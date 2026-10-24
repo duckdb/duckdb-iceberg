@@ -1,0 +1,215 @@
+# name: test/sql/local/catalog_custom_setup/sigv4_mock/test_governance_table_loader.test
+# description: test tables loaded through the registered table loader with GOVERNANCE true
+# group: [sigv4_mock]
+
+# Requires: python3 scripts/sigv4_mock_server.py 19130
+require-env SIGV4_MOCK_SERVER_AVAILABLE
+
+include test/sql/init_requires
+
+require aws
+
+require iceberg_test_table_loader
+
+statement ok
+CREATE SECRET sigv4_secret (
+    TYPE S3,
+    KEY_ID 'test_key_id',
+    SECRET 'test_secret_key',
+    SESSION_TOKEN 'test_session_token',
+    REGION 'us-east-1'
+);
+
+statement ok
+CALL enable_logging(level='debug');
+
+statement ok
+ATTACH ':' AS gov (
+    TYPE ICEBERG,
+    ENDPOINT_TYPE 'GLUE',
+    URI 'http://127.0.0.1:19130',
+    SECRET 'sigv4_secret',
+    GOVERNANCE true
+);
+
+# The catalog's REST calls are logged
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('HTTP') WHERE starts_with(request.url, 'http://127.0.0.1:19130/v1/config');
+----
+true
+
+statement ok
+SET iceberg_test_table_loader_metadata_location = '{WORKING_DIRECTORY}/data/persistent/partition_integer/metadata/v1.metadata.json';
+
+# A lookup builds the table from the metadata file the loader names, and never calls the REST LoadTable
+query III
+SELECT partition_col, user_id, event_type FROM gov.governed_db.lookup_table;
+----
+
+query I
+SELECT count(*) FROM iceberg_test_table_loader_requests() WHERE table_name = 'lookup_table';
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE contains(request.url, '/tables/lookup_table');
+----
+0
+
+# The loader is told the catalog, table, region and the credentials the catalog signs with; ':' is the default catalog
+query IIIIIIII
+SELECT * FROM iceberg_test_table_loader_requests() WHERE table_name = 'lookup_table';
+----
+gov	(empty)	governed_db	lookup_table	us-east-1	test_key_id	test_secret_key	test_session_token
+
+# Any other warehouse is the catalog id
+statement ok
+ATTACH '123456789012' AS gov_account (
+    TYPE ICEBERG,
+    ENDPOINT_TYPE 'GLUE',
+    URI 'http://127.0.0.1:19130',
+    SECRET 'sigv4_secret',
+    GOVERNANCE true
+);
+
+query I
+SELECT count(*) FROM gov_account.governed_db.account_table;
+----
+0
+
+query T
+SELECT catalog_id FROM iceberg_test_table_loader_requests() WHERE table_name = 'account_table';
+----
+123456789012
+
+# A gzipped metadata file is read as well
+statement ok
+SET iceberg_test_table_loader_metadata_location = '{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg_gz/metadata/v1.gz.metadata.json';
+
+query II
+SELECT l_orderkey, l_comment FROM gov.governed_db.gzip_table;
+----
+
+statement ok
+SET iceberg_test_table_loader_metadata_location = '{WORKING_DIRECTORY}/data/persistent/partition_integer/metadata/v1.metadata.json';
+
+# The transaction keeps the loaded table; the next transaction loads it again
+statement ok
+BEGIN;
+
+query I
+SELECT count(*) FROM gov.governed_db.cached_table;
+----
+0
+
+query I
+SELECT count(*) FROM gov.governed_db.cached_table;
+----
+0
+
+query I
+SELECT count(*) FROM iceberg_test_table_loader_requests() WHERE table_name = 'cached_table';
+----
+1
+
+statement ok
+COMMIT;
+
+query I
+SELECT count(*) FROM gov.governed_db.cached_table;
+----
+0
+
+query I
+SELECT count(*) FROM iceberg_test_table_loader_requests() WHERE table_name = 'cached_table';
+----
+2
+
+# Listings keep showing the placeholder of a table the loader returns a view for, on any connection
+statement ok
+SET iceberg_test_table_loader_return_view = true;
+
+query I
+SELECT i FROM gov.governed_db.governed_table;
+----
+1
+
+query T
+SELECT column_name FROM duckdb_columns() WHERE database_name = 'gov' AND table_name = 'governed_table';
+----
+__
+
+query T con2
+SELECT column_name FROM duckdb_columns() WHERE database_name = 'gov' AND table_name = 'governed_table';
+----
+__
+
+statement ok
+RESET iceberg_test_table_loader_return_view;
+
+# Listings show the columns of a table the loader returns as is, on any connection
+query I
+SELECT count(*) FROM gov.governed_db.governed_table;
+----
+0
+
+query T con2
+SELECT column_name FROM duckdb_columns() WHERE database_name = 'gov' AND table_name = 'governed_table' ORDER BY column_index;
+----
+partition_col
+user_id
+event_type
+
+# A file path the listing does not report is not loaded
+statement ok
+COPY (SELECT 42 AS x) TO '{TEST_DIR}/governed_file.parquet';
+
+statement ok
+USE gov.governed_db;
+
+query I
+SELECT x FROM '{TEST_DIR}/governed_file.parquet';
+----
+42
+
+statement ok
+USE memory;
+
+query I
+SELECT count(*) FROM iceberg_test_table_loader_requests() WHERE contains(table_name, 'governed_file');
+----
+0
+
+# A Glue table has a single-level namespace
+statement error
+SELECT * FROM gov."governed_db.nested".nested_table;
+----
+GOVERNANCE requires a single-level namespace, got 'governed_db.nested'
+
+# Without a table, the loader returns nothing
+statement ok
+RESET iceberg_test_table_loader_metadata_location;
+
+statement error
+SELECT * FROM gov.governed_db.missing_table;
+----
+Table with name missing_table does not exist
+
+query I
+SELECT count(*) FROM iceberg_test_table_loader_requests() WHERE table_name = 'missing_table';
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE contains(request.url, '/tables/missing_table');
+----
+0
+
+# More than one registered loader is refused
+statement ok
+PRAGMA iceberg_test_table_loader_register;
+
+statement error
+SELECT * FROM gov.governed_db.lookup_table;
+----
+More than one extension registered a GovernedIcebergTableLoader

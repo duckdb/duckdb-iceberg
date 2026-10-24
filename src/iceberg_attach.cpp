@@ -262,6 +262,9 @@ static void ParseAttachOptions(IcebergAttachOptions &attach_options, optional<Id
 				throw InvalidConfigurationException("'max_table_staleness' cannot be negative");
 			}
 			attach_options.max_table_staleness_micros = interval_in_micros;
+		} else if (lower_name == "governance") {
+			// Read from the ATTACH options only (in Attach), never from the server's /config
+			continue;
 		} else {
 			attach_options.options.emplace(entry);
 		}
@@ -398,6 +401,25 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 	if (attach_options.authorization_type == IcebergAuthorizationType::INVALID) {
 		attach_options.authorization_type = IcebergAuthorizationType::OAUTH2;
 	}
+	auto governance_it = client_options.find("governance");
+	if (governance_it != client_options.end()) {
+		attach_options.governance = governance_it->second.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
+	}
+	if (attach_options.governance) {
+		if (endpoint_type != IcebergEndpointType::AWS_GLUE) {
+			throw InvalidConfigurationException("GOVERNANCE requires ENDPOINT_TYPE 'glue'");
+		}
+		// The loader vends the table credentials, not the REST catalog
+		if (client_options.count("access_delegation_mode") &&
+		    attach_options.access_mode != IRCAccessDelegationMode::NONE) {
+			throw InvalidConfigurationException("GOVERNANCE requires ACCESS_DELEGATION_MODE 'none'");
+		}
+		attach_options.access_mode = IRCAccessDelegationMode::NONE;
+		// Each transaction loads a governed table again, never from table_request_cache
+		if (attach_options.max_table_staleness_micros.IsValid()) {
+			throw InvalidConfigurationException("GOVERNANCE does not support MAX_TABLE_STALENESS");
+		}
+	}
 	// Catalog-specific presets are fallbacks, below the server's defaults.
 	auto fallback_options = attach_options.options;
 	fallback_options["authorization_type"] =
@@ -450,6 +472,11 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 	} else {
 		// Already validated/consumed by the bootstrap authorization handler.
 		attach_options.options.clear();
+	}
+	if (attach_options.governance) {
+		// Whatever the server's /config sets: no vended credentials and no cached governed tables
+		attach_options.access_mode = IRCAccessDelegationMode::NONE;
+		attach_options.max_table_staleness_micros = optional_idx();
 	}
 	catalog->attach_options = attach_options;
 	catalog->default_schema = default_schema;

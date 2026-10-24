@@ -20,6 +20,7 @@
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "common/iceberg_constants.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/rest/iceberg_table_loader.hpp"
 #include "catalog/rest/iceberg_request_executor.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
@@ -481,6 +482,15 @@ static bool EntryMissingFromListing(const optional<vector<rest_api_objects::Tabl
 
 optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, const EntryLookupInfo &lookup) {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
+	if (ic_catalog.attach_options.governance) {
+		return GetGovernedEntry(context, lookup);
+	}
+	return GetEntry(context, lookup, [&](IcebergTable &table) { return FillEntry(context, table); });
+}
+
+optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, const EntryLookupInfo &lookup,
+                                                     const std::function<bool(IcebergTable &)> &fill) {
+	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 	const auto &table_name = lookup.GetEntryName();
 	// first check transaction entries
@@ -509,13 +519,14 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 	}
 	auto new_version = IcebergTable::CreatePlaceholder(ic_catalog, schema, table_name);
 	auto &table_info = *new_version;
-	if (!FillEntry(context, table_info)) {
+	if (!fill(table_info)) {
 		//! The table doesn't exist in the catalog
 		iceberg_transaction.SetLatestTableState(table_key, IcebergTableStatus::MISSING);
 		return nullptr;
 	}
 
-	{
+	// Under GOVERNANCE, GetGovernedEntry lists the table only if the loader returns it as is
+	if (!ic_catalog.attach_options.governance) {
 		annotated_lock_guard<annotated_mutex> l(entry_lock);
 		entries[table_name] = new_version;
 	}
@@ -525,6 +536,103 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 		state.GetOrCreateTransactionInfo(iceberg_transaction);
 	}
 	return state.GetInfo().GetSchemaVersion(at);
+}
+
+static IcebergLoadGovernedTableRequest GetLoadGovernedTableRequest(ClientContext &context, IcebergCatalog &catalog,
+                                                                   const vector<string> &namespace_items,
+                                                                   const string &table_name) {
+	// Glue addresses a table by a single database name
+	if (namespace_items.size() != 1) {
+		throw InvalidConfigurationException("GOVERNANCE requires a single-level namespace, got '%s'",
+		                                    StringUtil::Join(namespace_items, "."));
+	}
+	IcebergLoadGovernedTableRequest request;
+	request.catalog_name = catalog.attach_options.name;
+	// ':' is the caller's default catalog
+	if (catalog.GetWarehouse() != ":") {
+		request.catalog_id = catalog.GetWarehouse();
+	}
+	request.database_name = namespace_items[0];
+	request.table_name = table_name;
+	// The region and the credentials the catalog signs its requests with
+	AWSInput signing;
+	catalog.auth_handler->Cast<SIGV4Authorization>().SetSigningRegionAndCredentials(
+	    context, StripScheme(catalog.base_uri), signing);
+	request.region = std::move(signing.region);
+	request.key_id = std::move(signing.key_id);
+	request.secret = std::move(signing.secret);
+	request.session_token = std::move(signing.session_token);
+	return request;
+}
+
+//! Replaces the REST LoadTable of a catalog attached with GOVERNANCE true: the entry to bind for the table, kept by
+//! the transaction per schema version, or loaded by the GovernedIcebergTableLoader from the metadata file it picks
+optional_ptr<CatalogEntry> IcebergTableSet::GetGovernedEntry(ClientContext &context, const EntryLookupInfo &lookup) {
+	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
+	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
+	const auto &table_name = lookup.GetEntryName();
+	const auto table_key = IcebergTable::GetTableKey(ic_catalog, schema.namespace_items, table_name);
+	auto latest_state = iceberg_transaction.GetLatestTableState(table_key);
+	if (latest_state) {
+		// The table's schema version for this AT clause, nullptr if the transaction dropped the table
+		auto entry = GetEntry(context, lookup, [](IcebergTable &) -> bool {
+			throw InternalException("GOVERNANCE: a table in the transaction is loaded again");
+		});
+		if (!entry) {
+			return nullptr;
+		}
+		auto cached = iceberg_transaction.governed_entries.find(*entry);
+		if (cached != iceberg_transaction.governed_entries.end()) {
+			return cached->second.get();
+		}
+	}
+	// As in GetEntry, a file path the listing rules out is not loaded
+	if (!latest_state && table_name.find_first_of("/\\") != string::npos &&
+	    EntryMissingFromListing(IRCAPI::GetTables(context, ic_catalog, schema), table_name)) {
+		return nullptr;
+	}
+	auto request = GetLoadGovernedTableRequest(context, ic_catalog, schema.namespace_items, table_name);
+	auto loader = GovernedIcebergTableLoader::Find(context);
+	if (!loader) {
+		throw InvalidConfigurationException(
+		    "Catalog '%s' is attached with GOVERNANCE true, but no extension registered a GovernedIcebergTableLoader",
+		    catalog.GetName().GetIdentifierName());
+	}
+	optional_ptr<CatalogEntry> table;
+	auto governed_entry = loader->Load(context, request, [&](const string &metadata_location) -> TableCatalogEntry & {
+		rest_api_objects::LoadTableResult load_table_result;
+		load_table_result.metadata_location = metadata_location;
+		try {
+			load_table_result.metadata =
+			    IcebergTableMetadata::Parse(metadata_location, FileSystem::GetFileSystem(context), "");
+		} catch (std::exception &ex) {
+			ErrorData error(ex);
+			if (error.Type() == ExceptionType::INTERRUPT) {
+				throw;
+			}
+			error.Throw(StringUtil::Format("Failed to read the metadata file '%s' of table '%s': ", metadata_location,
+			                               table_key));
+		}
+		// A table already in the transaction keeps its state
+		table = GetEntry(context, lookup, [&](IcebergTable &table_info) {
+			// Kept by the transaction, never in the catalog's LoadTable cache
+			table_info.InitializeFromLoadTableResult(load_table_result);
+			return true;
+		});
+		return table->Cast<TableCatalogEntry>();
+	});
+	if (!governed_entry) {
+		//! The table doesn't exist in the catalog
+		iceberg_transaction.SetLatestTableState(table_key, IcebergTableStatus::MISSING);
+		return nullptr;
+	}
+	// A table the loader returns as is may be read whole, so listings show its columns as without GOVERNANCE
+	if (!latest_state && governed_entry.get() == table.get()) {
+		annotated_lock_guard<annotated_mutex> l(entry_lock);
+		entries[table_name] = iceberg_transaction.tables[table_key];
+	}
+	iceberg_transaction.governed_entries.emplace(*table, *governed_entry);
+	return governed_entry;
 }
 
 // ─── View operations ─────────────────────────────────────────────────────────
