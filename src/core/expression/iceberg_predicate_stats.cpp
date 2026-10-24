@@ -4,8 +4,13 @@
 #include "duckdb/common/types/geometry.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "duckdb/main/client_context.hpp"
+#include "duckdb/storage/statistics/base_statistics.hpp"
 #include "duckdb/storage/statistics/geometry_stats.hpp"
+#include "duckdb/storage/statistics/numeric_stats.hpp"
+#include "duckdb/storage/statistics/string_stats.hpp"
 #include "iceberg_logging.hpp"
+
+#include <limits>
 
 namespace duckdb {
 
@@ -51,6 +56,50 @@ static shared_ptr<BaseStatistics> BuildGeometryStats(const Value &lower_bound, c
 		extent.m_max = hi[3];
 	}
 	return stats;
+}
+
+shared_ptr<BaseStatistics> IcebergPredicateStats::BuildColumnStats(const LogicalType &type) const {
+	switch (BaseStatistics::GetStatsType(type)) {
+	case StatisticsType::NUMERIC_STATS: {
+		auto stats = NumericStats::CreateEmpty(type);
+		if (lower_bound && !lower_bound->IsNull()) {
+			NumericStats::SetMin(stats, *lower_bound);
+		}
+		if (upper_bound && !upper_bound->IsNull()) {
+			NumericStats::SetMax(stats, *upper_bound);
+		}
+		if (type.id() == LogicalTypeId::FLOAT || type.id() == LogicalTypeId::DOUBLE) {
+			//! Iceberg float bounds exclude NaN, which core zonemaps order as the largest value
+			if (!has_nan || *has_nan) {
+				NumericStats::SetMax(stats, type.id() == LogicalTypeId::FLOAT
+				                                ? Value::FLOAT(std::numeric_limits<float>::quiet_NaN())
+				                                : Value::DOUBLE(std::numeric_limits<double>::quiet_NaN()));
+			}
+		}
+		if (has_null) {
+			stats.SetHasNull();
+		}
+		if (has_not_null) {
+			stats.SetHasNoNull();
+		}
+		return make_shared_ptr<BaseStatistics>(std::move(stats));
+	}
+	case StatisticsType::STRING_STATS: {
+		auto stats = StringStats::CreateUnknown(type);
+		//! Iceberg string bounds may be truncated
+		if (lower_bound && !lower_bound->IsNull()) {
+			StringStats::SetMin(stats, lower_bound->GetValueUnsafe<string_t>(), StringStatsType::TRUNCATED_STATS);
+		}
+		if (upper_bound && !upper_bound->IsNull()) {
+			StringStats::SetMax(stats, upper_bound->GetValueUnsafe<string_t>(), StringStatsType::TRUNCATED_STATS);
+		}
+		stats.Set(has_null ? StatsInfo::CAN_HAVE_NULL_VALUES : StatsInfo::CANNOT_HAVE_NULL_VALUES);
+		stats.Set(has_not_null ? StatsInfo::CAN_HAVE_VALID_VALUES : StatsInfo::CANNOT_HAVE_VALID_VALUES);
+		return make_shared_ptr<BaseStatistics>(std::move(stats));
+	}
+	default:
+		return nullptr;
+	}
 }
 
 IcebergPredicateStats IcebergPredicateStats::DeserializeBounds(ClientContext &context, const Value &lower_bound,

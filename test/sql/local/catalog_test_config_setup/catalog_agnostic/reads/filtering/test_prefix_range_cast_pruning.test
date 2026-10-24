@@ -1,0 +1,127 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_prefix_range_cast_pruning.test
+# description: Prefix-range pruning preserves precision and handles narrowing casts conservatively
+# group: [filtering]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SCAN_PLANNING_MODE client
+
+include test/sql/init_requires
+
+statement ok
+SET threads=1;
+
+statement ok
+SET dynamic_or_filter_threshold=0;
+
+statement ok
+CALL enable_logging('Iceberg');
+
+# Values beyond exact DOUBLE precision must retain their 64-bit bounds.
+foreach offset -9007199254740993 9007199254740993
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.prf_bigints;
+
+statement ok
+CREATE TABLE my_datalake.default.prf_bigints (k BIGINT, id INTEGER);
+
+foreach batch 0 1 2
+
+statement ok
+INSERT INTO my_datalake.default.prf_bigints
+SELECT {offset}::BIGINT + range, range FROM range({batch} * 100, ({batch} + 1) * 100);
+
+endloop
+
+statement ok
+CREATE OR REPLACE TEMP TABLE prf_bigint_keys AS
+SELECT {offset}::BIGINT + unnest([0, 299]) AS k;
+
+statement ok
+SET disabled_optimizers='join_filter_pushdown';
+
+query I
+SELECT list(t.id ORDER BY t.id)
+FROM my_datalake.default.prf_bigints t JOIN prf_bigint_keys s USING (k);
+----
+[0, 299]
+
+statement ok
+SET disabled_optimizers='';
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(t.id ORDER BY t.id)
+FROM my_datalake.default.prf_bigints t JOIN prf_bigint_keys s USING (k);
+----
+[0, 299]
+
+query I
+SELECT count(DISTINCT message) FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE '%skipped ''data_file''%'
+	AND message LIKE '%IN PRF%';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.prf_bigints;
+
+endloop
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.prf_casts;
+
+statement ok
+CREATE TABLE my_datalake.default.prf_casts (k INTEGER);
+
+# The first two files have an overflowing bound but contain matching values.
+# Evaluating only the endpoints must not discard either file.
+statement ok
+INSERT INTO my_datalake.default.prf_casts SELECT range FROM range(-100, 100);
+
+statement ok
+INSERT INTO my_datalake.default.prf_casts SELECT range FROM range(200, 400);
+
+statement ok
+INSERT INTO my_datalake.default.prf_casts SELECT range FROM range(100, 200);
+
+statement ok
+INSERT INTO my_datalake.default.prf_casts SELECT NULL FROM range(100);
+
+statement ok
+CREATE TEMP TABLE prf_cast_keys AS SELECT unnest([0::UTINYINT, 255::UTINYINT]) AS k;
+
+statement ok
+SET disabled_optimizers='join_filter_pushdown';
+
+query I
+SELECT list(t.k ORDER BY t.k)
+FROM my_datalake.default.prf_casts t JOIN prf_cast_keys s ON TRY_CAST(t.k AS UTINYINT) = s.k;
+----
+[0, 255]
+
+statement ok
+SET disabled_optimizers='';
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(t.k ORDER BY t.k)
+FROM my_datalake.default.prf_casts t JOIN prf_cast_keys s ON TRY_CAST(t.k AS UTINYINT) = s.k;
+----
+[0, 255]
+
+# The fully representable interior file and the all-NULL file can be pruned.
+query I
+SELECT count(DISTINCT message) FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE '%skipped ''data_file''%'
+	AND message LIKE '%IN PRF%';
+----
+2
+
+statement ok
+DROP TABLE my_datalake.default.prf_casts;

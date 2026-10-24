@@ -1,5 +1,6 @@
 #include "planning/pruning/iceberg_predicate.hpp"
 
+#include "duckdb/common/optional.hpp"
 #include "duckdb/common/types/variant_iterator.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
@@ -14,8 +15,10 @@
 #include "duckdb/planner/filter/in_filter.hpp"
 #include "duckdb/planner/filter/optional_filter.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/logical_operator_visitor.hpp"
 #include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/storage/statistics/base_statistics.hpp"
 #include "duckdb/storage/statistics/geometry_stats.hpp"
 
 namespace duckdb {
@@ -283,6 +286,23 @@ static bool IsVariantReference(const Expression &expr) {
 	return IsDirectReference(current_expr);
 }
 
+static optional<LogicalType> FindFilteredColumnType(const Expression &expr) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_REF) {
+		auto &ref = expr.Cast<BoundReferenceExpression>();
+		if (ref.Index() == 0) {
+			return ref.GetReturnType();
+		}
+		return nullopt;
+	}
+	optional<LogicalType> result;
+	ExpressionIterator::EnumerateChildren(expr, [&result](const Expression &child) {
+		if (!result) {
+			result = FindFilteredColumnType(child);
+		}
+	});
+	return result;
+}
+
 static bool MatchBoundsExpression(ClientContext &context, const unique_ptr<Expression> &expr_p,
                                   const IcebergPredicateStats &stats, const IcebergTransform &transform) {
 	auto &expr = *expr_p;
@@ -397,7 +417,34 @@ static bool MatchBoundsExpression(ClientContext &context, const unique_ptr<Expre
 			//! child filter wasn't populated (yet?) for some reason, just be conservative
 			return true;
 		}
-		return true;
+		if (transform.Type() != IcebergTransformType::IDENTITY) {
+			return true;
+		}
+		shared_ptr<BaseStatistics> column_stats;
+		if (!stats.has_not_null || stats.BoundsAreNull()) {
+			//! Counts or an explicit NULL identity partition prove every value NULL without usable bounds.
+			auto column_type = FindFilteredColumnType(expr);
+			if (!column_type) {
+				return true;
+			}
+			auto all_null_stats = BaseStatistics::CreateEmpty(*column_type);
+			if (stats.has_null) {
+				all_null_stats.SetHasNull();
+			}
+			column_stats = make_shared_ptr<BaseStatistics>(std::move(all_null_stats));
+		} else {
+			if (!stats.lower_bound || !stats.upper_bound || stats.lower_bound->IsNull() ||
+			    stats.upper_bound->IsNull()) {
+				return true;
+			}
+			column_stats = stats.BuildColumnStats(stats.lower_bound->type());
+		}
+		if (!column_stats) {
+			return true;
+		}
+		auto result = ExpressionFilter::CheckExpressionStatistics(&context, expr, *column_stats);
+		return result != FilterPropagateResult::FILTER_ALWAYS_FALSE &&
+		       result != FilterPropagateResult::FILTER_FALSE_OR_NULL;
 	}
 	default:
 		//! Conservative approach: we don't know what this is, just say it doesn't filter anything

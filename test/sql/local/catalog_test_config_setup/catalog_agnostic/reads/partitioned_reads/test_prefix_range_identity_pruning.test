@@ -1,0 +1,98 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/partitioned_reads/test_prefix_range_identity_pruning.test
+# description: Prefix-range filters prune identity partitions without file metrics
+# group: [partitioned_reads]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SCAN_PLANNING_MODE client
+
+include test/sql/init_requires
+
+statement ok
+SET threads=1;
+
+statement ok
+SET dynamic_or_filter_threshold=0;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.prf_identity;
+
+# Disabling file metrics makes partition values the only available pruning proof.
+# A single insert puts the scattered keys and the interior miss in one manifest.
+statement ok
+CREATE TABLE my_datalake.default.prf_identity (k INTEGER, id INTEGER)
+PARTITIONED BY (k)
+WITH ('write.metadata.metrics.default'='none');
+
+statement ok
+INSERT INTO my_datalake.default.prf_identity
+SELECT k, range FROM (VALUES (-10), (0), (10), (NULL)) p(k), range(100);
+
+statement ok
+CREATE TEMP TABLE prf_identity_keys AS SELECT unnest([-10, 10]) AS k;
+
+statement ok
+SET disabled_optimizers='join_filter_pushdown';
+
+query II
+SELECT count(*), sum(id)
+FROM my_datalake.default.prf_identity t JOIN prf_identity_keys s USING (k);
+----
+200	9900
+
+statement ok
+SET disabled_optimizers='';
+
+statement ok
+CALL enable_logging('Iceberg');
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query II
+SELECT count(*), sum(id)
+FROM my_datalake.default.prf_identity t JOIN prf_identity_keys s USING (k);
+----
+200	9900
+
+query I
+SELECT count(DISTINCT message) FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE '%skipped ''data_file''%'
+	AND message LIKE '%partition column ''k'' has raw value 0%'
+	AND message LIKE '%IN PRF%';
+----
+1
+
+# A NULL identity partition proves every key is NULL even without metrics.
+query I
+SELECT count(DISTINCT message) FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE '%skipped ''data_file''%'
+	AND message LIKE '%partition column ''k'' has raw value NULL%'
+	AND message LIKE '%IN PRF%';
+----
+1
+
+# This append creates another manifest entirely inside the build-side envelope,
+# but with no member keys. It should be pruned before reading its data files.
+statement ok
+INSERT INTO my_datalake.default.prf_identity
+SELECT k, range FROM (VALUES (-5), (0), (5)) p(k), range(100);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query II
+SELECT count(*), sum(id)
+FROM my_datalake.default.prf_identity t JOIN prf_identity_keys s USING (k);
+----
+200	9900
+
+query I
+SELECT count(DISTINCT message) FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE '%skipped ''manifest_file''%'
+	AND message LIKE '%bounds [-5, 5]%' AND message LIKE '%IN PRF%';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.prf_identity;
