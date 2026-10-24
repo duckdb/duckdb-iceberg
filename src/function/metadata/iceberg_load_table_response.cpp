@@ -121,23 +121,25 @@ static unique_ptr<FunctionData> IcebergLoadTableResponseBind(ClientContext &cont
 	return std::move(ret);
 }
 
-static void OutputMap(const case_insensitive_map_t<string> &config, Vector &config_vec) {
-	auto config_count = config.size();
-	ListVector::Reserve(config_vec, config_count);
-	auto &config_key_vec = MapVector::GetKeys(config_vec);
-	auto &config_val_vec = MapVector::GetValues(config_vec);
-	idx_t config_idx = 0;
+//! Write 'config' as row 'row_idx' of MAP vector 'map_vec', appending to the entries already written.
+//! Secret values (vended keys, tokens, ...) are redacted so they can't be read back through SQL.
+static void OutputMap(const case_insensitive_map_t<string> &config, Vector &map_vec, idx_t row_idx) {
+	auto offset = ListVector::GetListSize(map_vec);
+	auto count = config.size();
+	ListVector::Reserve(map_vec, offset + count);
+	auto &key_vec = MapVector::GetKeys(map_vec);
+	auto &val_vec = MapVector::GetValues(map_vec);
+	idx_t entry_idx = offset;
 	for (auto &kv : config) {
-		FlatVector::GetDataMutable<string_t>(config_key_vec)[config_idx] =
-		    StringVector::AddString(config_key_vec, kv.first);
-		FlatVector::GetDataMutable<string_t>(config_val_vec)[config_idx] =
-		    StringVector::AddString(config_val_vec, kv.second);
-		config_idx++;
+		FlatVector::GetDataMutable<string_t>(key_vec)[entry_idx] = StringVector::AddString(key_vec, kv.first);
+		FlatVector::GetDataMutable<string_t>(val_vec)[entry_idx] =
+		    StringVector::AddString(val_vec, ICUtils::RedactConfigValue(kv.first, kv.second));
+		entry_idx++;
 	}
-	ListVector::SetListSize(config_vec, config_count);
-	auto &config_list_data = FlatVector::GetDataMutable<list_entry_t>(config_vec)[0];
-	config_list_data.offset = 0;
-	config_list_data.length = config_count;
+	ListVector::SetListSize(map_vec, offset + count);
+	auto &list_data = FlatVector::GetDataMutable<list_entry_t>(map_vec)[row_idx];
+	list_data.offset = offset;
+	list_data.length = count;
 }
 
 static void IcebergLoadTableResponseFunction(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
@@ -183,7 +185,7 @@ static void IcebergLoadTableResponseFunction(ClientContext &context, TableFuncti
 	// config MAP(VARCHAR, VARCHAR)
 	auto &config_vector = output.data[2];
 	if (load_result.config) {
-		OutputMap(*load_result.config, config_vector);
+		OutputMap(*load_result.config, config_vector, 0);
 	} else {
 		FlatVector::ValidityMutable(config_vector).SetInvalid(0);
 	}
@@ -207,24 +209,7 @@ static void IcebergLoadTableResponseFunction(ClientContext &context, TableFuncti
 			    StringVector::AddString(prefix_vec, cred.prefix);
 
 			// config map for this credential
-			OutputMap(cred.config, cred_config_vec);
-
-			auto inner_config_count = cred.config.size();
-			ListVector::Reserve(cred_config_vec, inner_config_count);
-			auto &inner_key_vec = MapVector::GetKeys(cred_config_vec);
-			auto &inner_val_vec = MapVector::GetValues(cred_config_vec);
-			idx_t cred_config_idx = 0;
-			for (auto &kv : cred.config) {
-				FlatVector::GetDataMutable<string_t>(inner_key_vec)[cred_config_idx] =
-				    StringVector::AddString(inner_key_vec, kv.first);
-				FlatVector::GetDataMutable<string_t>(inner_val_vec)[cred_config_idx] =
-				    StringVector::AddString(inner_val_vec, kv.second);
-				cred_config_idx++;
-			}
-			ListVector::SetListSize(cred_config_vec, inner_config_count);
-			auto &inner_list_data = FlatVector::GetDataMutable<list_entry_t>(cred_config_vec)[struct_idx];
-			inner_list_data.offset = 0;
-			inner_list_data.length = inner_config_count;
+			OutputMap(cred.config, cred_config_vec, struct_idx);
 		}
 		ListVector::SetListSize(storage_credentials_vector, cred_count);
 

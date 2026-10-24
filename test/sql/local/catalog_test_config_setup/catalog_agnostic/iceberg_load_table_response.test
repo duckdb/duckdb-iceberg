@@ -39,3 +39,18 @@ query I
 SELECT metadata."schemas"[1]."fields"[1]."name" FROM iceberg_load_table_response(my_datalake.default.my_table);
 ----
 a
+
+# Vended credentials (in 'config' or 'storage_credentials') must not be readable through SQL
+query I
+SELECT count(*)
+FROM (
+    SELECT unnest(map_entries(cred.config)) AS entry
+    FROM (SELECT unnest(storage_credentials) AS cred FROM iceberg_load_table_response(my_datalake.default.my_table))
+    UNION ALL
+    SELECT unnest(map_entries(config)) AS entry FROM iceberg_load_table_response(my_datalake.default.my_table)
+)
+WHERE (entry.key IN ('s3.secret-access-key', 's3.session-token', 'gcs.oauth2.token', 'token', 'credential')
+       OR entry.key LIKE 'adls.sas-token.%')
+  AND entry.value != 'redacted';
+----
+0
