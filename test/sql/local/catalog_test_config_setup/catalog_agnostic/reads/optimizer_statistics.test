@@ -8,6 +8,10 @@ include test/sql/init_requires
 
 require core_functions
 
+# Exercise manifest-derived statistics independently of optional server-side file metrics.
+statement ok
+SET iceberg_use_server_side_scan_planning = false;
+
 statement ok
 DROP TABLE IF EXISTS my_datalake.default.optimizer_statistics;
 
@@ -251,3 +255,6 @@ false
 
 statement ok
 RESET iceberg_manifest_statistics_max_data_files;
+
+statement ok
+RESET iceberg_use_server_side_scan_planning;

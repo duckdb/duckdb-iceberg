@@ -5,6 +5,10 @@ require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
 
 include test/sql/init_requires
 
+# This test verifies execution-time file pruning through the emitted logs.
+statement ok
+SET iceberg_enable_manifest_statistics = false;
+
 statement ok
 attach ':memory:' as my_datalake;
 
@@ -83,3 +87,6 @@ WITH result as (
 select total_record_count >= 3500 AND total_record_count <= 3800 from result
 ----
 true
+
+statement ok
+RESET iceberg_enable_manifest_statistics;
