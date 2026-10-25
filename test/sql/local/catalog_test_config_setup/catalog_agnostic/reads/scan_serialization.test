@@ -1,0 +1,280 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/scan_serialization.test
+# description: Catalog-backed Iceberg scans serialize for CTE deep copies without losing snapshot or schema identity
+# group: [reads]
+
+# The plan assertions below match upper-case operator names such as CTE_SCAN and WINDOW
+statement ok
+SET profiling_renderer_settings = MAP {'operator_casing': 'upper'};
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require core_functions
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.scan_serialization_sales;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.scan_serialization_returns;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.scan_serialization_parts;
+
+statement ok
+CREATE TABLE my_datalake.default.scan_serialization_sales (
+    order_no INTEGER,
+    warehouse INTEGER,
+    payload INTEGER
+) WITH ('format-version' = '2');
+
+statement ok
+CREATE TABLE my_datalake.default.scan_serialization_returns (
+    order_no INTEGER
+) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.scan_serialization_sales VALUES
+    (1, 10, 100),
+    (1, 20, 200),
+    (2, 10, 300),
+    (3, 10, 400);
+
+statement ok
+INSERT INTO my_datalake.default.scan_serialization_returns VALUES (1), (3);
+
+statement ok
+SET VARIABLE scan_serialization_snapshot = (
+    SELECT snapshot_id::BIGINT
+    FROM iceberg_snapshots(my_datalake.default.scan_serialization_sales)
+    ORDER BY sequence_number DESC
+    LIMIT 1
+);
+
+# These rows make order 4 eligible only if a copied scan incorrectly moves from the pinned snapshot to latest.
+statement ok
+INSERT INTO my_datalake.default.scan_serialization_sales VALUES (4, 30, 500), (4, 40, 600);
+
+statement ok
+INSERT INTO my_datalake.default.scan_serialization_returns VALUES (4);
+
+statement ok
+PRAGMA explain_output = 'optimized_only';
+
+# Controls for the negative plan assertions below: a materialized CTE keeps its CTE_SCAN, and a window without
+# PARTITION BY is not rewritten into a self-join, so both operator names are visible in this rendering.
+query II
+EXPLAIN WITH copied AS MATERIALIZED (
+    SELECT order_no FROM my_datalake.default.scan_serialization_sales
+)
+SELECT count(*) FROM copied a, copied b;
+----
+logical_opt	<REGEX>:.*CTE_SCAN.*
+
+query II
+EXPLAIN SELECT order_no, count(*) OVER () FROM my_datalake.default.scan_serialization_sales;
+----
+logical_opt	<REGEX>:.*WINDOW.*
+
+# This is the relevant shape of TPC-DS Q95: a two-scan CTE is referenced twice under a LIMIT. DuckDB
+# automatically inlines it by deep-copying its Iceberg scans; before serialization support it retained a CTE_SCAN.
+query II
+EXPLAIN WITH pairs AS (
+    SELECT a.order_no
+    FROM my_datalake.default.scan_serialization_sales AS a AT (VERSION => getvariable('scan_serialization_snapshot')),
+         my_datalake.default.scan_serialization_sales AS b AT (VERSION => getvariable('scan_serialization_snapshot'))
+    WHERE a.order_no = b.order_no
+      AND a.warehouse <> b.warehouse
+)
+SELECT count(DISTINCT s.order_no)
+FROM my_datalake.default.scan_serialization_sales s
+WHERE s.order_no IN (SELECT order_no FROM pairs)
+  AND s.order_no IN (
+      SELECT r.order_no
+      FROM my_datalake.default.scan_serialization_returns r, pairs p
+      WHERE r.order_no = p.order_no
+  )
+LIMIT 100;
+----
+logical_opt	<!REGEX>:.*CTE_SCAN.*
+
+# The two copied scans remain pinned to the first snapshot, so the later order 4 is absent from pairs.
+query I
+WITH pairs AS NOT MATERIALIZED (
+    SELECT a.order_no
+    FROM my_datalake.default.scan_serialization_sales AS a AT (VERSION => getvariable('scan_serialization_snapshot')),
+         my_datalake.default.scan_serialization_sales AS b AT (VERSION => getvariable('scan_serialization_snapshot'))
+    WHERE a.order_no = b.order_no
+      AND a.warehouse <> b.warehouse
+)
+SELECT count(DISTINCT s.order_no)
+FROM my_datalake.default.scan_serialization_sales s
+WHERE s.order_no IN (SELECT order_no FROM pairs)
+  AND s.order_no IN (
+      SELECT r.order_no
+      FROM my_datalake.default.scan_serialization_returns r, pairs p
+      WHERE r.order_no = p.order_no
+  )
+LIMIT 100;
+----
+1
+
+# A latest scan with transaction-local rows must rebind as latest, not as explicit time travel to its base snapshot.
+statement ok
+BEGIN TRANSACTION;
+
+statement ok
+INSERT INTO my_datalake.default.scan_serialization_sales VALUES (5, 50, 700), (5, 60, 800);
+
+query II
+EXPLAIN WITH copied AS NOT MATERIALIZED (
+    SELECT order_no, warehouse
+    FROM my_datalake.default.scan_serialization_sales
+)
+SELECT count(*)
+FROM copied a JOIN copied b ON a.order_no = b.order_no AND a.warehouse <> b.warehouse;
+----
+logical_opt	<!REGEX>:.*CTE_SCAN.*
+
+query I
+WITH copied AS NOT MATERIALIZED (
+    SELECT order_no, warehouse
+    FROM my_datalake.default.scan_serialization_sales
+)
+SELECT count(*)
+FROM copied a JOIN copied b ON a.order_no = b.order_no AND a.warehouse <> b.warehouse;
+----
+6
+
+statement ok
+ROLLBACK;
+
+# A schema committed without a new data snapshot must also survive the deep copy, and the copy must
+# still inline rather than falling back to materialization.
+statement ok
+ALTER TABLE my_datalake.default.scan_serialization_sales ADD COLUMN note VARCHAR;
+
+query II
+EXPLAIN WITH copied AS NOT MATERIALIZED (
+    SELECT order_no, note
+    FROM my_datalake.default.scan_serialization_sales
+)
+SELECT count(*), count(a.note)
+FROM copied a JOIN copied b USING (order_no);
+----
+logical_opt	<!REGEX>:.*CTE_SCAN.*
+
+query II
+WITH copied AS NOT MATERIALIZED (
+    SELECT order_no, note
+    FROM my_datalake.default.scan_serialization_sales
+)
+SELECT count(*), count(a.note)
+FROM copied a JOIN copied b USING (order_no);
+----
+10	0
+
+# Smoke test for a copy made after filter pushdown: the window self-join rewrite copies the scan once order_no = 4
+# has been pushed into the Iceberg planner, so field 107 is written and read with a real filter. The result would be
+# the same if the planner filter were dropped (execution re-applies the table filters); the profiled estimates below
+# are what prove the filter is preserved. This does catch a filter restored on the wrong column, because no other
+# column contains 4, so the copied side would prune every file and lose the rows.
+query II
+EXPLAIN SELECT order_no, warehouse, count(*) OVER (PARTITION BY warehouse)
+FROM my_datalake.default.scan_serialization_sales
+WHERE order_no = 4;
+----
+logical_opt	<!REGEX>:.*WINDOW.*
+
+query III
+SELECT order_no, warehouse, count(*) OVER (PARTITION BY warehouse)
+FROM my_datalake.default.scan_serialization_sales
+WHERE order_no = 4
+ORDER BY warehouse;
+----
+4	30	1
+4	40	1
+
+statement ok
+RESET explain_output;
+
+# Planner filters must survive serialization. Execution re-applies table filters, so results and file reads cannot
+# show this; the optimizer-time cardinality can. Each partition value below is written by its own INSERT, so it gets
+# its own manifest, and the scan's estimate is the row count of the manifests that remain after pruning.
+#
+# debug_verify_serializer round-trips the final optimized plan and executes the deserialized one. Operator estimates
+# are not serialized, so the physical plan recomputes the root estimate from the deserialized scan's file list: 3 if
+# the planner filter part = 4 was restored, 33 (the whole table) if it was dropped. EXPLAIN cannot show this because
+# VerifyPlan skips plans rooted in EXPLAIN, so the estimates are read from the JSON profile instead.
+statement ok
+CREATE TABLE my_datalake.default.scan_serialization_parts (part INTEGER, v INTEGER) PARTITIONED BY (part);
+
+statement ok
+INSERT INTO my_datalake.default.scan_serialization_parts SELECT 1, range FROM range(10);
+
+statement ok
+INSERT INTO my_datalake.default.scan_serialization_parts SELECT 2, range FROM range(20);
+
+statement ok
+INSERT INTO my_datalake.default.scan_serialization_parts SELECT 4, range FROM range(3);
+
+statement ok
+SET debug_verify_serializer = true;
+
+# Control: without a filter the round-tripped scan reports the whole table, which shows the profile carries the
+# recomputed estimate in the format asserted below.
+statement ok
+PRAGMA enable_profiling = 'json';
+
+statement ok
+PRAGMA profiling_output = '{TEST_DIR}/scan_serialization_all_parts.json';
+
+statement ok
+SELECT part, v FROM my_datalake.default.scan_serialization_parts;
+
+statement ok
+PRAGMA disable_profiling;
+
+query I
+SELECT regexp_matches(content, '"Estimated Cardinality":\s*"33"')
+FROM read_text('{TEST_DIR}/scan_serialization_all_parts.json');
+----
+true
+
+statement ok
+PRAGMA enable_profiling = 'json';
+
+statement ok
+PRAGMA profiling_output = '{TEST_DIR}/scan_serialization_pruned_parts.json';
+
+statement ok
+SELECT part, v FROM my_datalake.default.scan_serialization_parts WHERE part = 4;
+
+statement ok
+PRAGMA disable_profiling;
+
+query II
+SELECT regexp_matches(content, '"Estimated Cardinality":\s*"3"'),
+       regexp_matches(content, '"Estimated Cardinality":\s*"33"')
+FROM read_text('{TEST_DIR}/scan_serialization_pruned_parts.json');
+----
+true	false
+
+query II
+SELECT part, v FROM my_datalake.default.scan_serialization_parts WHERE part = 4 ORDER BY v;
+----
+4	0
+4	1
+4	2
+
+statement ok
+RESET debug_verify_serializer;
+
+statement ok
+DROP TABLE my_datalake.default.scan_serialization_parts;
+
+statement ok
+DROP TABLE my_datalake.default.scan_serialization_returns;
+
+statement ok
+DROP TABLE my_datalake.default.scan_serialization_sales;
