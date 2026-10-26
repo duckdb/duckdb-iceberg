@@ -184,6 +184,7 @@ public:
 	string GetDBPath() override;
 	//! Allow ATTACH OR REPLACE to actually re-attach when iceberg-specific options change
 	bool HasConflictingAttachOptions(const string &path, const AttachOptions &options) override;
+	void PrefetchEntries(ClientContext &context, const vector<QualifiedName> &tables) override;
 	void SetAttachOptions(const unordered_map<string, Value> &options);
 	//! Throws if the write mode property doesn't allow merge-on-read delete files, which is all DuckDB-Iceberg writes
 	static void VerifyMergeOnRead(const IcebergTableMetadata &metadata, const string &table_name,
