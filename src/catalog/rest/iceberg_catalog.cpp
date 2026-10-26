@@ -1,5 +1,4 @@
 #include "catalog/rest/iceberg_catalog.hpp"
-#include "catalog/rest/iceberg_table_prefetch.hpp"
 
 #include "duckdb/storage/database_size.hpp"
 #include "duckdb/logging/logger.hpp"
@@ -142,18 +141,6 @@ optional_ptr<SchemaCatalogEntry> IcebergCatalog::LookupSchema(CatalogTransaction
 	}
 
 	return reinterpret_cast<SchemaCatalogEntry *>(entry.get());
-}
-
-void IcebergCatalog::PrefetchEntries(ClientContext &context, const vector<QualifiedName> &tables) {
-	try {
-		IcebergTablePrefetch::PrefetchTables(context, *this, tables);
-	} catch (std::exception &ex) {
-		ErrorData error(ex);
-		if (error.Type() == ExceptionType::INTERRUPT) {
-			throw;
-		}
-		//! Prefetching is an optimization: binding still resolves every table on its own
-	}
 }
 
 optional<Identifier> IcebergCatalog::GetDefaultSchema() const {
