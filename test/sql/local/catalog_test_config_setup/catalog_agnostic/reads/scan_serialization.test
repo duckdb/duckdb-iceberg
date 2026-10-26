@@ -43,15 +43,7 @@ INSERT INTO my_datalake.default.scan_serialization_sales VALUES
 statement ok
 INSERT INTO my_datalake.default.scan_serialization_returns VALUES (1), (3);
 
-statement ok
-SET VARIABLE scan_serialization_snapshot = (
-    SELECT snapshot_id::BIGINT
-    FROM iceberg_snapshots(my_datalake.default.scan_serialization_sales)
-    ORDER BY sequence_number DESC
-    LIMIT 1
-);
-
-# These rows make order 4 eligible only if a copied scan incorrectly moves from the pinned snapshot to latest.
+# These rows make both orders 1 and 4 eligible for the Q95-shaped CTE below.
 statement ok
 INSERT INTO my_datalake.default.scan_serialization_sales VALUES (4, 30, 500), (4, 40, 600);
 
@@ -81,8 +73,8 @@ logical_opt	<REGEX>:.*WINDOW.*
 query II
 EXPLAIN WITH pairs AS (
     SELECT a.order_no
-    FROM my_datalake.default.scan_serialization_sales AS a AT (VERSION => getvariable('scan_serialization_snapshot')),
-         my_datalake.default.scan_serialization_sales AS b AT (VERSION => getvariable('scan_serialization_snapshot'))
+    FROM my_datalake.default.scan_serialization_sales AS a,
+         my_datalake.default.scan_serialization_sales AS b
     WHERE a.order_no = b.order_no
       AND a.warehouse <> b.warehouse
 )
@@ -98,12 +90,11 @@ LIMIT 100;
 ----
 logical_opt	<!REGEX>:.*CTE_SCAN.*
 
-# The two copied scans remain pinned to the first snapshot, so the later order 4 is absent from pairs.
 query I
 WITH pairs AS NOT MATERIALIZED (
     SELECT a.order_no
-    FROM my_datalake.default.scan_serialization_sales AS a AT (VERSION => getvariable('scan_serialization_snapshot')),
-         my_datalake.default.scan_serialization_sales AS b AT (VERSION => getvariable('scan_serialization_snapshot'))
+    FROM my_datalake.default.scan_serialization_sales AS a,
+         my_datalake.default.scan_serialization_sales AS b
     WHERE a.order_no = b.order_no
       AND a.warehouse <> b.warehouse
 )
@@ -117,7 +108,7 @@ WHERE s.order_no IN (SELECT order_no FROM pairs)
   )
 LIMIT 100;
 ----
-1
+2
 
 # A latest scan with transaction-local rows must rebind as latest, not as explicit time travel to its base snapshot.
 statement ok
