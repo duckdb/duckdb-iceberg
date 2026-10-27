@@ -252,7 +252,7 @@ IcebergResolvedMetadata IcebergUtils::ResolveTableMetadata(ClientContext &contex
 			iceberg_table.PrepareIcebergScanFromEntry(context);
 			auto &metadata = iceberg_table.table_info.table_metadata;
 			auto copy = metadata.Copy();
-			copy.credentials = IcebergFileCredentialsCallback::Get(context, iceberg_table.table_info);
+			copy.file_secret = IcebergFileCredentialsCallback::Get(context, iceberg_table.table_info);
 			return IcebergResolvedMetadata(metadata.GetLocation(), std::move(copy));
 		}
 	}

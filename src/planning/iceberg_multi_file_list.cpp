@@ -154,7 +154,7 @@ OpenFileInfo IcebergMultiFileList::GetFileInternal(idx_t file_id) const {
 	if (!task) {
 		return OpenFileInfo();
 	}
-	return IcebergMultiFileReader::FileInfo(*task).WithCredentials(planner->GetMetadata().credentials);
+	return IcebergMultiFileReader::FileInfo(*task).WithFileSecret(planner->GetMetadata().file_secret);
 }
 
 vector<OpenFileInfo> IcebergMultiFileList::GetAllFiles() const {

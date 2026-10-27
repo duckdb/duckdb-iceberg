@@ -1,6 +1,5 @@
 #pragma once
 
-#include "duckdb/main/secret/file_credentials.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/storage/external_file_cache/caching_file_system_wrapper.hpp"
 
@@ -69,7 +68,7 @@ public:
 	IcebergTableMetadata &operator=(IcebergTableMetadata &&) = default;
 
 public:
-	//! Opens `file` with its extended information, such as its credentials
+	//! Opens `file` with its extended information, such as its file secret
 	static rest_api_objects::TableMetadata Parse(const OpenFileInfo &file, FileSystem &fs,
 	                                             const string &metadata_compression_codec);
 	static IcebergTableMetadata FromTableMetadata(const rest_api_objects::TableMetadata &table_metadata);
@@ -180,10 +179,10 @@ public:
 
 	vector<IcebergMetadataLogItem> metadata_log;
 
-	//! When set, every file of the table (manifest lists, manifests, data and delete files) is opened with these
-	//! credentials alone. Set only on a copy a read of the table makes (IcebergFileCredentialsCallback), never on the
-	//! table's own metadata, which other connections share; never written to a file.
-	shared_ptr<FileCredentials> credentials;
+	//! When set, the file secret every file of the table (manifest lists, manifests, data and delete files) is opened
+	//! with alone. Set only on a copy a read of the table makes (IcebergFileCredentialsCallback), never on the table's
+	//! own metadata, which other connections share; never written to a file.
+	string file_secret;
 
 public:
 	explicit IcebergTableMetadata(IcebergTableMetadataSchemas schemas);

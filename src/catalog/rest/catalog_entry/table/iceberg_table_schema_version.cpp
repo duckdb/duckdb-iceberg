@@ -86,11 +86,11 @@ TableFunction IcebergTableSchemaVersion::GetScanFunction(ClientContext &context,
 
 	auto &fs = FileSystem::GetFileSystem(context);
 	shared_ptr<IcebergScanInfo> scan_info;
-	auto credentials = IcebergFileCredentialsCallback::Get(context, table_info);
-	if (credentials) {
-		// the scan's own copy of the metadata carries the credentials: the table's is shared with other connections
+	auto file_secret = IcebergFileCredentialsCallback::Get(context, table_info);
+	if (!file_secret.empty()) {
+		// the scan's own copy of the metadata carries the file secret: the table's is shared with other connections
 		auto scan_metadata = make_uniq<IcebergScanTemporaryData>(metadata.Copy());
-		scan_metadata->metadata.credentials = std::move(credentials);
+		scan_metadata->metadata.file_secret = std::move(file_secret);
 		auto &scan_schema = scan_metadata->metadata.GetSchemaFromId(schema_id);
 		scan_info = make_shared_ptr<IcebergScanInfo>(metadata.GetMetadataPath(fs), std::move(scan_metadata),
 		                                             snapshot_info, scan_schema);

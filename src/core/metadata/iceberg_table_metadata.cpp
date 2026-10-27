@@ -560,7 +560,7 @@ IcebergTableMetadata IcebergTableMetadata::Copy() const {
 	res.table_properties = table_properties;
 	res.metadata_log = metadata_log;
 	res.current_schema_id = current_schema_id;
-	res.credentials = credentials;
+	res.file_secret = file_secret;
 	return res;
 }
 
