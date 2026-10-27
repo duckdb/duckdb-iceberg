@@ -1,0 +1,63 @@
+# name: test/sql/local/iceberg_scans/parquet_nan_stats.test
+# description: Rows holding NaN are read when a data file's float min/max leave NaN out and it has no nan_count
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+require json
+
+# written by scripts/persistent/parquet_nan_stats.py: row group 0 holds 1.0 and NaN, but its min and max are both 1.0
+query IIIII
+SELECT row_group_id, path_in_schema, stats_min_value, stats_max_value, stats_nan_count
+FROM parquet_metadata('data/persistent/parquet_nan_stats/default/nan_stats/data/*.parquet')
+WHERE path_in_schema <> 'k'
+ORDER BY ALL;
+----
+0	d	1.0	1.0	NULL
+0	f	1.0	1.0	NULL
+1	d	2.0	2.0	NULL
+1	f	2.0	2.0	NULL
+
+statement ok
+CREATE MACRO nan_table() AS TABLE
+SELECT * FROM iceberg_scan('data/persistent/parquet_nan_stats/default/nan_stats', version='00001-a234396b-27e8-4110-ab2e-db4af6a9e3b3');
+
+query I
+SELECT k FROM nan_table() WHERE d <> 1 ORDER BY k;
+----
+2
+3
+
+query I
+SELECT k FROM nan_table() WHERE f <> 1 ORDER BY k;
+----
+2
+3
+
+query I
+SELECT k FROM nan_table() WHERE d > 1.5 ORDER BY k;
+----
+2
+3
+
+query I
+SELECT k FROM nan_table() WHERE f > 1.5 ORDER BY k;
+----
+2
+3
+
+# the same files through the scan tasks
+statement ok
+SET VARIABLE nan_tasks = (SELECT list(task) FROM (SELECT * FROM iceberg_scan_plan('data/persistent/parquet_nan_stats/default/nan_stats', version='00001-a234396b-27e8-4110-ab2e-db4af6a9e3b3')) task);
+
+query I
+SELECT k FROM iceberg_scan_tasks(getvariable('nan_tasks')) WHERE d <> 1 ORDER BY k;
+----
+2
+3
+
+query I
+SELECT k FROM iceberg_scan_tasks(getvariable('nan_tasks')) WHERE f > 1.5 ORDER BY k;
+----
+2
+3
