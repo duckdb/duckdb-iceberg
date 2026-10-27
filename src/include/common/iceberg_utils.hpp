@@ -47,6 +47,7 @@ public:
 	static idx_t ParseByteSizeOptionallyFormatted(const string &input);
 	static int64_t AddFileSizeChecked(int64_t total, int64_t file_size_in_bytes);
 	static timestamp_ms_t GetTransactionStartTimeMS(ClientContext &context);
+	static bool IsIcebergCatalog(Catalog &catalog);
 };
 
 } // namespace duckdb

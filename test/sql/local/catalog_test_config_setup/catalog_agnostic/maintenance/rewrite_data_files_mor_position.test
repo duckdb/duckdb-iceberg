@@ -67,10 +67,10 @@ set variable starting_seq = (
     where status <> 'DELETED'
 );
 
-query III
+query IIIII
 call iceberg_rewrite_data_files('my_datalake.default.rewrite_mor_position');
 ----
-6	1	<REGEX>:[1-9][0-9]*
+6	1	<REGEX>:[1-9][0-9]*	0	0
 
 query I
 select count(*) from my_datalake.default.rewrite_mor_position;

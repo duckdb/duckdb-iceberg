@@ -77,12 +77,18 @@ bool BucketQualifies(const RewriteBucket &bucket, const RewriteDataFilesPlanInpu
 	if (input.rewrite_all) {
 		return true;
 	}
+	//! Spark SizeBasedFileRewriter.tooMuchContent: one file above max-file-size-bytes
+	//! is rewritten on its own so it can be split. A lone undersized file stays put.
+	if (bucket.eligible_count == 1 && bucket.eligible_bytes > input.max_file_size_bytes.value()) {
+		return true;
+	}
 	//! Spark SizeBasedFileRewriter: rewrite when the group has enough files,
 	//! or at least two files whose total size already meets the target.
 	if (bucket.eligible_count >= input.min_input_files) {
 		return true;
 	}
-	return bucket.eligible_count >= 2 && bucket.eligible_bytes >= target_file_size_bytes;
+	//! Spark enoughContent uses a strict greater-than comparison against the target.
+	return bucket.eligible_count >= 2 && bucket.eligible_bytes > target_file_size_bytes;
 }
 
 void ConsiderCandidate(RewriteBucket &bucket, RewriteCandidate cand, const RewriteDataFilesPlanInput &input) {
@@ -143,7 +149,7 @@ void SelectCandidates(RewritePlan &plan, const RewriteDataFilesPlanInput &input,
 }
 
 void SelectCandidates(RewritePlan &plan, const RewriteDataFilesPlanInput &input,
-                      std::map<string, RewriteBucket> &per_partition) {
+                      std::map<string, RewriteBucket> &per_partition, RewriteBucket &other_specs) {
 	bool capped;
 	idx_t remaining = RemainingRewriteCap(input, capped);
 	for (auto &kv : per_partition) {
@@ -152,16 +158,37 @@ void SelectCandidates(RewritePlan &plan, const RewriteDataFilesPlanInput &input,
 		}
 		SelectFromBucket(plan, kv.second, input, remaining, capped);
 	}
+	if (capped && remaining == 0) {
+		return;
+	}
+	SelectFromBucket(plan, other_specs, input, remaining, capped);
 }
 
-void AssertCurrentPartitionSpec(const IcebergManifestListEntry &list_entry, int32_t default_spec_id) {
-	//! Guard against partition spec evolution: reject until multi-spec support is implemented.
-	if (list_entry.GetFile().partition_spec_id != default_spec_id) {
-		throw NotImplementedException(
-		    "iceberg_rewrite_data_files: table has data files written under partition spec %d "
-		    "but current default spec is %d; partition spec evolution is not yet supported",
-		    list_entry.GetFile().partition_spec_id, default_spec_id);
+//! output_spec_id defaults to the current spec. A missing id is rejected before manifests are read.
+//! The copy writer only emits the current default spec, so a historical output spec is rejected too.
+int32_t ResolveOutputSpecId(const RewriteDataFilesPlanInput &input, const IcebergTableMetadata &metadata) {
+	auto output_spec_id = metadata.default_spec_id;
+	if (input.output_spec_id) {
+		output_spec_id = input.output_spec_id.value();
 	}
+	if (metadata.partition_specs.find(output_spec_id) == metadata.partition_specs.end()) {
+		throw InvalidInputException(
+		    "iceberg_rewrite_data_files: 'output_spec_id' %d does not exist in the table partition specs",
+		    output_spec_id);
+	}
+	auto spec = metadata.FindPartitionSpecById(output_spec_id);
+	if (!spec) {
+		throw InvalidInputException(
+		    "iceberg_rewrite_data_files: 'output_spec_id' %d does not exist in the table partition specs",
+		    output_spec_id);
+	}
+	if (spec->spec_id != metadata.default_spec_id) {
+		throw InvalidInputException(
+		    "iceberg_rewrite_data_files: 'output_spec_id' %d is not the table's current default partition spec %d; "
+		    "rewriting data files into a historical partition spec is not supported",
+		    spec->spec_id, metadata.default_spec_id);
+	}
+	return spec->spec_id;
 }
 
 optional<RewriteCandidate> TryMakeRewriteCandidate(const IcebergManifestEntry &entry) {
@@ -180,16 +207,12 @@ optional<RewriteCandidate> TryMakeRewriteCandidate(const IcebergManifestEntry &e
 }
 
 void CollectUnpartitionedCandidates(RewriteBucket &bucket, const vector<IcebergManifestListEntry> &manifest_files,
-                                    const RewriteDataFilesPlanInput &input, int32_t default_spec_id,
-                                    int64_t target_file_size_bytes) {
+                                    const RewriteDataFilesPlanInput &input, int64_t target_file_size_bytes) {
 	for (const auto &list_entry : manifest_files) {
 		if (list_entry.GetFile().content != IcebergManifestContentType::DATA) {
 			continue;
 		}
-		AssertCurrentPartitionSpec(list_entry, default_spec_id);
 		if (UnpartitionedCollectionComplete(bucket, input, target_file_size_bytes)) {
-			//! Cap and group gating are already satisfied; remaining DATA manifests
-			//! are still checked above for partition spec evolution.
 			continue;
 		}
 		for (const auto &entry : list_entry.GetManifestEntries()) {
@@ -231,17 +254,22 @@ string PartitionBucketKey(const vector<IcebergPartitionInfo> &partition_info) {
 	return out;
 }
 
-void CollectPartitionedCandidates(std::map<string, RewriteBucket> &per_partition,
+void CollectPartitionedCandidates(std::map<string, RewriteBucket> &per_partition, RewriteBucket &other_specs,
                                   const vector<IcebergManifestListEntry> &manifest_files,
-                                  const RewriteDataFilesPlanInput &input, int32_t default_spec_id) {
+                                  const RewriteDataFilesPlanInput &input, int32_t output_spec_id) {
 	for (const auto &list_entry : manifest_files) {
 		if (list_entry.GetFile().content != IcebergManifestContentType::DATA) {
 			continue;
 		}
-		AssertCurrentPartitionSpec(list_entry, default_spec_id);
+		//! Spark keeps output-spec files in per-partition buckets and groups every other spec together.
+		const auto on_output_spec = list_entry.GetFile().partition_spec_id == output_spec_id;
 		for (const auto &entry : list_entry.GetManifestEntries()) {
 			auto cand = TryMakeRewriteCandidate(entry);
 			if (!cand) {
+				continue;
+			}
+			if (!on_output_spec) {
+				ConsiderCandidate(other_specs, std::move(*cand), input);
 				continue;
 			}
 			auto &bucket = per_partition[PartitionBucketKey(cand->partition_info)];
@@ -272,10 +300,14 @@ RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input)
 		                            input.min_file_size_bytes.value(), input.max_file_size_bytes.value());
 	}
 	plan.table_info = std::move(table_info_ptr);
+	table_info.VerifyWriteEncryptionSupported();
 
 	if (table_metadata.iceberg_version >= 3) {
 		throw NotImplementedException("iceberg_rewrite_data_files does not yet support V3 tables");
 	}
+
+	//! Reject an unknown or historical output spec before reading manifests.
+	auto output_spec_id = ResolveOutputSpecId(input, table_metadata);
 
 	auto latest_snapshot = table_metadata.GetLatestSnapshot();
 	if (!latest_snapshot) {
@@ -284,13 +316,10 @@ RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input)
 		return plan;
 	}
 
-	if (!latest_snapshot->snapshot_id) {
-		throw InvalidConfigurationException("snapshot.snapshot_id is not set");
-	}
 	if (!latest_snapshot->sequence_number) {
 		throw InvalidConfigurationException("snapshot.sequence_number is not set");
 	}
-	plan.starting_snapshot_id = *latest_snapshot->snapshot_id;
+	plan.starting_snapshot_id = latest_snapshot->snapshot_id;
 	//! Rewritten files use the sequence number of the snapshot being compacted.
 	plan.starting_sequence_number = *latest_snapshot->sequence_number;
 
@@ -310,16 +339,20 @@ RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input)
 		return plan;
 	}
 
-	auto default_spec_id = table_metadata.default_spec_id;
 	const bool unpartitioned = !table_metadata.HasPartitionSpec();
 	if (unpartitioned) {
+		//! All files share the same output partition, including files written before partitioning was removed.
+		//! Apply size/count gating and the rewrite cap to that single group.
 		RewriteBucket bucket;
-		CollectUnpartitionedCandidates(bucket, manifest_files, input, default_spec_id, plan.target_file_size_bytes);
+		CollectUnpartitionedCandidates(bucket, manifest_files, input, plan.target_file_size_bytes);
 		SelectCandidates(plan, input, bucket);
 	} else {
+		//! Files already on the output spec keep per-partition gating. Every other spec shares one group,
+		//! then the existing COPY rewrites both with the current spec (which partitions output files).
+		RewriteBucket other_specs;
 		std::map<string, RewriteBucket> per_partition;
-		CollectPartitionedCandidates(per_partition, manifest_files, input, default_spec_id);
-		SelectCandidates(plan, input, per_partition);
+		CollectPartitionedCandidates(per_partition, other_specs, manifest_files, input, output_spec_id);
+		SelectCandidates(plan, input, per_partition, other_specs);
 	}
 
 	return plan;

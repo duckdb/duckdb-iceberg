@@ -28,11 +28,11 @@ SELECT i FROM my_datalake.default.time_travel_future_timestamp ORDER BY i;
 2
 3
 
-# Time traveling to a timestamp that predates every snapshot is still allowed,
-# it produces an empty scan.
-query I
+# Time traveling to a timestamp that predates every snapshot is rejected.
+statement error
 SELECT i FROM my_datalake.default.time_travel_future_timestamp AT (TIMESTAMP => TIMESTAMP '1990-01-01 00:00:00') ORDER BY i;
 ----
+Could not find snapshot at or before timestamp '1990-01-01 00:00:00'
 
 # A snapshot can only be created in the past, so a timestamp in the future can
 # not identify a point in the history of the table.
@@ -131,8 +131,7 @@ SELECT i FROM my_datalake.default.time_travel_future_timestamp AT (TIMESTAMP => 
 3
 4
 
-# Time traveling to the timestamp of a snapshot that actually exists is still
-# allowed - only timestamps beyond the current time are rejected.
+# Time traveling to the timestamp of a snapshot that actually exists is allowed.
 statement ok
 set variable first_timestamp = (
 	select timestamp_ms from iceberg_snapshots(

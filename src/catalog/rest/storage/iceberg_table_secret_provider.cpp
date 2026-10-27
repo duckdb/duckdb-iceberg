@@ -186,29 +186,55 @@ static CreateSecretInput ReVendVendedCredentials(ClientContext &context, CreateS
 		                                       EnumUtil::ToString(refreshed_credentials.status_),
 		                                       refreshed_credentials.error_->_error.message));
 	}
-	auto credentials = table_info.GetVendedCredentials(context, refreshed_credentials.result_->storage_credentials);
+	auto &response = refreshed_credentials.result_;
+	optional_ptr<const case_insensitive_map_t<string>> config_override;
+	if (response.config) {
+		config_override = *response.config;
+	}
+	auto credentials = table_info.GetVendedCredentials(context, response.storage_credentials, config_override);
+	auto log_table_name =
+	    IcebergLogType::Redact(context, StringUtil::Format("%s.%s.%s", catalog_name, schema_name, table_name));
 
 	optional_ptr<CreateSecretInput> match;
+	const char *match_reason = nullptr;
 	if (credentials.config) {
 		match = credentials.config.get();
+		match_reason = "config fallback";
 	} else {
 		for (auto &candidate : credentials.storage_credentials) {
 			if (candidate.scope == input.scope) {
 				match = &candidate;
+				match_reason = "matching scopes";
 				break;
 			}
 		}
 		if (!match && credentials.storage_credentials.size() == 1) {
 			match = &credentials.storage_credentials[0];
+			match_reason = "single credential fallback";
 		}
 	}
 	if (!match) {
+		DUCKDB_LOG_DEBUG(context,
+		                 "Iceberg table '%s': no refresh credential matches secret '%s' with scopes [%s] "
+		                 "(%llu usable credentials)",
+		                 log_table_name, IcebergLogType::Redact(context, input.name.GetIdentifierName()),
+		                 IcebergLogType::Redact(context, input.scope), credentials.storage_credentials.size());
 		throw InvalidConfigurationException("Could not refresh Iceberg vended credentials for table '%s': no "
 		                                    "matching "
 		                                    "credential was re-vended",
 		                                    table_name);
 	}
 
+	DUCKDB_LOG_DEBUG(context, "Iceberg table '%s': refreshing secret '%s' using %s; retaining original scopes [%s]",
+	                 log_table_name, IcebergLogType::Redact(context, input.name.GetIdentifierName()), match_reason,
+	                 IcebergLogType::Redact(context, input.scope));
+	if (!credentials.config && match->scope != input.scope) {
+		DUCKDB_LOG_INFO(context,
+		                "Iceberg table '%s': refresh credential for secret '%s' has scopes [%s]; preserving "
+		                "original secret scopes [%s]",
+		                log_table_name, IcebergLogType::Redact(context, input.name.GetIdentifierName()),
+		                IcebergLogType::Redact(context, match->scope), IcebergLogType::Redact(context, input.scope));
+	}
 	auto result = std::move(*match);
 	result.name = input.name;
 	result.scope = input.scope;
@@ -231,7 +257,8 @@ bool IcebergTableSecretProvider::SupportsStorageType(const string &storage_type)
 
 unique_ptr<BaseSecret> IcebergTableSecretProvider::CreateSecret(ClientContext &context, CreateSecretInput &input) {
 	if (input.options.find("catalog_name") != input.options.end()) {
-		DUCKDB_LOG_INFO(context, "Refreshing Iceberg vended credentials for secret '%s'", input.name);
+		DUCKDB_LOG_INFO(context, "Refreshing Iceberg vended credentials for secret '%s'",
+		                IcebergLogType::Redact(context, input.name.GetIdentifierName()));
 		auto revended = ReVendVendedCredentials(context, input);
 		return BuildVendedSecret(revended);
 	}

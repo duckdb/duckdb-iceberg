@@ -60,6 +60,36 @@ select id, _row_id from my_datalake.default.merge_v3_lineage order by id;
 9	8
 10	9
 
+# Rewritten entries must carry their identities explicitly, independently of
+# the replacement manifest's sequence number and first_row_id.
+statement ok
+begin;
+
+statement ok
+set variable merged_lineage_paths = (
+	select list(distinct manifest_path) from iceberg_metadata(my_datalake.default.merge_v3_lineage)
+	where status = 'EXISTING'
+);
+
+query III
+select sequence_number, file_sequence_number, data_file.first_row_id
+from read_avro(getvariable('merged_lineage_paths')) order by sequence_number;
+----
+1	1	0
+2	2	2
+3	3	4
+4	4	6
+
+query II
+select count(*), bool_and(e.snapshot_id = s.snapshot_id)
+from read_avro(getvariable('merged_lineage_paths')) e
+join iceberg_snapshots(my_datalake.default.merge_v3_lineage) s on e.sequence_number = s.sequence_number;
+----
+4	true
+
+statement ok
+commit;
+
 # Data equivalence: every row still present and correct.
 query II
 select id, data from my_datalake.default.merge_v3_lineage order by id;

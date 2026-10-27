@@ -1,4 +1,5 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/merge/merge_into_multiple_update_delete_actions.test
+# description: Multiple UPDATE clauses can update different columns in rows from the same data file.
 # group: [merge]
 
 require-env CATALOG_TEST_CONFIG_SETUP
@@ -58,7 +59,7 @@ date	NULL	NULL	NULL	2000-01-01
 number	50	NULL	NULL	NULL
 text	NULL	Hello	NULL	NULL
 
-statement error
+query I
 MERGE INTO my_datalake.default.entry AS entry
 USING my_datalake.default.new_entry AS new_entry
 ON entry.type = new_entry.type
@@ -68,10 +69,7 @@ WHEN MATCHED AND entry.type = 'country' THEN UPDATE SET country = new_entry.coun
 WHEN MATCHED AND entry.type = 'date' THEN UPDATE SET date = new_entry.date
 WHEN MATCHED THEN ERROR;
 ----
-MERGE INTO with Iceberg only supports a single UPDATE/DELETE action currently
-
-# Expected result when the limitation is lifted
-mode skip
+4
 
 query IIIII
 FROM my_datalake.default.entry ORDER BY type
@@ -80,3 +78,9 @@ country	NULL	NULL	Germany	NULL
 date	NULL	NULL	NULL	2010-01-01
 number	100	NULL	NULL	NULL
 text	NULL	World	NULL	NULL
+
+statement ok
+DROP TABLE my_datalake.default.entry;
+
+statement ok
+DROP TABLE my_datalake.default.new_entry;

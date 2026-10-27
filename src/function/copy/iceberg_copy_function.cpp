@@ -151,6 +151,7 @@ CopyIcebergBindData::CopyIcebergBindData(const CopyInfo &info, vector<string> &&
 		}
 		table_metadata->table_properties[name] = value;
 	}
+	table_metadata->table_properties.emplace("write.parquet.shred-variants", "true");
 }
 
 unique_ptr<FunctionData> CopyIcebergBindData::Copy() const {

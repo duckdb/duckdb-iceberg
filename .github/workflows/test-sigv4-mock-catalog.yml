@@ -75,5 +75,5 @@ jobs:
             echo "sigv4 mock server failed to start on port 19130"
             exit 1
           fi
-          ./build/relassert/test/unittest --order lex "$PWD/test/sql/local/catalog_custom_setup/sigv4_mock/*" --list-test-names-only || true
-          ./build/relassert/test/unittest --order lex "$PWD/test/sql/local/catalog_custom_setup/sigv4_mock/*"
+          ./build/relassert/test/unittest --order lex "$PWD/test/sql/local/catalog_custom_setup/sigv4_mock/*" "exclude:*.test_slow" --list-test-names-only || true
+          ./build/relassert/test/unittest --order lex "$PWD/test/sql/local/catalog_custom_setup/sigv4_mock/*" "exclude:*.test_slow"

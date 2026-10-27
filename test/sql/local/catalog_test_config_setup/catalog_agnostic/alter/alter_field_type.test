@@ -33,7 +33,7 @@ statement ok
 insert into my_datalake.default.alter_struct_field VALUES (
 	{
 		'a': 'test',
-		'b': 0.213123,
+		'b': 0.25,
 		'nested': {
 			'd': '2012/8/19'::DATE
 		},
@@ -44,3 +44,85 @@ insert into my_datalake.default.alter_struct_field VALUES (
 	},
 	false
 );
+
+# Widen a nested primitive without rewriting the old data file.
+statement ok
+ALTER TABLE my_datalake.default.alter_struct_field ALTER COLUMN col.b TYPE DOUBLE;
+
+query II fresh
+SELECT typeof(col.b), col.b FROM my_datalake.default.alter_struct_field;
+----
+DOUBLE	0.25
+
+# Invalid nested paths and narrowing conversions must leave the schema unchanged.
+statement error
+ALTER TABLE my_datalake.default.alter_struct_field ALTER COLUMN col.missing TYPE BIGINT;
+----
+<REGEX>:.*does not have a column.*
+
+statement error
+ALTER TABLE my_datalake.default.alter_struct_field ALTER COLUMN col.b TYPE FLOAT;
+----
+<REGEX>:.*can't be altered.*
+
+query II
+SELECT typeof(col.b), col.b FROM my_datalake.default.alter_struct_field;
+----
+DOUBLE	0.25
+
+statement ok
+ALTER TABLE my_datalake.default.alter_struct_field ADD COLUMN col.also_nested.g INTEGER;
+
+statement ok
+INSERT INTO my_datalake.default.alter_struct_field VALUES (
+	{
+		'a': 'new',
+		'b': 0.5,
+		'also_nested': {'f': 43, 'g': 7}
+	},
+	true
+);
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.alter_struct_field ALTER COLUMN col.also_nested.g TYPE BIGINT;
+
+query I
+SELECT typeof(col.also_nested.g) FROM my_datalake.default.alter_struct_field LIMIT 1;
+----
+BIGINT
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT typeof(col.also_nested.g) FROM my_datalake.default.alter_struct_field LIMIT 1;
+----
+INTEGER
+
+statement ok
+ALTER TABLE my_datalake.default.alter_struct_field ALTER COLUMN col.also_nested.g TYPE BIGINT;
+
+# A value outside INTEGER range proves the new type is used by subsequent writes.
+statement ok
+INSERT INTO my_datalake.default.alter_struct_field VALUES (
+	{
+		'a': 'wide',
+		'b': 0.75,
+		'also_nested': {'f': 44, 'g': 2147483648}
+	},
+	false
+);
+
+query IIII fresh
+SELECT col.a, typeof(col.b), typeof(col.also_nested.g), col.also_nested.g
+FROM my_datalake.default.alter_struct_field ORDER BY col.a;
+----
+new	DOUBLE	BIGINT	7
+test	DOUBLE	BIGINT	NULL
+wide	DOUBLE	BIGINT	2147483648
+
+statement ok
+DROP TABLE my_datalake.default.alter_struct_field;

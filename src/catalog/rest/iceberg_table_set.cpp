@@ -281,10 +281,15 @@ void IcebergTableSet::LoadEntriesInternal(ClientContext &context) {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	// The request owns its namespace; workers never access or mutate this table set.
 	IcebergRequestExecutor executor(context, ic_catalog);
-	auto result = executor.Schedule(IcebergListTablesRequest(schema.namespace_items));
+	bool allow_forbidden = !iceberg_transaction.looked_up_entries.count(schema.name.GetIdentifierName());
+	auto result = executor.Schedule(IcebergListTablesRequest(schema.namespace_items, allow_forbidden));
 	auto tables = executor.WaitAndTakeResult(*result);
 	if (context.IsInterrupted()) {
 		throw InterruptException();
+	}
+	if (!tables) {
+		// A later explicit lookup in this transaction must retry and report the permission error.
+		return;
 	}
 	ApplyListResult(std::move(tables));
 	iceberg_transaction.listed_schemas.insert(schema.name.GetIdentifierName());
@@ -412,6 +417,8 @@ IcebergTable &IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCat
 		        .GetValue<string>();
 		bootstrap_metadata.table_properties.emplace(option.first, option_val);
 	}
+	// Explicitly enable shredding for new DuckDB tables, while preserving an explicit override.
+	bootstrap_metadata.table_properties.emplace("write.parquet.shred-variants", "true");
 
 	auto initial_partition_spec = IcebergTable::BuildPartitionSpec(info.partition_keys, *new_schema, 0, 1000);
 	//! Sort order id 0 is reserved for the unsorted order, so a table created with SORTED BY starts at 1

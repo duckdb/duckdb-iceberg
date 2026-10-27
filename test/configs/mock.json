@@ -1,17 +1,45 @@
 {
-	"description": "Test-only v2 REST mock started with make mock. Run the catalog-agnostic SQL suite with the capability flags and skip policy in this config.",
-	"on_init": "ATTACH '' AS my_datalake (TYPE ICEBERG, URI 'http://127.0.0.1:19134', AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none', STAGE_CREATE_TABLES true, DISABLE_MULTI_TABLE_COMMIT true); CREATE SCHEMA IF NOT EXISTS my_datalake.default;",
+	"description": "Test-only v2/v3 REST mock started with make mock. Run the catalog-agnostic SQL suite with the capability flags and skip policy in this config.",
+	"on_init": "ATTACH '' AS my_datalake (TYPE ICEBERG, URI 'http://127.0.0.1:19134', AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none', STAGE_CREATE_TABLES true); CREATE SCHEMA IF NOT EXISTS my_datalake.default;",
 	"skip_error_messages": [
-		".*Only append snapshots are implemented.*",
 		"UnsupportedOperationException"
 	],
 	"statically_loaded_extensions": ["core_functions", "parquet", "avro", "iceberg", "httpfs", "icu"],
 	"test_env": [
 		{"env_name": "CATALOG_TEST_CONFIG_SETUP", "env_value": "mock"},
 		{"env_name": "STAGED_CREATE_SUPPORT", "env_value": "true"},
+		{"env_name": "FORMAT_V3_SUPPORT", "env_value": "true"},
+		{"env_name": "COLUMN_DEFAULT_SUPPORT", "env_value": "true"},
+		{"env_name": "UNKNOWN_SUPPORT", "env_value": "true"},
+		{"env_name": "VARIANT_SUPPORT", "env_value": "true"},
+		{"env_name": "GEOMETRY_SUPPORT", "env_value": "true"},
+		{"env_name": "TIMESTAMP_NS_SUPPORT", "env_value": "true"},
+		{"env_name": "TIMESTAMP_NS_DEFAULT_SUPPORT", "env_value": "true"},
+		{"env_name": "TIMESTAMPTZ_NS_DEFAULT_SUPPORT", "env_value": "true"},
+		{"env_name": "FILE_CLEANUP_SUPPORT", "env_value": "true"},
+		{"env_name": "CASE_SENSITIVE_TABLE_NAMES_SUPPORT", "env_value": "true"},
+		{"env_name": "SNAPSHOT_HISTORY_SUPPORT", "env_value": "true"},
+		{"env_name": "NAMESPACE_PROPERTIES_SUPPORT", "env_value": "true"},
+		{"env_name": "METADATA_FILE_READ_SUPPORT", "env_value": "true"},
+		{"env_name": "METADATA_LOG_SUPPORT", "env_value": "true"},
+		{"env_name": "TIMETRAVEL_SUPPORT", "env_value": "true"},
+		{"env_name": "MULTI_TABLE_COMMIT_SUPPORT", "env_value": "true"},
+		{"env_name": "ATOMIC_COMMIT_CONFLICT_SUPPORT", "env_value": "true"},
 		{"env_name": "SCAN_PLANNING_MODE", "env_value": "client"}
 	],
 	"skip_tests": [
+		{
+			"reason": "Recreating the old identifier uses an explicit table location, which both mock backends reject; native protocol tests cover rename metadata preservation separately",
+			"paths": [
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/rename_table/rename_preserves_metadata.test"
+			]
+		},
+		{
+			"reason": "The test hard-codes the fixture catalog's initial field-ID order; the mock preserves the client's valid field IDs",
+			"paths": [
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_unknown_type_omitted_from_data_files.test"
+			]
+		},
 		{
 			"reason": "Iceberg V1 tables are not supported in the mock catalog",
 			"paths": [
@@ -22,18 +50,15 @@
 			"reason": "Failure mode doesn't match the expected error message in the mock catalog",
 			"paths": [
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_local_fs_disabled.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/capabilities/no_snapshot_history.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/capabilities/no_time_travel.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/capabilities/no_case_sensitive_table_names.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/capabilities/no_metadata_file_read.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/capabilities/no_view.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_plan_shape.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_add_column_default_without_v3.test"
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/capabilities/no_view.test"
 			]
 		},
 		{
-			"reason": "No applicable HTTP logs are produced",
+			"reason": "The mock uses a local warehouse, so HTTP file-read assertions do not apply",
 			"paths": [
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_no_head_request_for_deletes.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_delete_manifest_filter_pushdown.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/partitioned_reads_v3/test_partitioned_reads_v3.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/partitioning/test_partitioning_pushdown_bucket.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_data_manifest_late_materialization.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/partitioned_reads/test_in_filter_partition_pruning.test",

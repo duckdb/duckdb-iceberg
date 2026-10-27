@@ -17,6 +17,7 @@
 #include "duckdb/planner/expression/bound_subquery_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/logical_operator_visitor.hpp"
+#include "common/iceberg_fixed_type.hpp"
 
 namespace duckdb {
 
@@ -74,6 +75,7 @@ void IcebergPlanner::PostBind(PlannerExtensionInput &input, BoundStatement &stat
 	if (statement.plan) {
 		IcebergPlannerRoutine routine;
 		routine.VisitOperator(*statement.plan);
+		IcebergFixedType::RejectOutsideIceberg(input.context, *statement.plan);
 	}
 }
 

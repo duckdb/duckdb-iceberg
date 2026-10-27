@@ -1,0 +1,205 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/merge/test_merge_multiple_actions_metadata.test
+# description: Multi-action MERGE consolidates deletes across partition specs and preserves v3 row lineage.
+# group: [merge]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+require-env SNAPSHOT_HISTORY_SUPPORT
+
+require-env METADATA_FILE_READ_SUPPORT
+
+require-env TIMETRAVEL_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+SET threads = 4;
+
+# Exercise both existing v3 vectors and positional deletes inherited from a v2 table.
+foreach initial_version 2 3
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.merge_actions_metadata;
+
+statement ok
+CREATE TABLE my_datalake.default.merge_actions_metadata (id INTEGER, p INTEGER, v VARCHAR)
+PARTITIONED BY (p) WITH ('format-version' = '{initial_version}');
+
+statement ok
+INSERT INTO my_datalake.default.merge_actions_metadata VALUES
+    (0, 10, 'old'), (1, 10, 'a'), (2, 10, 'b'), (3, 10, 'c'),
+    (4, 20, 'old'), (5, 20, 'e'), (6, 20, 'f'), (7, 20, 'g');
+
+statement ok
+DELETE FROM my_datalake.default.merge_actions_metadata WHERE id IN (0, 4);
+
+statement ok
+ALTER TABLE my_datalake.default.merge_actions_metadata SET ('format-version' = 3);
+
+statement ok
+ALTER TABLE my_datalake.default.merge_actions_metadata SET PARTITIONED BY (bucket(2, id));
+
+statement ok
+INSERT INTO my_datalake.default.merge_actions_metadata VALUES (8, 30, 'h'), (9, 30, 'i'), (10, 30, 'j');
+
+statement ok
+CREATE OR REPLACE TEMP TABLE merge_actions_before AS
+SELECT id, _row_id AS row_id, filename AS data_file FROM my_datalake.default.merge_actions_metadata;
+
+statement ok
+SET VARIABLE next_row_id_before = (
+    SELECT metadata."next-row-id"::BIGINT
+    FROM iceberg_load_table_response('my_datalake.default.merge_actions_metadata')
+);
+
+statement ok
+SET VARIABLE before_snapshot = (
+    SELECT snapshot_id FROM iceberg_snapshots('my_datalake.default.merge_actions_metadata')
+    WHERE sequence_number = 3
+);
+
+# Both old partitions receive an UPDATE and a DELETE. New-spec files are modified as well.
+query I
+MERGE INTO my_datalake.default.merge_actions_metadata t
+USING (VALUES (1, 'A'), (2, 'unused'), (5, 'E'), (6, 'unused'), (8, 'H'), (9, 'unused'), (11, 'new')) s(id, v)
+ON t.id = s.id
+WHEN MATCHED AND s.id IN (1, 5) THEN UPDATE SET v = s.v
+WHEN MATCHED AND s.id = 8 THEN UPDATE SET v = s.v
+WHEN MATCHED THEN DELETE
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, 30, s.v)
+WHEN NOT MATCHED BY SOURCE AND t.id = 99 THEN UPDATE SET v = 'unused';
+----
+7
+
+query ITI
+SELECT id, v, _last_updated_sequence_number FROM my_datalake.default.merge_actions_metadata ORDER BY id;
+----
+1	A	4
+3	c	1
+5	E	4
+7	g	1
+8	H	4
+10	j	3
+11	new	4
+
+query II
+SELECT count(*), bool_and(t._row_id = b.row_id)
+FROM my_datalake.default.merge_actions_metadata t JOIN merge_actions_before b USING (id);
+----
+6	true
+
+query II
+SELECT count(DISTINCT _row_id), bool_and(_row_id >= getvariable('next_row_id_before')) FILTER (WHERE id = 11)
+FROM my_datalake.default.merge_actions_metadata;
+----
+7	true
+
+query IT
+SELECT sequence_number, operation FROM iceberg_snapshots('my_datalake.default.merge_actions_metadata')
+ORDER BY sequence_number;
+----
+1	append
+2	delete
+3	append
+4	overwrite
+
+# Keep catalog-vended credentials in scope for the manifest list and all manifest reads.
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE latest_manifest_list = (
+    SELECT manifest_list FROM iceberg_snapshots('my_datalake.default.merge_actions_metadata')
+    WHERE sequence_number = 4
+);
+
+query I
+SELECT count(DISTINCT partition_spec_id)
+FROM read_avro(getvariable('latest_manifest_list'))
+WHERE content = 1 AND added_files_count > 0;
+----
+2
+
+statement ok
+CREATE OR REPLACE TEMP TABLE merge_actions_vectors (data_file VARCHAR, deleted_positions BIGINT);
+
+# Read each partition schema separately; Avro does not support union_by_name.
+foreach spec_order min max
+
+statement ok
+SET VARIABLE delete_manifests = (
+    SELECT list(manifest_path) FROM read_avro(getvariable('latest_manifest_list'))
+    WHERE content = 1 AND sequence_number = 4
+    AND partition_spec_id = (
+        SELECT {spec_order}(partition_spec_id) FROM read_avro(getvariable('latest_manifest_list'))
+        WHERE content = 1 AND added_files_count > 0
+    )
+);
+
+statement ok
+INSERT INTO merge_actions_vectors
+SELECT data_file.referenced_data_file AS data_file, data_file.record_count AS deleted_positions
+FROM read_avro(getvariable('delete_manifests'))
+WHERE status != 2 AND data_file.file_format = 'puffin';
+
+endloop
+
+# No older vector may remain live beside the newly written vector for the same file.
+query I
+SELECT count(*) = (SELECT count(*) FROM merge_actions_vectors)
+FROM iceberg_metadata('my_datalake.default.merge_actions_metadata')
+WHERE status != 'DELETED' AND file_format = 'puffin';
+----
+true
+
+# Each affected source file has one live vector, even when several actions touched it.
+query III
+SELECT count(*) = count(DISTINCT data_file),
+       count(*) = (SELECT count(DISTINCT data_file) FROM merge_actions_before WHERE id IN (1, 2, 5, 6, 8, 9)),
+       sum(deleted_positions)
+FROM merge_actions_vectors;
+----
+true	true	8
+
+# The two old partition files each retain the earlier delete plus both MERGE actions.
+query I
+SELECT count(*) FROM merge_actions_vectors
+WHERE data_file IN (SELECT data_file FROM merge_actions_before WHERE id IN (1, 5))
+AND deleted_positions = 3;
+----
+2
+
+query III
+SELECT s.summary."added-records"::BIGINT,
+       s.summary."added-dvs"::BIGINT = (SELECT count(*) FROM merge_actions_vectors),
+       coalesce(s.summary."removed-dvs"::BIGINT, 0) = 2 * ({initial_version} - 2)
+FROM iceberg_load_table_response('my_datalake.default.merge_actions_metadata'),
+     unnest(metadata.snapshots::VARIANT[]) AS snapshots(s)
+WHERE s."sequence-number"::BIGINT = 4;
+----
+4	true	true
+
+statement ok
+COMMIT;
+
+# Consolidation must not invalidate delete files belonging to the preceding snapshot.
+query IT
+SELECT id, v FROM my_datalake.default.merge_actions_metadata
+AT (VERSION => getvariable('before_snapshot')) ORDER BY id;
+----
+1	a
+2	b
+3	c
+5	e
+6	f
+7	g
+8	h
+9	i
+10	j
+
+statement ok
+DROP TABLE my_datalake.default.merge_actions_metadata;
+
+endloop

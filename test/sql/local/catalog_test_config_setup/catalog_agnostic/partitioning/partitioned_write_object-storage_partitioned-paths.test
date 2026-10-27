@@ -22,7 +22,7 @@ INSERT INTO my_datalake.default.partitioned_paths_default VALUES
 query I
 SELECT count(*)
 FROM iceberg_metadata(my_datalake.default.partitioned_paths_default)
-WHERE file_path LIKE '%=%/%';
+WHERE replace(file_path, chr(92), '/') LIKE '%=%/%';
 ----
 2
 
@@ -51,7 +51,7 @@ INSERT INTO my_datalake.default.partitioned_paths_flat VALUES
 query II
 SELECT
   count(*) AS total_files,
-  count_if(file_path LIKE '%=%/%') AS hive_style_files
+  count_if(replace(file_path, chr(92), '/') LIKE '%=%/%') AS hive_style_files
 FROM iceberg_metadata(my_datalake.default.partitioned_paths_flat);
 ----
 2	0

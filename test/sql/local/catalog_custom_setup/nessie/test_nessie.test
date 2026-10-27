@@ -136,7 +136,7 @@ create table my_datalake.new_schema.table_1 as select range a from range(100);
 query I
 select message from duckdb_logs() where message like '%Failed%';
 ----
-Failed to create valid secret from Vended Credentials for table 'table_1'
+Failed to create valid secret from Vended Credentials for table '"my_datalake"."new_schema".table_1'
 
 statement ok
 SET httpfs_enable_credential_refresh=true;

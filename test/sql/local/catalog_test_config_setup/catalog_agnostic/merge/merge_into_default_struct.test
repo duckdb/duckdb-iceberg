@@ -107,12 +107,20 @@ WHEN NOT MATCHED THEN INSERT (id, col, col2) VALUES (s.id, s.col, s.col2)
 query III
 select * from my_datalake.default.tbl where id = 3;
 ----
-3	{'a': hello, 'b': 42, 'c': \xAA\xFF\xAA}	NULL
+3	{'a': hello, 'b': 42, 'c': '\\xAA\\xFF\\xAA'}	NULL
 
 query III
 select * from my_datalake.default.tbl where id = 6;
 ----
-6	{'a': hello, 'b': 42, 'c': \xAA\xFF\xAA}	NULL
+6	{'a': hello, 'b': 42, 'c': '\\xAA\\xFF\\xAA'}	NULL
+
+# Check the BLOB bytes for both the matched update and the inserted row.
+query ITIT
+select id, typeof(col.c), octet_length(col.c), hex(col.c)
+from my_datalake.default.tbl where id in (3, 6) order by id;
+----
+3	BLOB	3	AAFFAA
+6	BLOB	3	AAFFAA
 
 statement ok
 RESET __iceberg_unsafe_struct_null_default_interp;

@@ -1,0 +1,196 @@
+# name: test/sql/local/native_catalog/snapshot_ref_retention.test
+# description: Snapshot updates preserve explicit retention settings and leave omitted settings absent
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+CREATE MACRO check_retention(snapshot_ref) AS (
+	(json_extract(snapshot_ref, '$."min-snapshots-to-keep"')
+		IS NOT DISTINCT FROM json_extract(getvariable('retention_policy'), '$."min-snapshots-to-keep"'))
+	AND (json_extract(snapshot_ref, '$."max-snapshot-age-ms"')
+		IS NOT DISTINCT FROM json_extract(getvariable('retention_policy'), '$."max-snapshot-age-ms"'))
+	AND (json_extract(snapshot_ref, '$."max-ref-age-ms"')
+		IS NOT DISTINCT FROM json_extract(getvariable('retention_policy'), '$."max-ref-age-ms"'))
+	AND len(json_keys(snapshot_ref)) = len(json_keys(getvariable('retention_policy'))) + 2
+	AND json_extract_string(snapshot_ref, '$.type') = 'branch'
+);
+
+foreach version 2 3
+
+foreach policy all min_snapshots max_snapshot_age max_ref_age none
+
+statement ok
+SET VARIABLE retention_policy = CASE '{policy}'
+	WHEN 'all' THEN '{"min-snapshots-to-keep":7,"max-snapshot-age-ms":1209600000,"max-ref-age-ms":2592000000}'
+	WHEN 'min_snapshots' THEN '{"min-snapshots-to-keep":7}'
+	WHEN 'max_snapshot_age' THEN '{"max-snapshot-age-ms":1209600000}'
+	WHEN 'max_ref_age' THEN '{"max-ref-age-ms":2592000000}'
+	ELSE '{}'
+END::JSON;
+
+statement ok
+CREATE TABLE my_datalake.default.retention (id INTEGER, s VARCHAR) WITH ('format-version' = '{version}');
+
+# The first insert creates main without any explicit retention settings.
+statement ok
+INSERT INTO my_datalake.default.retention VALUES (1, 'a');
+
+query I
+SELECT len(json_keys(json_extract(body, '$.metadata.refs.main')))
+FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/retention', NULL);
+----
+2
+
+statement ok
+SET VARIABLE initial_snapshot = (
+	SELECT json_extract(body, '$.metadata."current-snapshot-id"')::BIGINT
+	FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/retention', NULL)
+);
+
+# Install the policy as an external writer such as Spark would.
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/retention',
+	json_object('requirements', json_array(), 'updates', json_array(
+		json_merge_patch(getvariable('retention_policy'),
+			json_object('action', 'set-snapshot-ref', 'ref-name', 'main', 'type', 'branch',
+				'snapshot-id', getvariable('initial_snapshot'))))));
+----
+200
+
+statement ok
+INSERT INTO my_datalake.default.retention VALUES (2, 'b');
+
+query III
+SELECT check_retention(json_extract(body, '$.metadata.refs.main')),
+	json_extract(body, '$.metadata.refs.main."snapshot-id"') = json_extract(body, '$.metadata."current-snapshot-id"'),
+	json_extract(body, '$.metadata.refs.main."snapshot-id"')::BIGINT <> getvariable('initial_snapshot')
+FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/retention', NULL);
+----
+true	true	true
+
+# Inspect the serialized INSERT commit, excluding the policy-setting request
+# above by selecting the new snapshot ID produced by DuckDB.
+statement ok
+SET VARIABLE inserted_snapshot = (
+	SELECT json_extract(body, '$.metadata."current-snapshot-id"')::BIGINT
+	FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/retention', NULL)
+);
+
+query IIII
+SELECT
+	json_extract(ref_update.value, '$."min-snapshots-to-keep"')
+		IS NOT DISTINCT FROM json_extract(getvariable('retention_policy'), '$."min-snapshots-to-keep"'),
+	json_extract(ref_update.value, '$."max-snapshot-age-ms"')
+		IS NOT DISTINCT FROM json_extract(getvariable('retention_policy'), '$."max-snapshot-age-ms"'),
+	json_extract(ref_update.value, '$."max-ref-age-ms"')
+		IS NOT DISTINCT FROM json_extract(getvariable('retention_policy'), '$."max-ref-age-ms"'),
+	json_extract_string(ref_update.value, '$."ref-name"') = 'main'
+		AND len(json_keys(ref_update.value)) = len(json_keys(getvariable('retention_policy'))) + 4
+FROM read_json_auto('{TEMP_DIR}/iceberg-native/*/requests.jsonl') AS journal,
+	json_each(try_cast(journal.request AS JSON), '$."table-changes"') AS table_change,
+	json_each(table_change.value, '$.updates') AS ref_update
+WHERE journal.method = 'POST' AND journal.path = '/v1/transactions/commit' AND journal.status = 204
+	AND json_extract_string(table_change.value, '$.identifier.name') = 'retention'
+	AND json_extract_string(ref_update.value, '$.action') = 'set-snapshot-ref'
+	AND json_extract(ref_update.value, '$."snapshot-id"')::BIGINT = getvariable('inserted_snapshot');
+----
+true	true	true	true
+
+# Explicit transactions and format upgrades copy the table metadata before committing.
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.retention SET ('format-version' = 3);
+
+statement ok
+UPDATE my_datalake.default.retention SET s = 'updated' WHERE id = 1;
+
+statement ok
+DELETE FROM my_datalake.default.retention WHERE id = 2;
+
+statement ok
+COMMIT;
+
+query II
+SELECT check_retention(json_extract(body, '$.metadata.refs.main')),
+	json_extract(body, '$.metadata.refs.main."snapshot-id"') = json_extract(body, '$.metadata."current-snapshot-id"')
+FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/retention', NULL);
+----
+true	true
+
+query IT
+SELECT * FROM my_datalake.default.retention;
+----
+1	updated
+
+# Rollback changes an existing reference without creating a new snapshot.
+query I
+SELECT current_snapshot_id = getvariable('initial_snapshot')
+FROM iceberg_rollback_to_snapshot('my_datalake.default.retention', getvariable('initial_snapshot'));
+----
+true
+
+query II
+SELECT check_retention(json_extract(body, '$.metadata.refs.main')),
+	json_extract(body, '$.metadata.refs.main."snapshot-id"')::BIGINT = getvariable('initial_snapshot')
+FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/retention', NULL);
+----
+true	true
+
+query IT
+SELECT * FROM my_datalake.default.retention;
+----
+1	a
+
+# A retry must use the refreshed policy, including settings removed by another writer.
+statement ok con1
+BEGIN;
+
+statement ok con1
+INSERT INTO my_datalake.default.retention VALUES (3, 'c');
+
+statement ok
+SET VARIABLE retention_policy = '{"min-snapshots-to-keep":11,"max-ref-age-ms":31536000000}'::JSON;
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/retention',
+	json_object('requirements', json_array(), 'updates', json_array(
+		json_merge_patch(getvariable('retention_policy'),
+			json_object('action', 'set-snapshot-ref', 'ref-name', 'main', 'type', 'branch',
+				'snapshot-id', getvariable('initial_snapshot'))))));
+----
+200
+
+# Advance main so con1's first commit attempt conflicts and reloads the metadata.
+statement ok
+INSERT INTO my_datalake.default.retention VALUES (4, 'd');
+
+statement ok con1
+COMMIT;
+
+query II
+SELECT check_retention(json_extract(body, '$.metadata.refs.main')),
+	json_extract(body, '$.metadata.refs.main."snapshot-id"') = json_extract(body, '$.metadata."current-snapshot-id"')
+FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/retention', NULL);
+----
+true	true
+
+query IT rowsort
+SELECT * FROM my_datalake.default.retention;
+----
+1	a
+3	c
+4	d
+
+statement ok
+DROP TABLE my_datalake.default.retention;
+
+endloop
+
+endloop

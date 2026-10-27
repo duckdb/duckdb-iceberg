@@ -3,6 +3,8 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
+require-env SCAN_PLANNING_MODE client
+
 include test/sql/init_requires
 
 require icu
@@ -29,8 +31,8 @@ select ts from my_datalake.default.day_partitioned_table where ts = '2025-01-04 
 2025-01-04 00:00:00+00
 2025-01-04 00:00:00+00
 
-# FIXME: used to be 3, test is most likely broken now
+# The first three days must be pruned by the day partition value.
 query I
-select count(*) from duckdb_logs() where type = 'Iceberg' and regexp_matches(message, '.*skipped.*data_file.*partition column.*with transform.*does not match filter.*ts=.*2025-01-04 00:00:00\+00.*');
+select count(*) from duckdb_logs() where type = 'Iceberg' and regexp_matches(message, '.*skipped.*data_file.*partition column.*with transform.*does not match filter.*ts\s*=\s*''2025-01-04 00:00:00\+00''.*');
 ----
-0
+3

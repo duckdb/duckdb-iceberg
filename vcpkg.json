@@ -15,6 +15,7 @@
 				"sts",
 				"identity-management",
 				"redshift",
+				"redshift-serverless",
 				"rds",
 				"cloudformation"
 			]

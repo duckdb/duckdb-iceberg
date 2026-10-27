@@ -3,8 +3,9 @@
 
 namespace duckdb {
 
-BoundIcebergManifestListEntry::BoundIcebergManifestListEntry(idx_t index, const IcebergManifestListEntry &entry)
-    : entry(entry), index(index) {
+BoundIcebergManifestListEntry::BoundIcebergManifestListEntry(idx_t index, const IcebergManifestListEntry &entry,
+                                                             IcebergRowLineageMode row_lineage_mode)
+    : entry(entry), row_lineage_mode(row_lineage_mode), index(index) {
 	next_row_id = entry.GetManifest().first_row_id;
 }
 

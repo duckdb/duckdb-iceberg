@@ -137,14 +137,14 @@ virtual_column_map_t IcebergTableSchemaVersion::VirtualColumns(int32_t iceberg_v
 //! NOTE: IcebergDelete::FindIcebergScan needs to change in tandem with this method
 vector<column_t> IcebergTableSchemaVersion::GetRowIdColumns() const {
 	vector<column_t> result;
-	auto &table_metadata = table_info.table_metadata;
-	if (table_metadata.iceberg_version >= 3) {
-		//! Project the _row_id column as part of the row-id-columns
-		result.push_back(COLUMN_IDENTIFIER_ROW_ID);
-	}
-
+	//! MERGE interprets a NULL first row-ID column as an absent target, so physical identity comes first.
 	result.push_back(MultiFileReader::COLUMN_IDENTIFIER_FILENAME);
 	result.push_back(MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER);
+	auto &table_metadata = table_info.table_metadata;
+	if (table_metadata.iceberg_version >= 3) {
+		//! Preserve assigned lineage on UPDATE; pending rows may have no assigned ID.
+		result.push_back(COLUMN_IDENTIFIER_ROW_ID);
+	}
 	return result;
 }
 

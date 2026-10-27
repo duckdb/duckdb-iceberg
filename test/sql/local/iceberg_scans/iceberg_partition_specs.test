@@ -1,0 +1,43 @@
+# name: test/sql/local/iceberg_scans/iceberg_partition_specs.test
+# description: iceberg_partition_specs lists the fields of every partition spec of a table
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+# one identity field
+query IIIIIII
+SELECT * FROM iceberg_partition_specs('{WORKING_DIRECTORY}/data/persistent/partition_integer');
+----
+0	true	1000	partition_col	identity	1	partition_col
+
+# the spec the table was created with and the one it evolved to, which is the default
+query IIIIIII
+SELECT * FROM iceberg_partition_specs('{WORKING_DIRECTORY}/data/persistent/hive_partitioned_table/metadata/v4.metadata.json');
+----
+0	false	1000	event_date	identity	1	event_date
+1	true	1000	event_date	identity	1	event_date
+1	true	1001	event_type	identity	3	event_type
+
+# several transforms of one source column
+query IIIII
+SELECT spec_id, field_id, name, transform, source_column
+FROM iceberg_partition_specs('{WORKING_DIRECTORY}/data/persistent/timestamptz_ns/metadata/v1.metadata.json');
+----
+0	1000	val_year	year	val
+0	1001	val_month	month	val
+0	1002	val_day	day	val
+0	1003	val_hour	hour	val
+
+# an unpartitioned table has no partition fields
+query I
+SELECT count(*) FROM iceberg_partition_specs('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg');
+----
+0
+
+statement ok
+create table t1 as select range a from range(10);
+
+statement error
+select * from iceberg_partition_specs(memory.main.t1);
+----
+<REGEX>:.*Invalid Input Error.*t1 is not an Iceberg table.*

@@ -113,6 +113,8 @@ public:
 	//! When set, this insert is part of an UPDATE: points to the delete operator so Finalize
 	//! can call AddUpdateSnapshot instead of AddSnapshot.
 	optional_ptr<PhysicalOperator> update_delete_op;
+	//! Contribute this action's files to the active MERGE's snapshot.
+	bool merge_action = false;
 	//! When set, this insert is a CTAS whose table is created lazily by this copy operator (its child).
 	//! Sink/Finalize resolve the TableCatalogEntry through it instead of through `table`.
 	optional_ptr<IcebergCopyToFile> ctas_copy_op;

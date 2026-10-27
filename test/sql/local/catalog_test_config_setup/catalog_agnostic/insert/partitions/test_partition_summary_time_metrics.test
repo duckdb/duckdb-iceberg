@@ -1,0 +1,126 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/test_partition_summary_time_metrics.test
+# description: TIME bounds preserve microseconds and metrics modes affect files, not partition summaries.
+# group: [partitions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+foreach mode none counts truncate(1) full
+
+foreach layout unpartitioned partitioned
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.time_metrics_{layout};
+
+endloop
+
+statement ok
+CREATE TABLE my_datalake.default.time_metrics_unpartitioned (t TIME, forced_full TIME, forced_none TIME)
+WITH ('write.metadata.metrics.default' = '{mode}',
+	'write.metadata.metrics.column.forced_full' = 'full',
+	'write.metadata.metrics.column.forced_none' = 'none');
+
+statement ok
+CREATE TABLE my_datalake.default.time_metrics_partitioned (t TIME, forced_full TIME, forced_none TIME)
+PARTITIONED BY (t)
+WITH ('write.metadata.metrics.default' = '{mode}',
+	'write.metadata.metrics.column.forced_full' = 'full',
+	'write.metadata.metrics.column.forced_none' = 'none');
+
+foreach layout unpartitioned partitioned
+
+statement ok
+INSERT INTO my_datalake.default.time_metrics_{layout}
+SELECT t, t, t FROM (VALUES
+	(TIME '00:00:00'),
+	(TIME '00:00:00.000001'),
+	(TIME '12:34:56.123456'),
+	(TIME '23:59:59.999999'),
+	(NULL)
+) v(t);
+
+# Keep delegated credentials in scope while inspecting the Avro files.
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE time_metrics_list = (
+	SELECT manifest_list FROM iceberg_snapshots(my_datalake.default.time_metrics_{layout})
+);
+
+# Verify the wire encoding independently of IcebergValue::DeserializeValue.
+query I
+SELECT CASE WHEN '{layout}' = 'partitioned' THEN
+	len(partitions) = 1 AND partitions[1].contains_null AND NOT partitions[1].contains_nan
+	AND hex(partitions[1].lower_bound) = '0000000000000000'
+	AND hex(partitions[1].upper_bound) = 'FF5FD71D14000000'
+ELSE partitions IS NULL END
+FROM read_avro(getvariable('time_metrics_list'));
+----
+true
+
+statement ok
+SET VARIABLE time_metrics_manifests = (
+	SELECT list(DISTINCT manifest_path) FROM iceberg_metadata(my_datalake.default.time_metrics_{layout})
+);
+
+# Full mode and even truncate(1) retain all eight bytes of a TIME bound.
+# Per-column settings override the default, including when that default is none.
+query III
+SELECT
+	bool_and(CASE WHEN '{mode}' IN ('full', 'truncate(1)') THEN
+		data_file.lower_bounds[1] IS NOT DISTINCT FROM data_file.lower_bounds[2]
+		AND data_file.upper_bounds[1] IS NOT DISTINCT FROM data_file.upper_bounds[2]
+	ELSE data_file.lower_bounds[1] IS NULL AND data_file.upper_bounds[1] IS NULL END),
+	bool_and((data_file.null_value_counts[1] IS NULL) = ('{mode}' = 'none')),
+	bool_and(data_file.lower_bounds[3] IS NULL AND data_file.upper_bounds[3] IS NULL
+		AND data_file.null_value_counts[3] IS NULL)
+FROM read_avro(getvariable('time_metrics_manifests'));
+----
+true	true	true
+
+query II
+SELECT
+	list_sort(list(hex(data_file.lower_bounds[2])) FILTER (WHERE data_file.lower_bounds[2] IS NOT NULL))
+		= CASE WHEN '{layout}' = 'partitioned' THEN
+			['0000000000000000', '0100000000000000', '40FEDB8B0A000000', 'FF5FD71D14000000']
+		ELSE ['0000000000000000'] END,
+	list_sort(list(hex(data_file.upper_bounds[2])) FILTER (WHERE data_file.upper_bounds[2] IS NOT NULL))
+		= CASE WHEN '{layout}' = 'partitioned' THEN
+			['0000000000000000', '0100000000000000', '40FEDB8B0A000000', 'FF5FD71D14000000']
+		ELSE ['FF5FD71D14000000'] END
+FROM read_avro(getvariable('time_metrics_manifests'));
+----
+true	true
+
+statement ok
+COMMIT;
+
+query I
+SELECT count(*) FROM my_datalake.default.time_metrics_{layout} WHERE t = TIME '00:00:00.000001';
+----
+1
+
+query I
+SELECT count(*) FROM my_datalake.default.time_metrics_{layout}
+WHERE t BETWEEN TIME '00:00:00' AND TIME '12:34:56.123456';
+----
+3
+
+query I
+SELECT count(*) FROM my_datalake.default.time_metrics_{layout} WHERE t = TIME '23:59:59.999999';
+----
+1
+
+query I
+SELECT count(*) FROM my_datalake.default.time_metrics_{layout} WHERE t IS NULL;
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.time_metrics_{layout};
+
+endloop
+
+endloop

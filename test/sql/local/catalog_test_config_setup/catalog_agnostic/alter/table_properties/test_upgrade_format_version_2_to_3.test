@@ -91,16 +91,16 @@ ALTER TABLE my_datalake.default.v2_to_v3_upgrade SET (
 	'format-version'=3
 );
 
-# Immediately after upgrade, no V3 snapshot written yet: the columns exist, row IDs are still NULL.
-# Sequence 1 because the positional delete did not rewrite the data file.
+# Immediately after upgrade, no V3 snapshot written yet: the columns exist, and both are NULL because the
+# data file has no first_row_id yet.
 query III
 SELECT _last_updated_sequence_number, _row_id, id FROM my_datalake.default.v2_to_v3_upgrade ORDER BY id;
 ----
-1	NULL	1
-1	NULL	3
-1	NULL	5
-1	NULL	7
-1	NULL	9
+NULL	NULL	1
+NULL	NULL	3
+NULL	NULL	5
+NULL	NULL	7
+NULL	NULL	9
 
 # V3 Phase insert V3 rows
 

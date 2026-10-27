@@ -7,8 +7,8 @@ require-env CATALOG_TEST_CONFIG_SETUP
 include test/sql/init_requires
 
 # VARCHAR can have a lower bound but no representable truncated upper bound.
-# TIME and UUID currently cannot serialize either bound. Do not add bounds for
-# those types: exercise the generic fallback for unavailable statistics.
+# TIME and UUID with compatible extrema can serialize both bounds. Check that
+# adding support for them preserves null-only summaries and the VARCHAR fallback.
 foreach type VARCHAR TIME UUID
 
 statement ok
@@ -47,7 +47,7 @@ SET VARIABLE missing_bounds_list = (
 # Null bounds are valid only when there are no non-null partition values.
 # The optional partitions list is the place to express unavailable summaries.
 query I
-SELECT bool_and((partitions IS NULL) = ('{nulls}' <> 'all'))
+SELECT bool_and((partitions IS NULL) = ('{type}' = 'VARCHAR' AND '{nulls}' <> 'all'))
 FROM read_avro(getvariable('missing_bounds_list'));
 ----
 true
@@ -57,7 +57,11 @@ SELECT CASE WHEN '{nulls}' = 'all' THEN
 	len(partitions) = 2 AND partitions[2].contains_null
 	AND NOT partitions[2].contains_nan
 	AND partitions[2].lower_bound IS NULL AND partitions[2].upper_bound IS NULL
-ELSE partitions IS NULL END
+WHEN '{type}' = 'VARCHAR' THEN partitions IS NULL
+ELSE len(partitions) = 2
+	AND partitions[2].contains_null = ('{nulls}' = 'mixed')
+	AND NOT partitions[2].contains_nan
+	AND partitions[2].lower_bound IS NOT NULL AND partitions[2].upper_bound IS NOT NULL END
 FROM read_avro(getvariable('missing_bounds_list'));
 ----
 true

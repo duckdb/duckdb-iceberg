@@ -23,7 +23,7 @@ index dfb919d..0a0393f 100644
  static enum aws_event_loop_type s_default_event_loop_type_override = AWS_EVENT_LOOP_PLATFORM_DEFAULT;
  #endif
  
-+#ifdef EMSCRIPTEN
++#ifdef __EMSCRIPTEN__
 +int aws_default_dns_resolve(
 +    struct aws_allocator *allocator,
 +    const struct aws_string *host_name,
@@ -41,7 +41,7 @@ index dfb919d..0a0393f 100644
   * If `aws_event_loop_override_default_type` has been called, return the override default type.
   */
  enum aws_event_loop_type aws_event_loop_get_default_type(void) {
-+#ifdef EMSCRIPTEN
++#ifdef __EMSCRIPTEN__
 +    return s_default_event_loop_type_override;
 +#else
      if (s_default_event_loop_type_override != AWS_EVENT_LOOP_PLATFORM_DEFAULT) {
@@ -63,7 +63,7 @@ index 22cd1fc..f19579c 100644
  
  /* Update socket->local_endpoint based on the results of getsockname() */
  static int s_update_local_endpoint(struct aws_socket *socket) {
-+#ifdef EMSCRIPTEN
++#ifdef __EMSCRIPTEN__
 +    return 0;
 +#else
      struct aws_socket_endpoint tmp_endpoint;
@@ -82,7 +82,7 @@ index 22cd1fc..f19579c 100644
      int events,
      void *user_data) {
 -
-+#ifdef EMSCRIPTEN
++#ifdef __EMSCRIPTEN__
 +    return;
 +#else
      (void)event_loop;
@@ -104,7 +104,7 @@ index de516be..a2a6930 100644
  void aws_tls_init_vtable(struct aws_allocator *allocator) {
      (void)allocator;
 
-+#ifndef EMSCRIPTEN
++#ifndef __EMSCRIPTEN__
      /* Allow the vtable to be set up only once on library initialization. */
      static bool s_vtable_initialized = false;
      if (s_vtable_initialized) {
@@ -116,7 +116,7 @@ index de516be..a2a6930 100644
  }
 
  void aws_tls_init_static_state(struct aws_allocator *allocator) {
-+#ifdef EMSCRIPTEN
++#ifdef __EMSCRIPTEN__
 +    (void)allocator;
 +#else
      AWS_PRECONDITION(s_tls_channel_handler_vtable.init_static_state);
@@ -125,7 +125,7 @@ index de516be..a2a6930 100644
  }
 
  void aws_tls_clean_up_static_state(void) {
-+#ifndef EMSCRIPTEN
++#ifndef __EMSCRIPTEN__
      AWS_PRECONDITION(s_tls_channel_handler_vtable.clean_up_static_state);
      s_tls_channel_handler_vtable.clean_up_static_state();
 +#endif
@@ -136,7 +136,7 @@ index de516be..a2a6930 100644
  }
 
  struct aws_tls_ctx *aws_tls_client_ctx_new(struct aws_allocator *alloc, const struct aws_tls_ctx_options *options) {
-+#ifdef EMSCRIPTEN
++#ifdef __EMSCRIPTEN__
 +    return NULL;
 +#else
      AWS_PRECONDITION(s_tls_channel_handler_vtable.client_ctx_new);

@@ -19,21 +19,26 @@ drop table if exists my_datalake.default.eq_fast_large;
 
 statement ok
 create table eq_fast_large_input as
-select i as id, i % 8 as a, (i // 8) % 8 as b, (i // 64) % 8 as c, (i // 512) % 8 as d
+select i as id,
+	2 * (i % 8) as a,
+	2 * ((i // 8) % 8) as b,
+	2 * ((i // 64) % 8) as c,
+	2 * ((i // 512) % 8) as d
 from range(4105) t(i);
 
 statement ok
 create table my_datalake.default.eq_fast_large as select * from eq_fast_large_input;
 
 # 7 * 8 * 8 * 8 = 3584 delete tuples: exceeds STANDARD_VECTOR_SIZE (2048)
-# and leaves a partial final insertion slice. Use OR predicates to avoid IN
-# being rewritten to a range or join, which would write positional deletes.
+# and leaves a partial final insertion slice. Core now rewrites consecutive
+# integer OR equalities into ranges (https://github.com/duckdb/duckdb/pull/26812).
+# Use nonconsecutive keys to preserve equality filters and avoid positional deletes.
 statement ok
 delete from my_datalake.default.eq_fast_large
-where (a = 0 or a = 1 or a = 2 or a = 3 or a = 4 or a = 5 or a = 6)
-  and (b = 0 or b = 1 or b = 2 or b = 3 or b = 4 or b = 5 or b = 6 or b = 7)
-  and (c = 0 or c = 1 or c = 2 or c = 3 or c = 4 or c = 5 or c = 6 or c = 7)
-  and (d = 0 or d = 1 or d = 2 or d = 3 or d = 4 or d = 5 or d = 6 or d = 7);
+where (a = 0 or a = 2 or a = 4 or a = 6 or a = 8 or a = 10 or a = 12)
+  and (b = 0 or b = 2 or b = 4 or b = 6 or b = 8 or b = 10 or b = 12 or b = 14)
+  and (c = 0 or c = 2 or c = 4 or c = 6 or c = 8 or c = 10 or c = 12 or c = 14)
+  and (d = 0 or d = 2 or d = 4 or d = 6 or d = 8 or d = 10 or d = 12 or d = 14);
 
 query II
 select count(*), sum(record_count)
@@ -46,7 +51,7 @@ where content = 'EQUALITY_DELETES' and status != 'DELETED';
 # tuples at the end of the data file, beyond multiple full probe vectors.
 statement ok
 create table eq_fast_large_expected as
-select id from eq_fast_large_input where not (a < 7 and b < 8 and c < 8 and d < 8);
+select id from eq_fast_large_input where not (a < 14 and b < 16 and c < 16 and d < 16);
 
 query I
 select count(*) from eq_fast_large_expected;

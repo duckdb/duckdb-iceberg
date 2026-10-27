@@ -53,14 +53,14 @@ query I
 select count(*)
 from iceberg_metadata('my_datalake.default.rewrite_partitioned')
 where content = 'DATA' and status <> 'DELETED'
-  and file_path like '%/category=%';
+  and replace(file_path, chr(92), '/') like '%/category=%';
 ----
 12
 
-query III
+query IIIII
 call iceberg_rewrite_data_files('my_datalake.default.rewrite_partitioned');
 ----
-12	2	<REGEX>:[1-9][0-9]*
+12	2	<REGEX>:[1-9][0-9]*	0	0
 
 query I
 select count(*) from my_datalake.default.rewrite_partitioned;
@@ -96,10 +96,10 @@ select category, count(*) from my_datalake.default.rewrite_partitioned group by 
 a	6
 b	6
 
-query III
+query IIIII
 call iceberg_rewrite_data_files('my_datalake.default.rewrite_partitioned');
 ----
-0	0	0
+0	0	0	0	0
 
 statement ok
 drop table if exists my_datalake.default.rewrite_partitioned;

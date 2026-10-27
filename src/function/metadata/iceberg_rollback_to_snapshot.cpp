@@ -111,8 +111,8 @@ static void IcebergRollbackToSnapshotFunction(ClientContext &context, TableFunct
 	auto &table_info = iceberg_table->table_info;
 	auto previous_snapshot = table_info.table_metadata.GetLatestSnapshot();
 	int64_t previous_snapshot_id = 0;
-	if (previous_snapshot && previous_snapshot->snapshot_id) {
-		previous_snapshot_id = *previous_snapshot->snapshot_id;
+	if (previous_snapshot) {
+		previous_snapshot_id = previous_snapshot->snapshot_id;
 	}
 
 	auto &iceberg_transaction = IcebergTransaction::Get(context, iceberg_table->catalog);

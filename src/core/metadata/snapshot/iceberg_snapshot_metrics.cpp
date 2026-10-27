@@ -82,6 +82,74 @@ static bool TryParseMetricValue(const string &raw_value, int64_t &value) {
 	}
 }
 
+struct ManifestMetrics {
+	int64_t data_files = 0;
+	int64_t records = 0;
+	int64_t delete_files = 0;
+	int64_t position_delete_files = 0;
+	int64_t equality_delete_files = 0;
+	int64_t position_deletes = 0;
+	int64_t equality_deletes = 0;
+	int64_t deletion_vectors = 0;
+	int64_t files_size = 0;
+};
+
+struct ManifestChanges {
+	ManifestMetrics added;
+	ManifestMetrics removed;
+};
+
+static int64_t AddManifestRecords(int64_t current, int64_t count) {
+	int64_t result;
+	if (count < 0 || !TryAddOperator::Operation(current, count, result)) {
+		throw InvalidConfigurationException("Iceberg manifest record counts must fit in a nonnegative BIGINT");
+	}
+	return result;
+}
+
+static ManifestChanges CollectManifestChanges(IcebergManifestContentType content,
+                                              const vector<IcebergManifestEntry> &entries) {
+	ManifestChanges changes;
+	for (const auto &entry : entries) {
+		if (entry.status == IcebergManifestEntryStatusType::EXISTING) {
+			continue;
+		}
+		if (entry.status != IcebergManifestEntryStatusType::ADDED &&
+		    entry.status != IcebergManifestEntryStatusType::DELETED) {
+			throw InvalidConfigurationException("Invalid manifest entry status");
+		}
+		auto &metrics = entry.status == IcebergManifestEntryStatusType::ADDED ? changes.added : changes.removed;
+		const auto &file = entry.data_file;
+		if ((content == IcebergManifestContentType::DATA) != (file.content == IcebergManifestEntryContentType::DATA)) {
+			throw InvalidConfigurationException("Data file content does not match its manifest content");
+		}
+		metrics.files_size = IcebergUtils::AddFileSizeChecked(metrics.files_size, file.GetContentSizeInBytes());
+		switch (file.content) {
+		case IcebergManifestEntryContentType::DATA:
+			metrics.data_files++;
+			metrics.records = AddManifestRecords(metrics.records, file.record_count);
+			break;
+		case IcebergManifestEntryContentType::POSITION_DELETES:
+			metrics.delete_files++;
+			metrics.position_deletes = AddManifestRecords(metrics.position_deletes, file.record_count);
+			if (file.IsDeletionVector()) {
+				metrics.deletion_vectors++;
+			} else {
+				metrics.position_delete_files++;
+			}
+			break;
+		case IcebergManifestEntryContentType::EQUALITY_DELETES:
+			metrics.delete_files++;
+			metrics.equality_delete_files++;
+			metrics.equality_deletes = AddManifestRecords(metrics.equality_deletes, file.record_count);
+			break;
+		default:
+			throw InvalidConfigurationException("Unsupported Iceberg manifest entry content type");
+		}
+	}
+	return changes;
+}
+
 } // namespace
 
 metrics_map_t IcebergSnapshotMetrics::EmptyMetrics() {
@@ -206,61 +274,55 @@ void IcebergSnapshotMetrics::UpdateTotalFilesSize(int64_t added, int64_t removed
 	total_it->second = updated;
 }
 
-void IcebergSnapshotMetrics::AddManifestListEntry(const IcebergManifestListEntry &manifest_list_entry) {
-	if (!manifest_list_entry.metrics) {
-		throw InternalException("New manifest was produced without metrics!?");
-	}
-	auto &manifest_metrics = *manifest_list_entry.metrics;
+void IcebergSnapshotMetrics::AddManifestEntries(IcebergManifestContentType content,
+                                                const vector<IcebergManifestEntry> &entries) {
+	auto changes = CollectManifestChanges(content, entries);
+	const auto &added = changes.added;
+	const auto &removed = changes.removed;
 
-	if (manifest_metrics.added_files_size > 0) {
-		AddSizeMetric(IcebergSnapshotMetricType::ADDED_FILES_SIZE, manifest_metrics.added_files_size);
+	if (added.files_size > 0) {
+		AddSizeMetric(IcebergSnapshotMetricType::ADDED_FILES_SIZE, added.files_size);
 	}
-	if (manifest_metrics.removed_files_size > 0) {
-		AddSizeMetric(IcebergSnapshotMetricType::REMOVED_FILES_SIZE, manifest_metrics.removed_files_size);
+	if (removed.files_size > 0) {
+		AddSizeMetric(IcebergSnapshotMetricType::REMOVED_FILES_SIZE, removed.files_size);
 	}
-	UpdateTotalFilesSize(manifest_metrics.added_files_size, manifest_metrics.removed_files_size);
+	UpdateTotalFilesSize(added.files_size, removed.files_size);
 
-	auto &manifest_file = manifest_list_entry.GetManifest();
-	if (manifest_file.content == IcebergManifestContentType::DELETE) {
+	if (content == IcebergManifestContentType::DELETE) {
 		//! Delete file count metrics
-		AddMetric(IcebergSnapshotMetricType::ADDED_DELETE_FILES, manifest_metrics.added_delete_files);
-		AddMetric(IcebergSnapshotMetricType::REMOVED_DELETE_FILES, manifest_metrics.removed_delete_files);
-		UpdateTotalMetric(IcebergSnapshotMetricType::TOTAL_DELETE_FILES, manifest_metrics.added_delete_files,
-		                  manifest_metrics.removed_delete_files);
+		AddMetric(IcebergSnapshotMetricType::ADDED_DELETE_FILES, added.delete_files);
+		AddMetric(IcebergSnapshotMetricType::REMOVED_DELETE_FILES, removed.delete_files);
+		UpdateTotalMetric(IcebergSnapshotMetricType::TOTAL_DELETE_FILES, added.delete_files, removed.delete_files);
 
 		//! Position delete file and record metrics. Deletion vectors contribute records, but not position delete files.
-		AddMetric(IcebergSnapshotMetricType::ADDED_POSITION_DELETE_FILES, manifest_metrics.added_position_delete_files);
-		AddMetric(IcebergSnapshotMetricType::REMOVED_POSITION_DELETE_FILES,
-		          manifest_metrics.removed_position_delete_files);
-		AddMetric(IcebergSnapshotMetricType::ADDED_DVS, manifest_metrics.added_deletion_vectors);
-		AddMetric(IcebergSnapshotMetricType::REMOVED_DVS, manifest_metrics.removed_deletion_vectors);
-		AddMetric(IcebergSnapshotMetricType::ADDED_POSITION_DELETES, manifest_metrics.added_position_deletes);
-		AddMetric(IcebergSnapshotMetricType::REMOVED_POSITION_DELETES, manifest_metrics.removed_position_deletes);
-		UpdateTotalMetric(IcebergSnapshotMetricType::TOTAL_POSITION_DELETES, manifest_metrics.added_position_deletes,
-		                  manifest_metrics.removed_position_deletes);
+		AddMetric(IcebergSnapshotMetricType::ADDED_POSITION_DELETE_FILES, added.position_delete_files);
+		AddMetric(IcebergSnapshotMetricType::REMOVED_POSITION_DELETE_FILES, removed.position_delete_files);
+		AddMetric(IcebergSnapshotMetricType::ADDED_DVS, added.deletion_vectors);
+		AddMetric(IcebergSnapshotMetricType::REMOVED_DVS, removed.deletion_vectors);
+		AddMetric(IcebergSnapshotMetricType::ADDED_POSITION_DELETES, added.position_deletes);
+		AddMetric(IcebergSnapshotMetricType::REMOVED_POSITION_DELETES, removed.position_deletes);
+		UpdateTotalMetric(IcebergSnapshotMetricType::TOTAL_POSITION_DELETES, added.position_deletes,
+		                  removed.position_deletes);
 
 		//! Equality delete file and record metrics
-		AddMetric(IcebergSnapshotMetricType::ADDED_EQUALITY_DELETE_FILES, manifest_metrics.added_equality_delete_files);
-		AddMetric(IcebergSnapshotMetricType::REMOVED_EQUALITY_DELETE_FILES,
-		          manifest_metrics.removed_equality_delete_files);
-		AddMetric(IcebergSnapshotMetricType::ADDED_EQUALITY_DELETES, manifest_metrics.added_equality_deletes);
-		AddMetric(IcebergSnapshotMetricType::REMOVED_EQUALITY_DELETES, manifest_metrics.removed_equality_deletes);
-		UpdateTotalMetric(IcebergSnapshotMetricType::TOTAL_EQUALITY_DELETES, manifest_metrics.added_equality_deletes,
-		                  manifest_metrics.removed_equality_deletes);
+		AddMetric(IcebergSnapshotMetricType::ADDED_EQUALITY_DELETE_FILES, added.equality_delete_files);
+		AddMetric(IcebergSnapshotMetricType::REMOVED_EQUALITY_DELETE_FILES, removed.equality_delete_files);
+		AddMetric(IcebergSnapshotMetricType::ADDED_EQUALITY_DELETES, added.equality_deletes);
+		AddMetric(IcebergSnapshotMetricType::REMOVED_EQUALITY_DELETES, removed.equality_deletes);
+		UpdateTotalMetric(IcebergSnapshotMetricType::TOTAL_EQUALITY_DELETES, added.equality_deletes,
+		                  removed.equality_deletes);
 		return;
 	}
 
 	//! Data file count metrics
-	AddMetric(IcebergSnapshotMetricType::ADDED_DATA_FILES, manifest_metrics.added_data_files);
-	AddMetric(IcebergSnapshotMetricType::DELETED_DATA_FILES, manifest_metrics.deleted_data_files);
-	UpdateTotalMetric(IcebergSnapshotMetricType::TOTAL_DATA_FILES, manifest_metrics.added_data_files,
-	                  manifest_metrics.deleted_data_files);
+	AddMetric(IcebergSnapshotMetricType::ADDED_DATA_FILES, added.data_files);
+	AddMetric(IcebergSnapshotMetricType::DELETED_DATA_FILES, removed.data_files);
+	UpdateTotalMetric(IcebergSnapshotMetricType::TOTAL_DATA_FILES, added.data_files, removed.data_files);
 
 	//! Data record metrics
-	AddMetric(IcebergSnapshotMetricType::ADDED_RECORDS, manifest_metrics.added_records);
-	AddMetric(IcebergSnapshotMetricType::DELETED_RECORDS, manifest_metrics.deleted_records);
-	UpdateTotalMetric(IcebergSnapshotMetricType::TOTAL_RECORDS, manifest_metrics.added_records,
-	                  manifest_metrics.deleted_records);
+	AddMetric(IcebergSnapshotMetricType::ADDED_RECORDS, added.records);
+	AddMetric(IcebergSnapshotMetricType::DELETED_RECORDS, removed.records);
+	UpdateTotalMetric(IcebergSnapshotMetricType::TOTAL_RECORDS, added.records, removed.records);
 }
 
 void IcebergSnapshotMetrics::RemoveManifestEntry(const IcebergManifestEntry &manifest_entry) {

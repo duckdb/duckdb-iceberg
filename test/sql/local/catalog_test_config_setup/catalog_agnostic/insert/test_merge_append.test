@@ -6,6 +6,7 @@ require-env CATALOG_TEST_CONFIG_SETUP
 
 include test/sql/init_requires
 
+require json
 
 statement ok
 drop table if exists my_datalake.default.merge_tbl;
@@ -67,6 +68,24 @@ set variable latest_merge_snapshot_id = (
 	limit 1
 );
 
+# Repacking the old manifests is metadata maintenance. Only the latest insert
+# contributes additions; the inherited data-file and record totals remain intact.
+query IIIIII
+select
+	json_extract_string(snap, '$.summary."added-data-files"')::BIGINT,
+	json_extract_string(snap, '$.summary."deleted-data-files"')::BIGINT,
+	json_extract_string(snap, '$.summary."total-data-files"')::BIGINT,
+	json_extract_string(snap, '$.summary."added-records"')::BIGINT,
+	json_extract_string(snap, '$.summary."deleted-records"')::BIGINT,
+	json_extract_string(snap, '$.summary."total-records"')::BIGINT
+from (
+	select unnest(json_extract(metadata::JSON, '$.snapshots[*]')) as snap
+	from iceberg_load_table_response(my_datalake.default.merge_tbl)
+)
+where json_extract_string(snap, '$."snapshot-id"')::BIGINT = getvariable('latest_merge_snapshot_id');
+----
+1	0	3	2	0	6
+
 # Start transaction to keep necessary credentials in scope
 statement ok
 begin
@@ -79,9 +98,8 @@ set variable latest_merge_manifest_list = (
 	limit 1
 );
 
-# The merged replacement manifest is written before the new snapshot id exists, so it must be stamped
-# when the final manifest list is assembled. Verify the published manifest list contains no placeholder
-# snapshot ids and that every manifest in the latest list is attributed to the latest snapshot.
+# Both the merged replacement and the new data manifest belong to this snapshot.
+# Verify that every manifest in the latest list has that snapshot's identity.
 query II
 select
 	count(*) filter (where added_snapshot_id = getvariable('latest_merge_snapshot_id')),

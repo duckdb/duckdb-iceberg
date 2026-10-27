@@ -1,0 +1,121 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/merge/test_one_merge_one_snapshot.test
+# description: A MERGE publishes its update and insert in one snapshot.
+# group: [merge]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SNAPSHOT_HISTORY_SUPPORT
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+foreach version 2 3
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.merge_single_snapshot;
+
+statement ok
+CREATE TABLE my_datalake.default.merge_single_snapshot (id INTEGER, v VARCHAR)
+WITH ('format-version' = '{version}');
+
+statement ok
+INSERT INTO my_datalake.default.merge_single_snapshot VALUES (1, 'a'), (2, 'b');
+
+query I
+MERGE INTO my_datalake.default.merge_single_snapshot t
+USING (VALUES (2, 'B'), (3, 'c')) s(id, v) ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET v = s.v
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
+----
+2
+
+query IT
+SELECT * FROM my_datalake.default.merge_single_snapshot ORDER BY id;
+----
+1	a
+2	B
+3	c
+
+query IT
+SELECT sequence_number, operation
+FROM iceberg_snapshots('my_datalake.default.merge_single_snapshot')
+ORDER BY sequence_number;
+----
+1	append
+2	overwrite
+
+# Neither action writes any rows.
+query I
+MERGE INTO my_datalake.default.merge_single_snapshot t
+USING (VALUES (2, 'ignored')) s(id, v) ON t.id = s.id
+WHEN MATCHED AND false THEN UPDATE SET v = s.v
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
+----
+0
+
+query I
+SELECT count(*) FROM iceberg_snapshots('my_datalake.default.merge_single_snapshot');
+----
+2
+
+# An empty update branch must not turn an append into an overwrite.
+query I
+MERGE INTO my_datalake.default.merge_single_snapshot t
+USING (VALUES (4, 'd')) s(id, v) ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET v = s.v
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
+----
+1
+
+query I
+MERGE INTO my_datalake.default.merge_single_snapshot t
+USING (VALUES (1, 'unused'), (5, 'e')) s(id, v) ON t.id = s.id
+WHEN MATCHED THEN DELETE
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
+----
+2
+
+# Multiple insert actions also share one snapshot.
+query I
+MERGE INTO my_datalake.default.merge_single_snapshot t
+USING (VALUES (6, 'f'), (7, 'g')) s(id, v) ON t.id = s.id
+WHEN NOT MATCHED AND s.id = 6 THEN INSERT VALUES (s.id, s.v)
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
+----
+2
+
+# An empty insert branch leaves a delete-only snapshot.
+query I
+MERGE INTO my_datalake.default.merge_single_snapshot t
+USING (VALUES (7, 'unused')) s(id, v) ON t.id = s.id
+WHEN MATCHED THEN DELETE
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
+----
+1
+
+query IT
+SELECT sequence_number, operation
+FROM iceberg_snapshots('my_datalake.default.merge_single_snapshot')
+ORDER BY sequence_number;
+----
+1	append
+2	overwrite
+3	append
+4	overwrite
+5	append
+6	delete
+
+query IT
+SELECT * FROM my_datalake.default.merge_single_snapshot ORDER BY id;
+----
+2	B
+3	c
+4	d
+5	e
+6	f
+
+statement ok
+DROP TABLE my_datalake.default.merge_single_snapshot;
+
+endloop

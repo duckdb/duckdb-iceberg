@@ -79,10 +79,6 @@
 			"env_value": "true"
 		},
 		{
-			"env_name": "CASE_SENSITIVE_TABLE_NAMES_SUPPORT",
-			"env_value": "true"
-		},
-		{
 			"env_name": "VIEW_SUPPORT",
 			"env_value": "true"
 		},

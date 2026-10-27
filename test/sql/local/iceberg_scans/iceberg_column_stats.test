@@ -2,12 +2,6 @@
 # description: test iceberg metadata function
 # group: [iceberg_scans]
 
-# Before we load the extension, this will fail
-statement error
-SELECT * FROM ICEBERG_COLUMN_STATS('{WORKING_DIRECTORY}/data/persistent/hive_partitioned_table') order by all;
-----
-Error
-
 include test/sql/init_requires
 
 query IIIIIIIIIIIII

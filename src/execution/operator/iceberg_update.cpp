@@ -153,16 +153,15 @@ OperatorResultType IcebergUpdate::Execute(ExecutionContext &context, DataChunk &
 		insert_chunk.data[i].Reference(update_expression_chunk.data[i]);
 	}
 	if (row_id_index.IsValid()) {
-		// _row_id is the 3rd column from the end in the scan output:
-		// [..., _row_id, file_path, seq_row_id]
-		auto index = input.ColumnCount() - 3;
+		// V3 scan output ends in [file_path, file_row_number, _row_id].
+		auto index = input.ColumnCount() - 1;
 		insert_chunk.data[physical_column_count].Reference(input.data[index]);
 	}
 
 	chunk.Reference(insert_chunk);
 
-	// Sink the delete tracking columns (last 2 columns: file_path, row_id)
-	idx_t delete_idx_start = input.ColumnCount() - 2;
+	// Physical delete identity precedes the optional V3 lineage column.
+	idx_t delete_idx_start = input.ColumnCount() - (row_id_index.IsValid() ? 3 : 2);
 	for (idx_t i = 0; i < 2; i++) {
 		delete_chunk.data[i].Reference(input.data[delete_idx_start + i]);
 	}
@@ -201,8 +200,9 @@ OperatorFinalResultType IcebergUpdate::OperatorFinalize(Pipeline &pipeline, Even
                                                         OperatorFinalizeInput &input) const {
 	auto &iceberg_delete = delete_op.Cast<IcebergDelete>();
 	auto &delete_global_state = delete_op.sink_state->Cast<IcebergDeleteGlobalState>();
-	auto &iceberg_transaction = IcebergTransaction::Get(context, table.catalog);
-	iceberg_delete.FlushDeletes(iceberg_transaction, context, delete_global_state);
+	if (!delete_global_state.merge_deletes) {
+		iceberg_delete.FlushDeletes(context, delete_global_state);
+	}
 	return OperatorFinalResultType::FINISHED;
 }
 
@@ -226,6 +226,7 @@ PhysicalOperator &IcebergCatalog::PlanUpdate(ClientContext &context, PhysicalPla
 	}
 
 	auto &table_entry = op.table.Cast<IcebergTableSchemaVersion>();
+	table_entry.table_info.VerifyWriteEncryptionSupported();
 	table_entry.PrepareIcebergScanFromEntry(context);
 
 	auto &irc_transaction = IcebergTransaction::Get(context, *this);

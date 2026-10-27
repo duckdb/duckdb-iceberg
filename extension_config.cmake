@@ -3,30 +3,31 @@ if (NOT EMSCRIPTEN)
   duckdb_extension_load(avro
   LOAD_TESTS
   GIT_URL https://github.com/duckdb/duckdb-avro
-  GIT_TAG fa09aa71a716703cbd865a4f3cea17224202cde1
+  GIT_TAG 758fb6063cbb6da49b2e1c16c4044cfcafefc52f
   SUBMODULES "third_party/avro-c"
   APPLY_PATCHES
 )
+  duckdb_extension_statically_link(avro)
 endif()
 
 # Extension from this repo
-if (DONT_LINK OR "$ENV{DONT_LINK}")
-  set(ICEBERG_DONT_LINK "DONT_LINK")
-else()
-  set(ICEBERG_DONT_LINK "")
-endif()
-
-
+duckdb_extension_load(parquet)
 duckdb_extension_load(json)
 duckdb_extension_load(iceberg
     SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}
     LOAD_TESTS
-    ${ICEBERG_DONT_LINK}
 )
+# Static registration order is also database startup load order. Avro above and
+# Parquet here must precede Iceberg, so fresh databases (including CSV result readers)
+# do not try to auto-install unsigned copies from the build's extension repository.
+duckdb_extension_statically_link(parquet json iceberg)
 
 if (NOT EMSCRIPTEN)
+  # Use DuckDB's pinned HTTPFS configuration without relying on Make build flags.
+  include("${EXTENSION_CONFIG_BASE_DIR}/httpfs.cmake")
   duckdb_extension_load(tpch)
   duckdb_extension_load(icu)
+  duckdb_extension_statically_link(tpch icu httpfs)
   #  duckdb_extension_load(ducklake
   #        LOAD_TESTS
   #        GIT_URL https://github.com/duckdb/ducklake
@@ -37,8 +38,17 @@ if (NOT EMSCRIPTEN)
     duckdb_extension_load(aws
             LOAD_TESTS
             GIT_URL https://github.com/duckdb/duckdb-aws
-            GIT_TAG 7eaa663835aa5c627cb2b6f50ffcc5487ad973f3
-            APPLY_PATCHES
+            GIT_TAG 16ae9c135300f750478d648c2496f2952a6f2827 # main 2026-10-18 pin
     )
+    duckdb_extension_statically_link(aws)
   endif()
+endif()
+
+# The native REST mock is a separate, test-only extension. It is deliberately not
+# linked into Iceberg or the default DuckDB library; SQL tests load it explicitly.
+if (BUILD_UNITTESTS AND NOT EMSCRIPTEN)
+  duckdb_extension_load(iceberg_mock
+      SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}/test/native_catalog
+      INCLUDE_DIR ${CMAKE_CURRENT_LIST_DIR}/test/native_catalog
+  )
 endif()

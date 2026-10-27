@@ -1,5 +1,5 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_transactional_merge_into.test
-# description: MERGE INTO update+insert uses transaction-start metadata and conflicts at catalog commit
+# description: Multi-action MERGE uses transaction-start metadata and conflicts atomically at catalog commit
 # group: [transactions]
 
 require-env CATALOG_TEST_CONFIG_SETUP
@@ -38,7 +38,7 @@ create table my_datalake.default.multi_transaction_merge (
 # Create a snapshot before either concurrent transaction starts.
 statement ok
 insert into my_datalake.default.multi_transaction_merge values
-	(0, 0);
+	(0, 0), (1, 1);
 
 statement ok con1
 begin
@@ -59,22 +59,24 @@ query II con1
 select * from my_datalake.default.multi_transaction_merge order by id;
 ----
 0	0
+1	1
 
-# Build a single MERGE against stale catalog metadata. The first source row
-# updates an existing row and the second inserts a new row.
+# Build a single MERGE against stale catalog metadata, with an UPDATE and DELETE on the same data file.
 query I con1
 MERGE INTO my_datalake.default.multi_transaction_merge AS target
 USING (VALUES
 	(0, 50),
+	(1, 100),
 	(3, 3)
 ) AS source(id, value)
 ON target.id = source.id
-WHEN MATCHED THEN UPDATE SET value = source.value
+WHEN MATCHED AND source.id = 0 THEN UPDATE SET value = source.value
+WHEN MATCHED THEN DELETE
 WHEN NOT MATCHED THEN INSERT VALUES (source.id, source.value);
 ----
-2
+3
 
-# Both MERGE actions are visible locally, while con2's newer row remains hidden.
+# All MERGE actions are visible locally, while con2's newer row remains hidden.
 query II con1
 select * from my_datalake.default.multi_transaction_merge order by id;
 ----
@@ -82,15 +84,16 @@ select * from my_datalake.default.multi_transaction_merge order by id;
 3	3
 
 # The client constructed the update from stale metadata; the catalog detects
-# the stale parent snapshot and rejects the atomic update+insert at commit.
+# the stale parent snapshot and rejects the atomic update+delete+insert at commit.
 statement error con1
 commit;
 ----
 <REGEX>:.*Failed to commit.*
 
-# Neither part of the rejected MERGE reached committed state.
+# None of the rejected MERGE's actions reached committed state.
 query II
 select * from my_datalake.default.multi_transaction_merge order by id;
 ----
 0	0
+1	1
 2	2

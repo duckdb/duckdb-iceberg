@@ -12,12 +12,18 @@ vector<TableFunctionSet> IcebergFunctions::GetTableFunctions(ExtensionLoader &lo
 	vector<TableFunctionSet> functions;
 
 	functions.push_back(GetIcebergSnapshotsFunction());
+	functions.push_back(GetIcebergHistoryFunction());
+	functions.push_back(GetIcebergRefsFunction());
+	functions.push_back(GetIcebergPartitionSpecsFunction());
+	functions.push_back(GetIcebergPartitionsFunction());
 	functions.push_back(GetIcebergScanFunction(loader));
 	functions.push_back(GetIcebergScanPlanFunction());
 	functions.push_back(GetIcebergScanTasksFunction());
 	functions.push_back(GetIcebergMetadataFunction());
 	functions.push_back(GetIcebergColumnStatsFunction());
 	functions.push_back(GetIcebergPartitionStatsFunction());
+	functions.push_back(GetIcebergManifestsFunction());
+	functions.push_back(GetIcebergFilesFunction());
 	functions.push_back(GetIcebergTablePropertiesFunctions());
 	functions.push_back(SetIcebergTablePropertiesFunctions());
 	functions.push_back(RemoveIcebergTablePropertiesFunctions());

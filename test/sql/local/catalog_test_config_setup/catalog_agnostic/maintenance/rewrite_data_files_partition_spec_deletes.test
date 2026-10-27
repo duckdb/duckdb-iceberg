@@ -1,0 +1,103 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_partition_spec_deletes.test
+# description: Repartitioning by a finer transform preserves position deletes across capped rewrites
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.rewrite_spec_deletes;
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_spec_deletes (id INTEGER, ts TIMESTAMP)
+PARTITIONED BY (day(ts));
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_spec_deletes VALUES
+    (1, '2021-05-01 09:00:00'), (2, '2021-05-01 10:00:00');
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_spec_deletes VALUES
+    (3, '2021-05-02 09:00:00'), (4, '2021-05-02 10:00:00');
+
+statement ok
+ALTER TABLE my_datalake.default.rewrite_spec_deletes SET PARTITIONED BY (hour(ts));
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_spec_deletes VALUES (5, '2021-05-01 09:30:00');
+
+statement ok
+DELETE FROM my_datalake.default.rewrite_spec_deletes WHERE id IN (2, 4);
+
+query I
+SELECT count(*) FROM iceberg_metadata('my_datalake.default.rewrite_spec_deletes')
+WHERE content = 'POSITION_DELETES' AND status <> 'DELETED';
+----
+2
+
+# Only the historical group qualifies; rewrite one of its two files.
+query IIIII
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_spec_deletes', min_input_files => 2, max_files_to_rewrite => 1);
+----
+1	1	<REGEX>:[1-9][0-9]*	0	0
+
+query I
+SELECT count(*)
+FROM iceberg_metadata('my_datalake.default.rewrite_spec_deletes') m
+JOIN iceberg_manifests('my_datalake.default.rewrite_spec_deletes') s ON m.manifest_path = s.path
+WHERE m.content = 'DATA' AND m.status <> 'DELETED' AND s.partition_spec_id = 0;
+----
+1
+
+# Deletes on both the rewritten and untouched historical files must still apply.
+query IT
+SELECT id, ts FROM my_datalake.default.rewrite_spec_deletes ORDER BY id;
+----
+1	2021-05-01 09:00:00
+3	2021-05-02 09:00:00
+5	2021-05-01 09:30:00
+
+query IIIII
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_spec_deletes', rewrite_all => true);
+----
+3	2	<REGEX>:[1-9][0-9]*	0	0
+
+query II
+SELECT s.partition_spec_id, count(*)
+FROM iceberg_metadata('my_datalake.default.rewrite_spec_deletes') m
+JOIN iceberg_manifests('my_datalake.default.rewrite_spec_deletes') s ON m.manifest_path = s.path
+WHERE m.content = 'DATA' AND m.status <> 'DELETED'
+GROUP BY s.partition_spec_id;
+----
+1	2
+
+query I
+SELECT id FROM my_datalake.default.rewrite_spec_deletes
+WHERE ts >= '2021-05-01 09:00:00' AND ts < '2021-05-01 10:00:00'
+ORDER BY id;
+----
+1
+5
+
+query I
+SELECT id FROM my_datalake.default.rewrite_spec_deletes
+WHERE ts >= '2021-05-02 09:00:00' AND ts < '2021-05-02 10:00:00';
+----
+3
+
+query I
+SELECT count(*) FROM my_datalake.default.rewrite_spec_deletes WHERE id IN (2, 4);
+----
+0
+
+query I
+SELECT count(*) FROM (
+    SELECT filename FROM my_datalake.default.rewrite_spec_deletes
+    GROUP BY filename HAVING count(DISTINCT date_trunc('hour', ts)) > 1
+);
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_spec_deletes;

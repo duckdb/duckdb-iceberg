@@ -24,6 +24,9 @@ enum class IcebergTableResolution : uint8_t { LAZY, EAGER };
 struct IcebergAttachOptions {
 	string catalog_uri;
 	string warehouse;
+	string prefix;
+	string namespace_separator = "\x1f";
+	string default_region;
 	string secret;
 	string name;
 	// some catalogs do not yet support stage create
@@ -53,6 +56,13 @@ struct IcebergAttachOptions {
 };
 
 unordered_map<string, Value> NormalizeIcebergAttachOptions(const unordered_map<string, Value> &options);
+//! Translate supported catalog properties to the same option names used by ATTACH.
+//! Unknown server properties are ignored; unknown ATTACH options are still rejected.
+unordered_map<string, Value> NormalizeIcebergCatalogOptions(const case_insensitive_map_t<string> &properties);
+//! Merge one normalized property layer, including individual extra HTTP headers.
+void MergeIcebergOptions(unordered_map<string, Value> &target, const unordered_map<string, Value> &source);
+bool IsIcebergAuthorizationOption(const string &name);
+void FilterIcebergAuthorizationOptions(unordered_map<string, Value> &options, IcebergAuthorizationType type);
 
 struct IcebergAttach {
 	static unique_ptr<Catalog> Attach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,

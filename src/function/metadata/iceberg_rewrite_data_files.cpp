@@ -97,6 +97,11 @@ static RewriteDataFilesPlanInput ParseRewritePlanInput(TableFunctionBindInput &i
 			result.max_files_to_rewrite = value;
 		} else if (opt == "rewrite_all") {
 			result.rewrite_all = BooleanValue::Get(val);
+		} else if (opt == "output_spec_id") {
+			if (val.IsNull()) {
+				throw InvalidInputException("iceberg_rewrite_data_files: 'output_spec_id' cannot be NULL");
+			}
+			result.output_spec_id = val.GetValue<int32_t>();
 		}
 	}
 	if (result.min_file_size_bytes && result.max_file_size_bytes &&
@@ -175,7 +180,8 @@ static unique_ptr<LogicalOperator> RewriteDataFilesBindOperator(ClientContext &c
 		result->children.push_back(BindCandidateCopy(*input.binder, result->plan));
 	}
 
-	return_names = {"rewritten_data_files", "added_data_files", "rewritten_bytes"};
+	return_names = {"rewritten_data_files_count", "added_data_files_count", "rewritten_bytes_count",
+	                "failed_data_files_count", "removed_delete_files_count"};
 	return std::move(result);
 }
 
@@ -192,7 +198,8 @@ TableFunctionSet IcebergFunctions::GetIcebergRewriteDataFilesFunction() {
 		    .Add("max_file_size_bytes", LogicalType::ANY)
 		    .Add("min_input_files", LogicalType::BIGINT)
 		    .Add("max_files_to_rewrite", LogicalType::BIGINT)
-		    .Add("rewrite_all", LogicalType::BOOLEAN);
+		    .Add("rewrite_all", LogicalType::BOOLEAN)
+		    .Add("output_spec_id", LogicalType::INTEGER);
 	});
 	function_set.AddFunction(function);
 	return function_set;

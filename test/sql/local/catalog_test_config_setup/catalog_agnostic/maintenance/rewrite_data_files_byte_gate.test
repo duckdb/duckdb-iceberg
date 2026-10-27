@@ -1,0 +1,76 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_byte_gate.test
+# description: two eligible files rewrite only when their combined size is strictly greater than the target
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+drop table if exists my_datalake.default.rewrite_byte_gate;
+
+statement ok
+create table my_datalake.default.rewrite_byte_gate (id INTEGER, payload VARCHAR);
+
+statement ok
+insert into my_datalake.default.rewrite_byte_gate values (1, 'a');
+
+statement ok
+insert into my_datalake.default.rewrite_byte_gate values (2, 'b');
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_byte_gate')
+where content = 'DATA' and status <> 'DELETED';
+----
+2
+
+statement ok
+begin
+
+statement ok
+set variable input_file_paths = (
+	select list(file_path)
+	from iceberg_metadata('my_datalake.default.rewrite_byte_gate')
+	where content = 'DATA' and status <> 'DELETED'
+);
+
+statement ok
+set variable input_bytes = (
+	select sum(size)::BIGINT
+	from read_blob(getvariable('input_file_paths'))
+);
+
+statement ok
+commit
+
+# Combined size equal to the target does not qualify. min_input_files stays above the file count.
+query IIIII
+call iceberg_rewrite_data_files(
+	'my_datalake.default.rewrite_byte_gate',
+	target_file_size_bytes => getvariable('input_bytes'),
+	min_file_size_bytes => 1000000000,
+	max_file_size_bytes => 1000000000,
+	min_input_files => 5
+);
+----
+0	0	0	0	0
+
+query IIIII
+call iceberg_rewrite_data_files(
+	'my_datalake.default.rewrite_byte_gate',
+	target_file_size_bytes => getvariable('input_bytes') - 1,
+	min_file_size_bytes => 1000000000,
+	max_file_size_bytes => 1000000000,
+	min_input_files => 5
+);
+----
+2	1	<REGEX>:[1-9][0-9]*	0	0
+
+query I
+select count(*) from my_datalake.default.rewrite_byte_gate;
+----
+2
+
+statement ok
+drop table if exists my_datalake.default.rewrite_byte_gate;

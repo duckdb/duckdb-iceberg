@@ -47,10 +47,10 @@ explain select * from iceberg_rewrite_data_files('my_datalake.default.rewrite_pl
 ----
 physical_plan	<!REGEX>:.*UNION.*
 
-query III
+query IIIII
 call iceberg_rewrite_data_files('my_datalake.default.rewrite_plan_shape');
 ----
-12	2	<REGEX>:[1-9][0-9]*
+12	2	<REGEX>:[1-9][0-9]*	0	0
 
 query I
 select count(*)

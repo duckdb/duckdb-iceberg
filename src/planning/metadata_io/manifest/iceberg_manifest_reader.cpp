@@ -117,6 +117,12 @@ void ManifestReader::ReadChunk(DataChunk &chunk, const map<idx_t, LogicalType> &
 	auto &partition_spec = input.partition_spec;
 	auto &manifest_format_version = input.metadata.format_version;
 	auto &table_format_version = input.table_format_version;
+	//! The columns read below follow the table's format version, so a newer manifest has fields we did not read
+	if (manifest_format_version > table_format_version) {
+		throw InvalidConfigurationException(
+		    "Manifest file has format-version %d, which is newer than the table's format-version %d",
+		    manifest_format_version, table_format_version);
+	}
 
 	//! Setup logic
 

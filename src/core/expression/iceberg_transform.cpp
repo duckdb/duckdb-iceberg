@@ -188,6 +188,14 @@ LogicalType IcebergTransform::GetBoundsType(const LogicalType &input) const {
 	}
 }
 
+LogicalType IcebergTransform::GetResultType(const LogicalType &input) const {
+	//! The day transform produces a date
+	if (type == IcebergTransformType::DAY) {
+		return LogicalType::DATE;
+	}
+	return GetBoundsType(input);
+}
+
 LogicalType IcebergTransform::GetSerializedType(const LogicalType &input) const {
 	switch (type) {
 	case IcebergTransformType::IDENTITY:

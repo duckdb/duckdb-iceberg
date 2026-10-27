@@ -1,4 +1,4 @@
-# name: test/sql/local/iceberg_scans/scan_order_limit_pruning.test
+# name: test/sql/local/iceberg_scans/scan_order_limit_pruning.test_slow
 # group: [iceberg_scans]
 
 include test/sql/init_requires

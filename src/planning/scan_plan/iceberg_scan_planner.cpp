@@ -139,7 +139,11 @@ void IcebergScanPlanner::InitializeView(annotated_lock_guard<annotated_mutex> &g
 		data_manifest_matches.push_back(pruner.ManifestMatchesFilter(manifest));
 	}
 	for (auto &manifest : GetScanPlanProvider().TransactionDataManifests()) {
-		data_manifests.emplace_back(data_manifests.size(), manifest);
+		auto &metadata = manifest.get().manifest_metadata;
+		D_ASSERT(metadata);
+		auto lineage_mode =
+		    metadata->format_version >= 3 ? IcebergRowLineageMode::STORED_ONLY : IcebergRowLineageMode::NONE;
+		data_manifests.emplace_back(data_manifests.size(), manifest, lineage_mode);
 		data_manifest_matches.push_back(pruner.ManifestMatchesFilter(manifest.get()));
 	}
 	auto &committed_deletes = GetScanPlanProvider().DeleteManifests();
@@ -236,7 +240,8 @@ void IcebergScanPlanner::EnsureScanOrderApplied(annotated_lock_guard<annotated_m
 
 IcebergDataFileDescriptor IcebergScanPlanner::CreateDataFileDescriptor(const BoundIcebergManifestEntry &entry) const {
 	auto &file = entry.entry.data_file;
-	auto &manifest = data_manifests[entry.manifest_file_idx].entry.GetManifest();
+	auto &bound_manifest = data_manifests[entry.manifest_file_idx];
+	auto &manifest = bound_manifest.entry.GetManifest();
 	IcebergDataFileDescriptor task;
 	task.original_file_path = file.file_path;
 	task.file_path =
@@ -246,6 +251,7 @@ IcebergDataFileDescriptor IcebergScanPlanner::CreateDataFileDescriptor(const Bou
 	task.record_count = file.record_count;
 	task.sequence_number = entry.entry.GetSequenceNumber(manifest);
 	task.first_row_id = entry.HasFirstRowId() ? optional<int64_t>(entry.GetFirstRowId()) : nullopt;
+	task.row_lineage_mode = bound_manifest.row_lineage_mode;
 	task.partition_spec_id = manifest.partition_spec_id;
 	return task;
 }

@@ -194,7 +194,7 @@ static void IcebergScanPlanFunction(ClientContext &context, TableFunctionInput &
 	}
 	output.data[IcebergScanTaskCodec::ROW_FILTER].Reference(bind.row_filter, count_t(count));
 	auto snapshot = bind.scan_info->snapshot_info.snapshot;
-	IcebergScanTaskCodec::WriteContext(output, count, snapshot ? snapshot->snapshot_id : nullopt,
+	IcebergScanTaskCodec::WriteContext(output, count, snapshot ? optional<int64_t>(snapshot->snapshot_id) : nullopt,
 	                                   bind.scan_info->snapshot_info.schema_id, state.metadata);
 }
 

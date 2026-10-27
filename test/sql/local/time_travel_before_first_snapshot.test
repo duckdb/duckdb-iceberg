@@ -1,0 +1,64 @@
+# name: test/sql/local/time_travel_before_first_snapshot.test
+# description: Timestamp lookups require an existing snapshot at or before the requested time
+# group: [local]
+
+include test/sql/init_requires
+
+require json
+
+statement error
+SELECT count(*) FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE, snapshot_from_timestamp => TIMESTAMP '2000-01-01 00:00:00');
+----
+Could not find snapshot at or before timestamp '2000-01-01 00:00:00'
+
+# Reject missing snapshots during bind, even if no rows would be read.
+statement error
+SELECT count(*) FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE, snapshot_from_timestamp => TIMESTAMP '2000-01-01 00:00:00') WHERE false;
+----
+Could not find snapshot at or before timestamp '2000-01-01 00:00:00'
+
+# The first snapshot is from 2025-05-02 12:21:19.060.
+statement error
+SELECT count(*) FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE, snapshot_from_timestamp => TIMESTAMP '2025-05-02 12:21:19.059');
+----
+Could not find snapshot at or before timestamp '2025-05-02 12:21:19.059'
+
+query I
+SELECT count(*) FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE, snapshot_from_timestamp => TIMESTAMP '2025-05-02 12:21:19.060');
+----
+60175
+
+# A timestamp between snapshots still selects the preceding snapshot.
+query I
+SELECT count(*) FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE, snapshot_from_timestamp => TIMESTAMP '2025-05-02 12:21:19.061');
+----
+60175
+
+# The fallback for metadata without a snapshot log must reject missing snapshots too.
+statement ok
+COPY (
+    SELECT json_merge_patch(content::JSON, '{"snapshot-log": null}')
+    FROM read_text('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg/metadata/v2.metadata.json')
+) TO '{TEST_DIR}/time_travel_no_snapshot_log.metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+statement error
+SELECT count(*) FROM iceberg_scan('{TEST_DIR}/time_travel_no_snapshot_log.metadata.json', snapshot_from_timestamp => TIMESTAMP '2000-01-01 00:00:00');
+----
+Could not find snapshot at or before timestamp '2000-01-01 00:00:00'
+
+# An ordinary scan of a table without snapshots is empty, but explicit time travel fails.
+statement ok
+COPY (
+    SELECT json_merge_patch(content::JSON, '{"snapshots": [], "snapshot-log": [], "current-snapshot-id": null, "refs": null}')
+    FROM read_text('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg/metadata/v2.metadata.json')
+) TO '{TEST_DIR}/time_travel_no_snapshots.metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+query I
+SELECT count(*) FROM iceberg_scan('{TEST_DIR}/time_travel_no_snapshots.metadata.json');
+----
+0
+
+statement error
+SELECT count(*) FROM iceberg_scan('{TEST_DIR}/time_travel_no_snapshots.metadata.json', snapshot_from_timestamp => TIMESTAMP '2000-01-01 00:00:00');
+----
+Could not find snapshot at or before timestamp '2000-01-01 00:00:00'

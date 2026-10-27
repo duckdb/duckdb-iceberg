@@ -1,0 +1,74 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_positional_delete_filename_bounds.test
+# description: V2 positional-delete filename bounds use the file_path field ID for DELETE and UPDATE
+# group: [delete]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+CREATE TABLE my_datalake.default.positional_delete_filename_bounds (id INTEGER) WITH ('format-version' = '2');
+
+# Separate inserts create two data files.
+statement ok
+INSERT INTO my_datalake.default.positional_delete_filename_bounds VALUES (1), (2), (3);
+
+statement ok
+INSERT INTO my_datalake.default.positional_delete_filename_bounds VALUES (4), (5), (6);
+
+statement ok
+DELETE FROM my_datalake.default.positional_delete_filename_bounds WHERE id IN (1, 4);
+
+statement ok
+UPDATE my_datalake.default.positional_delete_filename_bounds SET id = id + 10 WHERE id IN (2, 5);
+
+query I
+SELECT id FROM my_datalake.default.positional_delete_filename_bounds ORDER BY id;
+----
+3
+6
+12
+15
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE delete_manifests = (
+	SELECT list(DISTINCT manifest_path)
+	FROM iceberg_metadata(my_datalake.default.positional_delete_filename_bounds)
+	WHERE manifest_content = 'DELETE'
+);
+
+# Each operation writes one delete file per data file. Only the position-delete
+# file_path ID belongs in the bounds, not the _file metadata column ID (2147483646).
+query IIIII
+SELECT
+	count(*),
+	bool_and(map_keys(data_file.lower_bounds) = [2147483546]),
+	bool_and(map_keys(data_file.upper_bounds) = [2147483546]),
+	bool_and(data_file.lower_bounds[2147483546] = encode(data_file.referenced_data_file)),
+	bool_and(data_file.upper_bounds[2147483546] = encode(data_file.referenced_data_file))
+FROM read_avro(getvariable('delete_manifests'))
+WHERE data_file.content = 1 AND status <> 2;
+----
+4	true	true	true	true
+
+statement ok
+SET VARIABLE delete_files = (
+	SELECT list(file_path)
+	FROM iceberg_metadata(my_datalake.default.positional_delete_filename_bounds)
+	WHERE manifest_content = 'DELETE' AND status <> 'DELETED'
+);
+
+# The manifest bounds and the actual Parquet column must use the same field ID.
+query TI
+SELECT DISTINCT name, field_id FROM parquet_schema(getvariable('delete_files')) WHERE name = 'file_path';
+----
+file_path	2147483546
+
+statement ok
+COMMIT;
+
+statement ok
+DROP TABLE my_datalake.default.positional_delete_filename_bounds;

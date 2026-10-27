@@ -1,0 +1,103 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/test_time_travel_before_first_snapshot.test
+# description: Time travel requires an existing snapshot at or before the requested timestamp
+# group: [catalog_agnostic]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env TIMETRAVEL_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.time_travel_before_first_snapshot;
+
+statement ok
+CREATE TABLE my_datalake.default.time_travel_before_first_snapshot (i INTEGER) WITH ('format-version' = 2);
+
+# Ordinary reads of a table without snapshots remain valid.
+query I
+SELECT count(*) FROM my_datalake.default.time_travel_before_first_snapshot;
+----
+0
+
+statement error
+SELECT count(*) FROM my_datalake.default.time_travel_before_first_snapshot AT (TIMESTAMP => TIMESTAMP '2000-01-01 00:00:00');
+----
+Could not find snapshot at or before timestamp '2000-01-01 00:00:00'
+
+statement error
+SELECT count(*) FROM my_datalake.default.time_travel_before_first_snapshot AT (VERSION => 1234);
+----
+Could not find snapshot with id 1234
+
+statement ok
+INSERT INTO my_datalake.default.time_travel_before_first_snapshot VALUES (1), (2);
+
+statement error
+SELECT count(*) FROM my_datalake.default.time_travel_before_first_snapshot AT (TIMESTAMP => TIMESTAMP '2000-01-01 00:00:00');
+----
+Could not find snapshot at or before timestamp '2000-01-01 00:00:00'
+
+# Snapshot validation happens during bind.
+statement error
+SELECT count(*) FROM my_datalake.default.time_travel_before_first_snapshot AT (TIMESTAMP => TIMESTAMP '2000-01-01 00:00:00') WHERE false;
+----
+Could not find snapshot at or before timestamp '2000-01-01 00:00:00'
+
+statement error
+SELECT count(*) FROM my_datalake.default.time_travel_before_first_snapshot AT (VERSION => 1234);
+----
+Could not find snapshot with id 1234
+
+statement ok
+SET VARIABLE first_timestamp = (
+    SELECT min(timestamp_ms) FROM iceberg_snapshots('my_datalake.default.time_travel_before_first_snapshot')
+);
+
+statement ok
+SET VARIABLE time_travel_query = $$
+    SELECT count(*) FROM my_datalake.default.time_travel_before_first_snapshot
+        AT (TIMESTAMP => TIMESTAMP 'COMPONENT')
+$$;
+
+# The timestamp boundary is inclusive.
+query I
+SELECT * FROM query(getvariable('time_travel_query').replace('COMPONENT', getvariable('first_timestamp')::VARCHAR));
+----
+2
+
+statement error
+SELECT * FROM query(getvariable('time_travel_query').replace('COMPONENT', (getvariable('first_timestamp') - INTERVAL 1 MILLISECOND)::VARCHAR));
+----
+Could not find snapshot at or before timestamp
+
+query I
+SELECT count(*) FROM my_datalake.default.time_travel_before_first_snapshot AT (TIMESTAMP => now());
+----
+2
+
+# Uncommitted data does not make an earlier timestamp valid.
+statement ok
+BEGIN TRANSACTION;
+
+statement ok
+INSERT INTO my_datalake.default.time_travel_before_first_snapshot VALUES (3);
+
+query I
+SELECT count(*) FROM my_datalake.default.time_travel_before_first_snapshot;
+----
+3
+
+statement error
+SELECT count(*) FROM my_datalake.default.time_travel_before_first_snapshot AT (TIMESTAMP => TIMESTAMP '2000-01-01 00:00:00');
+----
+Could not find snapshot at or before timestamp '2000-01-01 00:00:00'
+
+statement ok
+ROLLBACK;
+
+statement ok
+DROP TABLE my_datalake.default.time_travel_before_first_snapshot;

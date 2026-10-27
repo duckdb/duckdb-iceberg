@@ -293,9 +293,9 @@ FROM iceberg_column_stats(my_datalake.default.value_counts_array_of_structs)
 WHERE value_count IS NOT NULL
 ORDER BY column_name, column_type;
 ----
-a	INTEGER	5	5
+a	INTEGER	5	4
 array_of_structs	STRUCT(a INTEGER, b VARCHAR)[]	3	1
-b	VARCHAR	5	5
+b	VARCHAR	5	4
 element	STRUCT(a INTEGER, b VARCHAR)	3	1
 
 query I

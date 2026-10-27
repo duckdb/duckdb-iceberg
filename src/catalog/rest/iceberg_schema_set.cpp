@@ -38,6 +38,8 @@ optional_ptr<CatalogEntry> IcebergSchemaSet::GetEntry(ClientContext &context, co
 		return created_schema->second.get();
 	}
 
+	// Track explicit lookups even when a discovery scan already pinned the schema.
+	auto verify_existence = iceberg_transaction.looked_up_entries.insert(name).second;
 	// Return an entry already referenced by this transaction directly.
 	auto transaction_entry = iceberg_transaction.schemas.find(name);
 	if (transaction_entry != iceberg_transaction.schemas.end()) {
@@ -47,7 +49,6 @@ optional_ptr<CatalogEntry> IcebergSchemaSet::GetEntry(ClientContext &context, co
 		return nullptr;
 	}
 
-	auto verify_existence = iceberg_transaction.looked_up_entries.insert(name).second;
 	auto entry = entries.find(name);
 	if (entry != entries.end()) {
 		iceberg_transaction.schemas.emplace(name, entry->second);

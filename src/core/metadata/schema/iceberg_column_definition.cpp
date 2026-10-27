@@ -7,6 +7,7 @@
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/function/scalar/generic_functions.hpp"
 #include "common/iceberg_default.hpp"
+#include "common/iceberg_fixed_type.hpp"
 
 namespace duckdb {
 
@@ -15,7 +16,9 @@ namespace duckdb {
 //! Hexadecimal values are given without the proper escape sequences, so we add them, for simplicity of conversion
 static string AddEscapesToBlob(const string &hexadecimal_string) {
 	string result;
-	D_ASSERT(hexadecimal_string.size() % 2 == 0);
+	if (hexadecimal_string.size() % 2 != 0) {
+		throw InvalidConfigurationException("Invalid hexadecimal default: expected an even number of digits");
+	}
 	for (idx_t i = 0; i < hexadecimal_string.size() / 2; i++) {
 		result += "\\x";
 		result += hexadecimal_string.substr(i * 2, 2);
@@ -66,8 +69,15 @@ Value IcebergColumnDefinition::ParsePrimitiveValue(const LogicalType &type,
 		return Value(default_value.string_type_value->value).DefaultCastAs(type);
 	}
 	case LogicalTypeId::BLOB: {
-		D_ASSERT(default_value.binary_type_value);
-		return Value::BLOB(AddEscapesToBlob(default_value.binary_type_value->value));
+		D_ASSERT(default_value.fixed_type_value || default_value.binary_type_value);
+		auto &hex = default_value.fixed_type_value ? default_value.fixed_type_value->value
+		                                           : default_value.binary_type_value->value;
+		auto value = Value::BLOB(AddEscapesToBlob(hex));
+		if (IcebergFixedType::IsFixed(type) &&
+		    value.GetValueUnsafe<string_t>().GetSize() != NumericCast<idx_t>(IcebergFixedType::GetLength(type))) {
+			throw InvalidConfigurationException("Invalid default length for %s", type.ToString());
+		}
+		return value.WithType(type);
 	}
 	default:
 		throw NotImplementedException("ParsePrimitiveValue not implemented for type: %s", type.ToString());
@@ -120,8 +130,7 @@ LogicalType IcebergColumnDefinition::ParsePrimitiveTypeString(const string &type
 		return LogicalType::UUID;
 	}
 	if (StringUtil::StartsWith(type_str, "fixed")) {
-		// FIXME: use fixed size type in DuckDB
-		return LogicalType::BLOB;
+		return IcebergFixedType::Parse(type_str);
 	}
 	if (type_str == "binary") {
 		return LogicalType::BLOB;
@@ -320,15 +329,8 @@ Value IcebergColumnDefinition::GetInitialDefault() const {
 }
 
 Value IcebergColumnDefinition::GetWriteDefault() const {
-	optional_ptr<Value> default_to_use;
-	if (write_default) {
-		//! Use write-default if it's set
-		default_to_use = write_default.get();
-	} else if (initial_default) {
-		//! If it's not set, use the initial-default (if that *is* set)
-		default_to_use = initial_default.get();
-	}
-	Value result = default_to_use ? *default_to_use : Value(type);
+	//! An omitted write-default is null - the initial-default only applies to rows written before the field existed
+	Value result = write_default ? *write_default : Value(type);
 	if (type.id() != LogicalTypeId::STRUCT || !result.IsNull() || !IcebergDefault::InterpretStructNullAsEmpty()) {
 		return result;
 	}

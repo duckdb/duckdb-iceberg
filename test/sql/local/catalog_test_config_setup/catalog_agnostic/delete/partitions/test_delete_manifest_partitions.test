@@ -83,3 +83,28 @@ NULL
 
 statement ok
 abort;
+
+# iceberg_manifests shows the manifests of the current snapshot
+query IIIIIII
+SELECT content, added_data_files_count, existing_data_files_count, deleted_data_files_count, added_delete_files_count, existing_delete_files_count, partition_summaries
+FROM iceberg_manifests(my_datalake.default.test_delete_manifest_partitions)
+ORDER BY content;
+----
+0	6	0	0	0	0	[{'contains_null': true, 'contains_nan': false, 'lower_bound': A, 'upper_bound': E}]
+1	0	0	0	3	0	[{'contains_null': true, 'contains_nan': false, 'lower_bound': A, 'upper_bound': D}]
+
+# iceberg_files lists the live data files and the delete files of the current snapshot
+query III
+SELECT content, partition, record_count
+FROM iceberg_files(my_datalake.default.test_delete_manifest_partitions)
+ORDER BY ALL;
+----
+0	{'identity_category_2': A}	1
+0	{'identity_category_2': B}	1
+0	{'identity_category_2': C}	1
+0	{'identity_category_2': D}	1
+0	{'identity_category_2': E}	1
+0	{'identity_category_2': NULL}	1
+1	{'identity_category_2': A}	1
+1	{'identity_category_2': D}	1
+1	{'identity_category_2': NULL}	1

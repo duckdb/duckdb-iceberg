@@ -62,8 +62,13 @@ vector<string> IRCAPI::ParseSchemaName(const string &namespace_name) {
 		//! Request error - this means something went wrong performing the request
 		throw IOException("%s request to endpoint '%s' failed: (ERROR %s)", method, url, response.GetRequestError());
 	}
-	//! FIXME: the spec defines response objects for all failure conditions, we can deserialize the response and
-	//! return a more descriptive error message based on that.
+	unique_ptr<JSONDocument> error_doc;
+	auto error_obj = ICUtils::GetErrorMessage(response.body, error_doc);
+	rest_api_objects::IcebergErrorResponse error;
+	if (error_obj.IsValid() && error.TryFromJSON(error_obj).empty()) {
+		throw HTTPException(response, "%s request to endpoint '%s' returned an error response (HTTP %n). %s: %s",
+		                    method, url, int(response.status), error._error.type, error._error.message);
+	}
 	if (!response.reason.empty()) {
 		throw HTTPException(response, "%s request to endpoint '%s' returned an error response (HTTP %n). Reason: %s",
 		                    method, url, int(response.status), response.reason);
@@ -75,18 +80,13 @@ vector<string> IRCAPI::ParseSchemaName(const string &namespace_name) {
 }
 
 static IRCEntryLookupStatus CheckVerificationResponse(ClientContext &context, HTTPStatusCode &status) {
-	// The following response codes return "schema does not exist"
-	// This list can change, some error codes we want to surface to the user (i.e PaymentRequired_402)
-	// but others not (Forbidden_403).
-	// We log 400, 401, and 500 just in case.
+	// Only a 404 establishes absence. Permission errors must not trigger IF EXISTS / IF NOT EXISTS behavior.
 	switch (status) {
 	case HTTPStatusCode::OK_200:
 	case HTTPStatusCode::NoContent_204:
 		return IRCEntryLookupStatus::EXISTS;
-	case HTTPStatusCode::Forbidden_403:
 	case HTTPStatusCode::NotFound_404:
 		return IRCEntryLookupStatus::NOT_FOUND;
-		break;
 	case HTTPStatusCode::BadRequest_400:
 	case HTTPStatusCode::Unauthorized_401:
 #ifndef DEBUG
@@ -111,6 +111,10 @@ bool IRCAPI::VerifyResponse(ClientContext &context, IcebergCatalog &catalog, IRC
 	if (execute_head) {
 		// First response of Head request
 		response = catalog.auth_handler->Request(RequestType::HEAD_REQUEST, context, url_builder, headers);
+		if (response->status == HTTPStatusCode::Forbidden_403 || response->status == HTTPStatusCode::Unauthorized_401) {
+			// A denied existence check is authoritative, even if GET would return success or not found.
+			ThrowException(url_builder.GetURLEncoded(), *response, "HEAD");
+		}
 		// the httputil currently only sets 200 and 304 response to success
 		// for AWS all responses < 400 are successful
 		entry_status = CheckVerificationResponse(context, response->status);
@@ -136,7 +140,7 @@ bool IRCAPI::VerifyResponse(ClientContext &context, IcebergCatalog &catalog, IRC
 	default:
 		// both head and get responses have returned a status that is an
 		// error status
-		ThrowException(url_builder.GetURLEncoded(), *response, response->reason);
+		ThrowException(url_builder.GetURLEncoded(), *response, "GET");
 	}
 }
 
@@ -223,10 +227,30 @@ IcebergLoadTableResult IRCAPI::GetTable(ClientContext &context, IcebergCatalog &
 	return IcebergLoadTableRequest(schema.namespace_items, table_name).Execute(context, catalog);
 }
 
-APIResult<unique_ptr<const rest_api_objects::LoadCredentialsResponse>>
-IRCAPI::GetTableCredentials(ClientContext &context, IcebergCatalog &catalog, const IcebergSchemaEntry &schema,
-                            const string &table_name) {
-	auto ret = APIResult<unique_ptr<const rest_api_objects::LoadCredentialsResponse>>();
+APIResult<IRCAPICredentials> IRCAPI::GetTableCredentials(ClientContext &context, IcebergCatalog &catalog,
+                                                         const IcebergSchemaEntry &schema, const string &table_name) {
+	auto ret = APIResult<IRCAPICredentials>();
+	ret.status_ = HTTPStatusCode::OK_200;
+	if (catalog.supported_urls.find("GET /v1/{prefix}/namespaces/{namespace}/tables/{table}/credentials") ==
+	    catalog.supported_urls.end()) {
+		auto table_result = GetTable(context, catalog, schema, table_name);
+		if (table_result.error_) {
+			ret.status_ = table_result.status_;
+			ret.error_ = std::move(table_result.error_);
+			return ret;
+		}
+		auto &credentials = ret.result_;
+		if (table_result.result_->storage_credentials) {
+			for (auto &credential : *table_result.result_->storage_credentials) {
+				credentials.storage_credentials.push_back(credential.Copy());
+			}
+		}
+		credentials.config.emplace();
+		if (table_result.result_->config) {
+			*credentials.config = *table_result.result_->config;
+		}
+		return ret;
+	}
 	auto result = LoadCredentials(context, catalog, schema, table_name);
 	if (result->status != HTTPStatusCode::OK_200) {
 		unique_ptr<JSONDocument> out_doc;
@@ -240,8 +264,8 @@ IRCAPI::GetTableCredentials(ClientContext &context, IcebergCatalog &catalog, con
 	}
 	auto doc = ICUtils::APIResultToDoc(result->body);
 	auto metadata_root = doc->GetRoot();
-	ret.result_ = make_uniq<const rest_api_objects::LoadCredentialsResponse>(
-	    rest_api_objects::LoadCredentialsResponse::FromJSON(metadata_root));
+	auto credentials = rest_api_objects::LoadCredentialsResponse::FromJSON(metadata_root);
+	ret.result_.storage_credentials = std::move(credentials.storage_credentials);
 	return ret;
 }
 
@@ -287,8 +311,8 @@ IcebergListTablesResult IRCAPI::GetTables(ClientContext &context, IcebergCatalog
 	return IcebergListTablesRequest(schema.namespace_items).Execute(context, catalog);
 }
 
-IcebergListTablesRequest::IcebergListTablesRequest(vector<string> namespace_items)
-    : namespace_items(std::move(namespace_items)) {
+IcebergListTablesRequest::IcebergListTablesRequest(vector<string> namespace_items, bool allow_forbidden)
+    : namespace_items(std::move(namespace_items)), allow_forbidden(allow_forbidden) {
 }
 
 IcebergListTablesResult IcebergListTablesRequest::Execute(ClientContext &context, IcebergCatalog &catalog) const {
@@ -317,11 +341,9 @@ IcebergListTablesResult IcebergListTablesRequest::Execute(ClientContext &context
 				// the catalog's default namespace before trying replacement scans.
 				return vector<rest_api_objects::TableIdentifier>();
 			}
-			if (response->status == HTTPStatusCode::Forbidden_403 ||
-			    response->status == HTTPStatusCode::Unauthorized_401) {
-				// when listing tables, if a user is not allowed to list a schema for one of the error reasons above
-				// we log a warning to notify the user. We do not error, otherwise the user won't be able to see any
-				// results.
+			if (allow_forbidden && (response->status == HTTPStatusCode::Forbidden_403 ||
+			                        response->status == HTTPStatusCode::Unauthorized_401)) {
+				// Catalog discovery can skip inaccessible schemas; explicit schema lookups must surface the error.
 				DUCKDB_LOG_WARNING(context, "GET %s returned status code %s", url_builder.GetURLEncoded(),
 				                   EnumUtil::ToString(response->status));
 				// no listing if the user cannot list tables for a schema.

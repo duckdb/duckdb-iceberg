@@ -17,10 +17,112 @@ import json
 import sys
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlsplit
+from uuid import NAMESPACE_URL, uuid5
 
 # Guards the recorded key id against concurrent requests.
 _lock = threading.Lock()
 _last_key_id = None
+
+
+# Empty tables exercise credential registration without contacting object storage.
+_scope_tables = {
+    "single_prefix": ("s3://scope-bucket/table/_external_metadata", ["s3://scope-bucket/table/"]),
+    "single_nested": ("s3://scope-bucket/table/", ["s3://scope-bucket/table/metadata/"]),
+    "nested": ("s3://scope-bucket/table/", ["s3://scope-bucket/table/metadata/", "s3://scope-bucket/table/"]),
+    "alias": ("s3a://scope-bucket/table/", ["s3://scope-bucket/table/metadata/"]),
+    "different_bucket": ("s3://scope-bucket/table/", ["s3://other-bucket/table/"]),
+    "slash": ("s3://scope-bucket/table/", ["/"]),
+    "bare_scheme": ("s3://scope-bucket/table/", ["s3"]),
+    "mixed_types": ("s3://scope-bucket/table/", ["gs://scope-bucket/table/", "s3://scope-bucket/table/"]),
+}
+
+# Tables whose catalog asks for S3 server-side encryption
+_sse_tables = {
+    "table_config": (
+        "s3://scope-bucket/sse/",
+        ["s3://scope-bucket/sse/"],
+        {"s3.sse.type": "kms", "s3.sse.key": "arn:aws:kms:us-east-1:111122223333:key/test"},
+        {},
+    ),
+    "credential_config": ("s3://scope-bucket/sse/", ["s3://scope-bucket/sse/"], {}, {"s3.sse.type": "dsse-kms"}),
+    # A customer-provided key must also be sent on reads
+    "customer_key": (
+        "s3://scope-bucket/sse/",
+        ["s3://scope-bucket/sse/"],
+        {"s3.sse.type": "custom", "s3.sse.key": "test-customer-key"},
+        {},
+    ),
+}
+
+_sse_catalog_tables = {
+    "catalog_config": ("s3://scope-bucket/sse/", ["s3://scope-bucket/sse/"], {}, {}),
+}
+
+# URI path root -> (/v1/config overrides, tables)
+_fixtures = {
+    "/credential-scopes": ({}, {name: (*table, {}, {}) for name, table in _scope_tables.items()}),
+    "/sse": ({}, _sse_tables),
+    "/sse-catalog": ({"s3.sse.type": "s3"}, _sse_catalog_tables),
+}
+
+
+def _scope_response(path, overrides, tables):
+    if path == "/v1/config":
+        return {"defaults": {}, "overrides": overrides}
+    if path == "/v1/namespaces":
+        return {"namespaces": [["default"]]}
+    if path == "/v1/namespaces/default":
+        return {"namespace": ["default"], "properties": {}}
+    if path == "/v1/namespaces/default/tables":
+        return {"identifiers": [{"namespace": ["default"], "name": name} for name in tables]}
+    table_name = path.removeprefix("/v1/namespaces/default/tables/")
+    if table_name not in tables:
+        return None
+    location, prefixes, table_config, credential_config = tables[table_name]
+    response = {
+        "metadata-location": location.rstrip("/") + "/metadata/v1.metadata.json",
+        "metadata": {
+            "format-version": 2,
+            "table-uuid": str(uuid5(NAMESPACE_URL, table_name)),
+            "location": location,
+            "last-sequence-number": 0,
+            "last-updated-ms": 1,
+            "last-column-id": 1,
+            "schemas": [
+                {
+                    "type": "struct",
+                    "schema-id": 0,
+                    "fields": [{"id": 1, "name": "id", "required": False, "type": "long"}],
+                }
+            ],
+            "current-schema-id": 0,
+            "partition-specs": [{"spec-id": 0, "fields": []}],
+            "default-spec-id": 0,
+            "last-partition-id": 999,
+            "sort-orders": [{"order-id": 0, "fields": []}],
+            "default-sort-order-id": 0,
+            "properties": {},
+            "snapshots": [],
+            "snapshot-log": [],
+            "metadata-log": [],
+        },
+        "storage-credentials": [
+            {
+                "prefix": prefix,
+                "config": {
+                    "s3.access-key-id": f"scope_key_{index}",
+                    "s3.secret-access-key": "scope_secret",
+                    "s3.region": "us-east-1",
+                    **credential_config,
+                },
+            }
+            for index, prefix in enumerate(prefixes)
+        ],
+    }
+    if table_config:
+        response["config"] = table_config
+    return response
 
 
 def _record_signing_key(headers):
@@ -50,6 +152,18 @@ class MockCatalogHandler(BaseHTTPRequestHandler):
             self._respond(200, {"key_id": key_id})
             return
         _record_signing_key(self.headers)
+        path = urlsplit(self.path).path
+        for root, (overrides, tables) in _fixtures.items():
+            if path.startswith(root + "/"):
+                response = _scope_response(path.removeprefix(root), overrides, tables)
+                if response is None:
+                    self._respond(
+                        404,
+                        {"error": {"message": "Unknown scope fixture", "type": "NoSuchTableException", "code": 404}},
+                    )
+                else:
+                    self._respond(200, response)
+                return
         if self.path.startswith("/v1/config"):
             self._respond(200, {"defaults": {}, "overrides": {}})
         elif "/namespaces" in self.path:

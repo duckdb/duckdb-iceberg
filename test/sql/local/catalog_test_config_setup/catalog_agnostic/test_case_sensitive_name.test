@@ -18,3 +18,40 @@ DROP TABLE IF EXISTS my_datalake.default.buy;
 
 statement ok
 create table my_datalake.default.Buy (price float, name varchar);
+
+statement ok
+create table my_datalake.default.buy (price float, name varchar);
+
+statement ok
+insert into my_datalake.default."Buy" values (1, 'upper');
+
+statement ok
+insert into my_datalake.default."buy" values (2, 'lower');
+
+query II fresh
+select price, name from my_datalake.default."Buy";
+----
+1.0	upper
+
+query II fresh
+select price, name from my_datalake.default."buy";
+----
+2.0	lower
+
+query I
+select
+	(select metadata."table-uuid" from iceberg_load_table_response(my_datalake.default."Buy")) <>
+	(select metadata."table-uuid" from iceberg_load_table_response(my_datalake.default."buy"));
+----
+true
+
+statement ok
+drop table my_datalake.default."Buy";
+
+query II fresh
+select price, name from my_datalake.default."buy";
+----
+2.0	lower
+
+statement ok
+drop table my_datalake.default."buy";

@@ -24,6 +24,15 @@ requires_equality_deletes_available = pytest.mark.skipif(
 
 
 class TestSparkRead:
+    @pytest.mark.requires_spark(">=4.0")
+    @pytest.mark.requires_capabilities("format_v3")
+    @pytest.mark.duckdb_setup_tests(
+        "catalog_agnostic/insert/partitions/null_values/test_unknown_partition_avro_schema.test"
+    )
+    def test_spark_read_duckdb_unknown_partition(self, spark_con):
+        res = spark_con.sql("SELECT * FROM default.unknown_partition_avro_schema ORDER BY id").collect()
+        assert res == [Row(id=1, u=None), Row(id=2, u=None)]
+
     @pytest.mark.duckdb_setup_tests("catalog_interop/other_engines/test_create_table_then_read_with_other_engine.test")
     def test_spark_read_duckdb_table(self, spark_con):
         df = spark_con.sql(

@@ -109,6 +109,13 @@ from iceberg_load_table_response(my_datalake.default.rollback_snap);
 ----
 true
 
+# The main branch also points at snap1
+query III
+select name, type, snapshot_id = getvariable('snap1').snapshot_id
+from iceberg_refs(my_datalake.default.rollback_snap);
+----
+main	BRANCH	true
+
 # Same-snapshot rollback is a successful no-op.
 query II
 select
@@ -142,6 +149,28 @@ call iceberg_rollback_to_snapshot(
 );
 ----
 not an ancestor
+
+# the rollback adds an entry for snap1, and the later snapshots are no longer ancestors
+query III
+select s.sequence_number, h.parent_id is null, h.is_current_ancestor
+from iceberg_history(my_datalake.default.rollback_snap) h
+join iceberg_snapshots(my_datalake.default.rollback_snap) s using (snapshot_id)
+order by h.made_current_at;
+----
+1	true	true
+2	false	false
+3	false	false
+1	true	true
+
+# parent_id points at the previous snapshot
+query I
+select count(*)
+from iceberg_history(my_datalake.default.rollback_snap) h
+join iceberg_snapshots(my_datalake.default.rollback_snap) child using (snapshot_id)
+join iceberg_snapshots(my_datalake.default.rollback_snap) parent on h.parent_id = parent.snapshot_id
+where parent.sequence_number = child.sequence_number - 1;
+----
+2
 
 # Forward writes still work after rollback.
 statement ok

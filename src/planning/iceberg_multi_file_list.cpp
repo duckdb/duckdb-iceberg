@@ -154,8 +154,7 @@ OpenFileInfo IcebergMultiFileList::GetFileInternal(idx_t file_id) const {
 	if (!task) {
 		return OpenFileInfo();
 	}
-	return IcebergMultiFileReader::FileInfo(task->file_path, task->file_format, task->file_size_in_bytes,
-	                                        task->first_row_id, task->sequence_number);
+	return IcebergMultiFileReader::FileInfo(*task);
 }
 
 vector<OpenFileInfo> IcebergMultiFileList::GetAllFiles() const {

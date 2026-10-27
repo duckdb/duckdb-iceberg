@@ -4,6 +4,8 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
+require-env SNAPSHOT_HISTORY_SUPPORT
+
 include test/sql/init_requires
 
 
@@ -27,6 +29,48 @@ select count(*) from iceberg_snapshots(my_datalake.default.test);
 statement ok
 update my_datalake.default.test set a = 100 where a % 100  = 99;
 
+# The optimizer removes the scan for these predicates (issue #1588).
+# Finalizing the UPDATE must succeed even though there is no source file list.
+foreach predicate false 1=0 a=NULL
+
+query I
+UPDATE my_datalake.default.test SET a = 100 WHERE {predicate};
+----
+0
+
+statement ok
+BEGIN;
+
+query I
+UPDATE my_datalake.default.test SET a = 100 WHERE {predicate};
+----
+0
+
+statement ok
+COMMIT;
+
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.test);
+----
+1
+
+endloop
+
+# A constant-false conjunct in a MERGE can also remove the target scan.
+query I
+MERGE INTO my_datalake.default.test AS t
+USING (SELECT NULL AS k) AS s ON t.a = s.k AND t.a < 50
+WHEN MATCHED THEN UPDATE SET a = 100;
+----
+0
+
+query I
+MERGE INTO my_datalake.default.test AS t
+USING (SELECT 1 AS k) AS s ON t.a = s.k AND false
+WHEN MATCHED THEN UPDATE SET a = 100;
+----
+0
+
 query I
 select * from my_datalake.default.test order by a;
 ----
@@ -46,4 +90,44 @@ select count(*) from iceberg_snapshots(my_datalake.default.test);
 ----
 1
 
+# Empty updates must not interfere with real updates in the same transaction.
+statement ok
+BEGIN;
+
+query I
+UPDATE my_datalake.default.test SET a = 100 WHERE false;
+----
+0
+
+query I
+UPDATE my_datalake.default.test SET a = 100 WHERE a = 0;
+----
+1
+
+query I
+UPDATE my_datalake.default.test SET a = 200 WHERE a = NULL;
+----
+0
+
+statement ok
+COMMIT;
+
+query I
+SELECT * FROM my_datalake.default.test ORDER BY a;
+----
+1
+2
+3
+4
+5
+6
+7
+8
+9
+100
+
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.test);
+----
+2
 

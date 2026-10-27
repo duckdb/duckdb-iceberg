@@ -14,6 +14,12 @@ set variable metadata_json = (
 	select content::JSON from read_text('{TEST_DIR}/copy_meta/metadata/*.metadata.json')
 );
 
+# Every DuckDB-created table explicitly enables shredding, even without VARIANT columns.
+query I
+SELECT getvariable('metadata_json')->'properties'->>'write.parquet.shred-variants';
+----
+true
+
 # v2 requires last-sequence-number, and the first snapshot of a table gets sequence number 1
 query IIII
 SELECT

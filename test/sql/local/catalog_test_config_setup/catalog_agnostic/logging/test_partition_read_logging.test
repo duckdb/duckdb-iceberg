@@ -3,6 +3,8 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
+require-env SCAN_PLANNING_MODE client
+
 include test/sql/init_requires
 
 require icu
@@ -27,8 +29,8 @@ select dt from my_datalake.default.month_partitioned_date where dt = DATE '2025-
 ----
 2025-06-01
 
-# FIXME: used to be 2, test is now likely broken
+# January and December must be pruned by the month partition value.
 query I
-select count(*) from duckdb_logs() where type = 'Iceberg' and regexp_matches(message, '.*skipped.*data_file.*partition column.*with transform.*does not match filter.*dt=.2025-06-01.*');
+select count(*) from duckdb_logs() where type = 'Iceberg' and regexp_matches(message, '.*skipped.*data_file.*partition column.*with transform.*does not match filter.*dt\s*=\s*''2025-06-01''.*');
 ----
-0
+2

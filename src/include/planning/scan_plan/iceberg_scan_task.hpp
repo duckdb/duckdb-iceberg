@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/deletes/iceberg_delete_file.hpp"
+#include "planning/iceberg_row_lineage.hpp"
 
 namespace duckdb {
 
@@ -15,6 +16,7 @@ struct IcebergDataFileDescriptor {
 	int64_t record_count = 0;
 	optional<int64_t> sequence_number;
 	optional<int64_t> first_row_id;
+	IcebergRowLineageMode row_lineage_mode = IcebergRowLineageMode::COMMITTED;
 	int32_t partition_spec_id = 0;
 };
 

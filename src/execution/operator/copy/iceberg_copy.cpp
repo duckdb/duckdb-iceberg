@@ -145,16 +145,15 @@ static void WriteIcebergMetadata(ClientContext &context, CopyIcebergBindData &bi
 		}
 	}
 
-	int64_t next_row_id = 0;
+	IcebergRowIdAllocator row_ids(0);
 	if (!written_files.empty()) {
 		const auto sequence_number = table_metadata.last_sequence_number + 1;
 		IcebergSnapshotWriter writer(context, table_metadata, table_metadata.GetCurrentSchemaId(),
-		                             IcebergSnapshotOperationType::APPEND, sequence_number, next_row_id, files_written);
+		                             IcebergSnapshotOperationType::APPEND, sequence_number, row_ids, files_written);
 		writer.WriteManifest(IcebergPendingManifest(
 		    IcebergManifestMetadata::FromTableMetadata(table_metadata, IcebergManifestContentType::DATA),
 		    std::move(written_files)));
 		auto written = IcebergWrittenSnapshot::Create(std::move(writer));
-		next_row_id = written.next_row_id;
 		auto &snapshot = written.snapshot;
 
 		// Update table metadata with snapshot
@@ -164,8 +163,8 @@ static void WriteIcebergMetadata(ClientContext &context, CopyIcebergBindData &bi
 		table_metadata.snapshots.emplace(0, std::move(snapshot));
 	}
 	if (table_metadata.iceberg_version >= 3) {
-		// Required since v3: higher than every row id assigned so far, [0, next_row_id) went to this snapshot
-		table_metadata.next_row_id = next_row_id;
+		// Publish the allocation end for the next writer.
+		table_metadata.next_row_id = row_ids.NextRowId();
 	}
 	auto version_hint = UUID::ToString(UUID::GenerateRandomUUID());
 

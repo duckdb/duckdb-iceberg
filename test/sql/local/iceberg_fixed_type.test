@@ -1,0 +1,322 @@
+# name: test/sql/local/iceberg_fixed_type.test
+# description: Parameterized fixed binary types preserve lengths and validate casts
+# group: [local]
+
+include test/sql/init_requires
+
+require json
+
+# This parameterized type is not in core's extension autoload registry.
+statement ok
+LOAD iceberg;
+
+query TT
+SELECT typeof('abcd'::ICEBERG_FIXED(4)), typeof(NULL::ICEBERG_FIXED(16));
+----
+ICEBERG_FIXED(4)	ICEBERG_FIXED(16)
+
+query TII
+SELECT hex('\x00\xFF'::ICEBERG_FIXED(2)), octet_length('abcd'::ICEBERG_FIXED(4)), 'abcd'::ICEBERG_FIXED(4) = 'abcd'::BLOB;
+----
+00FF	4	true
+
+statement error
+SELECT 'abc'::BLOB::ICEBERG_FIXED(4);
+----
+Expected 4 bytes
+
+statement error
+SELECT 'abcde'::ICEBERG_FIXED(4);
+----
+Expected 4 bytes
+
+statement error
+SELECT 'abcd'::ICEBERG_FIXED(4)::ICEBERG_FIXED(3);
+----
+Expected 3 bytes
+
+query I
+SELECT octet_length('00112233-4455-6677-8899-aabbccddeeff'::UUID::ICEBERG_FIXED(16));
+----
+16
+
+statement error
+SELECT '00112233-4455-6677-8899-aabbccddeeff'::UUID::ICEBERG_FIXED(4);
+----
+Expected 4 bytes
+
+query T
+SELECT hex('11111111'::BIT::ICEBERG_FIXED(1));
+----
+FF
+
+statement error
+SELECT '11111111'::BIT::ICEBERG_FIXED(2);
+----
+Expected 2 bytes
+
+query T
+SELECT ('abcd'::BLOB::VARIANT)::ICEBERG_FIXED(4);
+----
+abcd
+
+statement error
+SELECT ('abc'::BLOB::VARIANT)::ICEBERG_FIXED(4);
+----
+Expected 4 bytes
+
+# JSON has a VARCHAR alias and must not bypass the length-checking cast.
+statement error
+SELECT '123'::JSON::ICEBERG_FIXED(4);
+----
+Expected 4 bytes
+
+query T
+SELECT TRY_CAST(v::JSON AS ICEBERG_FIXED(4))
+FROM (VALUES ('123'), ('1234'), (NULL)) t(v);
+----
+NULL
+1234
+NULL
+
+query T
+SELECT TRY_CAST(v AS ICEBERG_FIXED(4)) FROM (VALUES ('abcd'), ('abc'), (NULL), ('abcde')) t(v);
+----
+abcd
+NULL
+NULL
+NULL
+
+query T
+SELECT TRY_CAST(v AS ICEBERG_FIXED(4)) FROM (VALUES ('abcd'::BLOB), ('abc'::BLOB), (NULL)) t(v);
+----
+abcd
+NULL
+NULL
+
+statement error
+SELECT NULL::ICEBERG_FIXED(0);
+----
+length must be a positive integer
+
+statement error
+SELECT NULL::ICEBERG_FIXED(-1);
+----
+length must be a positive integer
+
+statement error
+SELECT NULL::ICEBERG_FIXED(NULL);
+----
+cannot be NULL
+
+statement error
+SELECT NULL::ICEBERG_FIXED;
+----
+Error
+
+statement error
+SELECT NULL::ICEBERG_FIXED(2147483648);
+----
+Error
+
+# Exercise non-constant vectors and string heap ownership.
+query II
+SELECT count(*), min(octet_length(v))
+FROM (SELECT repeat(chr(97 + (i % 2)::INTEGER), 32)::ICEBERG_FIXED(32) v FROM range(5000) t(i))
+WHERE v = repeat('a', 32)::BLOB;
+----
+2500	32
+
+# The modifier must survive nested types.
+query TTTT
+SELECT typeof(f), typeof(l), typeof(s), typeof(m)
+FROM (
+	SELECT 'abcd'::BLOB::ICEBERG_FIXED(4) f, ['xy'::BLOB]::ICEBERG_FIXED(2)[] l,
+	       {'f': 'abc'::BLOB}::STRUCT(f ICEBERG_FIXED(3)) s,
+	       MAP(['k'::BLOB], ['vv'::BLOB])::MAP(ICEBERG_FIXED(1), ICEBERG_FIXED(2)) m
+);
+----
+ICEBERG_FIXED(4)	ICEBERG_FIXED(2)[]	STRUCT(f ICEBERG_FIXED(3))	MAP(ICEBERG_FIXED(1), ICEBERG_FIXED(2))
+
+statement error
+SELECT ['xyz'::BLOB]::ICEBERG_FIXED(2)[];
+----
+Expected 2 bytes
+
+# ICEBERG_FIXED is only for Iceberg tables: it cannot be stored in DuckDB tables, in memory or in a database file.
+statement error
+CREATE TABLE fixed_table (f ICEBERG_FIXED(4));
+----
+ICEBERG_FIXED can only be used in Iceberg tables
+
+statement error
+CREATE TABLE fixed_table (s STRUCT(l ICEBERG_FIXED(2)[]));
+----
+ICEBERG_FIXED can only be used in Iceberg tables
+
+statement error
+CREATE TABLE fixed_table AS SELECT 'abcd'::BLOB::ICEBERG_FIXED(4) f;
+----
+ICEBERG_FIXED can only be used in Iceberg tables
+
+statement error
+CREATE TYPE fixed_alias AS ICEBERG_FIXED(4);
+----
+ICEBERG_FIXED can only be used in Iceberg tables
+
+# EXPLAIN ANALYZE executes its child plan, so it needs the same storage checks.
+statement error
+EXPLAIN ANALYZE CREATE TABLE fixed_explain (f ICEBERG_FIXED(4));
+----
+ICEBERG_FIXED can only be used in Iceberg tables
+
+statement error
+EXPLAIN ANALYZE CREATE TABLE fixed_explain AS SELECT 'abcd'::ICEBERG_FIXED(4) f;
+----
+ICEBERG_FIXED can only be used in Iceberg tables
+
+statement error
+EXPLAIN ANALYZE CREATE TYPE fixed_explain_alias AS ICEBERG_FIXED(4);
+----
+ICEBERG_FIXED can only be used in Iceberg tables
+
+statement ok
+ATTACH '{TEST_DIR}/iceberg_fixed.db' AS fixed_db;
+
+statement error
+CREATE TABLE fixed_db.nested (m MAP(ICEBERG_FIXED(1), INTEGER));
+----
+ICEBERG_FIXED can only be used in Iceberg tables
+
+statement ok
+CREATE TABLE fixed_db.blobs (id INTEGER, s STRUCT(a INTEGER));
+
+statement error
+EXPLAIN ANALYZE ALTER TABLE fixed_db.blobs ADD COLUMN f ICEBERG_FIXED(4);
+----
+ICEBERG_FIXED can only be used in Iceberg tables
+
+statement error
+ALTER TABLE fixed_db.blobs ADD COLUMN f ICEBERG_FIXED(4);
+----
+ICEBERG_FIXED can only be used in Iceberg tables
+
+statement error
+ALTER TABLE fixed_db.blobs ADD COLUMN s.f ICEBERG_FIXED(4);
+----
+ICEBERG_FIXED can only be used in Iceberg tables
+
+statement error
+ALTER TABLE fixed_db.blobs ALTER COLUMN id TYPE ICEBERG_FIXED(4);
+----
+ICEBERG_FIXED can only be used in Iceberg tables
+
+# Casting to BLOB is the way to store the values.
+statement ok
+CREATE TABLE fixed_db.copied AS SELECT 'abcd'::BLOB::ICEBERG_FIXED(4)::BLOB f;
+
+query TT
+SELECT typeof(f), f FROM fixed_db.copied;
+----
+BLOB	abcd
+
+statement ok
+DETACH fixed_db;
+
+# TRY_CAST must handle both invalid BLOB syntax and invalid lengths in the same vector.
+query T
+SELECT hex(TRY_CAST(v AS ICEBERG_FIXED(2)))
+FROM (VALUES ('\x00\xFF'), ('\xGG'), ('a'), (NULL), ('xy')) t(v);
+----
+00FF
+NULL
+NULL
+NULL
+7879
+
+# Exercise dictionary vectors, NULLs and values that cannot fit in string_t's inline storage.
+query III
+SELECT count(*), count(f), count(*) FILTER (WHERE f = repeat('x', 32)::BLOB)
+FROM (
+	SELECT TRY_CAST(v AS ICEBERG_FIXED(32)) f
+	FROM (
+		SELECT i, CASE i % 3 WHEN 0 THEN repeat('x', 32) WHEN 1 THEN repeat('y', 31) END v
+		FROM range(10000) t(i)
+	) WHERE i % 2 = 0
+);
+----
+5000	1667	1667
+
+statement ok
+PREPARE fixed_parameter AS SELECT $1::ICEBERG_FIXED(4);
+
+query T
+EXECUTE fixed_parameter('abcd'::BLOB);
+----
+abcd
+
+statement error
+EXECUTE fixed_parameter('abc'::BLOB);
+----
+Expected 4 bytes
+
+query T
+EXECUTE fixed_parameter(NULL);
+----
+NULL
+
+statement error
+SELECT {'f': 'abc'::BLOB}::STRUCT(f ICEBERG_FIXED(2));
+----
+Expected 2 bytes
+
+statement error
+SELECT MAP(['abc'::BLOB], ['xy'::BLOB])::MAP(ICEBERG_FIXED(2), ICEBERG_FIXED(2));
+----
+Expected 2 bytes
+
+statement error
+SELECT MAP(['xy'::BLOB], ['abc'::BLOB])::MAP(ICEBERG_FIXED(2), ICEBERG_FIXED(2));
+----
+Expected 2 bytes
+
+statement error
+SELECT ['xy'::BLOB, 'abc'::BLOB]::ICEBERG_FIXED(2)[2];
+----
+Expected 2 bytes
+
+# Explicit NULL children remain valid; length constraints are not NOT NULL constraints.
+query TTT
+SELECT [NULL, 'xy'::BLOB]::ICEBERG_FIXED(2)[],
+       {'f': NULL}::STRUCT(f ICEBERG_FIXED(2)),
+       MAP(['xy'::BLOB], [NULL])::MAP(ICEBERG_FIXED(2), ICEBERG_FIXED(2));
+----
+[NULL, xy]	{'f': NULL}	{xy=NULL}
+
+# COPY uses the shared Iceberg write projection, including for values already
+# labelled as fixed by JSON's nested conversion.
+statement error
+COPY (SELECT '["x"]'::JSON::ICEBERG_FIXED(2)[] AS l)
+TO '{TEST_DIR}/invalid_fixed_copy' (FORMAT ICEBERG);
+----
+Expected 2 bytes
+
+query I
+SELECT count(*) FROM glob('{TEST_DIR}/invalid_fixed_copy/metadata/*.metadata.json');
+----
+0
+
+statement ok
+COPY (
+	SELECT i, CASE WHEN i = 0 THEN NULL ELSE repeat('x', 32)::BLOB END::ICEBERG_FIXED(32) AS f,
+	       CASE WHEN i = 0 THEN NULL ELSE [NULL, 'xy'::BLOB] END::ICEBERG_FIXED(2)[] AS l
+	FROM range(3) t(i)
+) TO '{TEST_DIR}/valid_fixed_copy' (FORMAT ICEBERG);
+
+query IITT
+SELECT i, octet_length(f), l, typeof(f)
+FROM iceberg_scan('{TEST_DIR}/valid_fixed_copy') ORDER BY i;
+----
+0	NULL	NULL	ICEBERG_FIXED(32)
+1	32	[NULL, xy]	ICEBERG_FIXED(32)
+2	32	[NULL, xy]	ICEBERG_FIXED(32)

@@ -18,6 +18,10 @@
 
 namespace duckdb {
 
+bool IcebergUtils::IsIcebergCatalog(Catalog &catalog) {
+	return catalog.GetCatalogType() == "iceberg";
+}
+
 int64_t IcebergUtils::AddFileSizeChecked(int64_t total, int64_t file_size_in_bytes) {
 	if (file_size_in_bytes < 0) {
 		throw InvalidConfigurationException("Iceberg content file has negative 'file_size_in_bytes': %lld",

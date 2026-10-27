@@ -10,51 +10,55 @@ namespace duckdb {
 
 static IcebergSnapshot CreateSnapshot(ClientContext &context, const IcebergTableMetadata &metadata, int32_t schema_id,
                                       IcebergSnapshotOperationType operation, sequence_number_t sequence_number,
-                                      int64_t next_row_id, optional_ptr<const IcebergSnapshot> parent) {
-	IcebergSnapshot snapshot(schema_id);
-	snapshot.snapshot_id = IcebergSnapshot::NewSnapshotId();
+                                      optional_ptr<const IcebergSnapshot> parent) {
+	IcebergSnapshot snapshot(schema_id, IcebergSnapshot::NewSnapshotId());
 	snapshot.sequence_number = sequence_number;
 	snapshot.operation = operation;
 	snapshot.timestamp_ms = Timestamp::GetEpochMs(Timestamp::GetCurrentTimestamp());
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto uuid = UUID::ToString(UUID::GenerateRandomUUID());
 	snapshot.manifest_list = fs.JoinPath(metadata.GetMetadataPath(fs),
-	                                     "snap-" + std::to_string(*snapshot.snapshot_id) + "-" + uuid + ".avro");
+	                                     "snap-" + std::to_string(snapshot.snapshot_id) + "-" + uuid + ".avro");
 	if (parent) {
 		snapshot.parent_snapshot_id = parent->snapshot_id;
 		snapshot.metrics = IcebergSnapshotMetrics(*parent);
-	}
-	if (metadata.iceberg_version >= 3) {
-		snapshot.first_row_id = next_row_id;
-		snapshot.added_rows = 0;
 	}
 	return snapshot;
 }
 
 IcebergSnapshotWriter::IcebergSnapshotWriter(ClientContext &context, const IcebergTableMetadata &table_metadata,
                                              int32_t schema_id, IcebergSnapshotOperationType operation,
-                                             sequence_number_t sequence_number, int64_t next_row_id,
+                                             sequence_number_t sequence_number, IcebergRowIdAllocator &row_ids,
                                              vector<string> &created_metadata_files,
                                              optional_ptr<const IcebergSnapshot> parent)
     : context(context), table_metadata(table_metadata), db(DatabaseInstance::GetDatabase(context)),
       avro_copy(IcebergUtils::GetCopyFunction(context, "avro").function),
       created_metadata_files(created_metadata_files),
-      snapshot(CreateSnapshot(context, table_metadata, schema_id, operation, sequence_number, next_row_id, parent)),
-      manifest_list(snapshot.manifest_list), next_row_id(next_row_id) {
+      snapshot(CreateSnapshot(context, table_metadata, schema_id, operation, sequence_number, parent)),
+      manifest_list(snapshot.manifest_list), row_ids(row_ids) {
 }
 
 void IcebergSnapshotWriter::AddExistingManifest(IcebergManifestListEntry manifest) {
-	if (!manifest.HasFile()) {
-		throw InternalException("Cannot carry forward unwritten manifest content");
+	if (table_metadata.iceberg_version >= 3) {
+		row_ids.AssignExistingManifest(manifest.GetManifest());
 	}
 	manifest_list.AddExistingManifestFile(std::move(manifest));
 }
 
-void IcebergSnapshotWriter::WriteManifestFile(IcebergManifestListEntry &list_entry) {
-	if (list_entry.GetManifestEntries().empty()) {
+IcebergManifestMetadata IcebergSnapshotWriter::GetWriteMetadata(const IcebergManifestMetadata &source) const {
+	return IcebergManifestMetadata(source.schema_id, source.partition_spec_id,
+	                               NumericCast<int32_t>(table_metadata.iceberg_version), source.content);
+}
+
+IcebergManifestListEntry IcebergSnapshotWriter::WriteManifestFile(const IcebergManifestMetadata &source_metadata,
+                                                                  vector<IcebergManifestEntry> entries,
+                                                                  optional<int64_t> first_row_id) {
+	if (entries.empty()) {
 		throw InternalException("Cannot write an empty Iceberg manifest");
 	}
-	auto &manifest = list_entry.GetManifest();
+	auto metadata = GetWriteMetadata(source_metadata);
+	auto manifest =
+	    IcebergManifest::CreateFromEntries(*snapshot.sequence_number, table_metadata, metadata, entries, first_row_id);
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto path =
 	    fs.JoinPath(table_metadata.GetMetadataPath(fs), UUID::ToString(UUID::GenerateRandomUUID()) + "-m0.avro");
@@ -62,35 +66,25 @@ void IcebergSnapshotWriter::WriteManifestFile(IcebergManifestListEntry &list_ent
 		manifest.min_sequence_number = manifest.sequence_number;
 	}
 	created_metadata_files.push_back(path);
-	auto length = manifest_file::WriteToFile(table_metadata, list_entry, path, avro_copy, db, context);
-	list_entry.SetFile(std::move(path), length, *snapshot.snapshot_id);
+	auto length = manifest_file::WriteToFile(table_metadata, metadata, entries, path, avro_copy, db, context);
+	IcebergManifestFile file(std::move(path), length, snapshot.snapshot_id, std::move(manifest));
+	return IcebergManifestListEntry(std::move(file), std::move(metadata), std::move(entries));
 }
 
 void IcebergSnapshotWriter::WriteManifest(const IcebergPendingManifest &pending) {
 	optional<int64_t> first_row_id;
-	if (table_metadata.iceberg_version >= 3 && pending.GetMetadata().content == IcebergManifestContentType::DATA) {
-		first_row_id = next_row_id;
+	if (table_metadata.iceberg_version >= 3) {
+		first_row_id = row_ids.AllocateManifest(pending);
 	}
-	auto entries = pending.GetEntries();
-	auto manifest = IcebergManifestListEntry::CreateFromEntries(
-	    *snapshot.sequence_number, table_metadata, pending.GetMetadata(), std::move(entries), first_row_id);
-	snapshot.metrics.AddManifestListEntry(manifest);
-	WriteManifestFile(manifest);
-	if (first_row_id) {
-		auto &counts = *manifest.GetFile().counts;
-		next_row_id += *counts.existing_rows_count + *counts.added_rows_count;
-		*snapshot.added_rows += *counts.added_rows_count;
-	}
-	manifest_list.AddExistingManifestFile(std::move(manifest));
+	auto manifest = WriteManifestFile(pending.GetMetadata(), pending.GetEntries(), first_row_id);
+	snapshot.metrics.AddManifestEntries(manifest.GetFile().content, manifest.GetManifestEntries());
+	AddExistingManifest(std::move(manifest));
 }
 
 IcebergManifestListEntry IcebergSnapshotWriter::WriteReplacementManifest(const IcebergManifestMetadata &metadata,
                                                                          vector<IcebergManifestEntry> entries,
                                                                          optional<int64_t> first_row_id) {
-	auto manifest = IcebergManifestListEntry::CreateFromEntries(*snapshot.sequence_number, table_metadata, metadata,
-	                                                            std::move(entries), first_row_id);
-	WriteManifestFile(manifest);
-	return manifest;
+	return WriteManifestFile(metadata, std::move(entries), first_row_id);
 }
 
 void IcebergSnapshotWriter::RemoveManifestEntry(const IcebergManifestEntry &entry) {
@@ -105,7 +99,10 @@ IcebergWrittenSnapshot IcebergWrittenSnapshot::Create(IcebergSnapshotWriter writ
 	writer.created_metadata_files.push_back(writer.snapshot.manifest_list);
 	manifest_list::WriteToFile(writer.table_metadata, writer.manifest_list, writer.avro_copy, writer.db,
 	                           writer.context);
-	return {std::move(writer.snapshot), writer.manifest_list.GetManifestListEntries(), writer.next_row_id};
+	if (writer.table_metadata.iceberg_version >= 3) {
+		writer.row_ids.CompleteSnapshot(writer.snapshot);
+	}
+	return {std::move(writer.snapshot), writer.manifest_list.TakeManifestListEntries()};
 }
 
 } // namespace duckdb

@@ -1,4 +1,5 @@
 #include "core/expression/iceberg_value.hpp"
+#include "common/iceberg_fixed_type.hpp"
 
 #include "duckdb/common/helper.hpp"
 #include "duckdb/common/types/uuid.hpp"
@@ -33,6 +34,10 @@ Value IcebergValue::TransformPartitionValue(const Value &value, const LogicalTyp
 	// COPY's partition map contains textual values. VARCHAR and BLOB share a physical
 	// type, but only BLOB contains bytes that should be decoded as Iceberg values.
 	if (value.type().id() == LogicalTypeId::VARCHAR) {
+		if (IcebergFixedType::IsFixed(type)) {
+			auto blob = value.DefaultCastAs(LogicalType::BLOB);
+			return TransformPartitionValueFromBlob(blob.GetValueUnsafe<string_t>(), type);
+		}
 		return value.DefaultCastAs(type);
 	}
 	// DECIMAL partition values are already decoded as proper DuckDB DECIMALs by the Avro reader.
@@ -241,7 +246,11 @@ DeserializeResult IcebergValue::DeserializeValue(const string_t &blob, const Log
 		}
 	}
 	case LogicalTypeId::BLOB: {
-		return Value::BLOB((data_ptr_t)blob.GetData(), blob.GetSize());
+		if (!bound && IcebergFixedType::IsFixed(type) &&
+		    blob.GetSize() != NumericCast<idx_t>(IcebergFixedType::GetLength(type))) {
+			return DeserializeError(blob, type);
+		}
+		return Value::BLOB((data_ptr_t)blob.GetData(), blob.GetSize()).WithType(type);
 	}
 	case LogicalTypeId::VARCHAR: {
 		auto data = blob.GetData();
@@ -513,6 +522,12 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, const LogicalTyp
 		auto serialized_val = Value::BLOB(serialized_const_data_ptr, sizeof(int64_t));
 		return SerializeResult(column_type, serialized_val);
 	}
+	case LogicalTypeId::TIME: {
+		//! Microseconds from midnight in an 8-byte little-endian long
+		int64_t micros_from_midnight = input_value.GetValue<dtime_t>().value;
+		auto serialized_val = Value::BLOB(const_data_ptr_cast<int64_t>(&micros_from_midnight), sizeof(int64_t));
+		return SerializeResult(column_type, serialized_val);
+	}
 	case LogicalTypeId::DECIMAL: {
 		auto decimal_as_string = input_value.GetValue<string>();
 		auto dec_pos = decimal_as_string.find(".");
@@ -575,7 +590,7 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, const LogicalTyp
 	case LogicalTypeId::BLOB: {
 		// do not double serialize blob values.
 		if (input_value.type() != LogicalType::VARCHAR) {
-			return SerializeResult(column_type, input_value);
+			return SerializeResult(column_type, input_value.WithType(LogicalType::BLOB));
 		}
 		// get const data ptr for the string value
 		auto val = input_value.GetValue<string>();

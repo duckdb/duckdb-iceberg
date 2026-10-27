@@ -1,0 +1,112 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_metadata_history_publication.test
+# description: Metadata-only commits link the previous immutable file and its original timestamp
+# group: [transactions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env METADATA_FILE_READ_SUPPORT
+
+require-env METADATA_LOG_SUPPORT
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.metadata_history_publication;
+
+statement ok
+CREATE TABLE my_datalake.default.metadata_history_publication (id INTEGER)
+WITH ('history.probe' = 'before');
+
+statement ok
+INSERT INTO my_datalake.default.metadata_history_publication VALUES (1);
+
+statement ok
+begin
+
+# Grab the credentials for the current transaction, which will be used to read the historical metadata file.
+statement ok
+SELECT id
+FROM my_datalake.default.metadata_history_publication;
+
+statement ok
+SET VARIABLE history_before = (
+	SELECT {
+		path: metadata_location,
+		updated: metadata."last-updated-ms",
+		snapshot: metadata."current-snapshot-id"
+	}
+	FROM iceberg_load_table_response(my_datalake.default.metadata_history_publication)
+);
+
+statement ok
+SET VARIABLE history_content = (
+	SELECT content FROM read_blob(getvariable('history_before').path)
+);
+
+# This creates a metadata version without creating a new snapshot.
+statement ok
+ALTER TABLE my_datalake.default.metadata_history_publication SET ('history.probe' = 'after');
+
+# Before the commit, the ALTER isn't published yet
+query IIII
+SELECT
+	metadata_location <> getvariable('history_before').path,
+	json_extract_string(metadata::JSON, '$."metadata-log"[#-1]."metadata-file"') = getvariable('history_before').path,
+	json_extract_string(metadata::JSON, '$."metadata-log"[#-1]."timestamp-ms"')::BIGINT = getvariable('history_before').updated,
+	metadata."current-snapshot-id" = getvariable('history_before').snapshot
+FROM iceberg_load_table_response(my_datalake.default.metadata_history_publication);
+----
+false	false	false	true
+
+statement ok
+commit
+
+statement ok
+begin
+
+statement ok
+from my_datalake.default.metadata_history_publication limit 0
+
+query IIII
+SELECT
+	metadata_location <> getvariable('history_before').path,
+	json_extract_string(metadata::JSON, '$."metadata-log"[#-1]."metadata-file"') = getvariable('history_before').path,
+	json_extract_string(metadata::JSON, '$."metadata-log"[#-1]."timestamp-ms"')::BIGINT = getvariable('history_before').updated,
+	metadata."current-snapshot-id" = getvariable('history_before').snapshot
+FROM iceberg_load_table_response(my_datalake.default.metadata_history_publication);
+----
+true	true	true	true
+
+# The historical file must still be readable and byte-for-byte unchanged.
+query I
+SELECT content = getvariable('history_content')
+FROM read_blob(getvariable('history_before').path);
+----
+true
+
+# Detect gzip by its header, including Iceberg's .gz.metadata.json naming.
+query I
+SELECT json_extract_string(json, '$.properties."history.probe"')
+FROM read_json_objects(
+	getvariable('history_before').path,
+	compression = CASE
+		WHEN starts_with(hex(getvariable('history_content')), '1F8B') THEN 'gzip'
+		ELSE 'uncompressed'
+	END
+);
+----
+before
+
+statement ok
+commit
+
+query I
+SELECT value FROM iceberg_table_properties(my_datalake.default.metadata_history_publication)
+WHERE key = 'history.probe';
+----
+after
+
+statement ok
+DROP TABLE my_datalake.default.metadata_history_publication;

@@ -58,11 +58,12 @@ public:
 public:
 	OAuth2Authorization(AttachedDatabase &db);
 	OAuth2Authorization(AttachedDatabase &db, unique_ptr<const OAuth2Credentials> credentials, const string &uri,
-	                    const string &scope, const string &default_region = "");
+	                    const string &scope);
 
 public:
-	static unique_ptr<OAuth2Authorization> FromAttachOptions(AttachedDatabase &db, ClientContext &context,
-	                                                         IcebergAttachOptions &input);
+	static unique_ptr<OAuth2Authorization>
+	FromAttachOptions(AttachedDatabase &db, ClientContext &context, IcebergAttachOptions &input,
+	                  optional_ptr<unordered_map<string, Value>> client_options = nullptr);
 	unique_ptr<HTTPResponse> Request(RequestType request_type, ClientContext &context,
 	                                 const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
 	                                 const string &data = "") override DUCKDB_EXCLUDES(token_mutex);
@@ -75,7 +76,6 @@ public:
 	//! OAuth2 configuration (set during construction, immutable after that)
 	const string uri;
 	const string scope;
-	const string default_region;
 
 private:
 	//! Token state and grant credentials (protected by token_mutex)

@@ -14,7 +14,8 @@ namespace {
 
 //! How many of a column's values in a data file are NULL, from the counts its manifest entry carries. An absent
 //! null count tells us nothing, so assume both kinds of row are present.
-void ApplyNullCounts(const IcebergDataFile &data_file, int32_t column_id, IcebergPredicateStats &stats) {
+void ApplyNullCounts(const IcebergDataFile &data_file, int32_t column_id, IcebergPredicateStats &stats,
+                     const vector<reference<const IcebergColumnDefinition>> &parents = {}) {
 	optional<int64_t> value_count;
 	optional<int64_t> null_count;
 	auto value_counts_it = data_file.value_counts.find(column_id);
@@ -33,12 +34,47 @@ void ApplyNullCounts(const IcebergDataFile &data_file, int32_t column_id, Iceber
 		stats.has_null = true;
 		stats.has_not_null = value_count ? *value_count > 0 : true;
 	}
+	for (auto &parent : parents) {
+		IcebergPredicateStats parent_stats;
+		ApplyNullCounts(data_file, parent.get().id, parent_stats);
+		// Container metrics can exclude NULL ancestors. A field is NULL if any ancestor is NULL, and
+		// cannot have a non-NULL value when an ancestor is entirely NULL. Do not add the counts:
+		// primitive metrics can already include these same NULLs.
+		stats.has_null |= parent_stats.has_null;
+		stats.has_not_null &= parent_stats.has_not_null;
+	}
 	if (stats.geometry_stats) {
 		stats.geometry_stats->Set(stats.has_null ? StatsInfo::CAN_HAVE_NULL_VALUES
 		                                         : StatsInfo::CANNOT_HAVE_NULL_VALUES);
 		stats.geometry_stats->Set(stats.has_not_null ? StatsInfo::CAN_HAVE_VALID_VALUES
 		                                             : StatsInfo::CANNOT_HAVE_VALID_VALUES);
 	}
+}
+
+optional_ptr<const IcebergColumnDefinition>
+ResolveStructField(const IcebergColumnDefinition &root, const ColumnIndex &column_index,
+                   vector<reference<const IcebergColumnDefinition>> &parents) {
+	optional_ptr<const IcebergColumnDefinition> column = root;
+	optional_ptr<const ColumnIndex> index = column_index;
+	while (index->HasChildren()) {
+		if (column->type.id() != LogicalTypeId::STRUCT || index->ChildIndexCount() != 1) {
+			return nullptr;
+		}
+		index = index->GetChildIndex(0);
+		if (!index->HasPrimaryIndex()) {
+			return nullptr;
+		}
+		parents.emplace_back(*column);
+		column = column->GetChild(index->GetPrimaryIndex());
+		if (!column) {
+			return nullptr;
+		}
+	}
+	// An extracted cast can change ordering or nullability. These metrics describe the stored field.
+	if (column->type != column_index.GetScanType()) {
+		return nullptr;
+	}
+	return column;
 }
 
 } // namespace
@@ -129,14 +165,18 @@ bool IcebergFilePruner::FileMatchesFilter(const IcebergManifest &manifest_file,
 	for (auto &entry : table_filters) {
 		auto &column_index = entry.first;
 		auto primary_index = column_index.GetPrimaryIndex();
-		auto &column = *schema.columns[primary_index];
+		auto &root = *schema.columns[primary_index];
+		optional_ptr<const IcebergColumnDefinition> column_p = root;
+		vector<reference<const IcebergColumnDefinition>> parents;
 
-		if (column_index.IsPushdownExtract() && column.type.id() == LogicalTypeId::STRUCT) {
-			// These metrics describe the parent struct, not the extracted field. In particular,
-			// a non-NULL struct can contain a NULL child. Child metrics also exclude NULL parents,
-			// so pruning an extracted field requires accounting for every ancestor's validity.
-			continue;
+		if (column_index.IsPushdownExtract() && root.type.id() == LogicalTypeId::STRUCT) {
+			column_p = ResolveStructField(root, column_index, parents);
+			if (!column_p) {
+				continue;
+			}
 		}
+		auto &column = *column_p;
+		auto column_name = column_index.GetName(root.name);
 
 		if (data_file.content == IcebergManifestEntryContentType::POSITION_DELETES) {
 			continue;
@@ -194,14 +234,14 @@ bool IcebergFilePruner::FileMatchesFilter(const IcebergManifest &manifest_file,
 			}
 		} else {
 			stats =
-			    IcebergPredicateStats::DeserializeBounds(context, lower_bound, upper_bound, column.name, column.type);
+			    IcebergPredicateStats::DeserializeBounds(context, lower_bound, upper_bound, column_name, column.type);
 		}
 
 		if (column.type.id() == LogicalTypeId::GEOMETRY && !stats.geometry_stats) {
 			// A missing bbox is unknown, but the null counts can still prove that no geometry matches.
 			stats.geometry_stats = make_shared_ptr<BaseStatistics>(GeometryStats::CreateUnknown(column.type));
 		}
-		ApplyNullCounts(data_file, column_id, stats);
+		ApplyNullCounts(data_file, column_id, stats, parents);
 
 		auto nan_counts_it = data_file.nan_value_counts.find(column_id);
 		if (nan_counts_it != data_file.nan_value_counts.end()) {
@@ -213,8 +253,8 @@ bool IcebergFilePruner::FileMatchesFilter(const IcebergManifest &manifest_file,
 			DUCKDB_LOG(context, IcebergLogType,
 			           "Iceberg Filter Pushdown, skipped 'data_file': '%s', column '%s' with "
 			           "bounds [%s, %s] did not match filter: %s",
-			           data_file.file_path, column.name, stats.lower_bound ? stats.lower_bound->ToString() : "N/A",
-			           stats.upper_bound ? stats.upper_bound->ToString() : "N/A", filter.ToString(column.name));
+			           data_file.file_path, column_name, stats.lower_bound ? stats.lower_bound->ToString() : "N/A",
+			           stats.upper_bound ? stats.upper_bound->ToString() : "N/A", filter.ToString(column_name));
 			return false;
 		}
 	}

@@ -158,6 +158,7 @@ using partitioned_manifest_entry_map_t = map<int32_t, vector<IcebergManifestEntr
 using partition_value_map_t = unordered_map<uint64_t, reference<const Value>>;
 
 struct IcebergManifestListEntry;
+struct IcebergManifestMetadata;
 
 namespace manifest_file {
 
@@ -206,9 +207,10 @@ static constexpr const int32_t REFERENCED_DATA_FILE = 143;
 static constexpr const int32_t CONTENT_OFFSET = 144;
 static constexpr const int32_t CONTENT_SIZE_IN_BYTES = 145;
 
-//! Writes the manifest file using the precomputed metadata stored on the list entry.
-idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManifestListEntry &manifest_entry,
-                  const string &path, CopyFunction &copy_function, DatabaseInstance &db, ClientContext &context);
+//! Serialize content without a resolved manifest sequence number. ADDED entries may inherit it later.
+idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManifestMetadata &manifest_metadata,
+                  const vector<IcebergManifestEntry> &manifest_entries, const string &path, CopyFunction &copy_function,
+                  DatabaseInstance &db, ClientContext &context);
 
 } // namespace manifest_file
 

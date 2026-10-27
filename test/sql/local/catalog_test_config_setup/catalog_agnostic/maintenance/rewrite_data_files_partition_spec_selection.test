@@ -1,0 +1,177 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_partition_spec_selection.test
+# description: Partition evolution preserves rewrite grouping, size thresholds, and the global file cap
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.rewrite_spec_groups;
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_spec_groups (a INTEGER, b INTEGER, c INTEGER)
+PARTITIONED BY (a);
+
+# Three files under spec 0, each in a different historical partition.
+statement ok
+INSERT INTO my_datalake.default.rewrite_spec_groups VALUES (1, 11, 7), (2, 12, 7), (3, 13, 7);
+
+statement ok
+ALTER TABLE my_datalake.default.rewrite_spec_groups SET PARTITIONED BY (b);
+
+# Two more files under spec 1. Neither historical spec qualifies on its own.
+statement ok
+INSERT INTO my_datalake.default.rewrite_spec_groups VALUES (4, 14, 7), (5, 15, 7);
+
+statement ok
+ALTER TABLE my_datalake.default.rewrite_spec_groups SET PARTITIONED BY (c);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_spec_groups VALUES (6, 16, 8), (7, 17, 9);
+
+statement ok
+CREATE TEMP TABLE current_spec_files AS
+SELECT m.file_path
+FROM iceberg_metadata('my_datalake.default.rewrite_spec_groups') m
+JOIN iceberg_manifests('my_datalake.default.rewrite_spec_groups') s ON m.manifest_path = s.path
+WHERE m.content = 'DATA' AND m.status <> 'DELETED' AND s.partition_spec_id = 2;
+
+query I
+SELECT count(*) FROM current_spec_files;
+----
+2
+
+# A historical spec does not bypass the file-size eligibility filter.
+query IIIII
+CALL iceberg_rewrite_data_files(
+    'my_datalake.default.rewrite_spec_groups',
+    min_file_size_bytes => 100,
+    max_file_size_bytes => 1000000000
+);
+----
+0	0	0	0	0
+
+# All five historical files qualify together at the default min_input_files.
+# The two current-spec partitions remain separate and below that threshold.
+query IIIII
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_spec_groups');
+----
+5	1	<REGEX>:[1-9][0-9]*	0	0
+
+query I
+SELECT count(*)
+FROM iceberg_metadata('my_datalake.default.rewrite_spec_groups')
+WHERE content = 'DATA' AND status <> 'DELETED' AND file_path IN (SELECT file_path FROM current_spec_files);
+----
+2
+
+query II
+SELECT s.partition_spec_id, count(*)
+FROM iceberg_metadata('my_datalake.default.rewrite_spec_groups') m
+JOIN iceberg_manifests('my_datalake.default.rewrite_spec_groups') s ON m.manifest_path = s.path
+WHERE m.content = 'DATA' AND m.status <> 'DELETED'
+GROUP BY s.partition_spec_id;
+----
+2	3
+
+query III
+SELECT a, b, c FROM my_datalake.default.rewrite_spec_groups ORDER BY a;
+----
+1	11	7
+2	12	7
+3	13	7
+4	14	7
+5	15	7
+6	16	8
+7	17	9
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_spec_groups;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.rewrite_spec_cap;
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_spec_cap (a INTEGER, b INTEGER)
+PARTITIONED BY (a);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_spec_cap VALUES (1, 7), (2, 7), (3, 7), (4, 7);
+
+statement ok
+ALTER TABLE my_datalake.default.rewrite_spec_cap SET PARTITIONED BY (b);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_spec_cap VALUES (5, 7);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_spec_cap VALUES (6, 7);
+
+# Historical and current-spec buckets cannot qualify each other for a partitioned output.
+query IIIII
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_spec_cap');
+----
+0	0	0	0	0
+
+# Both groups qualify at min_input_files 2. The current group consumes two slots,
+# leaving only one slot for the historical group.
+query IIIII
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_spec_cap', min_input_files => 2, max_files_to_rewrite => 3);
+----
+3	1	<REGEX>:[1-9][0-9]*	0	0
+
+query I
+SELECT count(*)
+FROM iceberg_metadata('my_datalake.default.rewrite_spec_cap') m
+JOIN iceberg_manifests('my_datalake.default.rewrite_spec_cap') s ON m.manifest_path = s.path
+WHERE m.content = 'DATA' AND m.status <> 'DELETED' AND s.partition_spec_id = 0;
+----
+3
+
+# Count all eligible historical files before applying the cap.
+query IIIII
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_spec_cap', min_input_files => 3, max_files_to_rewrite => 1);
+----
+1	1	<REGEX>:[1-9][0-9]*	0	0
+
+query I
+SELECT count(*)
+FROM iceberg_metadata('my_datalake.default.rewrite_spec_cap') m
+JOIN iceberg_manifests('my_datalake.default.rewrite_spec_cap') s ON m.manifest_path = s.path
+WHERE m.content = 'DATA' AND m.status <> 'DELETED' AND s.partition_spec_id = 0;
+----
+2
+
+# rewrite_all bypasses both size and count thresholds for every spec.
+query IIIII
+CALL iceberg_rewrite_data_files(
+    'my_datalake.default.rewrite_spec_cap',
+    min_file_size_bytes => 100,
+    max_file_size_bytes => 1000000000,
+    rewrite_all => true
+);
+----
+4	1	<REGEX>:[1-9][0-9]*	0	0
+
+query II
+SELECT s.partition_spec_id, count(*)
+FROM iceberg_metadata('my_datalake.default.rewrite_spec_cap') m
+JOIN iceberg_manifests('my_datalake.default.rewrite_spec_cap') s ON m.manifest_path = s.path
+WHERE m.content = 'DATA' AND m.status <> 'DELETED'
+GROUP BY s.partition_spec_id;
+----
+1	1
+
+query II
+SELECT a, b FROM my_datalake.default.rewrite_spec_cap ORDER BY a;
+----
+1	7
+2	7
+3	7
+4	7
+5	7
+6	7
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_spec_cap;

@@ -104,6 +104,191 @@ FROM ICEBERG_SNAPSHOTS(
 ----
 2
 
+query IIII
+SELECT snapshot_id, parent_id, operation, summary
+FROM ICEBERG_SNAPSHOTS('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg')
+ORDER BY sequence_number;
+----
+7817332053627255703	NULL	append	{added-data-files=1, added-files-size=1406875, added-records=60175, changed-partition-count=1, spark.app.id=local-1746188475876, total-data-files=1, total-delete-files=0, total-equality-deletes=0, total-files-size=1406875, total-position-deletes=0, total-records=60175}
+2354745328521181395	7817332053627255703	overwrite	{added-data-files=1, added-files-size=1225526, added-records=51793, changed-partition-count=1, deleted-data-files=1, deleted-records=60175, removed-files-size=1406875, spark.app.id=local-1746188475876, total-data-files=1, total-delete-files=0, total-equality-deletes=0, total-files-size=1225526, total-position-deletes=0, total-records=51793}
+
+query I
+SELECT summary['total-records'] FROM ICEBERG_SNAPSHOTS('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg')
+ORDER BY sequence_number;
+----
+60175
+51793
+
+query IIIIIIIIIIII
+SELECT * FROM ICEBERG_MANIFESTS('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE) ORDER BY path;
+----
+0	lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m0.avro	7862	0	2354745328521181395	0	0	1	0	0	0	[]
+0	lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m1.avro	7863	0	2354745328521181395	1	0	0	0	0	0	[]
+
+query IIIIIIIIIIII
+SELECT * FROM ICEBERG_MANIFESTS('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE, version='1');
+----
+0	lineitem_iceberg/metadata/787a5996-87e9-4d93-b258-066d524e82cc-m0.avro	7867	0	7817332053627255703	1	0	0	0	0	0	[]
+
+query I
+SELECT count(*) FROM ICEBERG_MANIFESTS('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg_gz', ALLOW_MOVED_PATHS=TRUE, METADATA_COMPRESSION_CODEC='gzip');
+----
+1
+
+# Partition summaries follow the partition spec of each manifest
+query IIII
+SELECT path, partition_spec_id, added_data_files_count, partition_summaries
+FROM ICEBERG_MANIFESTS('{WORKING_DIRECTORY}/data/persistent/hive_partitioned_table', ALLOW_MOVED_PATHS=TRUE)
+ORDER BY path;
+----
+data/persistent/hive_partitioned_table/metadata/8f7c6cdd-f7e6-4743-857e-021adfe0b999-m0.avro	0	2	[{'contains_null': false, 'contains_nan': false, 'lower_bound': 2024-01-01, 'upper_bound': 2024-01-02}]
+data/persistent/hive_partitioned_table/metadata/fee93099-6425-4d83-bd7c-0aa646533090-m0.avro	1	4	[{'contains_null': false, 'contains_nan': false, 'lower_bound': 2024-01-03, 'upper_bound': 2024-01-04}, {'contains_null': false, 'contains_nan': false, 'lower_bound': click, 'upper_bound': view}]
+
+query II
+SELECT added_snapshot_id, partition_summaries
+FROM ICEBERG_MANIFESTS('{WORKING_DIRECTORY}/data/persistent/map_stats/default.db/map_stats', version='00002-0e059d4b-e5e8-41af-a763-76cbf3a3d0bc', ALLOW_MOVED_PATHS=TRUE)
+ORDER BY added_snapshot_id;
+----
+554549470069664013	[{'contains_null': false, 'contains_nan': false, 'lower_bound': 2026-01-02, 'upper_bound': 2026-01-02}]
+8792170059756986233	[{'contains_null': false, 'contains_nan': false, 'lower_bound': 2026-01-01, 'upper_bound': 2026-01-01}]
+
+query IIII
+SELECT * FROM ICEBERG_HISTORY('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg') ORDER BY made_current_at;
+----
+2025-05-02 12:21:19.06	7817332053627255703	NULL	true
+2025-05-02 12:21:20.005	2354745328521181395	7817332053627255703	true
+
+query IIII
+SELECT * FROM ICEBERG_HISTORY('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', version='1');
+----
+2025-05-02 12:21:19.06	7817332053627255703	NULL	true
+
+query I
+SELECT count(*) FROM ICEBERG_HISTORY('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg_gz', METADATA_COMPRESSION_CODEC='gzip');
+----
+1
+
+query IIIIII
+SELECT * FROM ICEBERG_REFS('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg');
+----
+main	BRANCH	2354745328521181395	NULL	NULL	NULL
+
+query IIIIII
+SELECT * FROM ICEBERG_REFS('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', version='1');
+----
+main	BRANCH	7817332053627255703	NULL	NULL	NULL
+
+query I
+SELECT count(*) FROM ICEBERG_REFS('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg_gz', METADATA_COMPRESSION_CODEC='gzip');
+----
+1
+
+# Table with both tag and branch with retention settings
+query IIIIII
+SELECT * FROM ICEBERG_REFS('{WORKING_DIRECTORY}/data/persistent/snapshot_refs/metadata/v1.metadata.json') ORDER BY name;
+----
+dev	BRANCH	1	2592000000	3	172800000
+main	BRANCH	2	NULL	NULL	NULL
+v1	TAG	1	604800000	NULL	NULL
+
+# Only files that are live in the snapshot are listed, the deleted entry is left out
+query IIIIIIIIIIIIIIIIII
+SELECT * EXCLUDE (lower_bounds, upper_bounds, readable_metrics) FROM ICEBERG_FILES('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE);
+----
+0	lineitem_iceberg/data/00000-5-dad9988f-2a3b-464c-adb6-6034de93da19-00001.parquet	PARQUET	0	51793	1225526	{1=82241, 2=75888, 3=45738, 4=14152, 5=38785, 6=170946, 7=22909, 8=21163, 9=9204, 10=6184, 11=83427, 12=83283, 13=83454, 14=13276, 15=19604, 16=450074}	{1=51793, 2=51793, 3=51793, 4=51793, 5=51793, 6=51793, 7=51793, 8=51793, 9=51793, 10=51793, 11=51793, 12=51793, 13=51793, 14=51793, 15=51793, 16=51793}	{1=0, 2=0, 3=0, 4=0, 5=0, 6=0, 7=0, 8=0, 9=0, 10=0, 11=0, 12=0, 13=0, 14=0, 15=0, 16=0}	NULL	NULL	[4]	NULL	0	NULL	NULL	NULL	NULL
+
+# Bounds are the raw serialized values, keyed by field id
+query IIII
+SELECT lower_bounds[1], upper_bounds[1], lower_bounds[15], upper_bounds[15] FROM ICEBERG_FILES('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE);
+----
+\x01\x00\x00\x00\x00\x00\x00\x00	`\xEA\x00\x00\x00\x00\x00\x00	AIR	TRUCK
+
+# readable_metrics has the metrics per column, with the bounds decoded
+query II
+SELECT readable_metrics.l_orderkey, readable_metrics.l_shipmode FROM ICEBERG_FILES('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE);
+----
+{'column_size': 82241, 'value_count': 51793, 'null_value_count': 0, 'nan_value_count': NULL, 'lower_bound': 1, 'upper_bound': 60000}	{'column_size': 19604, 'value_count': 51793, 'null_value_count': 0, 'nan_value_count': NULL, 'lower_bound': AIR, 'upper_bound': TRUCK}
+
+query II
+SELECT file_path, record_count FROM ICEBERG_FILES('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE, version='1');
+----
+lineitem_iceberg/data/00000-1-66fee7c2-c97c-4af9-963d-930afd99ace4-00001.parquet	60175
+
+query I
+SELECT count(*) FROM ICEBERG_FILES('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg_gz', ALLOW_MOVED_PATHS=TRUE, METADATA_COMPRESSION_CODEC='gzip');
+----
+1
+
+# The partition struct combines the fields of all partition specs
+query III
+SELECT file_path, spec_id, partition
+FROM ICEBERG_FILES('{WORKING_DIRECTORY}/data/persistent/hive_partitioned_table', ALLOW_MOVED_PATHS=TRUE)
+ORDER BY file_path;
+----
+data/persistent/hive_partitioned_table/data/event_date=2024-01-01/00000-3-249d8105-f013-47e6-8600-a855387633e5-00001.parquet	0	{'event_date': 2024-01-01, 'event_type': NULL}
+data/persistent/hive_partitioned_table/data/event_date=2024-01-02/00000-3-249d8105-f013-47e6-8600-a855387633e5-00002.parquet	0	{'event_date': 2024-01-02, 'event_type': NULL}
+data/persistent/hive_partitioned_table/data/event_date=2024-01-03/event_type=click/00000-8-c8ef1f50-38e5-4f6c-bc66-8b6410198355-00002.parquet	1	{'event_date': 2024-01-03, 'event_type': click}
+data/persistent/hive_partitioned_table/data/event_date=2024-01-03/event_type=view/00000-8-c8ef1f50-38e5-4f6c-bc66-8b6410198355-00001.parquet	1	{'event_date': 2024-01-03, 'event_type': view}
+data/persistent/hive_partitioned_table/data/event_date=2024-01-04/event_type=purchase/00000-8-c8ef1f50-38e5-4f6c-bc66-8b6410198355-00003.parquet	1	{'event_date': 2024-01-04, 'event_type': purchase}
+data/persistent/hive_partitioned_table/data/event_date=2024-01-04/event_type=view/00000-8-c8ef1f50-38e5-4f6c-bc66-8b6410198355-00004.parquet	1	{'event_date': 2024-01-04, 'event_type': view}
+
+# A day partition is shown as a date
+query I
+SELECT partition
+FROM ICEBERG_FILES('{WORKING_DIRECTORY}/data/persistent/map_stats/default.db/map_stats', version='00002-0e059d4b-e5e8-41af-a763-76cbf3a3d0bc', ALLOW_MOVED_PATHS=TRUE)
+ORDER BY ALL;
+----
+{'_day': 2026-01-01}
+{'_day': 2026-01-02}
+
+# Nested columns are named by their full path, like 'metadata.key' for a map key
+query II
+SELECT readable_metrics['metadata.key'], readable_metrics.timestamp.lower_bound
+FROM ICEBERG_FILES('{WORKING_DIRECTORY}/data/persistent/map_stats/default.db/map_stats', version='00002-0e059d4b-e5e8-41af-a763-76cbf3a3d0bc', ALLOW_MOVED_PATHS=TRUE)
+ORDER BY ALL;
+----
+{'column_size': 85, 'value_count': 1, 'null_value_count': 0, 'nan_value_count': NULL, 'lower_bound': NULL, 'upper_bound': NULL}	2026-01-01 00:00:00+00
+{'column_size': 85, 'value_count': 1, 'null_value_count': 0, 'nan_value_count': NULL, 'lower_bound': NULL, 'upper_bound': NULL}	2026-01-02 00:00:00+00
+
+# A v3 table with a deletion vector, the data file inherits its first row id from the manifest
+query IIIIII
+SELECT content, record_count, referenced_data_file IS NOT NULL, content_offset, content_size_in_bytes, first_row_id
+FROM ICEBERG_FILES('{WORKING_DIRECTORY}/data/persistent/moved_deletion_vector_path', ALLOW_MOVED_PATHS=TRUE)
+ORDER BY content;
+----
+0	100	false	NULL	NULL	0
+1	1	true	4	42	NULL
+
+# One row per partition, with the totals of its files
+query IIIIIIIIIII
+SELECT * FROM ICEBERG_PARTITIONS('{WORKING_DIRECTORY}/data/persistent/hive_partitioned_table', ALLOW_MOVED_PATHS=TRUE)
+ORDER BY ALL;
+----
+{'event_date': 2024-01-01, 'event_type': NULL}	0	1	1	928	0	0	0	0	2025-05-09 12:21:11.358	2541674261311761067
+{'event_date': 2024-01-02, 'event_type': NULL}	0	1	1	948	0	0	0	0	2025-05-09 12:21:11.358	2541674261311761067
+{'event_date': 2024-01-03, 'event_type': click}	1	1	1	928	0	0	0	0	2025-05-09 12:21:11.644	5128628767169163501
+{'event_date': 2024-01-03, 'event_type': view}	1	1	1	921	0	0	0	0	2025-05-09 12:21:11.644	5128628767169163501
+{'event_date': 2024-01-04, 'event_type': purchase}	1	1	1	948	0	0	0	0	2025-05-09 12:21:11.644	5128628767169163501
+{'event_date': 2024-01-04, 'event_type': view}	1	1	1	921	0	0	0	0	2025-05-09 12:21:11.644	5128628767169163501
+
+# An unpartitioned table has a single row, without 'partition' and 'spec_id'
+query IIIIIIIII
+SELECT * FROM ICEBERG_PARTITIONS('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE);
+----
+51793	1	1225526	0	0	0	0	2025-05-02 12:21:20.005	2354745328521181395
+
+query II
+SELECT record_count, last_updated_snapshot_id FROM ICEBERG_PARTITIONS('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE, version='1');
+----
+60175	7817332053627255703
+
+# A deletion vector counts as a position delete file
+query III
+SELECT record_count, position_delete_record_count, position_delete_file_count
+FROM ICEBERG_PARTITIONS('{WORKING_DIRECTORY}/data/persistent/moved_deletion_vector_path', ALLOW_MOVED_PATHS=TRUE);
+----
+100	1	1
+
 statement ok
 SET unsafe_enable_version_guessing = true;
 
@@ -145,5 +330,30 @@ create table t1 as select range a from range(10);
 
 statement error
 select * from iceberg_metadata(memory.main.t1);
+----
+<REGEX>:.*Invalid Input Error.*t1 is not an Iceberg table.*
+
+statement error
+select * from iceberg_manifests(memory.main.t1);
+----
+<REGEX>:.*Invalid Input Error.*t1 is not an Iceberg table.*
+
+statement error
+select * from iceberg_history(memory.main.t1);
+----
+<REGEX>:.*Invalid Input Error.*t1 is not an Iceberg table.*
+
+statement error
+select * from iceberg_partitions(memory.main.t1);
+----
+<REGEX>:.*Invalid Input Error.*t1 is not an Iceberg table.*
+
+statement error
+select * from iceberg_refs(memory.main.t1);
+----
+<REGEX>:.*Invalid Input Error.*t1 is not an Iceberg table.*
+
+statement error
+select * from iceberg_files(memory.main.t1);
 ----
 <REGEX>:.*Invalid Input Error.*t1 is not an Iceberg table.*

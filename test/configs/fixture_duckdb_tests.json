@@ -175,6 +175,7 @@
         "test/sql/types/nested/map/test_map_nested_keys.test",
         "test/sql/types/struct/nested_structs.test",
         "test/sql/types/struct/struct_updates.test",
+        "test/sql/insert/test_insert_ignored_syntax.test",
         "test/sql/function/list/aggregates/any_value.test",
         "test/sql/function/list/aggregates/entropy.test",
         "test/sql/function/list/aggregates/first.test",
@@ -202,6 +203,7 @@
     {
       "reason": "Startup queries provided via on_init failed",
       "paths": [
+        "test/sql/collate/collation_invalid_utf8.test",
         "test/sql/create/create_objects_readonly.test",
         "test/sql/function/list/lambdas/test_lambda_storage.test",
         "test/sql/index/art/storage/test_art_duckdb_versions.test",
@@ -249,13 +251,17 @@
         "test/sql/secrets/create_secret_hffs_autoload.test",
         "test/sql/secrets/create_secret_persistence_no_client_context.test",
         "test/sql/secrets/secret_autoloading_errors.test",
+        "test/sql/secrets/persistent_secret_map_value.test",
         "test/sql/settings/setting_preserve_identifier_case.test",
+        "test/sql/settings/test_disabled_file_systems.test",
         "test/sql/show_select/test_describe_all.test",
         "test/sql/storage/compression/zstd/reclaim_space_column.test_slow",
         "test/sql/storage/compression/zstd/reclaim_space_table.test_slow",
         "test/sql/storage/large_delete_wal.test_slow",
+        "test/sql/storage/distinct_statistics_sample.test",
         "test/sql/storage/many_checkpoints_leak.test_slow",
         "test/sql/storage/optimistic_write/optimistic_write.test_slow",
+        "test/sql/storage/adaptive_segment_rollback.test",
         "test/sql/storage/optimistic_write/optimistic_write_abort.test_slow",
         "test/sql/storage/optimistic_write/optimistic_write_alter_type.test_slow",
         "test/sql/storage/optimistic_write/optimistic_write_drop_column.test_slow",
@@ -505,6 +511,12 @@
       ]
     },
     {
+      "reason": "Requires the read-only fallback crypto provider with HTTPFS unloaded; the fixture loads HTTPFS and enables encrypted writes",
+      "paths": [
+        "test/sql/attach/attach_encryption_fallback_readonly.test"
+      ]
+    },
+    {
       "reason": "Parquet write / read differences when storage backed by Iceberg",
       "paths": [
         "test/sql/copy/parquet/attach_parquet.test",
@@ -542,21 +554,32 @@
       "paths": [
         "test/sql/create/create_as_partition_sorted_options.test",
         "test/sql/create/create_table_extra_options.test",
-        "test/sql/alter/alter_table_set_table_options.test"
+        "test/sql/alter/alter_table_set_table_options.test",
+        "test/sql/parser/parsed_data_statement_roundtrip.test"
       ]
     },
     {
       "reason": "EXPLAIN output differs because storage backend is Iceberg",
       "paths": [
+        "test/sql/aggregate/group/perfect_ht_memory_limit.test",
+        "test/sql/aggregate/grouping_sets/grouping_sets_sum_having.test",
         "test/sql/explain/explain_execute.test",
+        "test/sql/explain/tree_renderer_branches.test",
         "test/sql/optimizer/test_common_subplan_table_filters.test",
         "test/sql/explain/test_explain_table_scan.test",
         "test/sql/function/numeric/test_is_nan.test",
+        "test/sql/optimizer/null_check_statistics_propagation.test",
         "test/sql/merge/merge_into_explain_analyze.test",
         "test/sql/cte/materialized/materialized_cte_order_preservation.test",
         "test/sql/optimizer/multiple_column_stats_pruning.test",
         "test/sql/optimizer/test_negated_filter_cardinality.test",
         "test/sql/cte/materialized/materialized_cte_parallel_buffered.test"
+      ]
+    },
+    {
+      "reason": "Tests DuckDB undo-buffer and index cleanup with fixed memory limits; Iceberg has different commit semantics and S3 metadata writes exceed the setup memory budget",
+      "paths": [
+        "test/sql/transactions/test_commit_cleanup_oom_index_retry.test"
       ]
     },
     {
@@ -570,7 +593,8 @@
         "test/sql/filter/test_transitive_filters.test",
         "test/sql/storage/extended_string_stats.test",
         "test/sql/delete/delete_compression_blocked_by_old_snapshot.test",
-        "test/sql/storage/total_string_length_repeated_insert.test"
+        "test/sql/storage/total_string_length_repeated_insert.test",
+        "test/sql/optimizer/unsigned_divide_statistics.test"
       ]
     },
     {
@@ -669,8 +693,9 @@
       ]
     },
     {
-      "reason": "Upstream UTF8 tests assume insertion order without ORDER BY; Iceberg returns the rows in a different order",
+      "reason": "Upstream tests assume insertion order without ORDER BY; Iceberg returns the rows in a different order",
       "paths": [
+        "test/sql/insert/test_insert_ignored_syntax.test",
         "test/sql/function/string/test_contains_utf8.test",
         "test/sql/function/string/test_instr_utf8.test",
         "test/sql/function/string/test_starts_with_function_utf8.test"
@@ -761,7 +786,8 @@
         "test/sql/aggregate/group/group_by_limits.test",
         "test/sql/function/numeric/test_bit_count.test",
         "test/sql/join/inner/equality_join_limits.test",
-        "test/sql/order/hugeint_order_by_extremes.test"
+        "test/sql/order/hugeint_order_by_extremes.test",
+        "test/sql/types/bignum/test_int_varchar_bignum_compatibility.test"
       ]
     },
     {
@@ -780,7 +806,8 @@
     {
       "reason": "Iceberg scans do not provide the table-wide min/max statistics required to bind BITSTRING_AGG(col) without explicit bounds",
       "paths": [
-        "test/sql/aggregate/aggregates/test_bitstring_agg.test"
+        "test/sql/aggregate/aggregates/test_bitstring_agg.test",
+        "test/sql/aggregate/aggregates/test_bitstring_agg_small_types.test"
       ]
     },
     {
@@ -833,6 +860,12 @@
       "paths": [
         "test/sql/storage/encryption/temp_files/encrypted_tpch_join.test_slow",
         "test/sql/storage/external_file_cache/external_file_cache_parquet_tpch.test_slow"
+      ]
+    },
+    {
+      "reason": "Flaky native spill-accounting assertion: parallel CTAS can leave freed interior block slots in temp files; file sizes include those slots while duckdb_memory reports only live spilled bytes",
+      "paths": [
+        "test/sql/storage/encryption/temp_files/encrypted_temp_file_size_accounting.test"
       ]
     },
     {
@@ -1152,10 +1185,12 @@
     {
       "reason": "Out of memory in buffer manager tests (iceberg memory pressure)",
       "paths": [
+        "test/sql/settings/operator_memory_limit.test",
         "test/sql/storage/buffer_manager.test_slow",
         "test/sql/storage/buffer_manager/appending_table_exceeding_limit.test_slow",
         "test/sql/storage/buffer_manager/larger_than_memory_aggregate.test_slow",
-        "test/sql/storage/buffer_manager_temp_dir.test"
+        "test/sql/storage/buffer_manager_temp_dir.test",
+        "test/sql/storage/test_eviction_queue_dead_nodes_underflow.test"
       ]
     },
     {
@@ -1202,6 +1237,12 @@
         "test/sql/parallelism/interquery/test_concurrent_sequence.test_slow",
         "test/sql/parallelism/interquery/tpch_concurrent_checkpoints.test_slow",
         "test/sql/parallelism/interquery/tpch_concurrent_operations.test_slow"
+      ]
+    },
+    {
+      "reason": "Temporary: txid_current() assumes a native DuckTransaction for the default catalog; remove when the pending DuckDB core fix is included",
+      "paths": [
+        "test/sql/index/art/create_index_session_dependent.test"
       ]
     },
     {
@@ -1394,8 +1435,10 @@
         "test/sql/attach/attach_foreign_key.test",
         "test/sql/attach/attach_index.test",
         "test/sql/attach/attach_issue7567.test",
+        "test/sql/attach/attach_fsspec.test",
         "test/sql/attach/attach_issue7711.test",
         "test/sql/attach/attach_issue_7660.test",
+        "test/sql/attach/attach_hidden.test",
         "test/sql/attach/attach_macros.test",
         "test/sql/attach/attach_serialize_dependency.test",
         "test/sql/attach/attach_show_table.test",
@@ -1419,12 +1462,15 @@
       "reason": "Test references main.<table> or another non-iceberg schema via on_new_connection",
       "paths": [
         "test/sql/binder/test_implicit_struct_pack.test",
-        "test/sql/catalog/function/attached_macro.test"
+        "test/sql/catalog/function/attached_macro.test",
+        "test/sql/parser/unquoted_underscore_digit_identifiers.test",
+        "test/sql/sql_export/dml_statements.test"
       ]
     },
     {
       "reason": "Contains attach and use call, when config already uses iceberg attached db",
       "paths": [
+        "test/sql/attach/attach_use_string_literal.test",
         "test/sql/storage/metadata/partial_column_metadata_reuse_small_block.test",
         "test/sql/storage/compression/fsst/invalid_fsst_bitpacking_width.test",
         "test/sql/optimizer/boolean_wrapper_pushdown.test"
@@ -1435,6 +1481,7 @@
       "paths": [
         "test/sql/binder/test_duplicate_in_set_operation.test",
         "test/sql/insert/insert_by_name.test",
+        "test/sql/catalog/identifier_embedded_nul.test",
         "test/sql/setops/test_except.test",
         "test/sql/setops/test_pg_union.test",
         "test/sql/show_select/test_summarize.test"
@@ -1456,7 +1503,9 @@
     {
       "reason": "changing secret manager settings after the secret manager is used is not allowed",
       "paths": [
+        "test/sql/parser/reject_accidental_statement_syntax.test",
         "test/sql/secrets/create_secret_filesystem_logging.test",
+        "test/sql/secrets/http_env_scope_lookup.test",
         "test/sql/settings/test_disabled_local_filesystem_metadata.test",
         "test/sql/settings/test_disabled_local_filesystem_secrets.test",
         "test/sql/settings/test_external_access_metadata.test",
@@ -1485,6 +1534,7 @@
         "test/sql/copy/csv/test_csv_wrong_file.test_slow",
         "test/sql/copy/csv/test_errors.test_slow",
         "test/sql/copy/csv/test_glob_reorder_lineitem.test",
+        "test/sql/copy/csv/test_lineitem_gz.test",
         "test/sql/copy/csv/test_multiple_big_compressed_csvs.test_slow",
         "test/sql/copy/csv/tpch_csv_sf01.test_slow",
         "test/sql/copy/csv/tpch_parallel_copy.test_slow",
@@ -1649,6 +1699,7 @@
       "reason": "Tables already exist / Schema does not exist / already exists",
       "paths": [
         "test/sql/storage/wal/wal_replay_unbound_index_create_index_during_wal.test",
+        "test/sql/function/generic/null_constant_return_type.test",
         "test/sql/trigger/trigger_after_update_old_new_wal.test",
         "test/sql/catalog/sequence/test_sequence_google_fuzz.test",
         "test/sql/catalog/nested_schema/nested_table_persist.test",
@@ -1934,7 +1985,8 @@
     {
       "reason": "Native DuckDB storage versions and reopening a different database do not reset the remote Iceberg catalog",
       "paths": [
-        "test/sql/pivot/pivot_star.test"
+        "test/sql/pivot/pivot_star.test",
+        "test/sql/pivot/pivot_empty_string_value.test"
       ]
     },
     {
@@ -1984,7 +2036,8 @@
       "reason": "Assertions require native column compression segments in pragma_storage_info, which Iceberg's Parquet-backed tables do not expose",
       "paths": [
         "test/sql/storage/compression/constant/constant_negative_zero.test",
-        "test/sql/storage/compression/rle/rle_select_force_fetch_row.test"
+        "test/sql/storage/compression/rle/rle_select_force_fetch_row.test",
+        "test/sql/storage/reclaim_space/test_reclaim_space_update_large_string.test"
       ]
     }
   ]

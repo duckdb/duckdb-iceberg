@@ -85,6 +85,7 @@ jobs:
         with:
           build-type: relassert
           build: python3 duckdb/scripts/ci/retry.py -- make relassert
+          test: ./build/relassert/test/unittest_iceberg_native
           vcpkg-commit: cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3 # Release 2026.06.24
           bundle: |
             # Python needs the same ASan/UBSan runtime as the instrumented library.
@@ -132,6 +133,13 @@ jobs:
     name: Test against mock REST catalog
     needs: build_iceberg
     uses: ./.github/workflows/test-mock-catalog.yml
+    with:
+      artifact-name: duckdb-iceberg
+
+  test-native:
+    name: Test against native REST catalog
+    needs: build_iceberg
+    uses: ./.github/workflows/test-native-catalog.yml
     with:
       artifact-name: duckdb-iceberg
 

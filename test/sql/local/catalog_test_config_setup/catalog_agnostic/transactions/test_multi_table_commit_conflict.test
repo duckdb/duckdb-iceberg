@@ -1,0 +1,108 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_multi_table_commit_conflict.test
+# description: A conflict on one table must prevent every table in the transaction from publishing
+# group: [transactions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env MULTI_TABLE_COMMIT_SUPPORT
+
+require-env ATOMIC_COMMIT_CONFLICT_SUPPORT
+
+include test/sql/init_requires
+
+# Conflict each table in turn, covering either order chosen for the REST request.
+foreach conflict a b
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.atomic_commit_a;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.atomic_commit_b;
+
+statement ok
+CREATE TABLE my_datalake.default.atomic_commit_a (id INTEGER) WITH ('commit.retry.num-retries' = '0');
+
+statement ok
+CREATE TABLE my_datalake.default.atomic_commit_b (id INTEGER) WITH ('commit.retry.num-retries' = '0');
+
+statement ok
+INSERT INTO my_datalake.default.atomic_commit_a VALUES (1);
+
+statement ok
+INSERT INTO my_datalake.default.atomic_commit_b VALUES (1);
+
+statement ok writer
+BEGIN;
+
+statement ok writer
+UPDATE my_datalake.default.atomic_commit_a SET id = 2;
+
+statement ok writer
+UPDATE my_datalake.default.atomic_commit_b SET id = 2;
+
+# A separate transaction invalidates the writer's requirement on one table only.
+statement ok
+UPDATE my_datalake.default.atomic_commit_{conflict} SET id = 3;
+
+statement ok
+SET VARIABLE atomic_a_before = (
+	SELECT metadata_location FROM iceberg_load_table_response(my_datalake.default.atomic_commit_a)
+);
+
+statement ok
+SET VARIABLE atomic_b_before = (
+	SELECT metadata_location FROM iceberg_load_table_response(my_datalake.default.atomic_commit_b)
+);
+
+statement error writer
+COMMIT;
+----
+<REGEX>:.*Failed to commit.*
+
+query II
+SELECT
+	(SELECT id FROM my_datalake.default.atomic_commit_a) = CASE WHEN '{conflict}' = 'a' THEN 3 ELSE 1 END,
+	(SELECT id FROM my_datalake.default.atomic_commit_b) = CASE WHEN '{conflict}' = 'b' THEN 3 ELSE 1 END;
+----
+true	true
+
+# Neither table's metadata pointer may advance because of the failed commit.
+query I
+SELECT metadata_location = getvariable('atomic_a_before')
+FROM iceberg_load_table_response(my_datalake.default.atomic_commit_a);
+----
+true
+
+query I
+SELECT metadata_location = getvariable('atomic_b_before')
+FROM iceberg_load_table_response(my_datalake.default.atomic_commit_b);
+----
+true
+
+# The same two-table write succeeds when no competing transaction intervenes.
+statement ok
+BEGIN;
+
+statement ok
+UPDATE my_datalake.default.atomic_commit_a SET id = 4;
+
+statement ok
+UPDATE my_datalake.default.atomic_commit_b SET id = 4;
+
+statement ok
+COMMIT;
+
+query II fresh
+SELECT
+	(SELECT id FROM my_datalake.default.atomic_commit_a),
+	(SELECT id FROM my_datalake.default.atomic_commit_b);
+----
+4	4
+
+statement ok
+DROP TABLE my_datalake.default.atomic_commit_a;
+
+statement ok
+DROP TABLE my_datalake.default.atomic_commit_b;
+
+endloop

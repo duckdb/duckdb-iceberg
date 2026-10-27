@@ -11,6 +11,7 @@
 #include "core/metadata/sort/iceberg_sort_order.hpp"
 #include "iceberg_options.hpp"
 #include "rest_catalog/objects/list.hpp"
+#include "rest_catalog/objects/snapshot_references.hpp"
 #include "planning/snapshot/iceberg_snapshot_scan_info.hpp"
 
 namespace duckdb {
@@ -20,6 +21,8 @@ const string WRITE_UPDATE_MODE = "write.update.mode";
 const string WRITE_DELETE_MODE = "write.delete.mode";
 const string WRITE_MERGE_MODE = "write.merge.mode";
 const string WRITE_DELETE_ISOLATION_LEVEL = "write.delete.isolation-level";
+const string WRITE_FORMAT_DEFAULT = "write.format.default";
+const string WRITE_DELETE_FORMAT_DEFAULT = "write.delete.format.default";
 
 struct IcebergMetadataLogItem {
 public:
@@ -117,6 +120,8 @@ public:
 	//! Whether the given write mode property (write.delete.mode, write.update.mode or write.merge.mode) allows
 	//! writing merge-on-read delete files
 	bool AllowsMergeOnRead(const string &write_mode_property) const;
+	void VerifyDataFileFormat() const;
+	void VerifyDeleteFileFormat() const;
 	string ToJSON() const;
 	void WriteMetadata(ClientContext &context, const string &path) const;
 	bool WriteVersionHint(ClientContext &context, const string &path, const string &metadata_json_path) const;
@@ -158,6 +163,8 @@ public:
 	unordered_map<int32_t, IcebergSortOrder> sort_specs;
 	//! snapshot_id -> snapshot
 	unordered_map<int64_t, IcebergSnapshot> snapshots;
+	//! Branch and tag references, including their optional retention settings
+	optional<rest_api_objects::SnapshotReferences> refs;
 	//! History of refs.main per Iceberg spec "snapshot-log": (snapshot_id, raw millis)
 	//! pairs recording each change to current-snapshot-id, sorted ascending by ms.
 	//! Used for spec-compliant point-in-time resolution; side-branch commits are absent.

@@ -9,7 +9,7 @@ on:
 
 jobs:
   test-mock:
-    name: Test v2 mock REST catalog
+    name: Test mock REST catalog
     runs-on: ubuntu-latest
     env:
       ASAN_SYMBOLIZER_PATH: "/usr/bin/llvm-symbolizer"
@@ -46,13 +46,7 @@ jobs:
           PY
 
       - name: Run catalog-agnostic SQL tests
-        run: |
-          trap 'make mock-stop' EXIT
-          make mock
-          ./build/relassert/test/unittest \
-            --test-config "$(scripts/catalog_test_config.sh)" \
-            "test/sql/local/catalog_test_config_setup/catalog_agnostic/*" \
-            "exclude:*.test_slow"
+        run: make test_mock_relassert
 
       - name: Upload failure diagnostics
         if: failure()

@@ -4,6 +4,10 @@
 
 require iceberg
 
+# This setting is not in core's extension autoload registry.
+statement ok
+LOAD iceberg;
+
 query I
 select current_setting('iceberg_metadata_log_clock_skew_ms');
 ----

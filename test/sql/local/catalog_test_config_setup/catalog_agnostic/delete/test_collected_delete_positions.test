@@ -1,0 +1,80 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_collected_delete_positions.test
+# description: Delete collection preserves positions and affected counts across chunks and data files.
+# group: [delete]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+SET threads = 4;
+
+foreach version 2 3
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.collected_delete_positions;
+
+statement ok
+CREATE TABLE my_datalake.default.collected_delete_positions (id BIGINT, v INTEGER)
+WITH ('format-version' = '{version}');
+
+# Each file has more rows than a vector, so collection must retain multiple input chunks.
+statement ok
+INSERT INTO my_datalake.default.collected_delete_positions SELECT i, 0 FROM range(10000) t(i);
+
+statement ok
+INSERT INTO my_datalake.default.collected_delete_positions SELECT i, 0 FROM range(10000, 20000) t(i);
+
+query I
+DELETE FROM my_datalake.default.collected_delete_positions WHERE id % 2 = 0;
+----
+10000
+
+query III
+SELECT count(*), sum(id), sum(v) FROM my_datalake.default.collected_delete_positions;
+----
+10000	100000000	0
+
+# UPDATE uses the same collection path for its deleted source rows.
+query I
+UPDATE my_datalake.default.collected_delete_positions SET v = 1 WHERE id % 4 = 1;
+----
+5000
+
+query III
+SELECT count(*), sum(id), sum(v) FROM my_datalake.default.collected_delete_positions;
+----
+10000	100000000	5000
+
+# Existing deletes are carried into v3 vectors, but must not inflate the newly affected row count.
+query I
+DELETE FROM my_datalake.default.collected_delete_positions WHERE id % 4 = 3;
+----
+5000
+
+query III
+SELECT count(*), sum(id), sum(v) FROM my_datalake.default.collected_delete_positions;
+----
+5000	49995000	5000
+
+query I
+DELETE FROM my_datalake.default.collected_delete_positions WHERE id % 4 = 3;
+----
+0
+
+query I
+UPDATE my_datalake.default.collected_delete_positions SET v = 2 WHERE id % 4 = 3;
+----
+0
+
+query III
+SELECT count(*), sum(id), sum(v) FROM my_datalake.default.collected_delete_positions;
+----
+5000	49995000	5000
+
+statement ok
+DROP TABLE my_datalake.default.collected_delete_positions;
+
+endloop

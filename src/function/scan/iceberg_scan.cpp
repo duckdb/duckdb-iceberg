@@ -65,11 +65,16 @@ static unique_ptr<FunctionData> IcebergScanDeserialize(Deserializer &deserialize
 	throw NotImplementedException("IcebergScan deserialization not implemented");
 }
 
-BindInfo IcebergBindInfo(const optional_ptr<FunctionData> bind_data) {
+static optional_ptr<TableCatalogEntry> IcebergGetTableEntry(optional_ptr<const FunctionData> bind_data) {
 	auto &multi_file_data = bind_data->Cast<MultiFileBindData>();
 	auto &file_list = multi_file_data.file_list->Cast<IcebergMultiFileList>();
-	auto table = file_list.GetTable();
-	BindInfo result = table ? BindInfo(*table) : BindInfo(ScanType::EXTERNAL);
+	return file_list.GetTable().get();
+}
+
+BindInfo IcebergBindInfo(TableFunctionGetBindInfoInput &input) {
+	auto &multi_file_data = input.bind_data->Cast<MultiFileBindData>();
+	auto &file_list = multi_file_data.file_list->Cast<IcebergMultiFileList>();
+	BindInfo result(file_list.GetTable() ? ScanType::TABLE : ScanType::EXTERNAL);
 
 	auto &planner = file_list.GetScanPlanner();
 	if (!planner.HasScanInfo()) {
@@ -82,8 +87,8 @@ BindInfo IcebergBindInfo(const optional_ptr<FunctionData> bind_data) {
 	}
 	result.InsertOption("schema_id", Value::INTEGER(snapshot_info.schema_id));
 	// Omitted for empty tables, and when uncommitted transaction-local changes are also scanned
-	if (snapshot_info.snapshot && snapshot_info.snapshot->snapshot_id && !planner.HasTransactionData()) {
-		result.InsertOption("snapshot_id", Value::BIGINT(*snapshot_info.snapshot->snapshot_id));
+	if (snapshot_info.snapshot && !planner.HasTransactionData()) {
+		result.InsertOption("snapshot_id", Value::BIGINT(snapshot_info.snapshot->snapshot_id));
 	}
 	return result;
 }
@@ -125,6 +130,7 @@ TableFunctionSet IcebergFunctions::GetIcebergScanFunction(ExtensionLoader &loade
 		function.statistics = nullptr;
 		function.table_scan_progress = nullptr;
 		function.get_bind_info = IcebergBindInfo;
+		function.get_table_entry = IcebergGetTableEntry;
 		function.get_virtual_columns = IcebergVirtualColumns;
 		function.get_partition_stats = IcebergMultiFileReader::IcebergGetPartitionStats;
 		function.set_scan_order = IcebergSetScanOrder;

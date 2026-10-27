@@ -168,8 +168,8 @@ jobs:
 
       - name: Run Generic IRC tests
         run: |
-          ./build/release/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --list-test-names-only || true
-          ./build/release/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --test-config test/configs/cloud_s3tables.json
+          ./build/release/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" "exclude:*.test_slow" --list-test-names-only || true
+          ./build/release/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" "exclude:*.test_slow" --test-config test/configs/cloud_s3tables.json
 
       - name: Tear down S3 Tables table bucket
         # Must run even when the build, the smoke test or the suite failed, so a

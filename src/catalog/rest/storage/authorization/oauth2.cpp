@@ -48,9 +48,9 @@ OAuth2Authorization::OAuth2Authorization(AttachedDatabase &db)
 }
 
 OAuth2Authorization::OAuth2Authorization(AttachedDatabase &db, unique_ptr<const OAuth2Credentials> credentials,
-                                         const string &uri, const string &scope, const string &default_region)
+                                         const string &uri, const string &scope)
     : IcebergAuthorization(db, IcebergAuthorizationType::OAUTH2), uri(uri), scope(scope),
-      default_region(default_region), credentials(std::move(credentials)) {
+      credentials(std::move(credentials)) {
 }
 
 //! NOTE: this doesnt use StringUtil::URLEncode(..., escape_slash=true) because of how ' ' (space) is encoded
@@ -229,25 +229,25 @@ string OAuth2Authorization::GetToken(ClientContext &context, const OAuth2Credent
 	return token_response.access_token;
 }
 
-unique_ptr<OAuth2Authorization> OAuth2Authorization::FromAttachOptions(AttachedDatabase &db, ClientContext &context,
-                                                                       IcebergAttachOptions &input) {
+unique_ptr<OAuth2Authorization>
+OAuth2Authorization::FromAttachOptions(AttachedDatabase &db, ClientContext &context, IcebergAttachOptions &input,
+                                       optional_ptr<unordered_map<string, Value>> client_options) {
 	unordered_map<string, Value> remaining_options;
 	case_insensitive_map_t<Value> create_secret_options;
 	string secret;
-	string default_region;
 
 	static const unordered_set<string> recognized_create_secret_options {
-	    "oauth2_scope", "oauth2_server_uri", "oauth2_grant_type",      "token",
-	    "client_id",    "client_secret",     "access_delegation_mode", "extra_http_headers"};
+	    "oauth2_scope", "oauth2_server_uri", "oauth2_grant_type", "token", "refresh_token", "expires_in",
+	    "client_id",    "client_secret",     "extra_http_headers"};
 
 	for (auto &entry : input.options) {
 		auto lower_name = StringUtil::Lower(entry.first);
 		if (lower_name == "secret") {
 			secret = entry.second.ToString();
-		} else if (lower_name == "default_region") {
-			default_region = entry.second.ToString();
 		} else if (recognized_create_secret_options.count(lower_name)) {
-			create_secret_options.emplace(std::move(entry));
+			create_secret_options.emplace(lower_name, lower_name == "expires_in"
+			                                              ? entry.second.DefaultCastAs(LogicalType::INTEGER)
+			                                              : entry.second);
 		} else {
 			remaining_options.emplace(std::move(entry));
 		}
@@ -289,6 +289,19 @@ unique_ptr<OAuth2Authorization> OAuth2Authorization::FromAttachOptions(AttachedD
 			           iceberg_secret->secret->GetName().GetIdentifierName());
 			input.catalog_uri = uri_from_secret.ToString();
 		}
+		// Secret properties are client configuration too. Resolve them before applying
+		// /config so defaults cannot replace them, and overrides can update individual
+		// properties without combining SECRET with explicit OAuth2 options.
+		if (client_options) {
+			client_options->erase("secret");
+			for (auto &entry : kv_iceberg_secret.secret_map) {
+				auto option_name = StringUtil::Lower(entry.first.GetIdentifierName());
+				if (option_name == "endpoint") {
+					option_name = "uri";
+				}
+				client_options->emplace(option_name, entry.second);
+			}
+		}
 	} else {
 		if (!secret.empty()) {
 			set<string> option_names;
@@ -313,7 +326,7 @@ unique_ptr<OAuth2Authorization> OAuth2Authorization::FromAttachOptions(AttachedD
 	const auto scope = kv_secret.TryGetValue("oauth2_scope");
 	auto result = make_uniq<OAuth2Authorization>(db, ExtractOAuth2CredentialsFromSecret(kv_secret),
 	                                             server_uri.IsNull() ? "" : server_uri.ToString(),
-	                                             scope.IsNull() ? "" : scope.ToString(), default_region);
+	                                             scope.IsNull() ? "" : scope.ToString());
 	const auto token = kv_secret.TryGetValue("token");
 	if (token.IsNull()) {
 		throw HTTPException(StringUtil::Format("Failed to retrieve OAuth2 token from %s", result->uri));

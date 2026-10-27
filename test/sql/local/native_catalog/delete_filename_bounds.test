@@ -1,0 +1,119 @@
+# name: test/sql/local/native_catalog/delete_filename_bounds.test
+# description: Positional-delete filename bounds preserve backslashes without interpreting BLOB escapes
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+# Windows preserves the first separator in a path, so use backslashes throughout
+# the input to exercise BLOB escapes instead of normalizing them to forward slashes.
+statement ok
+SET VARIABLE filename_bounds_separator = (
+	SELECT CASE WHEN platform LIKE 'windows%' THEN chr(92) ELSE '/' END FROM pragma_platform()
+);
+
+foreach version 2 3
+
+foreach escape invalid hex
+
+statement ok
+SET VARIABLE filename_bounds_path = replace(
+	'{TEMP_DIR}/filename_bounds_{version}_{escape}/'
+		|| CASE WHEN '{escape}' = 'invalid' THEN 'backslash\a' ELSE 'backslash\x41' END,
+	'/', getvariable('filename_bounds_separator')
+);
+
+statement ok
+CREATE TABLE my_datalake.default.delete_filename_bounds (id INTEGER) WITH (
+	'format-version' = '{version}',
+	'write.data.path' = getvariable('filename_bounds_path')
+);
+
+statement ok
+INSERT INTO my_datalake.default.delete_filename_bounds VALUES (1), (2), (3);
+
+statement ok
+SET VARIABLE original_data_path = (
+	SELECT file_path FROM iceberg_metadata(my_datalake.default.delete_filename_bounds)
+	WHERE content = 'DATA' AND status <> 'DELETED'
+);
+
+query I
+SELECT CASE WHEN contains(getvariable('original_data_path'), chr(92))
+	= (getvariable('filename_bounds_separator') = chr(92))
+THEN true::VARIANT ELSE {
+	'expected_has_backslash': getvariable('filename_bounds_separator') = chr(92),
+	'actual_has_backslash': contains(getvariable('original_data_path'), chr(92)),
+	'requested_data_path': getvariable('filename_bounds_path'),
+	'actual_data_path': getvariable('original_data_path'),
+	'platform': (SELECT platform FROM pragma_platform()),
+	'format_version': '{version}',
+	'escape_case': '{escape}'
+}::VARIANT END;
+----
+true
+
+statement ok
+DELETE FROM my_datalake.default.delete_filename_bounds WHERE id = 1;
+
+query I
+SELECT id FROM my_datalake.default.delete_filename_bounds ORDER BY id;
+----
+2
+3
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE delete_manifests = (
+	SELECT list(DISTINCT manifest_path)
+	FROM iceberg_metadata(my_datalake.default.delete_filename_bounds)
+	WHERE manifest_content = 'DELETE'
+);
+
+# Filename metrics are the UTF-8 bytes of the referenced data path.
+query II
+SELECT
+	CASE WHEN data_file.lower_bounds[2147483546] = encode(getvariable('original_data_path'))
+	THEN true::VARIANT ELSE {
+		'bound': 'lower',
+		'expected_hex': hex(encode(getvariable('original_data_path'))),
+		'actual_hex': hex(data_file.lower_bounds[2147483546]),
+		'data_file_path': getvariable('original_data_path'),
+		'format_version': '{version}',
+		'escape_case': '{escape}'
+	}::VARIANT END,
+	CASE WHEN data_file.upper_bounds[2147483546] = encode(getvariable('original_data_path'))
+	THEN true::VARIANT ELSE {
+		'bound': 'upper',
+		'expected_hex': hex(encode(getvariable('original_data_path'))),
+		'actual_hex': hex(data_file.upper_bounds[2147483546]),
+		'data_file_path': getvariable('original_data_path'),
+		'format_version': '{version}',
+		'escape_case': '{escape}'
+	}::VARIANT END
+FROM read_avro(getvariable('delete_manifests'))
+WHERE status = 1;
+----
+true	true
+
+statement ok
+COMMIT;
+
+statement ok
+UPDATE my_datalake.default.delete_filename_bounds SET id = 20 WHERE id = 2;
+
+query I
+SELECT id FROM my_datalake.default.delete_filename_bounds ORDER BY id;
+----
+3
+20
+
+statement ok
+DROP TABLE my_datalake.default.delete_filename_bounds;
+
+endloop
+
+endloop
