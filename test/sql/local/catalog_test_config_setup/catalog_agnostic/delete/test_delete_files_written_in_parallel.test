@@ -12,7 +12,7 @@ statement ok
 DROP TABLE IF EXISTS my_datalake.default.test_parallel_delete_files;
 
 statement ok
-CREATE TABLE my_datalake.default.test_parallel_delete_files (p INT, id INT) PARTITIONED BY (p) WITH ('format-version'='${v}');
+CREATE TABLE my_datalake.default.test_parallel_delete_files (p INT, id INT) PARTITIONED BY (p) WITH ('format-version'='{v}');
 
 # 16 partitions, one data file each
 statement ok
