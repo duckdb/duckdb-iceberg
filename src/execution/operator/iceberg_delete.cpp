@@ -13,6 +13,7 @@
 #include "duckdb/execution/physical_operator.hpp"
 #include "duckdb/function/copy_function.hpp"
 #include "duckdb/common/types/uuid.hpp"
+#include "duckdb/parallel/task_executor.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 
 #include "catalog/rest/iceberg_catalog.hpp"
@@ -350,70 +351,120 @@ void IcebergDelete::FinalizeMergeDeletes(ClientContext &context, IcebergDeleteGl
 	});
 }
 
+namespace {
+
+//! Writes the delete file of one data file, so that the delete files of a statement are written in parallel
+class IcebergDeleteFileWriteTask : public BaseExecutorTask {
+public:
+	IcebergDeleteFileWriteTask(TaskExecutor &executor, ClientContext &context, const IcebergDelete &op,
+	                           const string &filename, const vector<idx_t> &deleted_rows, IcebergDeleteFileWrite &out)
+	    : BaseExecutorTask(executor), context(context), op(op), filename(filename), deleted_rows(deleted_rows),
+	      out(out) {
+	}
+
+	void ExecuteTask() override {
+		out = op.WriteDeleteFile(context, filename, deleted_rows);
+	}
+
+	string TaskType() const override {
+		return "IcebergDeleteFileWriteTask";
+	}
+
+private:
+	ClientContext &context;
+	const IcebergDelete &op;
+	const string &filename;
+	const vector<idx_t> &deleted_rows;
+	IcebergDeleteFileWrite &out;
+};
+
+} // namespace
+
 void IcebergDelete::WriteDeletes(ClientContext &context, const IcebergPendingDeletes &pending_deletes,
                                  IcebergDeleteWriteResult &result) const {
-	bool write_deletion_vector = table.table_info.table_metadata.iceberg_version >= 3;
-
 	if (!multi_file_list) {
 		throw InternalException("IcebergDelete multi_file_list is NULL");
 	}
 
-	for (const auto &entry : pending_deletes.rows_by_file) {
-		auto &filename = entry.first;
-		auto &deleted_rows = entry.second;
-
-		// Check newly selected positions before adding existing deletes: only new duplicate matches are errors.
-		set<idx_t> sorted_deletes;
-		for (auto &row_idx : deleted_rows) {
-			sorted_deletes.insert(row_idx);
+	// Each data file gets its own delete file, written with its own object store round trips
+	vector<reference<const string>> filenames;
+	vector<IcebergDeleteFileWrite> writes(pending_deletes.rows_by_file.size());
+	if (writes.size() == 1) {
+		auto &entry = *pending_deletes.rows_by_file.begin();
+		filenames.push_back(entry.first);
+		writes[0] = WriteDeleteFile(context, entry.first, entry.second);
+	} else {
+		TaskExecutor executor(context);
+		for (const auto &entry : pending_deletes.rows_by_file) {
+			executor.ScheduleTask(make_uniq<IcebergDeleteFileWriteTask>(executor, context, *this, entry.first,
+			                                                            entry.second, writes[filenames.size()]));
+			filenames.push_back(entry.first);
 		}
-		if (sorted_deletes.size() != deleted_rows.size()) {
-			throw NotImplementedException("The same row was updated multiple times - this is not (yet) supported in "
-			                              "Iceberg. Eliminate duplicate matches prior to running the UPDATE");
-		}
-		if (write_deletion_vector) {
-			// A v3 vector must also retain all positions already deleted from this data file.
-			auto existing_delete = multi_file_list->GetExistingPositionalDeleteData(filename);
-			if (existing_delete) {
-				auto &delete_data = *existing_delete;
-				PopulateAlteredManifests(result.altered_manifests, delete_data);
-				delete_data.ToSet(sorted_deletes);
-			}
-		}
-
-		IcebergDeleteFileInfo delete_file;
-		delete_file.data_file_path = filename;
-		delete_file.partition_info = multi_file_list->GetScanPlanner().GetPartitionForDataFile(filename);
-
-		auto &fs = FileSystem::GetFileSystem(context);
-
-		string file_format;
-		if (write_deletion_vector) {
-			file_format = "puffin";
-		} else {
-			file_format = "parquet";
-		}
-
-		string delete_filename = UUID::ToString(UUID::GenerateRandomUUID()) + "-deletes." + file_format;
-		// Place the delete file in the same directory as the data file it references,
-		// so that for partitioned tables it lands in the correct partition folder.
-		auto sep = fs.PathSeparator(filename);
-		auto last_sep = filename.rfind(sep);
-		if (last_sep == string::npos) {
-			throw InvalidConfigurationException("Cannot create valid file path for delete file");
-		}
-		string data_file_dir = filename.substr(0, last_sep);
-		string delete_file_path = fs.JoinPath(data_file_dir, delete_filename);
-
-		delete_file.file_name = delete_file_path;
-
-		if (!write_deletion_vector) {
-			delete_file = WritePositionalDeleteFile(context, filename, std::move(delete_file), sorted_deletes);
-		} else {
-			delete_file = WriteDeletionVectorFile(context, filename, std::move(delete_file), sorted_deletes);
-		}
-		result.written_files.emplace(filename, std::move(delete_file));
+		executor.WorkOnTasks();
 	}
+
+	for (idx_t i = 0; i < writes.size(); i++) {
+		if (writes[i].superseded_deletes) {
+			PopulateAlteredManifests(result.altered_manifests, *writes[i].superseded_deletes);
+		}
+		result.written_files.emplace(filenames[i].get(), std::move(writes[i].delete_file));
+	}
+}
+
+IcebergDeleteFileWrite IcebergDelete::WriteDeleteFile(ClientContext &context, const string &filename,
+                                                      const vector<idx_t> &deleted_rows) const {
+	bool write_deletion_vector = table.table_info.table_metadata.iceberg_version >= 3;
+	IcebergDeleteFileWrite result;
+
+	// Check newly selected positions before adding existing deletes: only new duplicate matches are errors.
+	set<idx_t> sorted_deletes;
+	for (auto &row_idx : deleted_rows) {
+		sorted_deletes.insert(row_idx);
+	}
+	if (sorted_deletes.size() != deleted_rows.size()) {
+		throw NotImplementedException("The same row was updated multiple times - this is not (yet) supported in "
+		                              "Iceberg. Eliminate duplicate matches prior to running the UPDATE");
+	}
+	if (write_deletion_vector) {
+		// A v3 vector must also retain all positions already deleted from this data file.
+		result.superseded_deletes = multi_file_list->GetExistingPositionalDeleteData(filename);
+		if (result.superseded_deletes) {
+			result.superseded_deletes->ToSet(sorted_deletes);
+		}
+	}
+
+	IcebergDeleteFileInfo delete_file;
+	delete_file.data_file_path = filename;
+	delete_file.partition_info = multi_file_list->GetScanPlanner().GetPartitionForDataFile(filename);
+
+	auto &fs = FileSystem::GetFileSystem(context);
+
+	string file_format;
+	if (write_deletion_vector) {
+		file_format = "puffin";
+	} else {
+		file_format = "parquet";
+	}
+
+	string delete_filename = UUID::ToString(UUID::GenerateRandomUUID()) + "-deletes." + file_format;
+	// Place the delete file in the same directory as the data file it references,
+	// so that for partitioned tables it lands in the correct partition folder.
+	auto sep = fs.PathSeparator(filename);
+	auto last_sep = filename.rfind(sep);
+	if (last_sep == string::npos) {
+		throw InvalidConfigurationException("Cannot create valid file path for delete file");
+	}
+	string data_file_dir = filename.substr(0, last_sep);
+	string delete_file_path = fs.JoinPath(data_file_dir, delete_filename);
+
+	delete_file.file_name = delete_file_path;
+
+	if (!write_deletion_vector) {
+		result.delete_file = WritePositionalDeleteFile(context, filename, std::move(delete_file), sorted_deletes);
+	} else {
+		result.delete_file = WriteDeletionVectorFile(context, filename, std::move(delete_file), sorted_deletes);
+	}
+	return result;
 }
 
 partitioned_manifest_entry_map_t IcebergDelete::GenerateDeleteManifestEntries(IcebergDeleteGlobalState &global_state) {
