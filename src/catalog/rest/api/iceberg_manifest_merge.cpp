@@ -266,6 +266,23 @@ IcebergManifestMerge::MergeManifests(vector<IcebergManifestListEntry> &&input, I
 		return result;
 	}
 
+	//! Bins never span partition specs and are merged only once they hold `min_count_to_merge` manifests,
+	//! so unless one spec has that many, nothing can merge: skip loading the entries, one GET per manifest.
+	map<int32_t, idx_t> manifests_per_spec;
+	bool can_merge = false;
+	for (auto &member : input) {
+		if (++manifests_per_spec[member.GetFile().partition_spec_id] >= config.min_count_to_merge) {
+			can_merge = true;
+			break;
+		}
+	}
+	if (!can_merge) {
+		for (auto &member : input) {
+			result.push_back(std::move(member));
+		}
+		return result;
+	}
+
 	//! Load the entries of the manifests if they're not already loaded
 	for (auto &member : input) {
 		if (member.HasManifestEntries()) {
