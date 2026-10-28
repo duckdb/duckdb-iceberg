@@ -1,0 +1,6 @@
+# name: benchmark/performance/delete_every_file_v3.benchmark
+# description: DELETE touching every data file of a v3 table
+# group: [performance]
+
+template benchmark/performance/delete_every_file.benchmark.in
+FORMAT_VERSION=3
