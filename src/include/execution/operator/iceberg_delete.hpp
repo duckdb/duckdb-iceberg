@@ -77,7 +77,7 @@ struct IcebergDeleteFileInfo {
 	unordered_map<int32_t, int64_t> nan_value_counts;
 };
 
-class IcebergDeleteData;
+struct IcebergDeleteData;
 
 //! The delete file written for one data file.
 struct IcebergDeleteFileWrite {
