@@ -45,12 +45,11 @@ statement ok
 commit
 
 # Combined size equal to the target does not qualify. min_input_files stays above the file count.
+# The min/max thresholds stay at their defaults (75% / 180% of the target) so the explicit options match Spark's band.
 query IIIII
 call iceberg_rewrite_data_files(
 	'my_datalake.default.rewrite_byte_gate',
 	target_file_size_bytes => getvariable('input_bytes'),
-	min_file_size_bytes => 1000000000,
-	max_file_size_bytes => 1000000000,
 	min_input_files => 5
 );
 ----
@@ -60,8 +59,6 @@ query IIIII
 call iceberg_rewrite_data_files(
 	'my_datalake.default.rewrite_byte_gate',
 	target_file_size_bytes => getvariable('input_bytes') - 1,
-	min_file_size_bytes => 1000000000,
-	max_file_size_bytes => 1000000000,
 	min_input_files => 5
 );
 ----

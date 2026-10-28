@@ -299,6 +299,18 @@ RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input)
 		                            "'max_file_size_bytes' (%lld)",
 		                            input.min_file_size_bytes.value(), input.max_file_size_bytes.value());
 	}
+	//! Parse only compares explicit arguments. These checks run after table properties and the
+	//! 75% / 180% defaults are filled in.
+	if (plan.target_file_size_bytes <= input.min_file_size_bytes.value()) {
+		throw InvalidInputException("iceberg_rewrite_data_files: resolved 'target_file_size_bytes' (%lld) must be > "
+		                            "'min_file_size_bytes' (%lld)",
+		                            plan.target_file_size_bytes, input.min_file_size_bytes.value());
+	}
+	if (plan.target_file_size_bytes >= input.max_file_size_bytes.value()) {
+		throw InvalidInputException("iceberg_rewrite_data_files: resolved 'target_file_size_bytes' (%lld) must be < "
+		                            "'max_file_size_bytes' (%lld)",
+		                            plan.target_file_size_bytes, input.max_file_size_bytes.value());
+	}
 	plan.table_info = std::move(table_info_ptr);
 	table_info.VerifyWriteEncryptionSupported();
 
