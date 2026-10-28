@@ -65,7 +65,7 @@ protected:
 	}
 	unique_ptr<FileHandle> OpenFileExtended(const OpenFileInfo &file, FileOpenFlags flags,
 	                                        optional_ptr<FileOpener> opener) override {
-		Record(file.path, false, file.HasFileSecret() ? file.extended_info->file_secret : string(), opener);
+		Record(file.path, false, file.GetFileSecret(), opener);
 		return LocalFileSystem::OpenFile(file.path, flags, opener);
 	}
 	unique_ptr<MultiFileList> GlobFilesExtended(const string &path, const FileGlobInput &input,
@@ -93,7 +93,7 @@ private:
 		if (!opener) {
 			throw InvalidConfigurationException("The file secret for '%s' cannot be used without a file opener", path);
 		}
-		FileOpenerInfo info {path, file_secret};
+		FileOpenerInfo info(OpenFileInfo(path).WithFileSecret(file_secret));
 		KeyValueSecretReader reader(*opener, &info, "s3");
 		Value key_id;
 		if (reader.TryGetSecretKey("key_id", key_id)) {

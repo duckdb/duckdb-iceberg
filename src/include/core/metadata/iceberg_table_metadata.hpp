@@ -181,11 +181,16 @@ public:
 
 	//! When set, the file secret every file of the table (manifest lists, manifests, data and delete files) is opened
 	//! with alone. Set only on a copy a read of the table makes (IcebergFileCredentialsCallback), never on the table's
-	//! own metadata, which other connections share; never written to a file.
+	//! own metadata, which other connections share; never written to a file. Set with SetFileSecret
 	string file_secret;
+	//! The name of the file secret as one value, which every file that names it shares
+	Value file_secret_value;
 
 public:
 	explicit IcebergTableMetadata(IcebergTableMetadataSchemas schemas);
+	void SetFileSecret(string name);
+	//! Names the file secret, if any, in the options of `file`, whose extended information is its own
+	void ApplyFileSecret(OpenFileInfo &file) const;
 
 private:
 	int32_t current_schema_id = 0;

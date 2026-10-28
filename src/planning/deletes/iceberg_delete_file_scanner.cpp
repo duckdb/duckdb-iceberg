@@ -279,7 +279,7 @@ static void ScanParquetDeleteFiles(const IcebergDeleteExecutionContext &context,
 		delete_file_infos.emplace_back(delete_file_path);
 		auto &file_info = delete_file_infos.back();
 		file_info.extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
-		file_info.extended_info->file_secret = context.metadata.file_secret;
+		context.metadata.ApplyFileSecret(file_info);
 		file_info.extended_info->options["file_size"] = Value::UBIGINT(data_file.file_size_in_bytes);
 		file_info.extended_info->options["validate_external_file_cache"] = Value::BOOLEAN(false);
 		file_info.extended_info->options["etag"] = Value("");

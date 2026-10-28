@@ -561,7 +561,21 @@ IcebergTableMetadata IcebergTableMetadata::Copy() const {
 	res.metadata_log = metadata_log;
 	res.current_schema_id = current_schema_id;
 	res.file_secret = file_secret;
+	res.file_secret_value = file_secret_value;
 	return res;
+}
+
+void IcebergTableMetadata::SetFileSecret(string name) {
+	file_secret = std::move(name);
+	file_secret_value = file_secret.empty() ? Value() : Value(file_secret);
+}
+
+void IcebergTableMetadata::ApplyFileSecret(OpenFileInfo &file) const {
+	if (file_secret.empty()) {
+		return;
+	}
+	D_ASSERT(file.extended_info);
+	file.extended_info->options[ExtendedOpenFileInfo::FILE_SECRET_OPTION] = file_secret_value;
 }
 
 const case_insensitive_map_t<string> &IcebergTableMetadata::GetTableProperties() const {
