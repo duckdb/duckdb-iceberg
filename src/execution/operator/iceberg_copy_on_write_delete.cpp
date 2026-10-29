@@ -1,6 +1,8 @@
 #include "execution/operator/iceberg_copy_on_write_delete.hpp"
 
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
+#include "duckdb/common/types/column/column_data_collection.hpp"
+#include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/execution/column_binding_resolver.hpp"
 #include "duckdb/execution/operator/join/physical_join.hpp"
 #include "duckdb/execution/operator/scan/physical_table_scan.hpp"
@@ -12,9 +14,11 @@
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
+#include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/operator/logical_delete.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
+#include "duckdb/planner/operator/logical_update.hpp"
 #include "duckdb/planner/table_filter_set.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
@@ -28,11 +32,24 @@ class CopyOnWriteDeleteGlobalState : public GlobalSinkState {
 public:
 	mutex lock;
 	IcebergCopyOnWriteDeletes deletes;
+	//! For an UPDATE: the new version of every matched row
+	unique_ptr<ColumnDataCollection> updated_rows;
 };
 
 class CopyOnWriteDeleteLocalState : public LocalSinkState {
 public:
 	unordered_map<string, vector<int64_t>> rows_by_file;
+	//! For an UPDATE: evaluates the new values of the matched rows
+	unique_ptr<ExpressionExecutor> update_executor;
+	DataChunk update_chunk;
+};
+
+//! Shares the scan of the updated rows between the threads that finish the probe side
+class CopyOnWriteUpdateEmitState : public GlobalOperatorState {
+public:
+	mutex lock;
+	bool scan_initialized = false;
+	ColumnDataParallelScanState scan;
 };
 
 class CopyOnWriteDeleteOperatorState : public OperatorState {
@@ -41,6 +58,7 @@ public:
 	}
 
 	SelectionVector keep;
+	ColumnDataLocalScanState updated_rows_scan;
 	//! The probe side reads one file at a time, so the last lookup is usually the next one
 	bool has_last_file = false;
 	string last_file;
@@ -107,17 +125,55 @@ IcebergCopyOnWriteDeleteFilter::IcebergCopyOnWriteDeleteFilter(PhysicalPlan &phy
 
 PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner,
                                                              LogicalDelete &op, IcebergTableSchemaVersion &table) {
-	auto &metadata = table.table_info.table_metadata;
-	if (metadata.iceberg_version >= 3) {
-		//! A V3 rewrite has to carry each kept row's _row_id and _last_updated_sequence_number into the new files
-		throw NotImplementedException("Copy-on-write DELETE on Iceberg V%d tables", metadata.iceberg_version);
-	}
-
 	//! Build side: the DELETE's own scan, which emits the filename and file_row_number of every matching row
 	auto &match_plan = planner.CreatePlan(*op.children[0]);
 	vector<idx_t> match_row_id_indexes;
 	for (idx_t i = 0; i < 2; i++) {
 		match_row_id_indexes.push_back(op.expressions[i]->Cast<BoundReferenceExpression>().Index());
+	}
+	return PlanRewrite(context, planner, table, match_plan, std::move(match_row_id_indexes), {});
+}
+
+PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner,
+                                                             LogicalUpdate &op, IcebergTableSchemaVersion &table) {
+	//! Build side: the UPDATE's own scan. An Iceberg UPDATE is bound as a delete and an insert, so its expressions
+	//! give the new value of every table column, followed in the scan's output by filename and file_row_number.
+	auto &match_plan = planner.CreatePlan(*op.children[0]);
+	auto match_column_count = match_plan.GetTypes().size();
+	vector<idx_t> match_row_id_indexes {match_column_count - 2, match_column_count - 1};
+
+	auto &columns = table.table_info.table_metadata.GetLatestSchema().columns;
+	if (op.columns.size() != columns.size()) {
+		throw InternalException(
+		    "Copy-on-write UPDATE: expected a new value for each of the %llu table columns, got %llu", columns.size(),
+		    op.columns.size());
+	}
+	unordered_map<idx_t, idx_t> expression_index_by_column;
+	for (idx_t i = 0; i < op.columns.size(); i++) {
+		expression_index_by_column[op.columns[i].index] = i;
+	}
+	vector<unique_ptr<Expression>> update_expressions;
+	for (idx_t column = 0; column < op.columns.size(); column++) {
+		auto expression_index = expression_index_by_column.at(column);
+		auto expression = op.expressions[expression_index]->Copy();
+		if (expression->GetExpressionType() == ExpressionType::VALUE_DEFAULT) {
+			expression = op.bound_defaults[expression_index]->Copy();
+		}
+		update_expressions.push_back(std::move(expression));
+	}
+	return PlanRewrite(context, planner, table, match_plan, std::move(match_row_id_indexes),
+	                   std::move(update_expressions));
+}
+
+PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanRewrite(ClientContext &context, PhysicalPlanGenerator &planner,
+                                                              IcebergTableSchemaVersion &table,
+                                                              PhysicalOperator &match_plan,
+                                                              vector<idx_t> match_row_id_indexes,
+                                                              vector<unique_ptr<Expression>> update_expressions) {
+	auto &metadata = table.table_info.table_metadata;
+	if (metadata.iceberg_version >= 3) {
+		//! A V3 rewrite has to carry each kept row's _row_id and _last_updated_sequence_number into the new files
+		throw NotImplementedException("Copy-on-write rewrites of Iceberg V%d tables", metadata.iceberg_version);
 	}
 
 	//! Probe side: the whole table again, so the rows of each matched file that survive can be rewritten. It is
@@ -131,12 +187,20 @@ PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanDelete(ClientContext &cont
 	auto keep_types = keep_plan.GetTypes();
 	D_ASSERT(keep_types.size() > 2);
 	vector<LogicalType> output_types(keep_types.begin(), keep_types.end() - 2);
+	//! The updated rows are emitted in the same chunks as the kept ones
+	for (idx_t i = 0; i < update_expressions.size(); i++) {
+		if (update_expressions[i]->GetReturnType() != output_types[i]) {
+			update_expressions[i] =
+			    BoundCastExpression::AddCastToType(context, std::move(update_expressions[i]), output_types[i]);
+		}
+	}
 
 	auto &filter = planner
 	                   .Make<IcebergCopyOnWriteDeleteFilter>(std::move(output_types), keep_plan, match_plan,
 	                                                         std::move(match_row_id_indexes))
 	                   .Cast<IcebergCopyOnWriteDeleteFilter>();
 	filter.keep_logical_plan = std::move(keep_logical_plan);
+	filter.update_expressions = std::move(update_expressions);
 
 	auto keep_scan = FindTableScan(keep_plan);
 	if (keep_scan) {
@@ -168,11 +232,20 @@ PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanDelete(ClientContext &cont
 // Sink (build side)
 //===--------------------------------------------------------------------===//
 unique_ptr<GlobalSinkState> IcebergCopyOnWriteDeleteFilter::GetGlobalSinkState(ClientContext &context) const {
-	return make_uniq<CopyOnWriteDeleteGlobalState>();
+	auto result = make_uniq<CopyOnWriteDeleteGlobalState>();
+	if (!update_expressions.empty()) {
+		result->updated_rows = make_uniq<ColumnDataCollection>(context, types);
+	}
+	return std::move(result);
 }
 
 unique_ptr<LocalSinkState> IcebergCopyOnWriteDeleteFilter::GetLocalSinkState(ExecutionContext &context) const {
-	return make_uniq<CopyOnWriteDeleteLocalState>();
+	auto result = make_uniq<CopyOnWriteDeleteLocalState>();
+	if (!update_expressions.empty()) {
+		result->update_executor = make_uniq<ExpressionExecutor>(context.client, update_expressions);
+		result->update_chunk.Initialize(context.client, types);
+	}
+	return std::move(result);
 }
 
 SinkResultType IcebergCopyOnWriteDeleteFilter::Sink(ExecutionContext &context, DataChunk &chunk,
@@ -200,6 +273,14 @@ SinkResultType IcebergCopyOnWriteDeleteFilter::Sink(ExecutionContext &context, D
 		}
 		current_rows->push_back(row_numbers[row_number_data.sel->get_index(i)]);
 	}
+
+	if (local_state.update_executor) {
+		auto &global_state = input.global_state.Cast<CopyOnWriteDeleteGlobalState>();
+		local_state.update_chunk.Reset();
+		local_state.update_executor->Execute(chunk, local_state.update_chunk);
+		lock_guard<mutex> guard(global_state.lock);
+		global_state.updated_rows->Append(local_state.update_chunk);
+	}
 	return SinkResultType::NEED_MORE_INPUT;
 }
 
@@ -212,7 +293,10 @@ SinkCombineResultType IcebergCopyOnWriteDeleteFilter::Combine(ExecutionContext &
 		auto &deleted = global_state.deletes.rows_by_file[entry.first];
 		for (auto row_number : entry.second) {
 			if (!deleted.insert(row_number).second) {
-				throw InternalException("Copy-on-write DELETE matched the same row twice");
+				//! Only an UPDATE ... FROM can match a row twice
+				throw NotImplementedException(
+				    "The same row was updated multiple times - this is not (yet) supported in Iceberg. Eliminate "
+				    "duplicate matches prior to running the UPDATE");
 			}
 		}
 		global_state.deletes.deleted_count += entry.second.size();
@@ -309,6 +393,30 @@ OperatorResultType IcebergCopyOnWriteDeleteFilter::Execute(ExecutionContext &con
 	return OperatorResultType::NEED_MORE_INPUT;
 }
 
+unique_ptr<GlobalOperatorState> IcebergCopyOnWriteDeleteFilter::GetGlobalOperatorState(ClientContext &context) const {
+	return make_uniq<CopyOnWriteUpdateEmitState>();
+}
+
+OperatorFinalizeResultType IcebergCopyOnWriteDeleteFilter::FinalExecute(ExecutionContext &context, DataChunk &chunk,
+                                                                        GlobalOperatorState &gstate_p,
+                                                                        OperatorState &state_p) const {
+	auto &gstate = gstate_p.Cast<CopyOnWriteUpdateEmitState>();
+	auto &state = state_p.Cast<CopyOnWriteDeleteOperatorState>();
+	auto &updated_rows = *sink_state->Cast<CopyOnWriteDeleteGlobalState>().updated_rows;
+	{
+		lock_guard<mutex> guard(gstate.lock);
+		if (!gstate.scan_initialized) {
+			updated_rows.InitializeScan(gstate.scan);
+			gstate.scan_initialized = true;
+		}
+	}
+	//! Every thread that finishes the probe side helps emit the updated rows, each of them exactly once
+	if (updated_rows.Scan(gstate.scan, state.updated_rows_scan, chunk)) {
+		return OperatorFinalizeResultType::HAVE_MORE_OUTPUT;
+	}
+	return OperatorFinalizeResultType::FINISHED;
+}
+
 //===--------------------------------------------------------------------===//
 // Pipelines
 //===--------------------------------------------------------------------===//
@@ -322,7 +430,7 @@ vector<const_reference<PhysicalOperator>> IcebergCopyOnWriteDeleteFilter::GetSou
 }
 
 string IcebergCopyOnWriteDeleteFilter::GetName() const {
-	return "ICEBERG_COPY_ON_WRITE_DELETE";
+	return update_expressions.empty() ? "ICEBERG_COPY_ON_WRITE_DELETE" : "ICEBERG_COPY_ON_WRITE_UPDATE";
 }
 
 } // namespace duckdb

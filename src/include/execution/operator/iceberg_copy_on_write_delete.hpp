@@ -17,6 +17,7 @@ namespace duckdb {
 
 class IcebergTableSchemaVersion;
 class LogicalDelete;
+class LogicalUpdate;
 class PhysicalPlanGenerator;
 class PhysicalTableScan;
 
@@ -32,6 +33,8 @@ struct IcebergCopyOnWriteDeletes {
 //!  - the probe side (children[0]) scans the table again, emitting its columns followed by those two virtual columns,
 //!    and this operator keeps only the rows of matched files that the DELETE does not remove.
 //! The kept rows are written by the IcebergInsert above it, which replaces the matched files in one snapshot.
+//! A copy-on-write UPDATE uses the same operator: the build side also computes each matched row's new values, and
+//! once the probe side has read the matched files, the operator emits those rows in place of the ones it dropped.
 class IcebergCopyOnWriteDeleteFilter : public PhysicalOperator {
 public:
 	IcebergCopyOnWriteDeleteFilter(PhysicalPlan &physical_plan, vector<LogicalType> types, PhysicalOperator &keep_plan,
@@ -44,9 +47,13 @@ public:
 	ProjectionIndex keep_scan_filename_index;
 	//! Owns the logical plan the probe side was planned from
 	unique_ptr<LogicalOperator> keep_logical_plan;
+	//! For an UPDATE: the new value of every table column, evaluated on the build side's rows
+	vector<unique_ptr<Expression>> update_expressions;
 
 public:
 	static PhysicalOperator &PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
+	                                    IcebergTableSchemaVersion &table);
+	static PhysicalOperator &PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
 	                                    IcebergTableSchemaVersion &table);
 
 	//! The rows removed by this DELETE; valid once the build side has finalized
@@ -57,6 +64,13 @@ public:
 	unique_ptr<OperatorState> GetOperatorState(ExecutionContext &context) const override;
 	OperatorResultType Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
 	                           GlobalOperatorState &gstate, OperatorState &state) const override;
+	unique_ptr<GlobalOperatorState> GetGlobalOperatorState(ClientContext &context) const override;
+	//! For an UPDATE, emits the updated rows after the probe side's last chunk
+	OperatorFinalizeResultType FinalExecute(ExecutionContext &context, DataChunk &chunk, GlobalOperatorState &gstate,
+	                                        OperatorState &state) const override;
+	bool RequiresFinalExecute() const override {
+		return !update_expressions.empty();
+	}
 
 	bool ParallelOperator() const override {
 		return true;
@@ -85,6 +99,11 @@ public:
 	string GetName() const override;
 
 private:
+	//! Plans the rewrite of the files `match_plan` matches; `update_expressions` is empty for a DELETE
+	static PhysicalOperator &PlanRewrite(ClientContext &context, PhysicalPlanGenerator &planner,
+	                                     IcebergTableSchemaVersion &table, PhysicalOperator &match_plan,
+	                                     vector<idx_t> match_row_id_indexes,
+	                                     vector<unique_ptr<Expression>> update_expressions);
 	void PushKeepScanFilter(const IcebergCopyOnWriteDeletes &deletes) const;
 };
 

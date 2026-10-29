@@ -68,12 +68,6 @@ write.delete.mode	copy-on-write
 write.update.mode	copy-on-write
 
 
-# write.update.mode is copy-on-write, so an UPDATE is refused
-statement error
-update my_datalake.default.test set a = a where a %2 = 0;
-----
-<REGEX>:.*Not implemented Error.*write.update.mode.*copy-on-write.*test.*
-
 # set the table property to merge on read
 statement ok
 CALL set_iceberg_table_properties(my_datalake.default.test,
@@ -81,7 +75,7 @@ CALL set_iceberg_table_properties(my_datalake.default.test,
         'write.delete.mode' : 'merge-on-read',
         });
 
-# table property is now merge on read, so there is no error
+# table property is now merge on read, so the delete writes a delete file
 statement ok
 delete from my_datalake.default.test where a %2 = 0;
 
