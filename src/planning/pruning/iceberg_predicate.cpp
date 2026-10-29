@@ -512,27 +512,21 @@ static IcebergMetricsMatch MatchBoundsExpression(ClientContext &context, const u
 			    !IsDirectReference(*bound_operator_expr.GetChildren()[0])) {
 				return IcebergMetricsMatch::ROWS_MIGHT_MATCH;
 			}
-			bool any_value_might_match = false;
-			bool every_row_matches = false;
 			for (idx_t i = 1; i < bound_operator_expr.GetChildren().size(); i++) {
 				if (bound_operator_expr.GetChildren()[i]->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
 					return IcebergMetricsMatch::ROWS_MIGHT_MATCH;
 				}
 				auto &value = bound_operator_expr.GetChildren()[i]->Cast<BoundConstantExpression>().GetValue();
-				if (!MatchBoundsConstant(value, ExpressionType::COMPARE_EQUAL, stats, transform)) {
-					continue;
+				if (MatchBoundsConstant(value, ExpressionType::COMPARE_EQUAL, stats, transform)) {
+					//! As Java's StrictEvalVisitor.in, only lower == upper == value proves every row; then no other
+					//! value can match, so the first possible match decides.
+					return evaluate_strict &&
+					               StrictMatchBoundsConstant(value, ExpressionType::COMPARE_EQUAL, stats, transform)
+					           ? IcebergMetricsMatch::ROWS_MUST_MATCH
+					           : IcebergMetricsMatch::ROWS_MIGHT_MATCH;
 				}
-				any_value_might_match = true;
-				//! As Java's StrictEvalVisitor.in: every row matches when lower == upper == one of the values. That is
-				//! the strict equality proof, which only identity bounds can give.
-				every_row_matches = every_row_matches ||
-				                    (evaluate_strict &&
-				                     StrictMatchBoundsConstant(value, ExpressionType::COMPARE_EQUAL, stats, transform));
 			}
-			if (!any_value_might_match) {
-				return IcebergMetricsMatch::ROWS_CANNOT_MATCH;
-			}
-			return every_row_matches ? IcebergMetricsMatch::ROWS_MUST_MATCH : IcebergMetricsMatch::ROWS_MIGHT_MATCH;
+			return IcebergMetricsMatch::ROWS_CANNOT_MATCH;
 		}
 		default:
 			return IcebergMetricsMatch::ROWS_MIGHT_MATCH;
