@@ -3,6 +3,7 @@
 #include "core/metadata/manifest/iceberg_manifest.hpp"
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
+#include "planning/pruning/iceberg_predicate.hpp"
 #include "planning/pruning/iceberg_table_filter.hpp"
 
 namespace duckdb {
@@ -15,7 +16,10 @@ public:
 	}
 
 	bool ManifestMatchesFilter(const IcebergManifestListEntry &entry) const;
-	bool FileMatchesFilter(const IcebergManifest &manifest_file, const IcebergManifestEntry &manifest_entry) const;
+	//! Scans only need the inclusive answer; ROWS_MUST_MATCH is only returned when `evaluate_strict`.
+	IcebergMetricsMatch FileMatchesFilter(const IcebergManifest &manifest_file,
+	                                      const IcebergManifestEntry &manifest_entry,
+	                                      bool evaluate_strict = false) const;
 	bool DeleteManifestMatchesDataFile(const IcebergManifest &delete_manifest, const IcebergManifest &data_manifest,
 	                                   const IcebergManifestEntry &data_manifest_entry) const;
 	bool DeleteFileMatchesDataFile(const IcebergManifest &delete_manifest,
@@ -27,7 +31,8 @@ public:
 	static partition_value_map_t PartitionValueMap(const IcebergDataFile &data_file);
 
 private:
-	bool FilePartitionMatchesFilter(const IcebergDataFile &data_file, const IcebergManifest &manifest_file) const;
+	bool FilePartitionMatchesFilter(const IcebergDataFile &data_file, const IcebergManifest &manifest_file,
+	                                bool evaluate_strict, vector<ColumnIndex> &covered_columns) const;
 	bool EqualityDeleteMatchesDataFile(const IcebergDataFile &delete_file, const IcebergDataFile &data_file) const;
 
 private:

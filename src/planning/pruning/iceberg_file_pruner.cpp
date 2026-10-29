@@ -80,7 +80,8 @@ ResolveStructField(const IcebergColumnDefinition &root, const ColumnIndex &colum
 } // namespace
 
 bool IcebergFilePruner::FilePartitionMatchesFilter(const IcebergDataFile &data_file,
-                                                   const IcebergManifest &manifest_file) const {
+                                                   const IcebergManifest &manifest_file, bool evaluate_strict,
+                                                   vector<ColumnIndex> &covered_columns) const {
 	if (data_file.partition_info.empty()) {
 		return true;
 	}
@@ -122,6 +123,8 @@ bool IcebergFilePruner::FilePartitionMatchesFilter(const IcebergDataFile &data_f
 		if (partition_val.value.IsNull()) {
 			stats.has_null = true;
 		} else {
+			//! Every transform maps NULL to NULL, so a file under a non-NULL partition value has no NULL rows here.
+			stats.has_null = false;
 			stats.has_not_null = true;
 		}
 
@@ -130,8 +133,8 @@ bool IcebergFilePruner::FilePartitionMatchesFilter(const IcebergDataFile &data_f
 			stats.has_nan = nan_counts_it->second != 0;
 		}
 
-		if (IcebergPredicate::MatchBounds(context, *table_filter, stats, field.transform) ==
-		    IcebergMetricsMatch::ROWS_CANNOT_MATCH) {
+		auto match = IcebergPredicate::MatchBounds(context, *table_filter, stats, field.transform, evaluate_strict);
+		if (match == IcebergMetricsMatch::ROWS_CANNOT_MATCH) {
 			auto &source_column = IcebergTableSchema::GetFromColumnIndex(schema.columns, column_id, 0);
 			auto partition_value_raw_str = stats.lower_bound ? stats.lower_bound->ToString() : "NULL";
 			auto partition_value_transformed_str =
@@ -144,12 +147,19 @@ bool IcebergFilePruner::FilePartitionMatchesFilter(const IcebergDataFile &data_f
 			           table_filter->ToString(source_column.name));
 			return false;
 		}
+		//! A nested source is evaluated against a filter extracted from its parent's, which can drop conjuncts on
+		//! other fields; only a top-level column whose own filter was evaluated whole can be covered.
+		if (match == IcebergMetricsMatch::ROWS_MUST_MATCH && !column_id.HasChildren() &&
+		    table_filters.TryGetFilterByColumnIndex(column_id)) {
+			covered_columns.push_back(column_id);
+		}
 	}
 	return true;
 }
 
-bool IcebergFilePruner::FileMatchesFilter(const IcebergManifest &manifest_file,
-                                          const IcebergManifestEntry &manifest_entry) const {
+IcebergMetricsMatch IcebergFilePruner::FileMatchesFilter(const IcebergManifest &manifest_file,
+                                                         const IcebergManifestEntry &manifest_entry,
+                                                         bool evaluate_strict) const {
 	D_ASSERT(table_filters.HasFilters());
 	unordered_set<int32_t> mapping_field_ids;
 	for (auto &mapping : metadata.mappings) {
@@ -159,12 +169,26 @@ bool IcebergFilePruner::FileMatchesFilter(const IcebergManifest &manifest_file,
 	}
 
 	auto &data_file = manifest_entry.data_file;
-	if (!FilePartitionMatchesFilter(data_file, manifest_file)) {
-		return false;
+	vector<ColumnIndex> covered_columns;
+	if (!FilePartitionMatchesFilter(data_file, manifest_file, evaluate_strict, covered_columns)) {
+		return IcebergMetricsMatch::ROWS_CANNOT_MATCH;
 	}
 
+	//! A filter counts once, whether a partition value or the file's own bounds proves it; a filter skipped below
+	//! for lack of usable stats is never counted, so the file cannot be reported as fully matching.
+	idx_t covered_filters = 0;
 	for (auto &entry : table_filters) {
 		auto &column_index = entry.first;
+		bool covered_by_partition = false;
+		for (auto &covered_column : covered_columns) {
+			if (covered_column == column_index) {
+				covered_by_partition = true;
+				break;
+			}
+		}
+		if (covered_by_partition) {
+			covered_filters++;
+		}
 		auto primary_index = column_index.GetPrimaryIndex();
 		auto &root = *schema.columns[primary_index];
 		optional_ptr<const IcebergColumnDefinition> column_p = root;
@@ -202,7 +226,8 @@ bool IcebergFilePruner::FileMatchesFilter(const IcebergManifest &manifest_file,
 
 		if (column.type.id() == LogicalTypeId::VARIANT) {
 			if (lower_bound.IsNull() || upper_bound.IsNull()) {
-				return true;
+				//! No evidence for this filter; the remaining filters can still rule the file out.
+				continue;
 			}
 			//! A filter on an extracted field refers to that field, so compare against the field's bounds
 			vector<string> path;
@@ -250,17 +275,29 @@ bool IcebergFilePruner::FileMatchesFilter(const IcebergManifest &manifest_file,
 		}
 
 		auto &filter = *entry.second;
-		if (IcebergPredicate::MatchBounds(context, filter, stats, IcebergTransform::Identity()) ==
-		    IcebergMetricsMatch::ROWS_CANNOT_MATCH) {
+		auto match =
+		    IcebergPredicate::MatchBounds(context, filter, stats, IcebergTransform::Identity(), evaluate_strict);
+		if (match == IcebergMetricsMatch::ROWS_CANNOT_MATCH) {
 			DUCKDB_LOG(context, IcebergLogType,
 			           "Iceberg Filter Pushdown, skipped 'data_file': '%s', column '%s' with "
 			           "bounds [%s, %s] did not match filter: %s",
 			           data_file.file_path, column_name, stats.lower_bound ? stats.lower_bound->ToString() : "N/A",
 			           stats.upper_bound ? stats.upper_bound->ToString() : "N/A", filter.ToString(column_name));
-			return false;
+			return IcebergMetricsMatch::ROWS_CANNOT_MATCH;
+		}
+		if (match == IcebergMetricsMatch::ROWS_MUST_MATCH && !covered_by_partition) {
+			covered_filters++;
 		}
 	}
-	return true;
+	//! Never claim coverage from an empty filter set, nor for a delete file (only its delete entries would match).
+	if (covered_filters > 0 && covered_filters == table_filters.FilterCount() &&
+	    data_file.content == IcebergManifestEntryContentType::DATA) {
+		DUCKDB_LOG(context, IcebergLogType,
+		           "Iceberg Strict Metrics, every row of file '%s' must match the pushed-down filters",
+		           data_file.file_path);
+		return IcebergMetricsMatch::ROWS_MUST_MATCH;
+	}
+	return IcebergMetricsMatch::ROWS_MIGHT_MATCH;
 }
 
 bool IcebergFilePruner::DeleteManifestMatchesDataFile(const IcebergManifest &delete_manifest,
