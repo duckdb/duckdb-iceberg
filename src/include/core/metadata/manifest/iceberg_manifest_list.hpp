@@ -131,7 +131,8 @@ struct IcebergManifestFile : public IcebergManifest {
 	}
 
 	//! Resolve inherited identities against this file before moving entries into a replacement.
-	//! ADDED entries become EXISTING; explicit identities and previously DELETED entries are preserved.
+	//! ADDED entries become EXISTING and explicit identities are preserved. Previously DELETED entries are
+	//! dropped: a tombstone belongs only to the snapshot that deleted the file (Apache Iceberg semantics).
 	vector<IcebergManifestEntry> PrepareEntriesForRewrite(vector<IcebergManifestEntry> entries) const;
 
 	string manifest_path;

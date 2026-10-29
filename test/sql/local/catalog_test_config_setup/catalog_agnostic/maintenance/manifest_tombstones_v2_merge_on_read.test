@@ -1,0 +1,107 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/manifest_tombstones_v2_merge_on_read.test
+# description: On a V2 merge-on-read table, rewrite tombstones are dropped while live position delete manifests are kept
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.manifest_tombstones_v2_merge_on_read;
+
+statement ok
+CREATE TABLE my_datalake.default.manifest_tombstones_v2_merge_on_read (id INTEGER, payload VARCHAR)
+WITH ('format-version' = 2, 'commit.manifest.min-count-to-merge' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.manifest_tombstones_v2_merge_on_read VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+statement ok
+INSERT INTO my_datalake.default.manifest_tombstones_v2_merge_on_read VALUES (4, 'd'), (5, 'e');
+
+# V2 deletes only add position delete files; they never replace earlier ones.
+statement ok
+DELETE FROM my_datalake.default.manifest_tombstones_v2_merge_on_read WHERE id = 1;
+
+statement ok
+DELETE FROM my_datalake.default.manifest_tombstones_v2_merge_on_read WHERE id = 4;
+
+# Per manifest: content, then added, existing and deleted file counts for that content.
+query IIII
+SELECT content,
+       CASE content WHEN 0 THEN added_data_files_count ELSE added_delete_files_count END,
+       CASE content WHEN 0 THEN existing_data_files_count ELSE existing_delete_files_count END,
+       CASE content WHEN 0 THEN deleted_data_files_count ELSE deleted_delete_files_count END
+FROM iceberg_manifests(my_datalake.default.manifest_tombstones_v2_merge_on_read)
+ORDER BY ALL;
+----
+0	0	2	0
+1	1	0	0
+1	1	0	0
+
+# The rewrite deletes both data files and keeps the position delete files.
+statement ok
+CALL iceberg_rewrite_data_files('my_datalake.default.manifest_tombstones_v2_merge_on_read', rewrite_all => true);
+
+query IIII
+SELECT content,
+       CASE content WHEN 0 THEN added_data_files_count ELSE added_delete_files_count END,
+       CASE content WHEN 0 THEN existing_data_files_count ELSE existing_delete_files_count END,
+       CASE content WHEN 0 THEN deleted_data_files_count ELSE deleted_delete_files_count END
+FROM iceberg_manifests(my_datalake.default.manifest_tombstones_v2_merge_on_read)
+ORDER BY ALL;
+----
+0	0	0	2
+0	1	0	0
+1	0	2	0
+
+# The tombstone-only data manifest is dropped; the live delete manifest is carried forward.
+statement ok
+INSERT INTO my_datalake.default.manifest_tombstones_v2_merge_on_read VALUES (6, 'f');
+
+query IIII
+SELECT content,
+       CASE content WHEN 0 THEN added_data_files_count ELSE added_delete_files_count END,
+       CASE content WHEN 0 THEN existing_data_files_count ELSE existing_delete_files_count END,
+       CASE content WHEN 0 THEN deleted_data_files_count ELSE deleted_delete_files_count END
+FROM iceberg_manifests(my_datalake.default.manifest_tombstones_v2_merge_on_read)
+ORDER BY ALL;
+----
+0	1	0	0
+0	1	0	0
+1	0	2	0
+
+# A further delete and insert merge both kinds of manifests, keeping every live delete file.
+statement ok
+DELETE FROM my_datalake.default.manifest_tombstones_v2_merge_on_read WHERE id = 6;
+
+statement ok
+INSERT INTO my_datalake.default.manifest_tombstones_v2_merge_on_read VALUES (7, 'g');
+
+query IIII
+SELECT content,
+       CASE content WHEN 0 THEN added_data_files_count ELSE added_delete_files_count END,
+       CASE content WHEN 0 THEN existing_data_files_count ELSE existing_delete_files_count END,
+       CASE content WHEN 0 THEN deleted_data_files_count ELSE deleted_delete_files_count END
+FROM iceberg_manifests(my_datalake.default.manifest_tombstones_v2_merge_on_read)
+ORDER BY ALL;
+----
+0	0	2	0
+0	1	0	0
+1	0	3	0
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.manifest_tombstones_v2_merge_on_read) WHERE status = 'DELETED';
+----
+0
+
+query II
+SELECT id, payload FROM my_datalake.default.manifest_tombstones_v2_merge_on_read ORDER BY id;
+----
+2	b
+3	c
+5	e
+7	g
+
+statement ok
+DROP TABLE my_datalake.default.manifest_tombstones_v2_merge_on_read;

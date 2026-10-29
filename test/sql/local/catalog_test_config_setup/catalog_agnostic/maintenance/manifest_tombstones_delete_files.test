@@ -1,0 +1,55 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/manifest_tombstones_delete_files.test
+# description: Delete manifests whose delete files were all removed by an earlier snapshot are not carried forward
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.manifest_tombstones_delete_files;
+
+statement ok
+CREATE TABLE my_datalake.default.manifest_tombstones_delete_files (id INTEGER, payload VARCHAR)
+WITH ('format-version' = 3, 'commit.manifest-merge.enabled' = false);
+
+statement ok
+INSERT INTO my_datalake.default.manifest_tombstones_delete_files VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+statement ok
+DELETE FROM my_datalake.default.manifest_tombstones_delete_files WHERE id = 1;
+
+# The second delete replaces the deletion vector, so the first delete manifest becomes tombstone-only.
+statement ok
+DELETE FROM my_datalake.default.manifest_tombstones_delete_files WHERE id = 2;
+
+query III
+SELECT added_delete_files_count, existing_delete_files_count, deleted_delete_files_count
+FROM iceberg_manifests(my_datalake.default.manifest_tombstones_delete_files)
+WHERE content = 1
+ORDER BY ALL;
+----
+0	0	1
+1	0	0
+
+statement ok
+INSERT INTO my_datalake.default.manifest_tombstones_delete_files VALUES (4, 'd');
+
+# Only the manifest with the live deletion vector is carried forward.
+query III
+SELECT added_delete_files_count, existing_delete_files_count, deleted_delete_files_count
+FROM iceberg_manifests(my_datalake.default.manifest_tombstones_delete_files)
+WHERE content = 1;
+----
+1	0	0
+
+query II
+SELECT id, payload FROM my_datalake.default.manifest_tombstones_delete_files ORDER BY id;
+----
+3	c
+4	d
+
+statement ok
+DROP TABLE my_datalake.default.manifest_tombstones_delete_files;

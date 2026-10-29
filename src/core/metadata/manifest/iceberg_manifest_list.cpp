@@ -87,14 +87,19 @@ IcebergManifestCounts IcebergManifestCounts::Zero() {
 
 vector<IcebergManifestEntry> IcebergManifestFile::PrepareEntriesForRewrite(vector<IcebergManifestEntry> entries) const {
 	auto next_row_id = content == IcebergManifestContentType::DATA ? first_row_id : nullopt;
+	vector<IcebergManifestEntry> result;
+	result.reserve(entries.size());
 	for (auto &entry : entries) {
+		//! Tombstones never consume inherited row IDs, so dropping them leaves the live files' ranges intact.
+		if (entry.status == IcebergManifestEntryStatusType::DELETED) {
+			continue;
+		}
 		entry.SetSnapshotId(entry.GetSnapshotId(*this));
 		entry.SetSequenceNumber(entry.GetSequenceNumber(*this));
 		entry.SetFileSequenceNumber(entry.GetFileSequenceNumber(*this));
 
 		auto &data_file = entry.data_file;
-		//! Old V2 tombstones never received row IDs; only live files inherit a range.
-		if (next_row_id && entry.status != IcebergManifestEntryStatusType::DELETED && !data_file.HasFirstRowId()) {
+		if (next_row_id && !data_file.HasFirstRowId()) {
 			int64_t following_row_id;
 			if (*next_row_id < 0 || data_file.record_count < 0 ||
 			    !TryAddOperator::Operation(*next_row_id, data_file.record_count, following_row_id)) {
@@ -107,8 +112,9 @@ vector<IcebergManifestEntry> IcebergManifestFile::PrepareEntriesForRewrite(vecto
 		if (entry.status == IcebergManifestEntryStatusType::ADDED) {
 			entry.status = IcebergManifestEntryStatusType::EXISTING;
 		}
+		result.push_back(std::move(entry));
 	}
-	return entries;
+	return result;
 }
 
 void IcebergManifest::SetCountsFromEntries(const vector<IcebergManifestEntry> &entries) {
