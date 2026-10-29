@@ -1,5 +1,6 @@
 #include "planning/pruning/iceberg_predicate.hpp"
 
+#include "common/iceberg_math.hpp"
 #include "duckdb/common/types/variant_iterator.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
@@ -124,6 +125,7 @@ static bool MatchBoundsConstantTemplated(const Value &constant, ExpressionType c
 	}
 }
 
+//! Inclusive evaluation: true if any value represented by the bounds might satisfy the comparison.
 static bool MatchBoundsConstant(const Value &constant, ExpressionType comparison_type,
                                 const IcebergPredicateStats &stats, const IcebergTransform &transform) {
 	switch (transform.Type()) {
@@ -146,6 +148,122 @@ static bool MatchBoundsConstant(const Value &constant, ExpressionType comparison
 	default:
 		throw InvalidConfigurationException("Transform '%s' not implemented", transform.RawType());
 	}
+}
+
+//! Identity keeps the source value, so the predicate applies to the bounds unchanged - no projection.
+static bool StrictMatchIdentityBounds(const Value &constant, ExpressionType comparison_type,
+                                      const IcebergPredicateStats &stats) {
+	D_ASSERT(stats.lower_bound);
+	D_ASSERT(stats.upper_bound);
+	switch (comparison_type) {
+	case ExpressionType::COMPARE_EQUAL:
+		return *stats.lower_bound == constant && *stats.upper_bound == constant;
+	case ExpressionType::COMPARE_GREATERTHAN:
+		return *stats.lower_bound > constant;
+	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+		return *stats.lower_bound >= constant;
+	case ExpressionType::COMPARE_LESSTHAN:
+		return *stats.upper_bound < constant;
+	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+		return *stats.upper_bound <= constant;
+	default:
+		return false;
+	}
+}
+
+static bool IsTemporalTransform(const IcebergTransform &transform) {
+	switch (transform.Type()) {
+	case IcebergTransformType::YEAR:
+	case IcebergTransformType::MONTH:
+	case IcebergTransformType::DAY:
+	case IcebergTransformType::HOUR:
+		return true;
+	default:
+		return false;
+	}
+}
+
+//! Strict projection as in Java's ProjectionUtil.*Strict: compare strictly, nudging <= and >= constants one unit.
+//! Binding gives a direct column comparison's constant the column's type, so one unit is the column's resolution.
+static bool StrictProjectBounds(const Value &constant, ExpressionType comparison_type,
+                                const IcebergPredicateStats &stats, const IcebergTransform &transform) {
+	D_ASSERT(stats.lower_bound && stats.upper_bound);
+	bool test_upper_bound;
+	//! Nudge the constant by this many units of its type before transforming it.
+	int step = 0;
+	switch (comparison_type) {
+	case ExpressionType::COMPARE_LESSTHAN: // c <  T  ->  upper < t(T)
+		test_upper_bound = true;
+		break;
+	case ExpressionType::COMPARE_LESSTHANOREQUALTO: // c <= T  ->  upper < t(T + 1)
+		test_upper_bound = true;
+		step = 1;
+		break;
+	case ExpressionType::COMPARE_GREATERTHAN: // c >  T  ->  lower > t(T)
+		test_upper_bound = false;
+		break;
+	case ExpressionType::COMPARE_GREATERTHANOREQUALTO: // c >= T  ->  lower > t(T - 1)
+		test_upper_bound = false;
+		step = -1;
+		break;
+	default:
+		return false;
+	}
+	auto &bound = test_upper_bound ? *stats.upper_bound : *stats.lower_bound;
+
+	Value stepped;
+	const Value *literal = &constant;
+	if (step != 0 && (step > 0 ? IcebergTryIncrement(constant, stepped) : IcebergTryDecrement(constant, stepped))) {
+		literal = &stepped;
+	}
+
+	auto projected = transform.ApplyTransform(*literal);
+	if (projected.IsNull()) {
+		return false;
+	}
+	if (!test_upper_bound && IsTemporalTransform(transform)) {
+		if (projected.type().id() != LogicalTypeId::INTEGER) {
+			return false;
+		}
+		auto projected_value = projected.GetValue<int32_t>();
+		if (projected_value <= 0) {
+			//! Old writers (and DuckDB before #1633) rounded pre-1970 values toward zero, so as in Java's
+			//! fixStrictTimeProjection, > and >= compare against the next partition value.
+			projected = Value::INTEGER(projected_value + 1);
+		}
+	}
+	return test_upper_bound ? bound < projected : bound > projected;
+}
+
+//! Strict counterpart to MatchBoundsConstant: true only when every row satisfies the comparison.
+static bool StrictMatchBoundsConstant(const Value &constant, ExpressionType comparison_type,
+                                      const IcebergPredicateStats &stats, const IcebergTransform &transform) {
+	if (constant.IsNull() || stats.BoundsAreNull() || !stats.lower_bound || !stats.upper_bound || stats.has_null) {
+		return false;
+	}
+	if ((stats.lower_bound->type().IsFloating() || constant.type().IsFloating()) &&
+	    (!stats.has_nan.has_value() || *stats.has_nan)) {
+		return false;
+	}
+
+	switch (transform.Type()) {
+	case IcebergTransformType::IDENTITY:
+		return StrictMatchIdentityBounds(constant, comparison_type, stats);
+	case IcebergTransformType::TRUNCATE:
+	case IcebergTransformType::YEAR:
+	case IcebergTransformType::MONTH:
+	case IcebergTransformType::DAY:
+	case IcebergTransformType::HOUR:
+		break;
+	default:
+		return false;
+	}
+	if (comparison_type == ExpressionType::COMPARE_EQUAL) {
+		//! No non-identity transform has a strict projection for equality; adjacent source values can share a
+		//! partition.
+		return false;
+	}
+	return StrictProjectBounds(constant, comparison_type, stats, transform);
 }
 
 static bool MatchBoundsIsNullFilter(const IcebergPredicateStats &stats) {
@@ -283,8 +401,17 @@ static bool IsVariantReference(const Expression &expr) {
 	return IsDirectReference(current_expr);
 }
 
-static bool MatchBoundsExpression(ClientContext &context, const unique_ptr<Expression> &expr_p,
-                                  const IcebergPredicateStats &stats, const IcebergTransform &transform) {
+static IcebergMetricsMatch InclusiveOnly(bool any_row_could_match) {
+	return any_row_could_match ? IcebergMetricsMatch::ROWS_MIGHT_MATCH : IcebergMetricsMatch::ROWS_CANNOT_MATCH;
+}
+
+static IcebergMetricsMatch WithoutStrictMatch(IcebergMetricsMatch pushdown) {
+	return pushdown == IcebergMetricsMatch::ROWS_MUST_MATCH ? IcebergMetricsMatch::ROWS_MIGHT_MATCH : pushdown;
+}
+
+static IcebergMetricsMatch MatchBoundsExpression(ClientContext &context, const unique_ptr<Expression> &expr_p,
+                                                 const IcebergPredicateStats &stats, const IcebergTransform &transform,
+                                                 bool evaluate_strict) {
 	auto &expr = *expr_p;
 	if (BoundComparisonExpression::IsComparison(expr)) {
 		auto &compare_expr = expr.Cast<BoundFunctionExpression>();
@@ -300,38 +427,54 @@ static bool MatchBoundsExpression(ClientContext &context, const unique_ptr<Expre
 		const bool is_identity = transform.Type() == IcebergTransformType::IDENTITY;
 
 		if (right_is_const && left_is_const) {
-			return true;
+			return IcebergMetricsMatch::ROWS_MIGHT_MATCH;
 		} else if (right_is_const) {
 			if (left_is_ref) {
-				return MatchBoundsConstant(right.Cast<BoundConstantExpression>().GetValue(), comparison_type, stats,
-				                           transform);
+				auto &constant = right.Cast<BoundConstantExpression>().GetValue();
+				if (!MatchBoundsConstant(constant, comparison_type, stats, transform)) {
+					return IcebergMetricsMatch::ROWS_CANNOT_MATCH;
+				}
+				return evaluate_strict && StrictMatchBoundsConstant(constant, comparison_type, stats, transform)
+				           ? IcebergMetricsMatch::ROWS_MUST_MATCH
+				           : IcebergMetricsMatch::ROWS_MIGHT_MATCH;
 			} else if (is_identity && IsVariantReference(left)) {
-				return MatchVariantBounds(context, comparison_type, left, right, stats, transform);
+				return InclusiveOnly(MatchVariantBounds(context, comparison_type, left, right, stats, transform));
 			}
 		} else if (left_is_const) {
 			if (right_is_ref) {
-				return MatchBoundsConstant(left.Cast<BoundConstantExpression>().GetValue(),
-				                           FlipComparisonExpression(comparison_type), stats, transform);
+				auto &constant = left.Cast<BoundConstantExpression>().GetValue();
+				auto flipped = FlipComparisonExpression(comparison_type);
+				if (!MatchBoundsConstant(constant, flipped, stats, transform)) {
+					return IcebergMetricsMatch::ROWS_CANNOT_MATCH;
+				}
+				return evaluate_strict && StrictMatchBoundsConstant(constant, flipped, stats, transform)
+				           ? IcebergMetricsMatch::ROWS_MUST_MATCH
+				           : IcebergMetricsMatch::ROWS_MIGHT_MATCH;
 			} else if (is_identity && IsVariantReference(right)) {
-				return MatchVariantBounds(context, FlipComparisonExpression(comparison_type), right, left, stats,
-				                          transform);
+				return InclusiveOnly(MatchVariantBounds(context, FlipComparisonExpression(comparison_type), right, left,
+				                                        stats, transform));
 			}
 		}
-		return true;
+		return IcebergMetricsMatch::ROWS_MIGHT_MATCH;
 	}
 
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::BOUND_CONJUNCTION: {
 		auto &conjunction = expr.Cast<BoundConjunctionExpression>();
 		if (conjunction.GetExpressionType() != ExpressionType::CONJUNCTION_AND) {
-			return true;
+			return IcebergMetricsMatch::ROWS_MIGHT_MATCH;
 		}
+		auto result = IcebergMetricsMatch::ROWS_MUST_MATCH;
 		for (auto &child : conjunction.GetChildren()) {
-			if (!MatchBoundsExpression(context, child, stats, transform)) {
-				return false;
+			auto child_result = MatchBoundsExpression(context, child, stats, transform, evaluate_strict);
+			if (child_result == IcebergMetricsMatch::ROWS_CANNOT_MATCH) {
+				return IcebergMetricsMatch::ROWS_CANNOT_MATCH;
+			}
+			if (child_result == IcebergMetricsMatch::ROWS_MIGHT_MATCH) {
+				result = IcebergMetricsMatch::ROWS_MIGHT_MATCH;
 			}
 		}
-		return true;
+		return result;
 	}
 	case ExpressionClass::BOUND_OPERATOR: {
 		auto &bound_operator_expr = expr.Cast<BoundOperatorExpression>();
@@ -346,68 +489,92 @@ static bool MatchBoundsExpression(ClientContext &context, const unique_ptr<Expre
 			if (bound_operator_expr.GetChildren().size() != 1 ||
 			    !IsDirectReference(*bound_operator_expr.GetChildren()[0])) {
 				//! We can't evaluate expressions that aren't direct column references
-				return true;
+				return IcebergMetricsMatch::ROWS_MIGHT_MATCH;
 			}
+			//! As Java's StrictEvalVisitor: IS NULL holds for every row when the column holds only NULLs, IS NOT NULL
+			//! when it holds none. Partition values never report the former, so only null counts can prove it.
 			if (expr.GetExpressionType() == ExpressionType::OPERATOR_IS_NULL) {
-				return MatchBoundsIsNullFilter(stats);
+				if (!MatchBoundsIsNullFilter(stats)) {
+					return IcebergMetricsMatch::ROWS_CANNOT_MATCH;
+				}
+				return stats.has_not_null || !evaluate_strict ? IcebergMetricsMatch::ROWS_MIGHT_MATCH
+				                                              : IcebergMetricsMatch::ROWS_MUST_MATCH;
 			}
 			D_ASSERT(expr.GetExpressionType() == ExpressionType::OPERATOR_IS_NOT_NULL);
-			return MatchBoundsIsNotNullFilter(stats);
+			if (!MatchBoundsIsNotNullFilter(stats)) {
+				return IcebergMetricsMatch::ROWS_CANNOT_MATCH;
+			}
+			return stats.has_null || !evaluate_strict ? IcebergMetricsMatch::ROWS_MIGHT_MATCH
+			                                          : IcebergMetricsMatch::ROWS_MUST_MATCH;
 		}
 		case ExpressionType::COMPARE_IN: {
 			if (bound_operator_expr.GetChildren().empty() ||
 			    !IsDirectReference(*bound_operator_expr.GetChildren()[0])) {
-				return true;
+				return IcebergMetricsMatch::ROWS_MIGHT_MATCH;
 			}
+			bool any_value_might_match = false;
+			bool every_row_matches = false;
 			for (idx_t i = 1; i < bound_operator_expr.GetChildren().size(); i++) {
 				if (bound_operator_expr.GetChildren()[i]->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
-					return true;
+					return IcebergMetricsMatch::ROWS_MIGHT_MATCH;
 				}
 				auto &value = bound_operator_expr.GetChildren()[i]->Cast<BoundConstantExpression>().GetValue();
-				if (MatchBoundsConstant(value, ExpressionType::COMPARE_EQUAL, stats, transform)) {
-					return true;
+				if (!MatchBoundsConstant(value, ExpressionType::COMPARE_EQUAL, stats, transform)) {
+					continue;
 				}
+				any_value_might_match = true;
+				//! As Java's StrictEvalVisitor.in: every row matches when lower == upper == one of the values. That is
+				//! the strict equality proof, which only identity bounds can give.
+				every_row_matches = every_row_matches ||
+				                    (evaluate_strict &&
+				                     StrictMatchBoundsConstant(value, ExpressionType::COMPARE_EQUAL, stats, transform));
 			}
-			return false;
+			if (!any_value_might_match) {
+				return IcebergMetricsMatch::ROWS_CANNOT_MATCH;
+			}
+			return every_row_matches ? IcebergMetricsMatch::ROWS_MUST_MATCH : IcebergMetricsMatch::ROWS_MIGHT_MATCH;
 		}
 		default:
-			return true;
+			return IcebergMetricsMatch::ROWS_MIGHT_MATCH;
 		}
 	}
 	case ExpressionClass::BOUND_FUNCTION: {
 		if (stats.geometry_stats) {
 			auto result = ExpressionFilter::CheckExpressionStatistics(expr, *stats.geometry_stats);
-			return result != FilterPropagateResult::FILTER_ALWAYS_FALSE;
+			return InclusiveOnly(result != FilterPropagateResult::FILTER_ALWAYS_FALSE);
 		}
 
 		auto &func = expr.Cast<BoundFunctionExpression>();
 		if (func.Function().GetName() == OptionalFilterScalarFun::NAME && func.BindInfo()) {
 			auto &data = func.BindInfo()->Cast<OptionalFilterFunctionData>();
 			if (data.child_filter_expr) {
-				return MatchBoundsExpression(context, data.child_filter_expr, stats, transform);
+				return WithoutStrictMatch(
+				    MatchBoundsExpression(context, data.child_filter_expr, stats, transform, evaluate_strict));
 			}
 			//! child filter wasn't populated (yet?) for some reason, just be conservative
-			return true;
+			return IcebergMetricsMatch::ROWS_MIGHT_MATCH;
 		}
 		if (func.Function().GetName() == SelectivityOptionalFilterScalarFun::NAME && func.BindInfo()) {
 			auto &data = func.BindInfo()->Cast<SelectivityOptionalFilterFunctionData>();
 			if (data.child_filter_expr) {
-				return MatchBoundsExpression(context, data.child_filter_expr, stats, transform);
+				return WithoutStrictMatch(
+				    MatchBoundsExpression(context, data.child_filter_expr, stats, transform, evaluate_strict));
 			}
 			//! child filter wasn't populated (yet?) for some reason, just be conservative
-			return true;
+			return IcebergMetricsMatch::ROWS_MIGHT_MATCH;
 		}
-		return true;
+		return IcebergMetricsMatch::ROWS_MIGHT_MATCH;
 	}
 	default:
 		//! Conservative approach: we don't know what this is, just say it doesn't filter anything
-		return true;
+		return IcebergMetricsMatch::ROWS_MIGHT_MATCH;
 	}
 }
 
-bool IcebergPredicate::MatchBounds(ClientContext &context, const ExpressionFilter &filter,
-                                   const IcebergPredicateStats &stats, const IcebergTransform &transform) {
-	return MatchBoundsExpression(context, filter.expr, stats, transform);
+IcebergMetricsMatch IcebergPredicate::MatchBounds(ClientContext &context, const ExpressionFilter &filter,
+                                                  const IcebergPredicateStats &stats, const IcebergTransform &transform,
+                                                  bool evaluate_strict) {
+	return MatchBoundsExpression(context, filter.expr, stats, transform, evaluate_strict);
 }
 
 } // namespace duckdb

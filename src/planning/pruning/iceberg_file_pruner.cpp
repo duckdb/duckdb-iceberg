@@ -130,7 +130,8 @@ bool IcebergFilePruner::FilePartitionMatchesFilter(const IcebergDataFile &data_f
 			stats.has_nan = nan_counts_it->second != 0;
 		}
 
-		if (!IcebergPredicate::MatchBounds(context, *table_filter, stats, field.transform)) {
+		if (IcebergPredicate::MatchBounds(context, *table_filter, stats, field.transform) ==
+		    IcebergMetricsMatch::ROWS_CANNOT_MATCH) {
 			auto &source_column = IcebergTableSchema::GetFromColumnIndex(schema.columns, column_id, 0);
 			auto partition_value_raw_str = stats.lower_bound ? stats.lower_bound->ToString() : "NULL";
 			auto partition_value_transformed_str =
@@ -249,7 +250,8 @@ bool IcebergFilePruner::FileMatchesFilter(const IcebergManifest &manifest_file,
 		}
 
 		auto &filter = *entry.second;
-		if (!IcebergPredicate::MatchBounds(context, filter, stats, IcebergTransform::Identity())) {
+		if (IcebergPredicate::MatchBounds(context, filter, stats, IcebergTransform::Identity()) ==
+		    IcebergMetricsMatch::ROWS_CANNOT_MATCH) {
 			DUCKDB_LOG(context, IcebergLogType,
 			           "Iceberg Filter Pushdown, skipped 'data_file': '%s', column '%s' with "
 			           "bounds [%s, %s] did not match filter: %s",
@@ -525,7 +527,8 @@ bool IcebergFilePruner::ManifestMatchesFilter(const IcebergManifestListEntry &en
 		stats.has_null = field_summary.contains_null;
 		stats.has_not_null = true;
 
-		if (!IcebergPredicate::MatchBounds(context, *table_filter, stats, field.transform)) {
+		if (IcebergPredicate::MatchBounds(context, *table_filter, stats, field.transform) ==
+		    IcebergMetricsMatch::ROWS_CANNOT_MATCH) {
 			DUCKDB_LOG(context, IcebergLogType,
 			           "Iceberg Filter Pushdown, skipped 'manifest_file': '%s', column '%s' with "
 			           "transform '%s', bounds [%s, %s] did not match filter: %s",
