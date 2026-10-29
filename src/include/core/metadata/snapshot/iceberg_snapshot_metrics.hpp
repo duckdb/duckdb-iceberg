@@ -90,6 +90,8 @@ public:
 	void RemoveManifestEntry(const IcebergManifestEntry &manifest_entry);
 	bool HasTotalFilesSize() const;
 	void SetTotalFilesSize(int64_t total_files_size);
+	//! Manifest-level counts reported by a manifest rewrite (manifests-created/kept/replaced).
+	void SetManifestRewriteCounts(int64_t created, int64_t kept, int64_t replaced);
 	const metrics_map_t &GetMetrics() const;
 	case_insensitive_map_t<string> ToString() const;
 

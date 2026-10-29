@@ -48,6 +48,7 @@ private:
 	static TableFunctionSet SetIcebergSchemaPropertiesFunctions();
 	static TableFunctionSet RemoveIcebergSchemaPropertiesFunctions();
 	static TableFunctionSet GetIcebergRewriteDataFilesFunction();
+	static TableFunctionSet GetIcebergRewriteManifestsFunction();
 	static TableFunctionSet GetIcebergRollbackToSnapshotFunction();
 };
 

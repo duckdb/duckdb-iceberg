@@ -1,0 +1,95 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_manifests_errors.test
+# description: iceberg_rewrite_manifests no-ops and rejected inputs.
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.rewrite_manifests_errors;
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_manifests_errors (id INTEGER)
+WITH ('format-version' = 2, 'commit.manifest-merge.enabled' = false);
+
+# A table without snapshots has nothing to rewrite and gains no snapshot.
+query II
+CALL iceberg_rewrite_manifests('my_datalake.default.rewrite_manifests_errors');
+----
+0	0
+
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.rewrite_manifests_errors);
+----
+0
+
+statement error
+CALL iceberg_rewrite_manifests('my_datalake.default.does_not_exist');
+----
+does_not_exist
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_manifests_errors VALUES (1);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_manifests_errors VALUES (2);
+
+# The rewrite is planned against the committed manifests, so it cannot follow data changes in the same transaction.
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_manifests_errors VALUES (3);
+
+statement error
+CALL iceberg_rewrite_manifests('my_datalake.default.rewrite_manifests_errors');
+----
+already has data changes in this transaction
+
+statement ok
+ROLLBACK;
+
+# It can precede them.
+statement ok
+BEGIN;
+
+query II
+CALL iceberg_rewrite_manifests('my_datalake.default.rewrite_manifests_errors');
+----
+2	1
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_manifests_errors VALUES (3);
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.rewrite_manifests_errors;
+----
+[1, 2, 3]
+
+statement ok
+COMMIT;
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.rewrite_manifests_errors;
+----
+[1, 2, 3]
+
+query II
+SELECT count(*), sum(existing_data_files_count) FROM iceberg_manifests(my_datalake.default.rewrite_manifests_errors);
+----
+2	2
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_manifests_errors;
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_manifests_errors (id INTEGER) WITH ('format-version' = 1);
+
+statement error
+CALL iceberg_rewrite_manifests('my_datalake.default.rewrite_manifests_errors');
+----
+iceberg_rewrite_manifests on Iceberg V1 tables
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_manifests_errors;
