@@ -144,6 +144,10 @@ public:
 	}
 	optional<Identifier> GetDefaultSchema() const override;
 	ErrorData SupportsCreateTable(BoundCreateTableInfo &info) override;
+	//! Applies IDENTIFIER_CASE to a namespace or table name
+	string FoldIdentifier(const string &name) const;
+	//! Applies IDENTIFIER_CASE to the schema and name parts, keeping the catalog alias as written
+	QualifiedName FoldName(const QualifiedName &name) const;
 
 public:
 	void Initialize(bool load_builtin) override;

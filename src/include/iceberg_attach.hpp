@@ -27,6 +27,10 @@ enum class IcebergTableResolution : uint8_t { LAZY, EAGER };
 //!   UNENFORCED - do not check at ATTACH; the first use of the default schema checks it instead
 enum class IcebergDefaultSchemaPolicy : uint8_t { THROW, CREATE, UNENFORCED };
 
+//! How namespace and table names are sent to the catalog. LOWERCASE suits catalogs that only accept
+//! (S3 Tables) or only store (Glue) lowercase names; column names are never changed.
+enum class IcebergIdentifierCase : uint8_t { PRESERVE_CASE, LOWERCASE };
+
 struct IcebergAttachOptions {
 	string catalog_uri;
 	string warehouse;
@@ -55,6 +59,7 @@ struct IcebergAttachOptions {
 	bool use_metadata_location = false;
 	IcebergTableResolution table_resolution = IcebergTableResolution::LAZY;
 	IcebergDefaultSchemaPolicy default_schema_policy = IcebergDefaultSchemaPolicy::THROW;
+	IcebergIdentifierCase identifier_case = IcebergIdentifierCase::PRESERVE_CASE;
 	IRCAccessDelegationMode access_mode = IRCAccessDelegationMode::VENDED_CREDENTIALS;
 	IcebergAuthorizationType authorization_type = IcebergAuthorizationType::INVALID;
 	unordered_map<string, Value> options;
