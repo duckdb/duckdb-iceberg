@@ -1,0 +1,178 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rollback_to_snapshot_in_transaction.test
+# description: iceberg_rollback_to_snapshot refuses to combine with other changes to the table in one transaction
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env TIMETRAVEL_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+drop table if exists my_datalake.default.rollback_in_transaction;
+
+statement ok
+create table my_datalake.default.rollback_in_transaction (id INTEGER);
+
+statement ok
+insert into my_datalake.default.rollback_in_transaction values (1);
+
+statement ok
+set variable first_snapshot = (
+	select snapshot_id from iceberg_snapshots(my_datalake.default.rollback_in_transaction) order by sequence_number limit 1
+);
+
+statement ok
+insert into my_datalake.default.rollback_in_transaction values (2);
+
+# a rollback after a change to the table
+statement ok
+BEGIN;
+
+statement ok
+insert into my_datalake.default.rollback_in_transaction values (3);
+
+statement error
+select * from iceberg_rollback_to_snapshot('my_datalake.default.rollback_in_transaction', getvariable('first_snapshot'));
+----
+<REGEX>:.*Cannot roll back table "rollback_in_transaction": it was already changed in this transaction.*
+
+statement ok
+ROLLBACK;
+
+# a change to the table after a rollback
+statement ok
+BEGIN;
+
+statement ok
+select * from iceberg_rollback_to_snapshot('my_datalake.default.rollback_in_transaction', getvariable('first_snapshot'));
+
+statement error
+insert into my_datalake.default.rollback_in_transaction values (3);
+----
+<REGEX>:.*Cannot change table "rollback_in_transaction" after rolling it back in the same transaction.*
+
+statement ok
+ROLLBACK;
+
+# a second rollback
+statement ok
+BEGIN;
+
+statement ok
+select * from iceberg_rollback_to_snapshot('my_datalake.default.rollback_in_transaction', getvariable('first_snapshot'));
+
+statement error
+select * from iceberg_rollback_to_snapshot('my_datalake.default.rollback_in_transaction', getvariable('first_snapshot'));
+----
+<REGEX>:.*it was already changed in this transaction.*
+
+statement ok
+ROLLBACK;
+
+statement ok
+BEGIN;
+
+statement ok
+select * from iceberg_rollback_to_snapshot('my_datalake.default.rollback_in_transaction', getvariable('first_snapshot'));
+
+statement error
+update my_datalake.default.rollback_in_transaction set id = 20 where id = 2;
+----
+<REGEX>:.*after rolling it back in the same transaction.*
+
+statement ok
+ROLLBACK;
+
+statement ok
+BEGIN;
+
+statement ok
+select * from iceberg_rollback_to_snapshot('my_datalake.default.rollback_in_transaction', getvariable('first_snapshot'));
+
+statement error
+delete from my_datalake.default.rollback_in_transaction where id = 2;
+----
+<REGEX>:.*after rolling it back in the same transaction.*
+
+statement ok
+ROLLBACK;
+
+statement ok
+BEGIN;
+
+statement ok
+select * from iceberg_rollback_to_snapshot('my_datalake.default.rollback_in_transaction', getvariable('first_snapshot'));
+
+statement error
+merge into my_datalake.default.rollback_in_transaction t using (select 3 as id) s on t.id = s.id when not matched then insert values (s.id);
+----
+<REGEX>:.*after rolling it back in the same transaction.*
+
+statement ok
+ROLLBACK;
+
+# a rollback after a DELETE
+statement ok
+BEGIN;
+
+statement ok
+delete from my_datalake.default.rollback_in_transaction where id = 2;
+
+statement error
+select * from iceberg_rollback_to_snapshot('my_datalake.default.rollback_in_transaction', getvariable('first_snapshot'));
+----
+<REGEX>:.*it was already changed in this transaction.*
+
+# the failed statement aborts the transaction, so COMMIT commits nothing, not even the DELETE
+statement ok
+COMMIT;
+
+query I
+select list(id order by id) from my_datalake.default.rollback_in_transaction;
+----
+[1, 2]
+
+# a property change in the same transaction commits with the rollback
+statement ok
+BEGIN;
+
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.rollback_in_transaction, {'probe': 'set'});
+
+statement ok
+select * from iceberg_rollback_to_snapshot('my_datalake.default.rollback_in_transaction', getvariable('first_snapshot'));
+
+statement ok
+COMMIT;
+
+query I
+select list(id order by id) from my_datalake.default.rollback_in_transaction;
+----
+[1]
+
+query I
+select value from iceberg_table_properties(my_datalake.default.rollback_in_transaction) where key = 'probe';
+----
+set
+
+statement ok
+insert into my_datalake.default.rollback_in_transaction values (2);
+
+# on its own in a transaction, the rollback commits
+statement ok
+BEGIN;
+
+statement ok
+select * from iceberg_rollback_to_snapshot('my_datalake.default.rollback_in_transaction', getvariable('first_snapshot'));
+
+statement ok
+COMMIT;
+
+query I
+select list(id order by id) from my_datalake.default.rollback_in_transaction;
+----
+[1]
+
+statement ok
+drop table my_datalake.default.rollback_in_transaction;
