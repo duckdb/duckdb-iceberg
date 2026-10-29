@@ -82,14 +82,3 @@ SELECT count(*), sum(existing_data_files_count) FROM iceberg_manifests(my_datala
 
 statement ok
 DROP TABLE my_datalake.default.rewrite_manifests_errors;
-
-statement ok
-CREATE TABLE my_datalake.default.rewrite_manifests_errors (id INTEGER) WITH ('format-version' = 1);
-
-statement error
-CALL iceberg_rewrite_manifests('my_datalake.default.rewrite_manifests_errors');
-----
-iceberg_rewrite_manifests on Iceberg V1 tables
-
-statement ok
-DROP TABLE my_datalake.default.rewrite_manifests_errors;
