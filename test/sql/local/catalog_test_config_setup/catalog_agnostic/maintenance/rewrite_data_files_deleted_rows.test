@@ -1,0 +1,61 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_deleted_rows.test
+# description: iceberg_rewrite_data_files removes data files none of whose rows are live
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+drop table if exists my_datalake.default.rewrite_deleted_rows;
+
+statement ok
+create table my_datalake.default.rewrite_deleted_rows (id INTEGER);
+
+statement ok
+insert into my_datalake.default.rewrite_deleted_rows values (1), (2);
+
+statement ok
+delete from my_datalake.default.rewrite_deleted_rows;
+
+query II
+select rewritten_data_files_count, added_data_files_count
+from iceberg_rewrite_data_files('my_datalake.default.rewrite_deleted_rows', rewrite_all := true);
+----
+1	0
+
+query I
+select count(*) from my_datalake.default.rewrite_deleted_rows;
+----
+0
+
+# no live data file is left
+query I
+select count(*) from iceberg_metadata(my_datalake.default.rewrite_deleted_rows)
+where manifest_content = 'DATA' and status != 'DELETED';
+----
+0
+
+# a file whose rows are all deleted is removed next to files that are rewritten
+statement ok
+insert into my_datalake.default.rewrite_deleted_rows values (3), (4);
+
+statement ok
+insert into my_datalake.default.rewrite_deleted_rows values (5), (6);
+
+statement ok
+delete from my_datalake.default.rewrite_deleted_rows where id <= 4;
+
+query II
+select rewritten_data_files_count, added_data_files_count
+from iceberg_rewrite_data_files('my_datalake.default.rewrite_deleted_rows', rewrite_all := true);
+----
+2	1
+
+query I
+select list(id order by id) from my_datalake.default.rewrite_deleted_rows;
+----
+[5, 6]
+
+statement ok
+drop table my_datalake.default.rewrite_deleted_rows;

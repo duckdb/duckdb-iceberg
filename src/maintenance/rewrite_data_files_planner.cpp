@@ -7,6 +7,8 @@
 #include "duckdb/common/types/value.hpp"
 
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "iceberg_options.hpp"
@@ -191,11 +193,16 @@ int32_t ResolveOutputSpecId(const RewriteDataFilesPlanInput &input, const Iceber
 	return spec->spec_id;
 }
 
-optional<RewriteCandidate> TryMakeRewriteCandidate(const IcebergManifestEntry &entry) {
+optional<RewriteCandidate> TryMakeRewriteCandidate(const IcebergManifestEntry &entry,
+                                                   optional_ptr<const IcebergTransactionData> transaction_data) {
 	if (entry.status == IcebergManifestEntryStatusType::DELETED) {
 		return nullopt;
 	}
 	if (entry.data_file.content != IcebergManifestEntryContentType::DATA) {
+		return nullopt;
+	}
+	//! An earlier statement of this transaction already replaced the file
+	if (transaction_data && transaction_data->IsFileInvalidated(entry.data_file.file_path)) {
 		return nullopt;
 	}
 	RewriteCandidate cand;
@@ -207,7 +214,8 @@ optional<RewriteCandidate> TryMakeRewriteCandidate(const IcebergManifestEntry &e
 }
 
 void CollectUnpartitionedCandidates(RewriteBucket &bucket, const vector<IcebergManifestListEntry> &manifest_files,
-                                    const RewriteDataFilesPlanInput &input, int64_t target_file_size_bytes) {
+                                    const RewriteDataFilesPlanInput &input, int64_t target_file_size_bytes,
+                                    optional_ptr<const IcebergTransactionData> transaction_data) {
 	for (const auto &list_entry : manifest_files) {
 		if (list_entry.GetFile().content != IcebergManifestContentType::DATA) {
 			continue;
@@ -216,7 +224,7 @@ void CollectUnpartitionedCandidates(RewriteBucket &bucket, const vector<IcebergM
 			continue;
 		}
 		for (const auto &entry : list_entry.GetManifestEntries()) {
-			auto cand = TryMakeRewriteCandidate(entry);
+			auto cand = TryMakeRewriteCandidate(entry, transaction_data);
 			if (!cand) {
 				continue;
 			}
@@ -256,7 +264,8 @@ string PartitionBucketKey(const vector<IcebergPartitionInfo> &partition_info) {
 
 void CollectPartitionedCandidates(std::map<string, RewriteBucket> &per_partition, RewriteBucket &other_specs,
                                   const vector<IcebergManifestListEntry> &manifest_files,
-                                  const RewriteDataFilesPlanInput &input, int32_t output_spec_id) {
+                                  const RewriteDataFilesPlanInput &input, int32_t output_spec_id,
+                                  optional_ptr<const IcebergTransactionData> transaction_data) {
 	for (const auto &list_entry : manifest_files) {
 		if (list_entry.GetFile().content != IcebergManifestContentType::DATA) {
 			continue;
@@ -264,7 +273,7 @@ void CollectPartitionedCandidates(std::map<string, RewriteBucket> &per_partition
 		//! Spark keeps output-spec files in per-partition buckets and groups every other spec together.
 		const auto on_output_spec = list_entry.GetFile().partition_spec_id == output_spec_id;
 		for (const auto &entry : list_entry.GetManifestEntries()) {
-			auto cand = TryMakeRewriteCandidate(entry);
+			auto cand = TryMakeRewriteCandidate(entry, transaction_data);
 			if (!cand) {
 				continue;
 			}
@@ -279,6 +288,15 @@ void CollectPartitionedCandidates(std::map<string, RewriteBucket> &per_partition
 }
 
 } // namespace
+
+optional_ptr<const IcebergTransactionData> GetRewriteTransactionData(ClientContext &context, IcebergTable &table_info) {
+	auto &transaction = IcebergTransaction::Get(context, table_info.catalog);
+	auto state = transaction.GetLatestTableState(table_info.GetTableKey());
+	if (!state || !state->IsAlive()) {
+		return nullptr;
+	}
+	return state->GetInfo().transaction_data.get();
+}
 
 RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input) {
 	RewritePlan plan;
@@ -339,19 +357,26 @@ RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input)
 		return plan;
 	}
 
+	for (const auto &list_entry : manifest_files) {
+		if (list_entry.GetFile().content == IcebergManifestContentType::DELETE) {
+			plan.has_delete_files = true;
+		}
+	}
+	auto transaction_data = GetRewriteTransactionData(context, table_info);
 	const bool unpartitioned = !table_metadata.HasPartitionSpec();
 	if (unpartitioned) {
 		//! All files share the same output partition, including files written before partitioning was removed.
 		//! Apply size/count gating and the rewrite cap to that single group.
 		RewriteBucket bucket;
-		CollectUnpartitionedCandidates(bucket, manifest_files, input, plan.target_file_size_bytes);
+		CollectUnpartitionedCandidates(bucket, manifest_files, input, plan.target_file_size_bytes, transaction_data);
 		SelectCandidates(plan, input, bucket);
 	} else {
 		//! Files already on the output spec keep per-partition gating. Every other spec shares one group,
 		//! then the existing COPY rewrites both with the current spec (which partitions output files).
 		RewriteBucket other_specs;
 		std::map<string, RewriteBucket> per_partition;
-		CollectPartitionedCandidates(per_partition, other_specs, manifest_files, input, output_spec_id);
+		CollectPartitionedCandidates(per_partition, other_specs, manifest_files, input, output_spec_id,
+		                             transaction_data);
 		SelectCandidates(plan, input, per_partition, other_specs);
 	}
 

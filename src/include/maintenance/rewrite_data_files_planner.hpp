@@ -13,6 +13,7 @@
 namespace duckdb {
 
 struct IcebergTable;
+struct IcebergTransactionData;
 
 struct RewriteCandidate {
 	string file_path;
@@ -38,6 +39,8 @@ struct RewritePlan {
 	shared_ptr<IcebergTable> table_info;
 	//! Files selected for rewrite after per-partition size / min_input_files gating.
 	vector<RewriteCandidate> selected_candidates;
+	//! Whether the snapshot has delete manifests, the only way a candidate can have no live row
+	bool has_delete_files = false;
 };
 
 struct RewriteDataFilesPlanInput {
@@ -56,5 +59,7 @@ struct RewriteDataFilesPlanInput {
 };
 
 RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input);
+//! The changes this transaction made to the table so far, if any
+optional_ptr<const IcebergTransactionData> GetRewriteTransactionData(ClientContext &context, IcebergTable &table_info);
 
 } // namespace duckdb
