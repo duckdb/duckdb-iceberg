@@ -39,7 +39,7 @@ UPDATE my_datalake.default.write_modes_transactions SET v = 'z' WHERE id = 1;
 statement ok
 ROLLBACK;
 
-# DELETE must also observe an uncommitted property change
+# DELETE must also observe an uncommitted property change: it rewrites the data file instead of writing a delete file
 
 statement ok
 BEGIN;
@@ -48,13 +48,23 @@ statement ok
 CALL set_iceberg_table_properties(my_datalake.default.write_modes_transactions,
     {'write.delete.mode': 'copy-on-write'});
 
-statement error
+query I
 DELETE FROM my_datalake.default.write_modes_transactions WHERE id = 1;
 ----
-<REGEX>:.*Not implemented Error.*write.delete.mode.*copy-on-write.*
+1
+
+query I
+SELECT id FROM my_datalake.default.write_modes_transactions ORDER BY id;
+----
+2
 
 statement ok
 ROLLBACK;
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.write_modes_transactions) WHERE content = 'POSITION_DELETES';
+----
+0
 
 # Append-only writes remain allowed after an uncommitted change to all three modes.
 # A subsequent modifying MERGE is refused, including its insert action.

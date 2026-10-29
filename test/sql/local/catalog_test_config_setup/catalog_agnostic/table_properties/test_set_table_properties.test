@@ -68,11 +68,11 @@ write.delete.mode	copy-on-write
 write.update.mode	copy-on-write
 
 
-# table property is copy-on-write, so there is an error
+# write.update.mode is copy-on-write, so an UPDATE is refused
 statement error
-delete from my_datalake.default.test where a %2 = 0;
+update my_datalake.default.test set a = a where a %2 = 0;
 ----
-<REGEX>:.*Not implemented Error.*write.delete.mode.*copy-on-write.*test.*
+<REGEX>:.*Not implemented Error.*write.update.mode.*copy-on-write.*test.*
 
 # set the table property to merge on read
 statement ok

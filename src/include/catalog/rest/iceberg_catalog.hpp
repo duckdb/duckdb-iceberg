@@ -163,6 +163,8 @@ public:
 	                             optional_ptr<PhysicalOperator> plan) override;
 	PhysicalOperator &PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner, LogicalCreateTable &op,
 	                                    PhysicalOperator &plan) override;
+	//! Plans a copy-on-write DELETE itself; any other DELETE plans its child and continues below
+	PhysicalOperator &PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op) override;
 	PhysicalOperator &PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
 	                             PhysicalOperator &plan) override;
 	//! Shared delete-planning body both PlanDelete and MERGE build on; only PlanDelete additionally opts the

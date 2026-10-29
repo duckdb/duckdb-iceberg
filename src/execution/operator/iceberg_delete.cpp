@@ -1,5 +1,6 @@
 #include "duckdb/execution/operator/persistent/physical_merge_into.hpp"
 #include "execution/operator/iceberg_delete.hpp"
+#include "execution/operator/iceberg_copy_on_write_delete.hpp"
 #include "execution/operator/merge_into/iceberg_merge_delete_collector.hpp"
 
 #include "iceberg_logging.hpp"
@@ -578,6 +579,27 @@ PhysicalOperator &IcebergDelete::PlanDelete(ClientContext &context, PhysicalPlan
 #else
 	return planner.Make<IcebergDelete>(table, multi_file_list, child_plan, std::move(row_id_indexes));
 #endif
+}
+
+PhysicalOperator &IcebergCatalog::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner,
+                                             LogicalDelete &op) {
+	auto &irc_transaction = IcebergTransaction::Get(context, *this);
+	//! A MERGE plans its delete action through PlanDeleteOperation, which applies write.merge.mode instead
+	if (!op.return_chunk && !irc_transaction.planning_merge_into) {
+		auto &table_entry = op.table.Cast<IcebergTableSchemaVersion>();
+		auto &alter = irc_transaction.GetOrCreateAlter();
+		auto &updated_table = alter.GetOrInitializeTable(table_entry.table_info);
+		auto &table_metadata = updated_table.table_metadata;
+		//! V3 is not supported yet: a rewrite has to carry each kept row's lineage into the new files. A V3 DELETE
+		//! continues below, where a copy-on-write mode is refused as before.
+		if (table_metadata.iceberg_version == 2 && table_metadata.UsesCopyOnWrite(WRITE_DELETE_MODE)) {
+			table_entry.table_info.VerifyWriteEncryptionSupported();
+			table_entry.PrepareIcebergScanFromEntry(context);
+			auto &updated_table_entry = *updated_table.schema_versions[table_metadata.GetLatestSchema().schema_id];
+			return IcebergCopyOnWriteDeleteFilter::PlanDelete(context, planner, op, updated_table_entry);
+		}
+	}
+	return Catalog::PlanDelete(context, planner, op);
 }
 
 PhysicalOperator &IcebergCatalog::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
