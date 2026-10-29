@@ -1,0 +1,260 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/optimizer_statistics.test
+# description: iceberg_scan exposes manifest statistics to the DuckDB optimizer
+# group: [reads]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require core_functions
+
+# Exercise manifest-derived statistics independently of optional server-side file metrics.
+statement ok
+SET iceberg_use_server_side_scan_planning = false;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.optimizer_statistics;
+
+statement ok
+CREATE TABLE my_datalake.default.optimizer_statistics (
+    id INTEGER,
+    value INTEGER
+)
+PARTITIONED BY (id) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.optimizer_statistics
+VALUES (1, 10), (2, NULL), (3, 30);
+
+# Identity partition values give exact per-file constants
+query IIII
+SELECT id_stats.min::INTEGER, id_stats.max::INTEGER,
+       id_stats.has_null, id_stats.has_no_null
+FROM (
+    SELECT stats(id) id_stats
+    FROM my_datalake.default.optimizer_statistics
+    LIMIT 1
+);
+----
+1	3	false	true
+
+# An all-NULL file needs no bounds, and contributes a NULL
+query IIII
+SELECT value_stats.min::INTEGER, value_stats.max::INTEGER,
+       value_stats.has_null, value_stats.has_no_null
+FROM (
+    SELECT stats(value) value_stats
+    FROM my_datalake.default.optimizer_statistics
+    LIMIT 1
+);
+----
+10	30	true	true
+
+# Regression: ORDER BY ... LIMIT ... OFFSET over non-overlapping files. DuckDB must not prune offset rows that the
+# Iceberg scan order would not skip.
+query I
+SELECT id FROM my_datalake.default.optimizer_statistics ORDER BY id LIMIT 1 OFFSET 2;
+----
+3
+
+query I
+SELECT id FROM my_datalake.default.optimizer_statistics ORDER BY id DESC LIMIT 1 OFFSET 2;
+----
+1
+
+query I
+SELECT id FROM my_datalake.default.optimizer_statistics ORDER BY id LIMIT 2 OFFSET 1;
+----
+2
+3
+
+# The all-NULL file must not be skipped as a leading NULL group either
+query I
+SELECT value FROM my_datalake.default.optimizer_statistics ORDER BY value NULLS FIRST LIMIT 1 OFFSET 1;
+----
+10
+
+query I
+SELECT value FROM my_datalake.default.optimizer_statistics ORDER BY value NULLS LAST LIMIT 1 OFFSET 1;
+----
+30
+
+# Regression: a filter that statistics prove always true for the pruned view is removed from the scan. A view rebuilt
+# from runtime join filters must still exclude the files that filter pruned (id = 1, value = 10).
+query II
+SELECT t.id, t.value
+FROM my_datalake.default.optimizer_statistics t
+JOIN (VALUES (10), (30)) v(x) ON t.value = v.x
+WHERE t.id > 1
+ORDER BY t.id;
+----
+3	30
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.optimizer_statistics_nulls;
+
+statement ok
+CREATE TABLE my_datalake.default.optimizer_statistics_nulls (
+    id INTEGER,
+    value INTEGER
+)
+PARTITIONED BY (id) WITH ('format-version' = '2');
+
+# The id = 2 file holds a NULL and 20, so pruning keeps it while value > 15 drops the id = 1 file
+statement ok
+INSERT INTO my_datalake.default.optimizer_statistics_nulls
+VALUES (1, 10), (2, NULL), (2, 20), (3, 30);
+
+# Regression: statistics of the pruned view rewrite value > 15 to IS NOT NULL. Rebuilding the view from the
+# rewritten filter alone would bring back the pruned id = 1 file.
+query II
+SELECT id, value
+FROM my_datalake.default.optimizer_statistics_nulls
+WHERE value > 15
+ORDER BY id;
+----
+2	20
+3	30
+
+query I
+SELECT count(*)
+FROM my_datalake.default.optimizer_statistics_nulls
+WHERE value > 15;
+----
+2
+
+statement ok
+DROP TABLE my_datalake.default.optimizer_statistics_nulls;
+
+# Join ordering and statistics propagation both request the scanned columns; each is derived once per scan
+statement ok
+CALL enable_logging('Iceberg');
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query II
+SELECT t.id, t.value
+FROM my_datalake.default.optimizer_statistics t
+JOIN (VALUES (1), (3)) v(x) ON t.id = v.x
+ORDER BY t.id;
+----
+1	10
+3	30
+
+query II
+SELECT count(*) FILTER (
+           message.starts_with('Iceberg statistics phase=global_column_derived field_id=1 ')
+       ),
+       count(*) FILTER (
+           message.starts_with('Iceberg statistics phase=global_column_derived field_id=2 ')
+       )
+FROM duckdb_logs()
+WHERE type = 'Iceberg';
+----
+1	1
+
+# Per-file statistics for one column are derived once for all files, then reused for every file
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.optimizer_statistics_files;
+
+statement ok
+CREATE TABLE my_datalake.default.optimizer_statistics_files (
+    id INTEGER,
+    value INTEGER
+)
+PARTITIONED BY (id) WITH ('format-version' = '2');
+
+# The id = 1 file spans [10, 30], so statistics cannot prove value > 15 and the filter stays on the scan
+statement ok
+INSERT INTO my_datalake.default.optimizer_statistics_files
+VALUES (1, 10), (1, 30), (2, 20);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Metadata COUNT(*) with a filter asks every file for value statistics, then scans because they are not exact
+query I
+SELECT count(*)
+FROM my_datalake.default.optimizer_statistics_files
+WHERE value > 15;
+----
+2
+
+query II
+SELECT count(*) FILTER (
+           message = 'Iceberg statistics phase=file_column_derived field_id=2 files=2'
+       ),
+       count(*) FILTER (
+           message.starts_with('Iceberg statistics phase=file_column_derived field_id=1 ')
+       )
+FROM duckdb_logs()
+WHERE type = 'Iceberg';
+----
+1	0
+
+statement ok
+CALL disable_logging();
+
+statement ok
+DROP TABLE my_datalake.default.optimizer_statistics_files;
+
+# File pruning alone leaves an empty scan in the plan; the statistics of that empty view remove it
+query II
+EXPLAIN SELECT id
+FROM my_datalake.default.optimizer_statistics
+WHERE id > 100;
+----
+physical_plan	<REGEX>:.*Empty Result.*
+
+statement ok
+SET iceberg_enable_manifest_statistics = false;
+
+query II
+EXPLAIN SELECT id
+FROM my_datalake.default.optimizer_statistics
+WHERE id > 100;
+----
+physical_plan	<!REGEX>:.*Empty Result.*
+
+query I
+SELECT id
+FROM my_datalake.default.optimizer_statistics
+WHERE id > 100;
+----
+
+statement ok
+RESET iceberg_enable_manifest_statistics;
+
+# A data-file budget below the selected file count leaves the column statistics unknown
+statement ok
+SET iceberg_manifest_statistics_max_data_files = 2;
+
+query I
+SELECT id_stats.has_null
+FROM (
+    SELECT stats(id) id_stats
+    FROM my_datalake.default.optimizer_statistics
+    LIMIT 1
+);
+----
+true
+
+statement ok
+SET iceberg_manifest_statistics_max_data_files = 3;
+
+query I
+SELECT id_stats.has_null
+FROM (
+    SELECT stats(id) id_stats
+    FROM my_datalake.default.optimizer_statistics
+    LIMIT 1
+);
+----
+false
+
+statement ok
+RESET iceberg_manifest_statistics_max_data_files;
+
+statement ok
+RESET iceberg_use_server_side_scan_planning;

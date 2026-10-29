@@ -8,6 +8,10 @@ require-env SCAN_PLANNING_MODE client
 
 include test/sql/init_requires
 
+# This test verifies that execution, rather than optimizer statistics, opens data manifests.
+statement ok
+SET iceberg_enable_manifest_statistics = false;
+
 statement ok
 set threads=1;
 
@@ -176,3 +180,6 @@ set disabled_optimizers='';
 
 statement ok
 drop table my_datalake.default.data_manifest_late_materialization;
+
+statement ok
+RESET iceberg_enable_manifest_statistics;

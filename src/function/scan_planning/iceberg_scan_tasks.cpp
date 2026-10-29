@@ -1,9 +1,12 @@
 #include "function/iceberg_functions.hpp"
 
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
+#include "duckdb/common/multi_file/multi_file_options.hpp"
+#include "duckdb/common/numeric_utils.hpp"
 #include "duckdb/execution/execution_context.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/parallel/thread_context.hpp"
+#include "duckdb/storage/statistics/node_statistics.hpp"
 #include "function/scan_planning/iceberg_scan_task_codec.hpp"
 #include "execution/scan/iceberg_task_executor.hpp"
 #include "function/scan_planning/iceberg_row_filter.hpp"
@@ -15,6 +18,10 @@ using TaskCodec = IcebergScanTaskCodec;
 struct IcebergScanTasksBindData : public TableFunctionData {
 	TaskCodec::InputLayout layout;
 	Value tasks;
+	vector<Identifier> names;
+	vector<LogicalType> types;
+	MultiFileOptions file_options;
+	optional<idx_t> explicit_cardinality;
 };
 
 enum class IcebergScanTasksExecutionMode : uint8_t { UNSELECTED, SINGLE_FILE, MULTI_FILE };
@@ -207,7 +214,60 @@ static unique_ptr<FunctionData> IcebergScanTasksBind(ClientContext &, TableFunct
 	auto result = make_uniq<IcebergScanTasksBindData>();
 	result->layout = TaskCodec::BindInput(ListType::GetChildType(tasks.type()), types, names);
 	result->tasks = tasks;
+	result->names = names;
+	result->types = types;
+
+	auto column_statistics = input.named_parameters.find("column_statistics");
+	if (column_statistics != input.named_parameters.end()) {
+		result->file_options.SetColumnStatistics(column_statistics->first, column_statistics->second);
+		result->file_options.VerifyColumnStatistics(names, types);
+	}
+	auto explicit_cardinality = input.named_parameters.find("explicit_cardinality");
+	if (explicit_cardinality != input.named_parameters.end() && !explicit_cardinality->second.IsNull()) {
+		result->explicit_cardinality = UBigIntValue::Get(explicit_cardinality->second);
+	}
 	return std::move(result);
+}
+
+static unique_ptr<BaseStatistics> IcebergScanTasksStatistics(ClientContext &, const FunctionData *bind_data,
+                                                             column_t column_index) {
+	auto &bind = bind_data->Cast<IcebergScanTasksBindData>();
+	if (column_index >= bind.names.size()) {
+		return nullptr;
+	}
+	return bind.file_options.GetColumnStatistics(bind.names[column_index], bind.types[column_index]);
+}
+
+static unique_ptr<NodeStatistics> IcebergScanTasksCardinality(ClientContext &, const FunctionData *bind_data) {
+	auto &bind = bind_data->Cast<IcebergScanTasksBindData>();
+	if (bind.explicit_cardinality) {
+		return make_uniq<NodeStatistics>(*bind.explicit_cardinality);
+	}
+	if (bind.tasks.IsNull()) {
+		return make_uniq<NodeStatistics>(idx_t(0));
+	}
+
+	idx_t cardinality = 0;
+	for (auto &descriptor : ListValue::GetChildren(bind.tasks)) {
+		if (descriptor.IsNull()) {
+			return nullptr;
+		}
+		auto record_count = TaskCodec::ReadValue(descriptor, bind.layout, TaskCodec::RECORD_COUNT, true);
+		if (record_count.IsNull()) {
+			return nullptr;
+		}
+		auto count_value = record_count.DefaultTryCastAs(LogicalType::UBIGINT, nullptr, true);
+		if (!count_value) {
+			// A count that is not a valid row count leaves the estimate unknown rather than failing the query
+			return nullptr;
+		}
+		auto count = UBigIntValue::Get(*count_value);
+		if (count > NumericLimits<idx_t>::Maximum() - cardinality) {
+			return nullptr;
+		}
+		cardinality += count;
+	}
+	return make_uniq<NodeStatistics>(cardinality);
 }
 
 static void IcebergScanTasksFunction(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
@@ -272,6 +332,11 @@ TableFunctionSet IcebergFunctions::GetIcebergScanTasksFunction() {
 	};
 	function.projection_pushdown = true;
 	function.filter_pushdown = true;
+	function.statistics = IcebergScanTasksStatistics;
+	function.cardinality = IcebergScanTasksCardinality;
+	function.GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
+		options.Add("column_statistics", LogicalTypeId::ANY).Add("explicit_cardinality", LogicalType::UBIGINT);
+	});
 	function.order_preservation_type = OrderPreservationType::NO_ORDER;
 	return TableFunctionSet(function);
 }

@@ -1290,3 +1290,35 @@ endloop
 
 statement ok
 reset threads;
+
+# Forwarded coordinator statistics are exposed to the task-local optimizer without changing scan rows.
+statement ok
+set variable statistics_task_list = (select list(task) from (select * from tasks) task);
+
+query IIII
+select s.min::integer, s.max::integer, s.has_null, s.has_no_null
+from (
+    select stats(id) s
+    from iceberg_scan_tasks(
+        getvariable('statistics_task_list'),
+        column_statistics := MAP {'id': MAP {
+            'min': '0', 'max': '3', 'count': '4', 'null_count': '0', 'distinct_count': '4'
+        }},
+        explicit_cardinality := 4
+    )
+    limit 1
+);
+----
+0	3	false	true
+
+statement ok
+set variable invalid_statistics_task_list = (select list(task) from (select * from tasks) task);
+
+statement error
+select *
+from iceberg_scan_tasks(
+    getvariable('invalid_statistics_task_list'),
+    column_statistics := MAP {'missing': MAP {'min': '0', 'max': '3'}}
+);
+----
+<REGEX>:.*column_statistics.*names no column.*

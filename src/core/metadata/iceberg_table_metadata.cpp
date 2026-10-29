@@ -23,11 +23,19 @@ optional_ptr<const IcebergColumnDefinition> IcebergTableMetadataSchemas::FindCol
 }
 
 const IcebergTableSchema &IcebergTableMetadataSchemas::GetSchemaFromId(int32_t schema_id) const {
-	auto it = schemas.find(schema_id);
-	if (it == schemas.end()) {
+	auto schema = TryGetSchemaFromId(schema_id);
+	if (!schema) {
 		throw InvalidConfigurationException("Schema id %d not found in Iceberg metadata", schema_id);
 	}
-	return *it->second;
+	return *schema;
+}
+
+optional_ptr<const IcebergTableSchema> IcebergTableMetadataSchemas::TryGetSchemaFromId(int32_t schema_id) const {
+	auto it = schemas.find(schema_id);
+	if (it == schemas.end()) {
+		return nullptr;
+	}
+	return it->second.get();
 }
 
 void IcebergTableMetadataSchemas::ForEachSchema(const std::function<void(const IcebergTableSchema &)> &callback) const {
