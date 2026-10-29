@@ -68,7 +68,7 @@ static Value RefreshInfoToStruct(const Value &refresh_info) {
 
 static unique_ptr<BaseSecret> BuildVendedSecret(CreateSecretInput &input) {
 	auto secret = make_uniq<KeyValueSecret>(input.scope, input.type, input.provider, input.name);
-	secret->redact_keys = {"secret", "session_token", "bearer_token", "http_proxy_password"};
+	secret->redact_keys = {"secret", "session_token", "bearer_token", "http_proxy_password", "sse_c_key"};
 
 	if (input.type == "r2") {
 		auto account_id_entry = input.options.find("account_id");
@@ -283,6 +283,7 @@ void IcebergTableSecretProvider::Register(ExtensionLoader &loader) {
 		function.named_parameters["key_id"] = LogicalType::VARCHAR;
 		function.named_parameters["secret"] = LogicalType::VARCHAR;
 		function.named_parameters["session_token"] = LogicalType::VARCHAR;
+		function.named_parameters["sse_c_key"] = LogicalType::VARCHAR;
 		function.named_parameters["region"] = LogicalType::VARCHAR;
 		function.named_parameters["endpoint"] = LogicalType::VARCHAR;
 		function.named_parameters["url_style"] = LogicalType::VARCHAR;

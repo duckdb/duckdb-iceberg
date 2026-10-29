@@ -115,6 +115,9 @@ private:
 	                        LoadTableCachePublication &publication);
 	void SetLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result);
 	vector<string> GetS3EncryptionTypes() const;
+	//! Whether 's3.sse.key' is set at any level (catalog config, table config or a storage credential)
+	bool HasS3CustomerKey() const;
+	void VerifyCustomerKeyAvailable(const string &operation) const;
 
 	//! Unchanged by rename, used to check for a rename
 	const string original_name;

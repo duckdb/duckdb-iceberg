@@ -42,23 +42,77 @@ const string &IcebergTable::BaseFilePath() const {
 	return table_metadata.location;
 }
 
+static const string SSE_TYPE = "s3.sse.type";
+static const string SSE_KEY = "s3.sse.key";
+
+//! A customer-provided key ('s3.sse.type'='custom') is sent as SSE-C headers on every object request, so the
+//! table can be read and written once the catalog vends the key itself in 's3.sse.key'.
+void IcebergTable::VerifyCustomerKeyAvailable(const string &operation) const {
+	if (!HasS3CustomerKey()) {
+		throw InvalidInputException("Cannot %s Iceberg table '%s': the catalog requests S3 server-side encryption "
+		                            "with 's3.sse.type'='custom' but provides no 's3.sse.key'",
+		                            operation, name);
+	}
+}
+
 void IcebergTable::VerifyReadEncryptionSupported() const {
 	for (auto &sse_type : GetS3EncryptionTypes()) {
 		if (StringUtil::CIEquals(sse_type, "custom")) {
-			throw NotImplementedException("Cannot read Iceberg table '%s': the catalog requests S3 server-side "
-			                              "encryption with 's3.sse.type'='%s'",
-			                              name, sse_type);
+			VerifyCustomerKeyAvailable("read");
 		}
 	}
 }
 
 void IcebergTable::VerifyWriteEncryptionSupported() const {
 	for (auto &sse_type : GetS3EncryptionTypes()) {
+		if (StringUtil::CIEquals(sse_type, "custom")) {
+			VerifyCustomerKeyAvailable("write to");
+			continue;
+		}
 		if (!StringUtil::CIEquals(sse_type, "none")) {
 			throw NotImplementedException("Cannot write to Iceberg table '%s': the catalog requests S3 server-side "
 			                              "encryption with 's3.sse.type'='%s'",
 			                              name, sse_type);
 		}
+	}
+}
+
+bool IcebergTable::HasS3CustomerKey() const {
+	if (config.find(SSE_KEY) != config.end() ||
+	    catalog.catalog_properties.find(SSE_KEY) != catalog.catalog_properties.end()) {
+		return true;
+	}
+	for (auto &credential : storage_credentials) {
+		if (credential.config.find(SSE_KEY) != credential.config.end()) {
+			return true;
+		}
+	}
+	return false;
+}
+
+//! Sets or clears the vended secret's `sse_c_key` from the SSE settings of `levels`, each overriding the one
+//! before (catalog /v1/config, then table config, then the storage credential), as for 's3.sse.type'.
+static void ApplyS3CustomerKey(case_insensitive_map_t<Value> &options,
+                               std::initializer_list<const case_insensitive_map_t<string> *> levels) {
+	string sse_type;
+	string sse_key;
+	for (auto level : levels) {
+		if (!level) {
+			continue;
+		}
+		auto type_it = level->find(SSE_TYPE);
+		if (type_it != level->end()) {
+			sse_type = type_it->second;
+		}
+		auto key_it = level->find(SSE_KEY);
+		if (key_it != level->end()) {
+			sse_key = key_it->second;
+		}
+	}
+	if (StringUtil::CIEquals(sse_type, "custom") && !sse_key.empty()) {
+		options["sse_c_key"] = Value(sse_key);
+	} else {
+		options.erase("sse_c_key");
 	}
 }
 
@@ -68,7 +122,6 @@ vector<string> IcebergTable::GetS3EncryptionTypes() const {
 		return sse_types;
 	}
 	// table config overrides the catalog config, and each storage credential overrides both.
-	static const string SSE_TYPE = "s3.sse.type";
 	auto it = config.find(SSE_TYPE);
 	if (it != config.end()) {
 		sse_types.push_back(it->second);
@@ -280,7 +333,11 @@ IcebergTable::GetVendedCredentials(ClientContext &context,
 	case_insensitive_map_t<Value> config_options;
 	//! TODO: apply the 'defaults' retrieved from the /v1/config endpoint
 	config_options.insert(user_defaults.begin(), user_defaults.end());
-	ParseConfigOptions(config_override ? *config_override : config, config_options, context, storage_type);
+	const auto &table_config = config_override ? *config_override : config;
+	ParseConfigOptions(table_config, config_options, context, storage_type);
+	if (storage_type == "s3") {
+		ApplyS3CustomerKey(config_options, {&catalog.catalog_properties, &table_config});
+	}
 
 	for (idx_t index = 0; index < storage_credentials.size(); index++) {
 		auto &credential = storage_credentials[index];
@@ -346,6 +403,10 @@ IcebergTable::GetVendedCredentials(ClientContext &context,
 		}
 
 		ParseConfigOptions(credential.config, create_secret_input.options, context, storage_type);
+		if (storage_type == "s3") {
+			ApplyS3CustomerKey(create_secret_input.options,
+			                   {&catalog.catalog_properties, &table_config, &credential.config});
+		}
 		//! TODO: apply the 'overrides' retrieved from the /v1/config endpoint
 		DUCKDB_LOG_DEBUG(context,
 		                 "Iceberg table '%s': credential %llu with prefix '%s' prepared as secret '%s' with "

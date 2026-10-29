@@ -46,11 +46,25 @@ _sse_tables = {
         {},
     ),
     "credential_config": ("s3://scope-bucket/sse/", ["s3://scope-bucket/sse/"], {}, {"s3.sse.type": "dsse-kms"}),
-    # A customer-provided key must also be sent on reads
+    # A customer-provided key (base-64 AES-256, Iceberg's S3FileIO 's3.sse.key'), sent on reads and writes
     "customer_key": (
         "s3://scope-bucket/sse/",
         ["s3://scope-bucket/sse/"],
-        {"s3.sse.type": "custom", "s3.sse.key": "test-customer-key"},
+        {"s3.sse.type": "custom", "s3.sse.key": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="},
+        {},
+    ),
+    # The same, with the key vended in the storage credential instead of the table config
+    "customer_key_credential": (
+        "s3://scope-bucket/sse/",
+        ["s3://scope-bucket/sse/"],
+        {"s3.sse.type": "custom"},
+        {"s3.sse.key": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="},
+    ),
+    # A customer-provided key requested but not vended
+    "customer_key_missing": (
+        "s3://scope-bucket/sse/",
+        ["s3://scope-bucket/sse/"],
+        {"s3.sse.type": "custom"},
         {},
     ),
 }
