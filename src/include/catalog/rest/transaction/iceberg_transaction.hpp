@@ -139,6 +139,8 @@ public:
 	unordered_map<string, shared_ptr<IcebergTable>> tables;
 	//! The visible state of every resolved table in this transaction.
 	unordered_map<string, IcebergTransactionTableState> current_table_data;
+	//! The entry the GovernedIcebergTableLoader returned to bind, by the table's schema version
+	reference_map_t<CatalogEntry, reference<CatalogEntry>> governed_entries;
 	//! Declared after the schema and table states so update references are destroyed before the referenced states.
 	IcebergTransactionUpdate transaction_update;
 

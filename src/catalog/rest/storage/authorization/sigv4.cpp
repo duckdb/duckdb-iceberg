@@ -65,16 +65,11 @@ AWSInput SIGV4Authorization::CreateAWSInput(ClientContext &context, const IRCEnd
 	aws_input.use_https = DetectHttps(host);
 	auto stripped_host = StripScheme(host);
 
-	// AWS service and region: use explicit overrides if provided, otherwise parse from host
+	// AWS service: use the explicit override if provided, otherwise parse from host
 	if (!sigv4_service.empty()) {
 		aws_input.service = sigv4_service;
 	} else {
 		aws_input.service = GetAwsService(stripped_host);
-	}
-	if (!sigv4_region.empty()) {
-		aws_input.region = sigv4_region;
-	} else {
-		aws_input.region = GetAwsRegion(stripped_host);
 	}
 
 	// Host decomposition
@@ -91,6 +86,20 @@ AWSInput SIGV4Authorization::CreateAWSInput(ClientContext &context, const IRCEnd
 		aws_input.query_string_parameters.emplace_back(param.first, param.second.raw);
 	}
 
+	SetSigningRegionAndCredentials(context, stripped_host, aws_input);
+
+	return aws_input;
+}
+
+void SIGV4Authorization::SetSigningRegionAndCredentials(ClientContext &context, const string &stripped_host,
+                                                        AWSInput &aws_input) {
+	// AWS region: use the explicit override if provided, otherwise parse from host
+	if (!sigv4_region.empty()) {
+		aws_input.region = sigv4_region;
+	} else {
+		aws_input.region = GetAwsRegion(stripped_host);
+	}
+
 	MaybeRefreshSecret(context);
 
 	auto secret_entry = IcebergCatalog::GetStorageSecret(context, secret);
@@ -99,8 +108,6 @@ AWSInput SIGV4Authorization::CreateAWSInput(ClientContext &context, const IRCEnd
 	aws_input.secret = kv_secret.secret_map["secret"].GetValue<string>();
 	aws_input.session_token =
 	    kv_secret.secret_map["session_token"].IsNull() ? "" : kv_secret.secret_map["session_token"].GetValue<string>();
-
-	return aws_input;
 }
 
 namespace {
