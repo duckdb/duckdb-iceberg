@@ -355,7 +355,7 @@ SourceResultType IcebergInsert::GetDataInternal(ExecutionContext &context, DataC
 	auto &global_state = sink_state->Cast<IcebergInsertGlobalState>();
 	auto value = Value::BIGINT(global_state.insert_count);
 	if (copy_on_write_delete_op) {
-		value = Value::BIGINT(NumericCast<int64_t>(copy_on_write_delete_op->GetDeletes().deleted_count));
+		value = Value::BIGINT(NumericCast<int64_t>(copy_on_write_delete_op->GetResultCount()));
 	}
 	chunk.data[0].Append(value);
 	chunk.SetChildCardinality(1);

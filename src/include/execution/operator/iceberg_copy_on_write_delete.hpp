@@ -12,6 +12,7 @@
 #include "duckdb/common/unordered_set.hpp"
 #include "duckdb/execution/physical_operator.hpp"
 #include "duckdb/planner/logical_operator.hpp"
+#include "execution/operator/iceberg_pending_deletes.hpp"
 
 namespace duckdb {
 
@@ -49,15 +50,24 @@ public:
 	unique_ptr<LogicalOperator> keep_logical_plan;
 	//! For an UPDATE: the new value of every table column, evaluated on the build side's rows
 	vector<unique_ptr<Expression>> update_expressions;
+	//! For a MERGE: the build side is the MERGE itself, which reports its row count, and the rows its UPDATE and
+	//! DELETE actions removed are collected here while it runs
+	shared_ptr<IcebergCopyOnWriteMergeRows> merge_rows;
 
 public:
 	static PhysicalOperator &PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
 	                                    IcebergTableSchemaVersion &table);
 	static PhysicalOperator &PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
 	                                    IcebergTableSchemaVersion &table);
+	//! Rewrites the files a planned MERGE matched, once the MERGE has run
+	static PhysicalOperator &PlanMerge(ClientContext &context, PhysicalPlanGenerator &planner,
+	                                   IcebergTableSchemaVersion &table, PhysicalOperator &merge_plan,
+	                                   shared_ptr<IcebergCopyOnWriteMergeRows> merge_rows);
 
 	//! The rows removed by this DELETE; valid once the build side has finalized
 	const IcebergCopyOnWriteDeletes &GetDeletes() const;
+	//! The row count the statement returns: the rows deleted or updated, or for a MERGE the rows it merged
+	idx_t GetResultCount() const;
 
 public:
 	// Operator interface (probe side)
@@ -103,7 +113,8 @@ private:
 	static PhysicalOperator &PlanRewrite(ClientContext &context, PhysicalPlanGenerator &planner,
 	                                     IcebergTableSchemaVersion &table, PhysicalOperator &match_plan,
 	                                     vector<idx_t> match_row_id_indexes,
-	                                     vector<unique_ptr<Expression>> update_expressions);
+	                                     vector<unique_ptr<Expression>> update_expressions,
+	                                     shared_ptr<IcebergCopyOnWriteMergeRows> merge_rows = nullptr);
 	void PushKeepScanFilter(const IcebergCopyOnWriteDeletes &deletes) const;
 };
 

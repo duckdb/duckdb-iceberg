@@ -1,5 +1,5 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/table_properties/test_write_mode_properties.test
-# description: Copy-on-write modes reject modifying MERGE actions while allowing appends
+# description: Appends under copy-on-write modes, and which mode governs a MERGE
 # group: [table_properties]
 
 require-env CATALOG_TEST_CONFIG_SETUP
@@ -17,52 +17,12 @@ CREATE TABLE my_datalake.default.write_modes (id INTEGER, v VARCHAR) WITH ('form
 statement ok
 INSERT INTO my_datalake.default.write_modes VALUES (1, 'a'), (2, 'b'), (3, 'c');
 
-# A copy-on-write UPDATE or DELETE on a v2 table rewrites the matched data files instead of being refused;
-# test_copy_on_write_update.test and test_copy_on_write_delete.test cover them.
+# A copy-on-write UPDATE, DELETE or modifying MERGE on a v2 table rewrites the matched data files instead of being
+# refused; test_copy_on_write_update.test, test_copy_on_write_delete.test and test_copy_on_write_merge.test cover them.
 
 statement ok
 CALL set_iceberg_table_properties(my_datalake.default.write_modes,
-    {'write.update.mode': 'copy-on-write', 'write.delete.mode': 'copy-on-write'});
-
-# MERGE with an UPDATE or DELETE action is refused when write.merge.mode is copy-on-write
-
-statement ok
-CALL set_iceberg_table_properties(my_datalake.default.write_modes, {'write.merge.mode': 'copy-on-write'});
-
-statement error
-MERGE INTO my_datalake.default.write_modes AS t USING (SELECT 2 AS id) AS s ON t.id = s.id
-WHEN MATCHED THEN UPDATE SET v = 'z';
-----
-<REGEX>:.*Not implemented Error.*write.merge.mode.*copy-on-write.*
-
-statement error
-MERGE INTO my_datalake.default.write_modes AS t USING (SELECT 2 AS id) AS s ON t.id = s.id
-WHEN MATCHED THEN DELETE;
-----
-<REGEX>:.*Not implemented Error.*write.merge.mode.*copy-on-write.*
-
-# an upsert is refused as a whole, so its insert doesn't happen either
-
-statement error
-MERGE INTO my_datalake.default.write_modes AS t USING (VALUES (2, 'z'), (5, 'e')) AS s(id, v) ON t.id = s.id
-WHEN MATCHED THEN UPDATE SET v = s.v
-WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
-----
-<REGEX>:.*Not implemented Error.*write.merge.mode.*copy-on-write.*
-
-query II
-SELECT id, v FROM my_datalake.default.write_modes ORDER BY id;
-----
-1	a
-2	b
-3	c
-
-# rejected writes do not publish a snapshot
-
-query I
-SELECT count(*) FROM iceberg_snapshots(my_datalake.default.write_modes);
-----
-1
+    {'write.update.mode': 'copy-on-write', 'write.delete.mode': 'copy-on-write', 'write.merge.mode': 'copy-on-write'});
 
 # INSERT remains an append even when all three write modes are copy-on-write
 

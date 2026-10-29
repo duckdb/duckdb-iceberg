@@ -327,6 +327,10 @@ void IcebergDelete::FlushDeletes(ClientContext &context, IcebergDeleteGlobalStat
 		// An empty UPDATE may have no source scan after optimization.
 		return;
 	}
+	if (copy_on_write_merge_rows) {
+		copy_on_write_merge_rows->Add(std::move(pending_deletes));
+		return;
+	}
 	lock_guard<mutex> guard(global_state.lock);
 	WriteDeletes(context, pending_deletes, global_state.write_result);
 }
@@ -482,6 +486,12 @@ partitioned_manifest_entry_map_t IcebergDeleteWriteResult::GenerateManifestEntri
 SinkFinalizeType IcebergDelete::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                          OperatorSinkFinalizeInput &input) const {
 	auto &global_state = input.global_state.Cast<IcebergDeleteGlobalState>();
+
+	if (copy_on_write_merge_rows) {
+		// A copy-on-write MERGE commits once its rewrite has run
+		FlushDeletes(context, global_state);
+		return SinkFinalizeType::READY;
+	}
 
 	if (global_state.merge_deletes) {
 		// Empty actions must also report completion, so an empty final branch cannot strand collected deletes.

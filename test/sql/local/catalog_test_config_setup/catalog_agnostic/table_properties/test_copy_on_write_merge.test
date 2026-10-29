@@ -1,0 +1,304 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/table_properties/test_copy_on_write_merge.test
+# description: MERGE on a v2 table whose write.merge.mode is copy-on-write rewrites the matched data files
+# group: [table_properties]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require core_functions
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cow_merge;
+
+statement ok
+CREATE TABLE my_datalake.default.cow_merge (id INTEGER, v VARCHAR) WITH (
+    'format-version' = '2',
+    'write.merge.mode' = 'copy-on-write'
+);
+
+# two inserts, so two data files
+
+statement ok
+INSERT INTO my_datalake.default.cow_merge VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+statement ok
+INSERT INTO my_datalake.default.cow_merge VALUES (4, 'd'), (5, 'e');
+
+# an UPDATE action
+
+query I
+MERGE INTO my_datalake.default.cow_merge AS t USING (SELECT 2 AS id) AS s ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET v = 'z';
+----
+1
+
+query II
+SELECT id, v FROM my_datalake.default.cow_merge ORDER BY id;
+----
+1	a
+2	z
+3	c
+4	d
+5	e
+
+query T
+SELECT operation FROM iceberg_snapshots(my_datalake.default.cow_merge) ORDER BY sequence_number DESC LIMIT 1;
+----
+overwrite
+
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.cow_merge);
+----
+3
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.cow_merge) WHERE content != 'DATA';
+----
+0
+
+query I
+SELECT sum(record_count) FROM iceberg_metadata(my_datalake.default.cow_merge) WHERE status != 'DELETED';
+----
+5
+
+# a DELETE action
+
+query I
+MERGE INTO my_datalake.default.cow_merge AS t USING (SELECT 4 AS id) AS s ON t.id = s.id
+WHEN MATCHED THEN DELETE;
+----
+1
+
+query II
+SELECT id, v FROM my_datalake.default.cow_merge ORDER BY id;
+----
+1	a
+2	z
+3	c
+5	e
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.cow_merge) WHERE content != 'DATA';
+----
+0
+
+# an upsert: the update and the insert are committed in one snapshot
+
+query I
+MERGE INTO my_datalake.default.cow_merge AS t USING (VALUES (3, 'y'), (6, 'f')) AS s(id, v) ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET v = s.v
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
+----
+2
+
+query II
+SELECT id, v FROM my_datalake.default.cow_merge ORDER BY id;
+----
+1	a
+2	z
+3	y
+5	e
+6	f
+
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.cow_merge);
+----
+5
+
+query I
+SELECT sum(record_count) FROM iceberg_metadata(my_datalake.default.cow_merge) WHERE status != 'DELETED';
+----
+5
+
+# UPDATE, DELETE and INSERT actions together, picked by condition
+
+query I
+MERGE INTO my_datalake.default.cow_merge AS t
+USING (VALUES (1, 'x'), (2, 'del'), (7, 'g')) AS s(id, v) ON t.id = s.id
+WHEN MATCHED AND s.v = 'del' THEN DELETE
+WHEN MATCHED THEN UPDATE SET v = t.v || s.v
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
+----
+3
+
+query II
+SELECT id, v FROM my_datalake.default.cow_merge ORDER BY id;
+----
+1	ax
+3	y
+5	e
+6	f
+7	g
+
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.cow_merge);
+----
+6
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.cow_merge) WHERE content != 'DATA';
+----
+0
+
+# a MERGE that matches nothing in the table only appends
+
+query I
+MERGE INTO my_datalake.default.cow_merge AS t USING (SELECT 8 AS id, 'h' AS v) AS s ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET v = s.v
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
+----
+1
+
+query T
+SELECT operation FROM iceberg_snapshots(my_datalake.default.cow_merge) ORDER BY sequence_number DESC LIMIT 1;
+----
+append
+
+# rows not matched by the source
+
+query I
+MERGE INTO my_datalake.default.cow_merge AS t USING (SELECT 1 AS id) AS s ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET v = 'kept'
+WHEN NOT MATCHED BY SOURCE AND t.id > 6 THEN DELETE;
+----
+3
+
+query II
+SELECT id, v FROM my_datalake.default.cow_merge ORDER BY id;
+----
+1	kept
+3	y
+5	e
+6	f
+
+# a source that matches a target row twice is refused by DuckDB before anything is written
+
+statement error
+MERGE INTO my_datalake.default.cow_merge AS t USING (VALUES (3, 'p'), (3, 'q')) AS s(id, v) ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET v = s.v;
+----
+<REGEX>:.*cannot affect the same target row more than once.*
+
+query II
+SELECT id, v FROM my_datalake.default.cow_merge WHERE id = 3;
+----
+3	y
+
+# rows removed earlier by merge-on-read delete files stay removed when their file is rewritten
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cow_merge_mixed;
+
+statement ok
+CREATE TABLE my_datalake.default.cow_merge_mixed (id INTEGER, v VARCHAR) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.cow_merge_mixed VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+query I
+DELETE FROM my_datalake.default.cow_merge_mixed WHERE id = 1;
+----
+1
+
+statement ok
+ALTER TABLE my_datalake.default.cow_merge_mixed SET ('write.merge.mode' = 'copy-on-write');
+
+query I
+MERGE INTO my_datalake.default.cow_merge_mixed AS t USING (SELECT 3 AS id) AS s ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET v = 'z';
+----
+1
+
+query II
+SELECT id, v FROM my_datalake.default.cow_merge_mixed ORDER BY id;
+----
+2	b
+3	z
+
+query I
+SELECT sum(record_count) FROM iceberg_metadata(my_datalake.default.cow_merge_mixed) WHERE content = 'DATA' AND status != 'DELETED';
+----
+2
+
+# a partitioned table: an updated row moves to the partition of its new value
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cow_merge_partitioned;
+
+statement ok
+CREATE TABLE my_datalake.default.cow_merge_partitioned (id INTEGER, part VARCHAR) PARTITIONED BY (part) WITH (
+    'format-version' = '2',
+    'write.merge.mode' = 'copy-on-write'
+);
+
+statement ok
+INSERT INTO my_datalake.default.cow_merge_partitioned VALUES (1, 'x'), (2, 'x'), (3, 'y');
+
+query I
+MERGE INTO my_datalake.default.cow_merge_partitioned AS t USING (SELECT 1 AS id) AS s ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET part = 'y';
+----
+1
+
+query II
+SELECT id, part FROM my_datalake.default.cow_merge_partitioned ORDER BY id;
+----
+1	y
+2	x
+3	y
+
+query II
+SELECT part, count(*) FROM my_datalake.default.cow_merge_partitioned WHERE part = 'y' GROUP BY part;
+----
+y	2
+
+# within a transaction, later statements see the rewrite
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cow_merge_transaction;
+
+statement ok
+CREATE TABLE my_datalake.default.cow_merge_transaction (id INTEGER, v VARCHAR) WITH (
+    'format-version' = '2',
+    'write.merge.mode' = 'copy-on-write'
+);
+
+statement ok
+INSERT INTO my_datalake.default.cow_merge_transaction VALUES (1, 'a'), (2, 'b');
+
+statement ok
+BEGIN;
+
+query I
+MERGE INTO my_datalake.default.cow_merge_transaction AS t USING (VALUES (1, 'z'), (3, 'c')) AS s(id, v) ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET v = s.v
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
+----
+2
+
+query I
+MERGE INTO my_datalake.default.cow_merge_transaction AS t USING (SELECT 2 AS id) AS s ON t.id = s.id
+WHEN MATCHED THEN DELETE;
+----
+1
+
+query II
+SELECT id, v FROM my_datalake.default.cow_merge_transaction ORDER BY id;
+----
+1	z
+3	c
+
+statement ok
+COMMIT;
+
+query II
+SELECT id, v FROM my_datalake.default.cow_merge_transaction ORDER BY id;
+----
+1	z
+3	c
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.cow_merge_transaction) WHERE content != 'DATA';
+----
+0
