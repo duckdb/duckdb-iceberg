@@ -9,6 +9,8 @@
 #include "planning/metadata_io/avro/avro_scan.hpp"
 #include "planning/metadata_io/manifest_list/iceberg_manifest_list_reader.hpp"
 
+#include <algorithm>
+
 namespace duckdb {
 
 static void AssignManifestFirstRowIds(const IcebergTableMetadata &metadata,
@@ -101,9 +103,6 @@ static optional<IcebergManifestListEntry> RewriteManifestFile(const IcebergManif
 	auto rewritten_entries = file.PrepareEntriesForRewrite(std::move(loaded_manifest.GetManifestEntries()));
 	bool removed_any_entries = false;
 	for (auto &manifest_entry : rewritten_entries) {
-		if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
-			continue;
-		}
 		if (!deletes.IsInvalidated({manifest_entry.data_file.file_path, manifest_entry.data_file.content_offset})) {
 			continue;
 		}
@@ -118,6 +117,18 @@ static optional<IcebergManifestListEntry> RewriteManifestFile(const IcebergManif
 	}
 	return writer.WriteReplacementManifest(*loaded_manifest.manifest_metadata, std::move(rewritten_entries),
 	                                       file.first_row_id);
+}
+
+//! A manifest whose files were all deleted by earlier snapshots holds only tombstones. Like Apache Iceberg's
+//! MergingSnapshotProducer, stop carrying it forward: the snapshot that deleted the files still references it.
+//! Manifests with unknown file counts are kept.
+static void DropManifestsWithoutLiveFiles(vector<IcebergManifestListEntry> &manifests) {
+	auto has_no_live_files = [](const IcebergManifestListEntry &manifest) {
+		auto &counts = manifest.GetFile().counts;
+		return counts && counts->added_files_count && counts->existing_files_count && *counts->added_files_count == 0 &&
+		       *counts->existing_files_count == 0;
+	};
+	manifests.erase(std::remove_if(manifests.begin(), manifests.end(), has_no_live_files), manifests.end());
 }
 
 void IcebergCommitState::WriteExistingManifests(IcebergSnapshotWriter &writer, int32_t schema_id,
@@ -142,6 +153,7 @@ IcebergCommitState::CreateSnapshotWriter(int32_t schema_id, IcebergSnapshotOpera
 	auto parent = GetLatestSnapshot();
 	IcebergSnapshotWriter writer(context, metadata, schema_id, operation, next_sequence_number++, row_ids,
 	                             created_metadata_files, parent);
+	DropManifestsWithoutLiveFiles(manifests);
 	//! Repack the base manifests once per commit attempt, with this snapshot's identity.
 	if (!written_snapshot) {
 		IcebergManifestMerge::MergeManifestList(manifests, metadata.GetCurrentSchemaId(), writer, *this);

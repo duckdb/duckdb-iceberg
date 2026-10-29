@@ -102,39 +102,27 @@ set variable last_manifest_list = (
 	offset 0 limit 1
 )
 
-# There are 3 delete manifests, because we made 3 deletes in 3 separate snapshots
+# The last snapshot keeps two delete manifests: the tombstone for the deletion vector it replaced and
+# the new deletion vector. The tombstone-only manifest from the previous snapshot is not carried forward.
 query I
 select count(*) from read_avro(getvariable('last_manifest_list')) where content = 1;
 ----
-3
-
-loop i 0 3
+2
 
 statement ok
-set variable delete_manifest{i} = (
-	select manifest_path from read_avro(
-		getvariable('last_manifest_list')
-	) where content = 1 order by sequence_number
-	offset {i} limit 1
+set variable delete_manifests = (
+	select list(manifest_path) from read_avro(getvariable('last_manifest_list')) where content = 1
 );
 
-endloop
-
-# Count manifest_entry's that aren't status == 2 (DELETED)
-query I
-select count(*) from read_avro(getvariable('delete_manifest0')) where status != 2;
+# Per delete manifest: (DELETED entries, live entries). One tombstone-only manifest, one live deletion vector.
+query II
+select count(*) filter (where status = 2), count(*) filter (where status != 2)
+from read_avro(getvariable('delete_manifests'), filename = true)
+group by filename
+order by all;
 ----
-0
-
-query I
-select count(*) from read_avro(getvariable('delete_manifest1')) where status != 2;
-----
-0
-
-query I
-select count(*) from read_avro(getvariable('delete_manifest2')) where status != 2;
-----
-1
+0	1
+1	0
 
 statement ok
 abort
