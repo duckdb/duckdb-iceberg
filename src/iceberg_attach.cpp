@@ -173,6 +173,10 @@ static void SetAWSCatalogOptions(IcebergAttachOptions &attach_options, case_inse
 	if (set_by_attach_options.find("purge_requested") == set_by_attach_options.end()) {
 		attach_options.purge_requested = true;
 	}
+	// S3 Tables rejects uppercase namespace and table names, and Glue lowercases them
+	if (set_by_attach_options.find("identifier_case") == set_by_attach_options.end()) {
+		attach_options.identifier_case = IcebergIdentifierCase::LOWERCASE;
+	}
 }
 
 } // namespace
@@ -263,6 +267,16 @@ static void ParseAttachOptions(IcebergAttachOptions &attach_options, optional<Id
 				throw InvalidConfigurationException(
 				    "Unrecognized 'default_schema_policy' (%s), accepted options are: error, create, unenforced",
 				    value);
+			}
+		} else if (lower_name == "identifier_case") {
+			auto value = StringUtil::Lower(argument.ToString());
+			if (value == "preserve_case") {
+				attach_options.identifier_case = IcebergIdentifierCase::PRESERVE_CASE;
+			} else if (value == "lowercase") {
+				attach_options.identifier_case = IcebergIdentifierCase::LOWERCASE;
+			} else {
+				throw InvalidConfigurationException(
+				    "Unrecognized 'identifier_case' (%s), accepted options are: preserve_case, lowercase", value);
 			}
 		} else if (lower_name == "encode_entire_prefix") {
 			attach_options.encode_entire_prefix = argument.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
@@ -477,6 +491,9 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 		attach_options.options.clear();
 	}
 	catalog->attach_options = attach_options;
+	if (default_schema) {
+		default_schema = Identifier(catalog->FoldIdentifier(default_schema->GetIdentifierName()));
+	}
 	catalog->default_schema = default_schema;
 	catalog->Configure(context, config, endpoint_type);
 	auto policy = attach_options.default_schema_policy;
