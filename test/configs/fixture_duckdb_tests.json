@@ -432,6 +432,13 @@
       ]
     },
     {
+      "reason": "Iceberg does not allow changing a map's key; DuckDB tests rename and drop fields of a key struct",
+      "paths": [
+        "test/sql/alter/map/rename_column_in_struct.test",
+        "test/sql/alter/map/drop_column_in_struct.test"
+      ]
+    },
+    {
       "reason": "ALTER TABLE SET PARTITIONED BY is supported in Iceberg but DuckDB tests expect failure",
       "paths": [
         "test/sql/alter/alter_table_set_partitioned_by.test",

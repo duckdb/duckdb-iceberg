@@ -1,0 +1,97 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/map_key_changes_refused.test
+# description: ALTERs that would change a map's key are refused; the map's value can still change
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+foreach fv 2 3
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.map_key_v{fv};
+
+statement ok
+CREATE TABLE my_datalake.default.map_key_v{fv} (
+	id INTEGER,
+	m MAP(STRUCT(k INTEGER, k2 INTEGER), VARCHAR),
+	mk MAP(INTEGER, VARCHAR),
+	mv MAP(VARCHAR, STRUCT(a INTEGER, b INTEGER))
+) WITH ('format-version' = {fv});
+
+statement ok
+INSERT INTO my_datalake.default.map_key_v{fv} VALUES (1, MAP {{'k': 1, 'k2': 2}: 'first', {'k': 1, 'k2': 5}: 'second'}, MAP {1: 'a'}, MAP {'x': {'a': 10, 'b': 20}});
+
+# Dropping k2 would leave two equal keys and make the table unreadable.
+statement error
+ALTER TABLE my_datalake.default.map_key_v{fv} DROP COLUMN m.key.k2;
+----
+map keys can't be changed
+
+statement error
+ALTER TABLE my_datalake.default.map_key_v{fv} ADD COLUMN m.key.k3 INTEGER;
+----
+map keys can't be changed
+
+statement error
+ALTER TABLE my_datalake.default.map_key_v{fv} RENAME COLUMN m.key.k TO kk;
+----
+map keys can't be changed
+
+statement error
+ALTER TABLE my_datalake.default.map_key_v{fv} ALTER COLUMN m.key.k TYPE BIGINT;
+----
+map keys can't be changed
+
+statement error
+ALTER TABLE my_datalake.default.map_key_v{fv} ALTER COLUMN m.key DROP NOT NULL;
+----
+map keys can't be changed
+
+statement error
+ALTER TABLE my_datalake.default.map_key_v{fv} ALTER COLUMN mk.key TYPE BIGINT;
+----
+map keys can't be changed
+
+statement error
+ALTER TABLE my_datalake.default.map_key_v{fv} ALTER COLUMN mk.key SET DEFAULT 1;
+----
+map keys can't be changed
+
+statement error
+ALTER TABLE my_datalake.default.map_key_v{fv} SET SORTED BY (mk.key);
+----
+map keys can't be changed
+
+statement error
+ALTER TABLE my_datalake.default.map_key_v{fv} SET PARTITIONED BY (mk.key);
+----
+map keys can't be changed
+
+# Nothing was committed: the table reads as before.
+query III
+SELECT id, m, mk FROM my_datalake.default.map_key_v{fv};
+----
+1	{{'k': 1, 'k2': 2}=first, {'k': 1, 'k2': 5}=second}	{1=a}
+
+# The value side of a map can still change.
+statement ok
+ALTER TABLE my_datalake.default.map_key_v{fv} RENAME COLUMN mv.value.a TO a2;
+
+statement ok
+ALTER TABLE my_datalake.default.map_key_v{fv} DROP COLUMN mv.value.b;
+
+statement ok
+ALTER TABLE my_datalake.default.map_key_v{fv} ADD COLUMN mv.value.c INTEGER;
+
+query I
+SELECT mv FROM my_datalake.default.map_key_v{fv};
+----
+{x={'a2': 10, 'c': NULL}}
+
+statement ok
+DROP TABLE my_datalake.default.map_key_v{fv};
+
+endloop
