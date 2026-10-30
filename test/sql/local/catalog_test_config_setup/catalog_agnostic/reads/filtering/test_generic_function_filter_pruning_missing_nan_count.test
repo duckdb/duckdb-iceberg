@@ -1,0 +1,82 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_generic_function_filter_pruning_missing_nan_count.test
+# description: FLOAT/DOUBLE bounds without a NaN count must not prune generic function filters
+# group: [filtering]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SCAN_PLANNING_MODE client
+
+include test/sql/init_requires
+
+statement ok
+SET threads=1;
+
+statement ok
+CALL enable_logging('Iceberg');
+
+query IIIII
+SELECT column_name, count(*), count(lower_bound), count(upper_bound), count(nan_value_count)
+FROM iceberg_column_stats('{WORKING_DIRECTORY}/data/persistent/add_columns_with_defaults/default.db/add_columns_with_defaults/metadata/00003-3f1801a5-7dfb-4072-b14a-39cd12f9279b.metadata.json')
+WHERE column_name IN ('col_float', 'col_double')
+GROUP BY column_name
+ORDER BY column_name;
+----
+col_double	2	1	1	0
+col_float	2	1	1	0
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT col1 FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/add_columns_with_defaults/default.db/add_columns_with_defaults/metadata/00003-3f1801a5-7dfb-4072-b14a-39cd12f9279b.metadata.json')
+WHERE col_float + 1 > 100 AND col_float + 1 <= 'NaN'::FLOAT;
+----
+
+query I
+SELECT col1 FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/add_columns_with_defaults/default.db/add_columns_with_defaults/metadata/00003-3f1801a5-7dfb-4072-b14a-39cd12f9279b.metadata.json')
+WHERE col_float + 1 > 10 AND col_float + 1 <= 'NaN'::FLOAT;
+----
+test
+
+query I
+select count(distinct message) from duckdb_logs()
+where type = 'Iceberg' and message like '%skipped ''data_file''%';
+----
+0
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT col1 FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/add_columns_with_defaults/default.db/add_columns_with_defaults/metadata/00003-3f1801a5-7dfb-4072-b14a-39cd12f9279b.metadata.json')
+WHERE col_double + 1 > 100 AND col_double + 1 <= 'NaN'::DOUBLE;
+----
+
+query I
+SELECT col1 FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/add_columns_with_defaults/default.db/add_columns_with_defaults/metadata/00003-3f1801a5-7dfb-4072-b14a-39cd12f9279b.metadata.json')
+WHERE col_double + 1 > 10 AND col_double + 1 <= 'NaN'::DOUBLE;
+----
+test
+
+query I
+select count(distinct message) from duckdb_logs()
+where type = 'Iceberg' and message like '%skipped ''data_file''%';
+----
+0
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT col1 FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/add_columns_with_defaults/default.db/add_columns_with_defaults/metadata/00003-3f1801a5-7dfb-4072-b14a-39cd12f9279b.metadata.json')
+WHERE col_decimal + 1 > 10000000 AND col_decimal + 1 <= 99999999999999.99;
+----
+
+query I
+select count(distinct message) from duckdb_logs()
+where type = 'Iceberg' and message like '%skipped ''data_file''%';
+----
+1
+
+statement ok
+RESET threads;
