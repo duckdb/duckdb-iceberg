@@ -1,0 +1,114 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/scan_serialization_time_travel.test
+# description: Copied catalog-backed Iceberg scans remain pinned to their historical snapshot
+# group: [reads]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env TIMETRAVEL_SUPPORT
+
+include test/sql/init_requires
+
+require core_functions
+
+# Match the upper-case CTE_SCAN operator name below.
+statement ok
+SET profiling_renderer_settings = MAP {'operator_casing': 'upper'};
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.scan_serialization_time_travel_sales;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.scan_serialization_time_travel_returns;
+
+statement ok
+CREATE TABLE my_datalake.default.scan_serialization_time_travel_sales (
+    order_no INTEGER,
+    warehouse INTEGER
+) WITH ('format-version' = '2');
+
+statement ok
+CREATE TABLE my_datalake.default.scan_serialization_time_travel_returns (
+    order_no INTEGER
+) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.scan_serialization_time_travel_sales VALUES
+    (1, 10),
+    (1, 20),
+    (2, 10),
+    (3, 10);
+
+statement ok
+INSERT INTO my_datalake.default.scan_serialization_time_travel_returns VALUES (1), (3);
+
+statement ok
+SET VARIABLE scan_serialization_snapshot = (
+    SELECT snapshot_id::BIGINT
+    FROM iceberg_snapshots(my_datalake.default.scan_serialization_time_travel_sales)
+    ORDER BY sequence_number DESC
+    LIMIT 1
+);
+
+# These rows make order 4 eligible only if a copied scan incorrectly moves from the pinned snapshot to latest.
+statement ok
+INSERT INTO my_datalake.default.scan_serialization_time_travel_sales VALUES (4, 30), (4, 40);
+
+statement ok
+INSERT INTO my_datalake.default.scan_serialization_time_travel_returns VALUES (4);
+
+statement ok
+PRAGMA explain_output = 'optimized_only';
+
+query II
+EXPLAIN WITH pairs AS (
+    SELECT a.order_no
+    FROM my_datalake.default.scan_serialization_time_travel_sales AS a
+             AT (VERSION => getvariable('scan_serialization_snapshot')),
+         my_datalake.default.scan_serialization_time_travel_sales AS b
+             AT (VERSION => getvariable('scan_serialization_snapshot'))
+    WHERE a.order_no = b.order_no
+      AND a.warehouse <> b.warehouse
+)
+SELECT count(DISTINCT s.order_no)
+FROM my_datalake.default.scan_serialization_time_travel_sales s
+WHERE s.order_no IN (SELECT order_no FROM pairs)
+  AND s.order_no IN (
+      SELECT r.order_no
+      FROM my_datalake.default.scan_serialization_time_travel_returns r, pairs p
+      WHERE r.order_no = p.order_no
+  )
+LIMIT 100;
+----
+logical_opt	<!REGEX>:.*CTE_SCAN.*
+
+# Both copied scans remain pinned to the first snapshot, so the later order 4 is absent from pairs.
+query I
+WITH pairs AS NOT MATERIALIZED (
+    SELECT a.order_no
+    FROM my_datalake.default.scan_serialization_time_travel_sales AS a
+             AT (VERSION => getvariable('scan_serialization_snapshot')),
+         my_datalake.default.scan_serialization_time_travel_sales AS b
+             AT (VERSION => getvariable('scan_serialization_snapshot'))
+    WHERE a.order_no = b.order_no
+      AND a.warehouse <> b.warehouse
+)
+SELECT count(DISTINCT s.order_no)
+FROM my_datalake.default.scan_serialization_time_travel_sales s
+WHERE s.order_no IN (SELECT order_no FROM pairs)
+  AND s.order_no IN (
+      SELECT r.order_no
+      FROM my_datalake.default.scan_serialization_time_travel_returns r, pairs p
+      WHERE r.order_no = p.order_no
+  )
+LIMIT 100;
+----
+1
+
+statement ok
+RESET explain_output;
+
+statement ok
+DROP TABLE my_datalake.default.scan_serialization_time_travel_returns;
+
+statement ok
+DROP TABLE my_datalake.default.scan_serialization_time_travel_sales;

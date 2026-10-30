@@ -41,6 +41,8 @@ public:
 	const IcebergScanPlanner &GetScanPlanner() const;
 
 	IcebergDeleteExecutionState &GetDeleteReader() const;
+	//! A view of this list that plans with the given filters, sharing metadata planning and delete execution state.
+	unique_ptr<IcebergMultiFileList> WithPlannerFilters(IcebergTableFilters filters) const;
 
 private:
 	IcebergMultiFileList(unique_ptr<IcebergScanPlanner> planner,
