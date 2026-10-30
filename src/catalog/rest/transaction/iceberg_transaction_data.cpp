@@ -218,7 +218,10 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 
 	auto manifest_metadata = IcebergManifestMetadata::FromTableMetadata(table_metadata, manifest_content_type);
 	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info, operation);
-	add_snapshot->AddPendingManifest(IcebergPendingManifest(manifest_metadata, std::move(data_files)));
+	//! A REPLACE that only removes files adds no manifest
+	if (!data_files.empty() || operation != IcebergSnapshotOperationType::REPLACE) {
+		add_snapshot->AddPendingManifest(IcebergPendingManifest(manifest_metadata, std::move(data_files)));
+	}
 	// make sure we are still inserting into the current schema
 	if (table_metadata.current_snapshot_id) {
 		TableAddAssertCurrentSchemaId();

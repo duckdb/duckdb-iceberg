@@ -170,7 +170,10 @@ SinkFinalizeType PhysicalRewriteDataFiles::Finalize(Pipeline &pipeline, Event &e
 	auto &gstate = input.global_state.Cast<RewriteDataFilesGlobalState>();
 	{
 		lock_guard<mutex> guard(gstate.lock);
-		if (gstate.insert_state.written_files.empty()) {
+		//! A rewrite planned with this one (e.g. in the same statement) may have replaced the candidates
+		VerifyCandidatesNotReplaced(context, gstate.plan);
+		//! Without delete files every candidate has live rows, so writing no file means the scan missed them
+		if (gstate.insert_state.written_files.empty() && !gstate.plan.has_delete_files) {
 			throw InternalException(
 			    "iceberg_rewrite_data_files: COPY returned no written files for selected candidates");
 		}

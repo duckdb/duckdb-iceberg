@@ -20,6 +20,9 @@ struct RewriteExecutionResult {
 	vector<RewriteCandidate> rewritten_candidates;
 };
 
+//! Throw if an earlier statement, or another rewrite in this one, replaced a candidate since planning.
+void VerifyCandidatesNotReplaced(ClientContext &context, const RewritePlan &plan);
+
 //! Commit all completed rewrite output as one Iceberg REPLACE snapshot.
 void CommitRewrite(ClientContext &context, const RewritePlan &plan, RewriteExecutionResult &result);
 
