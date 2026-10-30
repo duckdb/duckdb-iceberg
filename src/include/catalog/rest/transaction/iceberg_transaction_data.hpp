@@ -29,8 +29,6 @@ public:
 	int64_t GetCommitRetryCount() const;
 	bool SupportsAppendRetry() const;
 	bool RetryStateMatches(const IcebergTable &table_info) const;
-	//! Whether this transaction stages a DELETE snapshot; gates the commit-retry safety check.
-	bool ContainsDelete() const;
 	bool IsFileInvalidated(const IcebergFileIdentity &file) const;
 	shared_ptr<IcebergMergeDeleteCollector> GetMergeDeleteCollector(idx_t action_count);
 	void VerifyMergeDeletesComplete() const;

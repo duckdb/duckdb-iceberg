@@ -21,6 +21,8 @@ const string WRITE_UPDATE_MODE = "write.update.mode";
 const string WRITE_DELETE_MODE = "write.delete.mode";
 const string WRITE_MERGE_MODE = "write.merge.mode";
 const string WRITE_DELETE_ISOLATION_LEVEL = "write.delete.isolation-level";
+const string WRITE_UPDATE_ISOLATION_LEVEL = "write.update.isolation-level";
+const string WRITE_MERGE_ISOLATION_LEVEL = "write.merge.isolation-level";
 const string WRITE_FORMAT_DEFAULT = "write.format.default";
 const string WRITE_DELETE_FORMAT_DEFAULT = "write.delete.format.default";
 

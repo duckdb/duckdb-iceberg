@@ -200,19 +200,27 @@ static void CreateTableRequirements(DatabaseInstance &db, ClientContext &context
 //! over sequence numbers (parent links aren't populated on read snapshots). A
 //! scan/tip snapshot the catalog doesn't expose (e.g. no history) can't be
 //! proven safe, so it counts as not reappliable.
-static bool DeleteCanReapply(const IcebergTableMetadata &metadata, int64_t base_snapshot_id, int64_t tip_snapshot_id) {
-	if (base_snapshot_id == tip_snapshot_id) {
-		return true;
+static bool DeleteCanReapply(const IcebergTableMetadata &metadata, optional<int64_t> base_snapshot_id,
+                             int64_t tip_snapshot_id) {
+	//! No base snapshot: every commit up to the tip is concurrent.
+	int64_t base_sequence = 0;
+	if (base_snapshot_id) {
+		auto base = metadata.FindSnapshotByIdInternal(*base_snapshot_id);
+		if (!base) {
+			return false;
+		}
+		if (!base->sequence_number) {
+			throw InvalidConfigurationException("Committed snapshot is missing a sequence number");
+		}
+		base_sequence = *base->sequence_number;
 	}
-	auto base = metadata.FindSnapshotByIdInternal(base_snapshot_id);
 	auto tip = metadata.FindSnapshotByIdInternal(tip_snapshot_id);
-	if (!base || !tip) {
+	if (!tip) {
 		return false;
 	}
-	if (!base->sequence_number || !tip->sequence_number) {
+	if (!tip->sequence_number) {
 		throw InvalidConfigurationException("Committed snapshot is missing a sequence number");
 	}
-	int64_t base_sequence = *base->sequence_number;
 	int64_t tip_sequence = *tip->sequence_number;
 	for (auto &entry : metadata.snapshots) {
 		auto &snapshot = entry.second;
@@ -230,47 +238,69 @@ static bool DeleteCanReapply(const IcebergTableMetadata &metadata, int64_t base_
 	return true;
 }
 
-//! Throw if a retried DELETE can't be safely re-applied. No-op on the first
-//! attempt (tip == scan) and for non-delete transactions.
+//! Throw if a retried DELETE/UPDATE/MERGE can't be safely re-applied. Skips the first attempt
+//! (tip == scan), plain INSERT and REPLACE snapshots, and a DELETE with no base snapshot.
 static void VerifyDeleteRetryability(const IcebergTable &table_info,
                                      optional_ptr<const IcebergSnapshot> current_snapshot) {
 	if (!table_info.transaction_data) {
 		return;
 	}
 	auto &transaction_data = *table_info.transaction_data;
-	if (!transaction_data.ContainsDelete()) {
-		return;
-	}
-	//! No base snapshot: the delete targets data created in this transaction, so there is no
-	//! committed base to rebase against and nothing to verify.
-	if (!transaction_data.base_snapshot_id) {
-		return;
-	}
 	if (!current_snapshot) {
 		return;
 	}
-	auto scan_snapshot_id = *transaction_data.base_snapshot_id;
+	//! No base snapshot: the table was empty at scan, so any committed snapshot is a concurrent commit.
+	auto scan_snapshot_id = transaction_data.base_snapshot_id;
 	auto tip_snapshot_id = current_snapshot->snapshot_id;
 
 	//! Nothing to reconcile if the tip hasn't moved since we scanned (e.g. the first attempt).
-	if (scan_snapshot_id == tip_snapshot_id) {
+	if (scan_snapshot_id && *scan_snapshot_id == tip_snapshot_id) {
 		return;
 	}
 
-	//! Re-applying a DELETE over concurrent commits is opt-in: the table must explicitly request
-	//! 'snapshot' isolation, and even then only a pure-append history is safe (DeleteCanReapply). Any
-	//! other isolation - unset (Iceberg's default is 'serializable') or an explicit 'serializable' - must
+	//! Re-applying a DELETE, UPDATE or MERGE over concurrent commits is opt-in: the table must
+	//! explicitly request 'snapshot' isolation, and even then only a pure-append history is safe (DeleteCanReapply).
+	//! Any other isolation - unset (Iceberg's default is 'serializable') or an explicit 'serializable' - must
 	//! abort, since a concurrent append can add rows matching the delete predicate that a silent re-apply
 	//! would leave behind.
-	auto isolation_level = table_info.table_metadata.GetTableProperty(WRITE_DELETE_ISOLATION_LEVEL);
-	if (StringUtil::CIEquals(isolation_level, "snapshot") &&
-	    DeleteCanReapply(table_info.table_metadata, scan_snapshot_id, tip_snapshot_id)) {
-		return;
+	optional<bool> can_reapply;
+	for (auto &alter : transaction_data.alters) {
+		auto &add_snapshot = alter.get();
+		string statement;
+		string isolation_property;
+		if (add_snapshot.IsMerge()) {
+			//! An insert-only MERGE commits an APPEND, but its NOT MATCHED check still read the table.
+			statement = "MERGE";
+			isolation_property = WRITE_MERGE_ISOLATION_LEVEL;
+		} else if (add_snapshot.GetOperation() == IcebergSnapshotOperationType::DELETE) {
+			if (!scan_snapshot_id) {
+				//! No base snapshot: a DELETE only removes rows of this transaction, so nothing to verify.
+				continue;
+			}
+			statement = "DELETE";
+			isolation_property = WRITE_DELETE_ISOLATION_LEVEL;
+		} else if (add_snapshot.GetOperation() == IcebergSnapshotOperationType::OVERWRITE) {
+			statement = "UPDATE";
+			isolation_property = WRITE_UPDATE_ISOLATION_LEVEL;
+		} else {
+			continue;
+		}
+		auto isolation_level = table_info.table_metadata.GetTableProperty(isolation_property);
+		if (StringUtil::CIEquals(isolation_level, "snapshot")) {
+			if (!can_reapply) {
+				can_reapply = DeleteCanReapply(table_info.table_metadata, scan_snapshot_id, tip_snapshot_id);
+			}
+			if (*can_reapply) {
+				continue;
+			}
+		}
+		throw TransactionException(
+		    "%s on \"%s\" conflicts with a concurrent commit (scanned snapshot %s, now at %s); "
+		    "re-run the %s. Set '%s'='snapshot' to allow re-applying %ss over concurrent "
+		    "appends.",
+		    statement, table_info.name, scan_snapshot_id ? std::to_string(*scan_snapshot_id) : string("none"),
+		    std::to_string(tip_snapshot_id), statement, isolation_property, StringUtil::Lower(statement));
 	}
-	throw TransactionException(
-	    "DELETE on \"%s\" conflicts with a concurrent commit (scanned snapshot %s, now at %s); re-run the DELETE. "
-	    "Set 'write.delete.isolation-level'='snapshot' to allow re-applying deletes over concurrent appends.",
-	    table_info.name, std::to_string(scan_snapshot_id), std::to_string(tip_snapshot_id));
 }
 
 static SingleTableStagedCommit StageSingleTableCommit(DatabaseInstance &db, IcebergTable &table_info,

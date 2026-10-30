@@ -117,18 +117,6 @@ int64_t IcebergTransactionData::GetCommitRetryCount() const {
 	return result;
 }
 
-bool IcebergTransactionData::ContainsDelete() const {
-	for (auto &update : updates) {
-		if (update->type != IcebergTableUpdateType::ADD_SNAPSHOT) {
-			continue;
-		}
-		if (update->Cast<IcebergAddSnapshot>().GetOperation() == IcebergSnapshotOperationType::DELETE) {
-			return true;
-		}
-	}
-	return false;
-}
-
 bool IcebergTransactionData::IsFileInvalidated(const IcebergFileIdentity &file) const {
 	return manifest_deletes.IsInvalidated(file);
 }
@@ -217,7 +205,7 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 	};
 
 	auto manifest_metadata = IcebergManifestMetadata::FromTableMetadata(table_metadata, manifest_content_type);
-	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info, operation);
+	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info, operation, merge_action);
 	add_snapshot->AddPendingManifest(IcebergPendingManifest(manifest_metadata, std::move(data_files)));
 	// make sure we are still inserting into the current schema
 	if (table_metadata.current_snapshot_id) {
@@ -275,7 +263,7 @@ void IcebergTransactionData::AddDeleteSnapshot(partitioned_manifest_entry_map_t 
 	auto &table_metadata = table_info.table_metadata;
 	CacheExistingManifestList(guard, table_metadata);
 
-	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info, IcebergSnapshotOperationType::DELETE);
+	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info, IcebergSnapshotOperationType::DELETE, merge_action);
 	AddPendingDeleteManifests(*add_snapshot, std::move(delete_files));
 	// make sure we are still inserting into the current schema
 	if (table_metadata.current_snapshot_id) {
@@ -297,7 +285,8 @@ void IcebergTransactionData::AddUpdateSnapshot(partitioned_manifest_entry_map_t 
 	auto data_manifest_metadata =
 	    IcebergManifestMetadata::FromTableMetadata(table_metadata, IcebergManifestContentType::DATA);
 
-	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info);
+	auto add_snapshot =
+	    make_uniq<IcebergAddSnapshot>(table_info, IcebergSnapshotOperationType::OVERWRITE, merge_action);
 	AddPendingDeleteManifests(*add_snapshot, std::move(delete_files));
 	add_snapshot->AddPendingManifest(IcebergPendingManifest(data_manifest_metadata, std::move(data_files)));
 	AddSnapshotUpdate(std::move(add_snapshot), std::move(altered_manifests), merge_action);
