@@ -38,6 +38,9 @@ struct RewritePlan {
 	shared_ptr<IcebergTable> table_info;
 	//! Files selected for rewrite after per-partition size / min_input_files gating.
 	vector<RewriteCandidate> selected_candidates;
+	//! Distinct delete-file paths whose referenced data files were all selected.
+	//! Invalidated on the same REPLACE commit as the rewritten data files.
+	vector<string> delete_files_to_remove;
 };
 
 struct RewriteDataFilesPlanInput {
