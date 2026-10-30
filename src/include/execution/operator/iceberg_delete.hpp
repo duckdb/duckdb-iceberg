@@ -77,6 +77,15 @@ struct IcebergDeleteFileInfo {
 	unordered_map<int32_t, int64_t> nan_value_counts;
 };
 
+struct IcebergDeleteData;
+
+//! The delete file written for one data file.
+struct IcebergDeleteFileWrite {
+	IcebergDeleteFileInfo delete_file;
+	//! The existing deletes of the data file that a written deletion vector supersedes
+	shared_ptr<IcebergDeleteData> superseded_deletes;
+};
+
 //! Materialized deletes and the old deletion vectors they supersede.
 struct IcebergDeleteWriteResult {
 	unordered_map<string, IcebergDeleteFileInfo> written_files;
@@ -216,6 +225,10 @@ public:
 	//! All new positions for a data file must be collected before calling this writer.
 	void WriteDeletes(ClientContext &context, const IcebergPendingDeletes &pending_deletes,
 	                  IcebergDeleteWriteResult &result) const;
+	//! Write the delete file for the newly deleted `deleted_rows` of one data file. Safe to call concurrently for
+	//! different data files.
+	IcebergDeleteFileWrite WriteDeleteFile(ClientContext &context, const string &filename,
+	                                       const vector<idx_t> &deleted_rows) const;
 
 private:
 	//! Walk `plan` for the PhysicalTableScan that emits the row-id virtual columns the delete needs.

@@ -1,0 +1,92 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_delete_files_written_in_parallel.test
+# description: A DELETE or UPDATE that touches many data files writes their delete files in parallel, each for its own data file
+# group: [delete]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+loop v 2 4
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_parallel_delete_files;
+
+statement ok
+CREATE TABLE my_datalake.default.test_parallel_delete_files (p INT, id INT) PARTITIONED BY (p) WITH ('format-version'='{v}');
+
+# 16 partitions, one data file each
+statement ok
+INSERT INTO my_datalake.default.test_parallel_delete_files SELECT i % 16, i FROM range(1600) t(i);
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_parallel_delete_files) WHERE manifest_content = 'DATA';
+----
+16
+
+# Every data file loses rows, so every data file gets a delete file
+query I
+DELETE FROM my_datalake.default.test_parallel_delete_files WHERE id % 7 = 0;
+----
+229
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_parallel_delete_files) WHERE manifest_content = 'DELETE';
+----
+16
+
+# A delete file applied to the wrong data file would remove the wrong rows
+query IIII
+SELECT count(*), sum(id), count(*) FILTER (WHERE id % 7 = 0), count(DISTINCT p) FROM my_datalake.default.test_parallel_delete_files;
+----
+1371	1096458	0	16
+
+query II
+SELECT p, count(*) FROM my_datalake.default.test_parallel_delete_files GROUP BY p ORDER BY p LIMIT 3;
+----
+0	85
+1	86
+2	86
+
+# A second delete over the same files: v3 deletion vectors keep the rows deleted before
+query I
+DELETE FROM my_datalake.default.test_parallel_delete_files WHERE id % 7 = 1;
+----
+229
+
+query III
+SELECT count(*), count(*) FILTER (WHERE id % 7 IN (0, 1)), count(DISTINCT p) FROM my_datalake.default.test_parallel_delete_files;
+----
+1142	0	16
+
+# An UPDATE over every partition writes a delete file per data file as well
+query I
+UPDATE my_datalake.default.test_parallel_delete_files SET id = id + 100000 WHERE id % 7 = 2;
+----
+229
+
+query IIII
+SELECT count(*), count(*) FILTER (WHERE id >= 100000), count(*) FILTER (WHERE id % 7 = 2 AND id < 100000), sum(id) FROM my_datalake.default.test_parallel_delete_files;
+----
+1142	229	0	23813487
+
+# An error in one of the parallel writes fails the statement
+statement ok
+CREATE TEMP TABLE parallel_delete_duplicates AS SELECT i AS dup_id FROM range(1600) t(i) WHERE i % 7 = 3 UNION ALL SELECT 3;
+
+statement error
+UPDATE my_datalake.default.test_parallel_delete_files SET id = -1 FROM parallel_delete_duplicates WHERE id = dup_id;
+----
+The same row was updated multiple times
+
+statement ok
+DROP TABLE parallel_delete_duplicates;
+
+query I
+SELECT count(*) FROM my_datalake.default.test_parallel_delete_files WHERE id = -1;
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.test_parallel_delete_files;
+
+endloop

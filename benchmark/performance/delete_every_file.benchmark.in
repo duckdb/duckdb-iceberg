@@ -1,0 +1,61 @@
+# name: ${FILE_PATH}
+# description: DELETE that touches every data file of a v${FORMAT_VERSION} table, so it writes one delete file per data file
+# group: [performance]
+
+name DELETE touching every data file - v${FORMAT_VERSION}
+group performance
+subgroup delete_files
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# 256 identity partitions with one data file each. The predicate is coprime to the partition count, so every data
+# file loses rows and gets its own delete file. After each run the table is rolled back to the loaded snapshot, so
+# every run deletes the same rows from the same files.
+load
+SET enable_external_file_cache=false;
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+DROP TABLE IF EXISTS my_datalake.default.delete_every_file_v${FORMAT_VERSION};
+CREATE TABLE my_datalake.default.delete_every_file_v${FORMAT_VERSION} (p INTEGER, id BIGINT)
+PARTITIONED BY (p) WITH ('format-version' = '${FORMAT_VERSION}');
+INSERT INTO my_datalake.default.delete_every_file_v${FORMAT_VERSION} SELECT i % 256, i FROM range(256000) t(i);
+DROP TABLE IF EXISTS my_datalake.default.delete_every_file_v${FORMAT_VERSION}_snapshot;
+CREATE TABLE my_datalake.default.delete_every_file_v${FORMAT_VERSION}_snapshot AS
+    SELECT snapshot_id::BIGINT snapshot_id
+    FROM iceberg_snapshots(my_datalake.default.delete_every_file_v${FORMAT_VERSION})
+    ORDER BY sequence_number DESC
+    LIMIT 1;
+
+# Every file operation waits 5 ms, like a request to object storage
+run
+SET threads=8;
+SET debug_fs_delay_mean_ms=5;
+SET enable_external_file_cache=false;
+DELETE FROM my_datalake.default.delete_every_file_v${FORMAT_VERSION} WHERE id % 97 = 7;
+
+cleanup
+SET debug_fs_delay_mean_ms=0;
+SET VARIABLE loaded_snapshot = (SELECT snapshot_id FROM my_datalake.default.delete_every_file_v${FORMAT_VERSION}_snapshot);
+SELECT * FROM iceberg_rollback_to_snapshot('my_datalake.default.delete_every_file_v${FORMAT_VERSION}', getvariable('loaded_snapshot'));
+
+result I
+2640

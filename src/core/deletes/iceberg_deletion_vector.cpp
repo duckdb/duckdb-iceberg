@@ -1,6 +1,7 @@
 #include "core/deletes/iceberg_deletion_vector.hpp"
 
 #include "duckdb/common/allocator.hpp"
+#include "duckdb/common/array.hpp"
 #include "duckdb/common/bswap.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -14,30 +15,11 @@ namespace {
 class CRC32 {
 public:
 	CRC32() : crc(0xFFFFFFFF) {
-		InitTable();
-	}
-
-public:
-	static void InitTable() {
-		if (table_initialized)
-			return;
-
-		for (uint32_t i = 0; i < 256; i++) {
-			uint32_t c = i;
-			for (int j = 0; j < 8; j++) {
-				if (c & 1) {
-					c = 0xEDB88320 ^ (c >> 1);
-				} else {
-					c = c >> 1;
-				}
-			}
-			crc_table[i] = c;
-		}
-		table_initialized = true;
 	}
 
 public:
 	void Update(const data_t *data, idx_t length) {
+		auto &crc_table = GetTable();
 		for (idx_t i = 0; i < length; i++) {
 			crc = crc_table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
 		}
@@ -56,13 +38,30 @@ public:
 	}
 
 private:
-	uint32_t crc;
-	static uint32_t crc_table[256];
-	static bool table_initialized;
-};
+	//! Deletion vectors are read and written by several threads at once, so the table is built by a thread-safe
+	//! static initializer
+	static const array<uint32_t, 256> &GetTable() {
+		static const array<uint32_t, 256> crc_table = [] {
+			array<uint32_t, 256> table;
+			for (uint32_t i = 0; i < 256; i++) {
+				uint32_t c = i;
+				for (int j = 0; j < 8; j++) {
+					if (c & 1) {
+						c = 0xEDB88320 ^ (c >> 1);
+					} else {
+						c = c >> 1;
+					}
+				}
+				table[i] = c;
+			}
+			return table;
+		}();
+		return crc_table;
+	}
 
-uint32_t CRC32::crc_table[256];
-bool CRC32::table_initialized = false;
+private:
+	uint32_t crc;
+};
 
 } // namespace
 
