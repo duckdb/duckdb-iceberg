@@ -85,6 +85,13 @@ IcebergManifestCounts IcebergManifestCounts::Zero() {
 	return result;
 }
 
+bool IcebergManifest::HasLiveFiles() const {
+	if (!counts || !counts->added_files_count || !counts->existing_files_count) {
+		return true;
+	}
+	return *counts->added_files_count != 0 || *counts->existing_files_count != 0;
+}
+
 vector<IcebergManifestEntry> IcebergManifestFile::PrepareEntriesForRewrite(vector<IcebergManifestEntry> entries) const {
 	auto next_row_id = content == IcebergManifestContentType::DATA ? first_row_id : nullopt;
 	for (auto &entry : entries) {
