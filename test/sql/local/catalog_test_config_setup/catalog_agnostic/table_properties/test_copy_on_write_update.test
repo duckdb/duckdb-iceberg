@@ -1,0 +1,271 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/table_properties/test_copy_on_write_update.test
+# description: UPDATE on a v2 table whose write.update.mode is copy-on-write rewrites the matched data files
+# group: [table_properties]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require core_functions
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cow_update;
+
+statement ok
+CREATE TABLE my_datalake.default.cow_update (id INTEGER, v VARCHAR) WITH (
+    'format-version' = '2',
+    'write.update.mode' = 'copy-on-write'
+);
+
+# two inserts, so two data files
+
+statement ok
+INSERT INTO my_datalake.default.cow_update VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+statement ok
+INSERT INTO my_datalake.default.cow_update VALUES (4, 'd'), (5, 'e');
+
+query I
+UPDATE my_datalake.default.cow_update SET v = 'z' WHERE id = 2;
+----
+1
+
+query II
+SELECT id, v FROM my_datalake.default.cow_update ORDER BY id;
+----
+1	a
+2	z
+3	c
+4	d
+5	e
+
+# the matched file is replaced in an overwrite snapshot, and no delete file is written
+
+query T
+SELECT operation FROM iceberg_snapshots(my_datalake.default.cow_update) ORDER BY sequence_number DESC LIMIT 1;
+----
+overwrite
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.cow_update) WHERE content != 'DATA';
+----
+0
+
+# the live files are the untouched second file and the rewrite of the first, which holds all three of its rows
+
+query II
+SELECT count(*), sum(record_count) FROM iceberg_metadata(my_datalake.default.cow_update) WHERE status != 'DELETED';
+----
+2	5
+
+# an UPDATE that matches nothing changes nothing
+
+query I
+UPDATE my_datalake.default.cow_update SET v = 'y' WHERE id = 42;
+----
+0
+
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.cow_update);
+----
+3
+
+# new values computed from the row, across both files
+
+query I
+UPDATE my_datalake.default.cow_update SET v = v || '!', id = id * 10 WHERE id IN (1, 5);
+----
+2
+
+query II
+SELECT id, v FROM my_datalake.default.cow_update ORDER BY id;
+----
+2	z
+3	c
+4	d
+10	a!
+50	e!
+
+query II
+SELECT count(*), sum(record_count) FROM iceberg_metadata(my_datalake.default.cow_update) WHERE status != 'DELETED';
+----
+1	5
+
+# updating every row
+
+query I
+UPDATE my_datalake.default.cow_update SET v = upper(v);
+----
+5
+
+query II
+SELECT id, v FROM my_datalake.default.cow_update ORDER BY id;
+----
+2	Z
+3	C
+4	D
+10	A!
+50	E!
+
+# an UPDATE ... FROM that matches a row twice is refused, as with merge-on-read
+
+statement error
+UPDATE my_datalake.default.cow_update SET v = s.v FROM (VALUES (2, 'p'), (2, 'q')) s(id, v)
+WHERE cow_update.id = s.id;
+----
+<REGEX>:.*Not implemented Error.*same row was updated multiple times.*
+
+query II
+SELECT id, v FROM my_datalake.default.cow_update WHERE id = 2;
+----
+2	Z
+
+# an UPDATE ... FROM that matches each row once
+
+query I
+UPDATE my_datalake.default.cow_update SET v = s.v FROM (VALUES (2, 'p'), (3, 'q')) s(id, v)
+WHERE cow_update.id = s.id;
+----
+2
+
+query II
+SELECT id, v FROM my_datalake.default.cow_update ORDER BY id;
+----
+2	p
+3	q
+4	D
+10	A!
+50	E!
+
+# rows removed earlier by merge-on-read delete files stay removed when their file is rewritten
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cow_update_mixed;
+
+statement ok
+CREATE TABLE my_datalake.default.cow_update_mixed (id INTEGER, v VARCHAR) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.cow_update_mixed VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+query I
+DELETE FROM my_datalake.default.cow_update_mixed WHERE id = 1;
+----
+1
+
+statement ok
+ALTER TABLE my_datalake.default.cow_update_mixed SET ('write.update.mode' = 'copy-on-write');
+
+query I
+UPDATE my_datalake.default.cow_update_mixed SET v = 'z' WHERE id = 3;
+----
+1
+
+query II
+SELECT id, v FROM my_datalake.default.cow_update_mixed ORDER BY id;
+----
+2	b
+3	z
+
+query I
+SELECT sum(record_count) FROM iceberg_metadata(my_datalake.default.cow_update_mixed) WHERE content = 'DATA' AND status != 'DELETED';
+----
+2
+
+# a partitioned table: an updated row moves to the partition of its new value
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cow_update_partitioned;
+
+statement ok
+CREATE TABLE my_datalake.default.cow_update_partitioned (id INTEGER, part VARCHAR) PARTITIONED BY (part) WITH (
+    'format-version' = '2',
+    'write.update.mode' = 'copy-on-write'
+);
+
+statement ok
+INSERT INTO my_datalake.default.cow_update_partitioned VALUES (1, 'x'), (2, 'x'), (3, 'y');
+
+query I
+UPDATE my_datalake.default.cow_update_partitioned SET part = 'y' WHERE id = 1;
+----
+1
+
+query II
+SELECT id, part FROM my_datalake.default.cow_update_partitioned ORDER BY id;
+----
+1	y
+2	x
+3	y
+
+query II
+SELECT part, count(*) FROM my_datalake.default.cow_update_partitioned WHERE part = 'y' GROUP BY part;
+----
+y	2
+
+# the x file is rewritten into one file per partition; the y file is untouched
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.cow_update_partitioned) WHERE status != 'DELETED';
+----
+3
+
+# within a transaction, later statements see the rewrite
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cow_update_transaction;
+
+statement ok
+CREATE TABLE my_datalake.default.cow_update_transaction (id INTEGER, v VARCHAR) WITH (
+    'format-version' = '2',
+    'write.update.mode' = 'copy-on-write',
+    'write.delete.mode' = 'copy-on-write'
+);
+
+statement ok
+INSERT INTO my_datalake.default.cow_update_transaction VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+statement ok
+BEGIN;
+
+query I
+UPDATE my_datalake.default.cow_update_transaction SET v = 'z' WHERE id = 1;
+----
+1
+
+query I
+UPDATE my_datalake.default.cow_update_transaction SET v = v || v WHERE id <= 2;
+----
+2
+
+query I
+DELETE FROM my_datalake.default.cow_update_transaction WHERE id = 3;
+----
+1
+
+query II
+SELECT id, v FROM my_datalake.default.cow_update_transaction ORDER BY id;
+----
+1	zz
+2	bb
+
+statement ok
+COMMIT;
+
+query II
+SELECT id, v FROM my_datalake.default.cow_update_transaction ORDER BY id;
+----
+1	zz
+2	bb
+
+query II
+SELECT count(*), sum(record_count) FROM iceberg_metadata(my_datalake.default.cow_update_transaction) WHERE status != 'DELETED';
+----
+1	2
+
+# an UPDATE with RETURNING is still refused
+
+statement error
+UPDATE my_datalake.default.cow_update_transaction SET v = 'r' WHERE id = 1 RETURNING id;
+----
+RETURNING clause not yet supported
