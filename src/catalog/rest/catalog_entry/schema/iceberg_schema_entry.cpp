@@ -956,7 +956,6 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 	case AlterTableType::RENAME_FIELD: {
 		auto &rename_field_info = alter_table_info.Cast<RenameFieldInfo>();
 		ThrowIfGeography(current_schema, rename_field_info.column_path);
-		ThrowIfMapKey(current_schema, rename_field_info.column_path);
 		auto &column_path = rename_field_info.column_path;
 		auto &new_name = rename_field_info.new_name;
 
@@ -976,6 +975,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 			throw CatalogException("Cannot rename field %s from column %s - can only rename fields inside a struct",
 			                       column_path.back(), column_path.front());
 		}
+		ThrowIfMapKey(current_schema, column_path);
 
 		auto new_path = column_path;
 		new_path.pop_back();
@@ -995,7 +995,6 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 	case AlterTableType::REMOVE_FIELD: {
 		auto &remove_field_info = alter_table_info.Cast<RemoveFieldInfo>();
 		ThrowIfGeography(current_schema, remove_field_info.column_path);
-		ThrowIfMapKey(current_schema, remove_field_info.column_path);
 		auto &column_path = remove_field_info.column_path;
 		auto &cascade = remove_field_info.cascade;
 		auto &if_column_exists = remove_field_info.if_column_exists;
@@ -1033,6 +1032,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 			throw CatalogException("Cannot drop field %s from column %s - it's not a struct", column_path.back(),
 			                       column_path.front());
 		}
+		ThrowIfMapKey(current_schema, column_path);
 
 		if (parent.GetChildCount() == 1) {
 			throw CatalogException("Can't drop field '%s' because it's the last field of the STRUCT!",

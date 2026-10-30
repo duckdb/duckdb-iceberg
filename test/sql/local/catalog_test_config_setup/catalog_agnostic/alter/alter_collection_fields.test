@@ -12,7 +12,7 @@ CREATE TABLE my_datalake.default.collection_fields(s STRUCT(m MAP(STRUCT(a INTEG
 statement ok
 INSERT INTO my_datalake.default.collection_fields VALUES ({'m': MAP {ROW(1, 2): ROW(3, 4)}, 'l': [ROW(5, 6)]});
 
-foreach field m.value l.element
+foreach field m.key m.value l.element
 
 statement error
 ALTER TABLE my_datalake.default.collection_fields RENAME COLUMN s.{field} TO other;
@@ -37,25 +37,21 @@ SELECT s FROM my_datalake.default.collection_fields;
 
 endloop
 
-# A map key can't be changed at all, its struct children included.
-foreach path m.key m.key.a
-
+# The struct children of a map key can't be changed either.
 statement error
-ALTER TABLE my_datalake.default.collection_fields RENAME COLUMN s.{path} TO other;
+ALTER TABLE my_datalake.default.collection_fields RENAME COLUMN s.m.key.a TO other;
 ----
 map keys can't be changed
 
 statement error
-ALTER TABLE my_datalake.default.collection_fields DROP COLUMN s.{path};
+ALTER TABLE my_datalake.default.collection_fields DROP COLUMN s.m.key.b;
 ----
 map keys can't be changed
 
 statement error
-ALTER TABLE my_datalake.default.collection_fields DROP COLUMN IF EXISTS s.{path};
+ALTER TABLE my_datalake.default.collection_fields DROP COLUMN IF EXISTS s.m.key.b;
 ----
 map keys can't be changed
-
-endloop
 
 query I
 SELECT s FROM my_datalake.default.collection_fields;
