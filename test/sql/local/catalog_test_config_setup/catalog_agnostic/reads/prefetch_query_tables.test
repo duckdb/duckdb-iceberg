@@ -1,0 +1,129 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/prefetch_query_tables.test
+# group: [reads]
+
+include test/sql/init_requires
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.prefetch_a;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.prefetch_b;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.prefetch_c;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.prefetch_d;
+
+statement ok
+CREATE TABLE my_datalake.default.prefetch_a AS SELECT i AS id, i * 10 AS a FROM range(5) t(i);
+
+statement ok
+CREATE TABLE my_datalake.default.prefetch_b AS SELECT i AS id, i * 100 AS b FROM range(5) t(i);
+
+statement ok
+CREATE TABLE my_datalake.default.prefetch_c AS SELECT i AS id FROM range(3) t(i);
+
+# Tables referenced in joins, FROM subqueries and WHERE subqueries are all resolved
+query III
+SELECT a.id, a, b
+FROM my_datalake.default.prefetch_a a
+JOIN (SELECT * FROM my_datalake.default.prefetch_b) b USING (id)
+WHERE a.id IN (SELECT id FROM my_datalake.default.prefetch_c)
+ORDER BY a.id;
+----
+0	0	0
+1	10	100
+2	20	200
+
+# Unqualified references through the default schema
+statement ok
+USE my_datalake.default;
+
+query II
+SELECT count(*), sum(a + b) FROM prefetch_a JOIN prefetch_b USING (id);
+----
+5	1100
+
+# A CTE named like a table shadows the table
+query I
+WITH prefetch_a AS (SELECT 42 AS a) SELECT a FROM prefetch_a;
+----
+42
+
+query I
+WITH x AS (SELECT * FROM prefetch_c) SELECT count(*) FROM x JOIN prefetch_a USING (id);
+----
+3
+
+# Tables read by INSERT ... SELECT and CREATE TABLE AS are resolved too
+statement ok
+CREATE TABLE prefetch_d AS SELECT a.id, a, b FROM prefetch_a a JOIN prefetch_b USING (id);
+
+statement ok
+INSERT INTO prefetch_d SELECT a.id, a, b FROM prefetch_a a JOIN prefetch_b USING (id) WHERE a.id < 2;
+
+query II
+SELECT count(*), sum(b) FROM prefetch_d;
+----
+7	1100
+
+statement ok
+DROP TABLE prefetch_d;
+
+# A missing table still fails as before, also next to tables that exist
+statement error
+SELECT * FROM prefetch_a JOIN prefetch_missing USING (id);
+----
+prefetch_missing
+
+# A temporary table shadows the Iceberg table of the same name
+statement ok
+CREATE TEMP TABLE prefetch_b AS SELECT 7 AS id, 7 AS b;
+
+query II
+SELECT id, b FROM prefetch_b;
+----
+7	7
+
+statement ok
+DROP TABLE prefetch_b;
+
+# Tables already resolved in a transaction are not requested again
+statement ok
+BEGIN;
+
+query I
+SELECT count(*) FROM prefetch_a;
+----
+5
+
+statement ok
+INSERT INTO my_datalake.default.prefetch_a VALUES (5, 50);
+
+query II
+SELECT count(*), max(a) FROM prefetch_a JOIN prefetch_b USING (id);
+----
+5	40
+
+query I
+SELECT count(*) FROM prefetch_a;
+----
+6
+
+statement ok
+COMMIT;
+
+statement ok
+USE memory;
+
+statement ok
+DROP TABLE my_datalake.default.prefetch_a;
+
+statement ok
+DROP TABLE my_datalake.default.prefetch_b;
+
+statement ok
+DROP TABLE my_datalake.default.prefetch_c;

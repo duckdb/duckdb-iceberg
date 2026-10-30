@@ -10,6 +10,7 @@
 
 namespace duckdb {
 class IcebergCatalog;
+class IcebergTablePrefetch;
 class IcebergSchemaEntry;
 class IcebergTableSchemaVersion;
 
@@ -89,6 +90,9 @@ public:
 	void DoViewDeletes(ClientContext &context);
 	void InvalidateViewEntry(const string &view_key);
 	IcebergCatalog &GetCatalog();
+	//! LoadTable requests scheduled ahead of binding for the tables a query references, created on first use
+	IcebergTablePrefetch &GetTablePrefetch(ClientContext &context);
+	optional_ptr<IcebergTablePrefetch> TryGetTablePrefetch();
 	void DoMultiTableCommitUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
 	void DoSingleTableCommitUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
 	optional_ptr<IcebergTransactionTableState> GetLatestTableState(const string &table_key);
@@ -127,6 +131,7 @@ private:
 private:
 	DatabaseInstance &db;
 	IcebergCatalog &catalog;
+	unique_ptr<IcebergTablePrefetch> table_prefetch;
 	AccessMode access_mode;
 
 public:

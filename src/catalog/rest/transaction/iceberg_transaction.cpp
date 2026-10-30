@@ -23,6 +23,7 @@
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/api/iceberg_retry.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/rest/iceberg_table_prefetch.hpp"
 #include "catalog/rest/storage/iceberg_authorization.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "catalog/rest/api/iceberg_add_snapshot.hpp"
@@ -82,6 +83,17 @@ void IcebergTransaction::Start() {
 
 IcebergCatalog &IcebergTransaction::GetCatalog() {
 	return catalog;
+}
+
+IcebergTablePrefetch &IcebergTransaction::GetTablePrefetch(ClientContext &context) {
+	if (!table_prefetch) {
+		table_prefetch = make_uniq<IcebergTablePrefetch>(context, catalog);
+	}
+	return *table_prefetch;
+}
+
+optional_ptr<IcebergTablePrefetch> IcebergTransaction::TryGetTablePrefetch() {
+	return table_prefetch.get();
 }
 
 template <class RESTObject>
