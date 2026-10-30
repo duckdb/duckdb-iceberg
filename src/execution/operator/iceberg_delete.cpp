@@ -312,9 +312,6 @@ IcebergDeleteFileInfo IcebergDelete::WritePositionalDeleteFile(ClientContext &co
 }
 
 static void PopulateAlteredManifests(IcebergManifestDeletes &out, const IcebergDeleteData &delete_data) {
-	if (delete_data.type != IcebergDeleteType::DELETION_VECTOR) {
-		return;
-	}
 	for (auto &file : delete_data.source_files) {
 		out.InvalidateFile(file);
 	}
@@ -372,7 +369,8 @@ void IcebergDelete::WriteDeletes(ClientContext &context, const IcebergPendingDel
 			                              "Iceberg. Eliminate duplicate matches prior to running the UPDATE");
 		}
 		if (write_deletion_vector) {
-			// A v3 vector must also retain all positions already deleted from this data file.
+			// A v3 vector must also retain all positions already deleted from this data file, and supersedes the
+			// vector or file-scoped position-delete files they were read from.
 			auto existing_delete = multi_file_list->GetExistingPositionalDeleteData(filename);
 			if (existing_delete) {
 				auto &delete_data = *existing_delete;
