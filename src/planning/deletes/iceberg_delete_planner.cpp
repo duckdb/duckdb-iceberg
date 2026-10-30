@@ -34,8 +34,10 @@ bool IcebergDeletePlanner::DeleteEntryMatchesFilters(const IcebergDeletePlanning
 	if (!context.table_filters.HasFilters()) {
 		return true;
 	}
+	// Coverage is irrelevant for delete files; only a proven non-match can exclude one.
 	return IcebergFilePruner(context.context, context.metadata, context.schema, context.table_filters)
-	    .FileMatchesFilter(context.delete_manifests[delete_manifest_idx].entry.GetManifest(), delete_manifest_entry);
+	           .FileMatchesFilter(context.delete_manifests[delete_manifest_idx].entry.GetManifest(),
+	                              delete_manifest_entry) != IcebergMetricsMatch::ROWS_CANNOT_MATCH;
 }
 
 bool IcebergDeletePlanner::DeleteEntryAppliesToDataFile(const IcebergDeletePlanningContext &context,
