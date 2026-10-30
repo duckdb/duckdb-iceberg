@@ -57,6 +57,17 @@ virtual_column_map_t IcebergVirtualColumns(ClientContext &context, optional_ptr<
 	return result;
 }
 
+static table_function_bind_t parquet_scan_bind = nullptr;
+
+static unique_ptr<FunctionData> IcebergScanBind(ClientContext &context, TableFunctionBindInput &input,
+                                                vector<LogicalType> &return_types, vector<Identifier> &names) {
+	// writers leave NaN out of a float column's min/max, so without a nan_count the bounds do not cover NaN
+	if (!input.named_parameters.contains("can_have_nan")) {
+		input.named_parameters.insert("can_have_nan", Value::BOOLEAN(true));
+	}
+	return parquet_scan_bind(context, input, return_types, names);
+}
+
 static void IcebergScanSerialize(Serializer &serializer, const optional_ptr<FunctionData> bind_data,
                                  const BoundTableFunction &function) {
 	throw NotImplementedException("IcebergScan serialization not implemented");
@@ -120,6 +131,9 @@ TableFunctionSet IcebergFunctions::GetIcebergScanFunction(ExtensionLoader &loade
 	parquet_scan_copy.ApplyToFunctions([](TableFunction &function) {
 		// Register the MultiFileReader as the driver for reads
 		function.get_multi_file_reader = IcebergMultiFileReader::CreateInstance;
+		D_ASSERT(!parquet_scan_bind || parquet_scan_bind == function.bind);
+		parquet_scan_bind = function.bind;
+		function.bind = IcebergScanBind;
 		function.late_materialization = false;
 
 		// Unset all of these: they are either broken, very inefficient.
