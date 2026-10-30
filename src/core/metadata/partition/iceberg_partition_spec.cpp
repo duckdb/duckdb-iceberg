@@ -25,13 +25,16 @@ bool IcebergPartitionSpecField::Equals(const IcebergPartitionSpecField &other) c
 	return source_id == other.source_id && transform.RawType() == other.transform.RawType();
 }
 
-bool IcebergPartitionSpec::Equals(const IcebergPartitionSpec &other) const {
+bool IcebergPartitionSpec::Equals(const IcebergPartitionSpec &other, bool compare_field_ids) const {
 	if (fields.size() != other.fields.size()) {
 		return false;
 	}
 	for (idx_t i = 0; i < fields.size(); i++) {
 		if (!fields[i].Equals(other.fields[i]) ||
 		    fields[i].GetPartitionSpecFieldName() != other.fields[i].GetPartitionSpecFieldName()) {
+			return false;
+		}
+		if (compare_field_ids && fields[i].partition_field_id != other.fields[i].partition_field_id) {
 			return false;
 		}
 	}
@@ -41,8 +44,12 @@ bool IcebergPartitionSpec::Equals(const IcebergPartitionSpec &other) const {
 IcebergPartitionSpec IcebergPartitionSpec::ParseFromJson(const rest_api_objects::PartitionSpec &partition_spec,
                                                          int32_t iceberg_version) {
 	D_ASSERT(partition_spec.spec_id);
-	IcebergPartitionSpec result(*partition_spec.spec_id);
-	auto &fields = partition_spec.fields;
+	return FromFields(partition_spec.fields, *partition_spec.spec_id, iceberg_version);
+}
+
+IcebergPartitionSpec IcebergPartitionSpec::FromFields(const vector<rest_api_objects::PartitionField> &fields,
+                                                      int32_t spec_id, int32_t iceberg_version) {
+	IcebergPartitionSpec result(spec_id);
 	idx_t missing_field_ids = 0;
 	for (auto &field : fields) {
 		if (!field.field_id) {
