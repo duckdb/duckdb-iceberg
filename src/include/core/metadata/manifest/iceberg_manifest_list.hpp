@@ -121,6 +121,10 @@ public:
 
 public:
 	void SetCountsFromEntries(const vector<IcebergManifestEntry> &entries);
+	//! False only when the counts prove that the manifest has no added or existing files, i.e. every entry is DELETED.
+	//! An unknown count (optional in V1 manifest lists) means the manifest may hold live files and has to be read.
+	//! Mirrors ManifestFile.hasAddedFiles() || hasExistingFiles() in Apache Iceberg.
+	bool HasLiveFiles() const;
 };
 
 //! A descriptor for an existing Avro manifest, including its snapshot identity.
