@@ -13,7 +13,9 @@ Usage:
     Default port: 19130
 """
 
+import base64
 import json
+import os
 import sys
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -37,6 +39,10 @@ _scope_tables = {
     "mixed_types": ("s3://scope-bucket/table/", ["gs://scope-bucket/table/", "s3://scope-bucket/table/"]),
 }
 
+# A customer-provided key in the form Iceberg's S3FileIO vends as 's3.sse.key' (base-64 AES-256). It is fresh per
+# run: the tests check that a key reaches the vended secret, never its value.
+_customer_key = base64.b64encode(os.urandom(32)).decode()
+
 # Tables whose catalog asks for S3 server-side encryption
 _sse_tables = {
     "table_config": (
@@ -46,11 +52,25 @@ _sse_tables = {
         {},
     ),
     "credential_config": ("s3://scope-bucket/sse/", ["s3://scope-bucket/sse/"], {}, {"s3.sse.type": "dsse-kms"}),
-    # A customer-provided key must also be sent on reads
+    # A customer-provided key, sent on reads and writes
     "customer_key": (
         "s3://scope-bucket/sse/",
         ["s3://scope-bucket/sse/"],
-        {"s3.sse.type": "custom", "s3.sse.key": "test-customer-key"},
+        {"s3.sse.type": "custom", "s3.sse.key": _customer_key},
+        {},
+    ),
+    # The same, with the key vended in the storage credential instead of the table config
+    "customer_key_credential": (
+        "s3://scope-bucket/sse/",
+        ["s3://scope-bucket/sse/"],
+        {"s3.sse.type": "custom"},
+        {"s3.sse.key": _customer_key},
+    ),
+    # A customer-provided key requested but not vended
+    "customer_key_missing": (
+        "s3://scope-bucket/sse/",
+        ["s3://scope-bucket/sse/"],
+        {"s3.sse.type": "custom"},
         {},
     ),
 }

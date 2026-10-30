@@ -1,5 +1,5 @@
 # name: test/sql/local/catalog_custom_setup/sigv4_mock/test_s3_sse.test
-# description: Writes are refused when the catalog asks for S3 server-side encryption, and reads refused when it asks for a customer-provided key
+# description: Writes are refused when the catalog asks for S3 server-side encryption the extension cannot apply; a vended customer-provided key is sent on reads and writes
 # group: [sigv4_mock]
 
 # Requires: python3 scripts/sigv4_mock_server.py 19130
@@ -87,21 +87,50 @@ CALL iceberg_rewrite_data_files('sse_catalog.default.catalog_config');
 ----
 's3.sse.type'='s3'
 
-# A customer-provided key is needed to read the files too, so reads are refused as well
-statement error
+# A customer-provided key vended in the table config is passed on to the vended secret, so reads are allowed
+query I
 SELECT count(*) FROM sse.default.customer_key;
 ----
-Cannot read Iceberg table 'customer_key': the catalog requests S3 server-side encryption with 's3.sse.type'='custom'
+0
 
-statement error
+query I
 SELECT count(*) FROM iceberg_snapshots('sse.default.customer_key');
 ----
-'s3.sse.type'='custom'
+0
+
+# The same with the key vended in the storage credential
+query I
+SELECT count(*) FROM sse.default.customer_key_credential;
+----
+0
+
+# The vended secret carries the key, redacted
+statement ok
+BEGIN
+
+query I
+SELECT count(*) FROM sse.default.customer_key;
+----
+0
+
+query I
+SELECT count(*) FROM duckdb_secrets() WHERE secret_string LIKE '%sse_c_key=redacted%';
+----
+1
+
+statement ok
+COMMIT
+
+# Without a vended key the files cannot be read or written
+statement error
+SELECT count(*) FROM sse.default.customer_key_missing;
+----
+Cannot read Iceberg table 'customer_key_missing': the catalog requests S3 server-side encryption with 's3.sse.type'='custom' but provides no 's3.sse.key'
 
 statement error
-INSERT INTO sse.default.customer_key VALUES (1);
+INSERT INTO sse.default.customer_key_missing VALUES (1);
 ----
-Cannot write to Iceberg table 'customer_key'
+Cannot write to Iceberg table 'customer_key_missing'
 
 statement ok
 DETACH sse;
