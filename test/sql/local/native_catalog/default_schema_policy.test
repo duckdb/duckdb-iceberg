@@ -1,0 +1,120 @@
+# name: test/sql/local/native_catalog/default_schema_policy.test
+# description: DEFAULT_SCHEMA_POLICY decides whether ATTACH checks, creates or skips the DEFAULT_SCHEMA namespace
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+# The policy only applies to a DEFAULT_SCHEMA, and is validated before any request
+statement error
+ATTACH '' AS policy_db (TYPE ICEBERG, URI 'http://iceberg-mock.invalid', AUTHORIZATION_TYPE 'none',
+	ACCESS_DELEGATION_MODE 'none', DEFAULT_SCHEMA_POLICY 'create');
+----
+DEFAULT_SCHEMA_POLICY requires DEFAULT_SCHEMA
+
+statement error
+ATTACH '' AS policy_db (TYPE ICEBERG, URI 'http://iceberg-mock.invalid', AUTHORIZATION_TYPE 'none',
+	ACCESS_DELEGATION_MODE 'none', DEFAULT_SCHEMA_POLICY 'bogus', DEFAULT_SCHEMA 'policy_missing');
+----
+Unrecognized 'default_schema_policy' (bogus), accepted options are: error, create, unenforced
+
+# An empty DEFAULT_SCHEMA means no default schema: there is nothing to check or create
+foreach policy error create
+
+statement error
+ATTACH '' AS policy_db (TYPE ICEBERG, URI 'http://iceberg-mock.invalid', AUTHORIZATION_TYPE 'none',
+	ACCESS_DELEGATION_MODE 'none', DEFAULT_SCHEMA '', DEFAULT_SCHEMA_POLICY '{policy}');
+----
+DEFAULT_SCHEMA_POLICY 'error' or 'create' requires a non-empty DEFAULT_SCHEMA
+
+endloop
+
+statement ok
+ATTACH '' AS policy_db (TYPE ICEBERG, URI 'http://iceberg-mock.invalid', AUTHORIZATION_TYPE 'none',
+	ACCESS_DELEGATION_MODE 'none', DEFAULT_SCHEMA '', DEFAULT_SCHEMA_POLICY 'unenforced');
+
+statement ok
+DETACH policy_db;
+
+# 'error' is the default: a missing namespace fails the ATTACH
+statement error
+ATTACH '' AS policy_db (TYPE ICEBERG, URI 'http://iceberg-mock.invalid', AUTHORIZATION_TYPE 'none',
+	ACCESS_DELEGATION_MODE 'none', DEFAULT_SCHEMA 'policy_missing');
+----
+default_schema 'policy_missing' does not exist
+
+statement error
+ATTACH '' AS policy_db (TYPE ICEBERG, URI 'http://iceberg-mock.invalid', AUTHORIZATION_TYPE 'none',
+	ACCESS_DELEGATION_MODE 'none', DEFAULT_SCHEMA 'policy_missing', DEFAULT_SCHEMA_POLICY 'error');
+----
+default_schema 'policy_missing' does not exist
+
+statement ok
+CALL enable_logging('HTTP');
+
+# 'unenforced' does not look the namespace up at ATTACH
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+ATTACH '' AS policy_db (TYPE ICEBERG, URI 'http://iceberg-mock.invalid', AUTHORIZATION_TYPE 'none',
+	ACCESS_DELEGATION_MODE 'none', DEFAULT_SCHEMA 'policy_missing', DEFAULT_SCHEMA_POLICY 'unenforced');
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%/namespaces/policy_missing%';
+----
+0
+
+# the first use of the default schema checks it instead
+statement error
+CREATE TABLE policy_db.t AS SELECT 42;
+----
+default namespace 'policy_missing' does not exist
+
+statement ok
+DETACH policy_db;
+
+# 'create' creates a missing namespace, so unqualified names work right away
+statement ok
+ATTACH '' AS policy_db (TYPE ICEBERG, URI 'http://iceberg-mock.invalid', AUTHORIZATION_TYPE 'none',
+	ACCESS_DELEGATION_MODE 'none', DEFAULT_SCHEMA 'policy_created', DEFAULT_SCHEMA_POLICY 'create');
+
+statement ok
+CREATE TABLE policy_db.t AS SELECT 42 AS i;
+
+query I
+SELECT i FROM policy_db.policy_created.t;
+----
+42
+
+statement ok
+DETACH policy_db;
+
+# an existing namespace is only checked, never created again
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+ATTACH '' AS policy_db (TYPE ICEBERG, URI 'http://iceberg-mock.invalid', AUTHORIZATION_TYPE 'none',
+	ACCESS_DELEGATION_MODE 'none', DEFAULT_SCHEMA 'policy_created', DEFAULT_SCHEMA_POLICY 'create');
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE request.type = 'POST';
+----
+0
+
+query I
+SELECT i FROM policy_db.t;
+----
+42
+
+statement ok
+DETACH policy_db;
+
+# 'create' cannot create on a READ_ONLY attach
+statement error
+ATTACH '' AS policy_db (TYPE ICEBERG, URI 'http://iceberg-mock.invalid', AUTHORIZATION_TYPE 'none',
+	ACCESS_DELEGATION_MODE 'none', READ_ONLY, DEFAULT_SCHEMA 'policy_read_only', DEFAULT_SCHEMA_POLICY 'create');
+----
+cannot create it on a READ_ONLY attach
