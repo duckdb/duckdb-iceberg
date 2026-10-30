@@ -1,0 +1,118 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/manifest_tombstones_carry_forward.test
+# description: Manifests whose files were all deleted by an earlier snapshot are not carried into later snapshots
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.manifest_tombstones_carry_forward;
+
+# Disable merging so that only carry-forward decides which manifests the next snapshot references.
+statement ok
+CREATE TABLE my_datalake.default.manifest_tombstones_carry_forward (id INTEGER, category VARCHAR)
+PARTITIONED BY (category)
+WITH ('format-version' = 2, 'commit.manifest-merge.enabled' = false);
+
+# One manifest with a file in each partition, then a second manifest with another file in 'a'.
+statement ok
+INSERT INTO my_datalake.default.manifest_tombstones_carry_forward VALUES (1, 'a'), (2, 'b');
+
+statement ok
+INSERT INTO my_datalake.default.manifest_tombstones_carry_forward VALUES (3, 'a');
+
+query IIIII
+CALL iceberg_rewrite_data_files('my_datalake.default.manifest_tombstones_carry_forward', min_input_files => 2);
+----
+2	1	<REGEX>:[1-9][0-9]*	0	0
+
+# The rewrite snapshot records its own deletes: the first manifest keeps 'b' and a tombstone for 'a',
+# the second manifest holds only a tombstone, and the compacted 'a' file is added.
+query III
+SELECT added_data_files_count, existing_data_files_count, deleted_data_files_count
+FROM iceberg_manifests(my_datalake.default.manifest_tombstones_carry_forward)
+ORDER BY ALL;
+----
+0	0	1
+0	1	1
+1	0	0
+
+statement ok
+INSERT INTO my_datalake.default.manifest_tombstones_carry_forward VALUES (4, 'b');
+
+# The tombstone-only manifest is dropped. The mixed manifest is carried forward unchanged.
+query III
+SELECT added_data_files_count, existing_data_files_count, deleted_data_files_count
+FROM iceberg_manifests(my_datalake.default.manifest_tombstones_carry_forward)
+ORDER BY ALL;
+----
+0	1	1
+1	0	0
+1	0	0
+
+query I
+SELECT count(*) FROM iceberg_manifests(my_datalake.default.manifest_tombstones_carry_forward)
+WHERE added_data_files_count = 0 AND existing_data_files_count = 0;
+----
+0
+
+query II
+SELECT id, category FROM my_datalake.default.manifest_tombstones_carry_forward ORDER BY id;
+----
+1	a
+2	b
+3	a
+4	b
+
+statement ok
+DROP TABLE my_datalake.default.manifest_tombstones_carry_forward;
+
+# A later snapshot in the same commit also drops the tombstone-only manifest of an earlier one.
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.manifest_tombstones_same_commit;
+
+statement ok
+CREATE TABLE my_datalake.default.manifest_tombstones_same_commit (id INTEGER, category VARCHAR)
+PARTITIONED BY (category)
+WITH ('format-version' = 2, 'commit.manifest-merge.enabled' = false);
+
+statement ok
+INSERT INTO my_datalake.default.manifest_tombstones_same_commit VALUES (1, 'a'), (2, 'b');
+
+statement ok
+INSERT INTO my_datalake.default.manifest_tombstones_same_commit VALUES (3, 'a');
+
+statement ok
+BEGIN;
+
+query IIIII
+CALL iceberg_rewrite_data_files('my_datalake.default.manifest_tombstones_same_commit', min_input_files => 2);
+----
+2	1	<REGEX>:[1-9][0-9]*	0	0
+
+statement ok
+INSERT INTO my_datalake.default.manifest_tombstones_same_commit VALUES (4, 'b');
+
+statement ok
+COMMIT;
+
+query III
+SELECT added_data_files_count, existing_data_files_count, deleted_data_files_count
+FROM iceberg_manifests(my_datalake.default.manifest_tombstones_same_commit)
+ORDER BY ALL;
+----
+0	1	1
+1	0	0
+1	0	0
+
+query II
+SELECT id, category FROM my_datalake.default.manifest_tombstones_same_commit ORDER BY id;
+----
+1	a
+2	b
+3	a
+4	b
+
+statement ok
+DROP TABLE my_datalake.default.manifest_tombstones_same_commit;
