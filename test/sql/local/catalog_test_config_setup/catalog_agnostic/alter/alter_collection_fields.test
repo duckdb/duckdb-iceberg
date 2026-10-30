@@ -1,5 +1,5 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_collection_fields.test
-# description: Collection fields cannot be renamed or dropped, but their struct children can
+# description: Collection fields cannot be renamed or dropped; the struct children of a map value or list element can, those of a map key cannot
 # group: [alter]
 
 require-env CATALOG_TEST_CONFIG_SETUP
@@ -12,7 +12,7 @@ CREATE TABLE my_datalake.default.collection_fields(s STRUCT(m MAP(STRUCT(a INTEG
 statement ok
 INSERT INTO my_datalake.default.collection_fields VALUES ({'m': MAP {ROW(1, 2): ROW(3, 4)}, 'l': [ROW(5, 6)]});
 
-foreach field m.key m.value l.element
+foreach field m.value l.element
 
 statement error
 ALTER TABLE my_datalake.default.collection_fields RENAME COLUMN s.{field} TO other;
@@ -37,7 +37,32 @@ SELECT s FROM my_datalake.default.collection_fields;
 
 endloop
 
-foreach field m.key m.value l.element
+# A map key can't be changed at all, its struct children included.
+foreach path m.key m.key.a
+
+statement error
+ALTER TABLE my_datalake.default.collection_fields RENAME COLUMN s.{path} TO other;
+----
+map keys can't be changed
+
+statement error
+ALTER TABLE my_datalake.default.collection_fields DROP COLUMN s.{path};
+----
+map keys can't be changed
+
+statement error
+ALTER TABLE my_datalake.default.collection_fields DROP COLUMN IF EXISTS s.{path};
+----
+map keys can't be changed
+
+endloop
+
+query I
+SELECT s FROM my_datalake.default.collection_fields;
+----
+{'m': {{'a': 1, 'b': 2}={'a': 3, 'b': 4}}, 'l': [{'a': 5, 'b': 6}]}
+
+foreach field m.value l.element
 
 statement ok
 ALTER TABLE my_datalake.default.collection_fields RENAME COLUMN s.{field}.a TO renamed;
@@ -50,7 +75,7 @@ endloop
 query I
 SELECT s FROM my_datalake.default.collection_fields;
 ----
-{'m': {{'renamed': 1}={'renamed': 3}}, 'l': [{'renamed': 5}]}
+{'m': {{'a': 1, 'b': 2}={'renamed': 3}}, 'l': [{'renamed': 5}]}
 
 statement ok
 DROP TABLE my_datalake.default.collection_fields;
