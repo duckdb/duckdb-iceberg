@@ -1,0 +1,65 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/add_field_default_null_struct_time_travel.test
+# description: A struct field default only fills structs that exist, when time travel reads a schema older than the latest
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env COLUMN_DEFAULT_SUPPORT
+
+require-env FORMAT_V3_SUPPORT
+
+require-env TIMETRAVEL_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+drop table if exists my_datalake.default.add_field_default_null_struct_tt;
+
+statement ok
+create table my_datalake.default.add_field_default_null_struct_tt (
+	id INTEGER,
+	s STRUCT(a VARCHAR, n STRUCT(b INTEGER))
+) WITH ('format-version' = 3);
+
+# Row 2 has a NULL nested struct, row 3 a NULL outer struct.
+statement ok
+insert into my_datalake.default.add_field_default_null_struct_tt values
+	(1, {'a': 'one', 'n': {'b': 1}}),
+	(2, {'a': 'two', 'n': NULL}),
+	(3, NULL);
+
+statement ok
+ALTER TABLE my_datalake.default.add_field_default_null_struct_tt ADD COLUMN s.n.y INTEGER DEFAULT 5;
+
+statement ok
+insert into my_datalake.default.add_field_default_null_struct_tt values
+	(4, {'a': 'four', 'n': {'b': 4, 'y': 40}});
+
+# The latest snapshot, whose schema has s.n.y
+statement ok
+set variable with_default_snapshot = (
+	select snapshot_id from iceberg_snapshots('my_datalake.default.add_field_default_null_struct_tt')
+	order by timestamp_ms desc, sequence_number desc
+	limit 1
+);
+
+# A newer schema without s.n.y. Adding c makes it a new schema.
+statement ok
+ALTER TABLE my_datalake.default.add_field_default_null_struct_tt ADD COLUMN c INTEGER;
+
+statement ok
+ALTER TABLE my_datalake.default.add_field_default_null_struct_tt DROP COLUMN s.n.y;
+
+query II
+select id, s.n.y from my_datalake.default.add_field_default_null_struct_tt AT (VERSION => getvariable('with_default_snapshot')) order by id;
+----
+1	5
+2	NULL
+3	NULL
+4	40
+
+query I
+select id from my_datalake.default.add_field_default_null_struct_tt AT (VERSION => getvariable('with_default_snapshot')) where s.n.y IS NULL order by id;
+----
+2
+3
