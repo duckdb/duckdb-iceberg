@@ -109,6 +109,8 @@ public:
 	bool assert_schema_id = false;
 	//! Whether this transaction explicitly requires the table to be newly created.
 	bool has_assert_create = false;
+	//! Whether this transaction rolls main back (TableRollbackToSnapshot)
+	bool rolls_back = false;
 	mutex lock;
 };
 
