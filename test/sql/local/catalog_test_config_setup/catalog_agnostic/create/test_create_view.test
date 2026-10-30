@@ -42,7 +42,7 @@ insert into test_view_base_table values (1, 'hello'), (2, 'world'), (3, 'foo');
 # ─── CREATE VIEW ──────────────────────────────────────────────────────────────
 
 statement ok
-create view test_view_v1 as select i, s from test_view_base_table where i > 1;
+create view test_view_v1 as select i, s from my_datalake.default.test_view_base_table where i > 1;
 
 # Query the view
 query II
@@ -106,7 +106,7 @@ drop view test_view_v1;
 # ─── VIEW WITH COLUMN ALIASES ────────────────────────────────────────────────
 
 statement ok
-create view test_view_v2 (col_a, col_b) as select i, s from test_view_base_table;
+create view test_view_v2 (col_a, col_b) as select i, s from my_datalake.default.test_view_base_table;
 
 query II
 select col_a, col_b from test_view_v2 order by col_a;
