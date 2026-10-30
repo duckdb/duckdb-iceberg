@@ -211,6 +211,12 @@ IcebergScanPlanner::GetDataFile(idx_t file_id, annotated_lock_guard<annotated_mu
 			if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
 				continue;
 			}
+			//! Skip a file this transaction already removed, e.g. one replaced by a copy-on-write DELETE
+			if (HasScanInfo() && HasTransactionData() &&
+			    shared_state->Configuration().scan_info->transaction_data->IsFileInvalidated(
+			        {data_file.file_path, data_file.content_offset})) {
+				continue;
+			}
 			if (table_filters.HasFilters() && !IcebergFilePruner(context, GetMetadata(), GetSchema(), table_filters)
 			                                       .FileMatchesFilter(manifest_file, manifest_entry)) {
 				continue;

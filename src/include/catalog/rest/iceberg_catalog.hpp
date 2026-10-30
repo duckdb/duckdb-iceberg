@@ -163,16 +163,23 @@ public:
 	                             optional_ptr<PhysicalOperator> plan) override;
 	PhysicalOperator &PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner, LogicalCreateTable &op,
 	                                    PhysicalOperator &plan) override;
+	//! Plans a copy-on-write DELETE itself; any other DELETE plans its child and continues below
+	PhysicalOperator &PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op) override;
 	PhysicalOperator &PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
 	                             PhysicalOperator &plan) override;
 	//! Shared delete-planning body both PlanDelete and MERGE build on; only PlanDelete additionally opts the
 	//! standalone DELETE into metadata-only deletes, so MERGE must plan its delete action through here directly.
 	PhysicalOperator &PlanDeleteOperation(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
 	                                      PhysicalOperator &plan);
+	//! Plans a copy-on-write UPDATE itself; any other UPDATE plans its child and continues below
+	PhysicalOperator &PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op) override;
 	PhysicalOperator &PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
 	                             PhysicalOperator &plan) override;
 	PhysicalOperator &PlanMergeInto(ClientContext &context, PhysicalPlanGenerator &planner, LogicalMergeInto &op,
 	                                PhysicalOperator &plan) override;
+	PhysicalOperator &PlanCopyOnWriteMergeInto(ClientContext &context, PhysicalPlanGenerator &planner,
+	                                           LogicalMergeInto &op, PhysicalOperator &plan,
+	                                           IcebergTableSchemaVersion &table);
 	unique_ptr<LogicalOperator> BindCreateIndex(Binder &binder, CreateStatement &stmt, TableCatalogEntry &table,
 	                                            unique_ptr<LogicalOperator> plan) override;
 	DatabaseSize GetDatabaseSize(ClientContext &context) override;

@@ -163,6 +163,9 @@ public:
 
 	//! Contribute this action's files to the active MERGE's snapshot.
 	bool merge_action = false;
+	//! In a copy-on-write MERGE: hand the matched rows to the rewrite that runs after the MERGE, instead of writing
+	//! delete files
+	shared_ptr<IcebergCopyOnWriteMergeRows> copy_on_write_merge_rows;
 	//! Immutable participant information assigned by MERGE planning.
 	optional_idx merge_delete_action_index;
 	idx_t merge_delete_action_count = 0;

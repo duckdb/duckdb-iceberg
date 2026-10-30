@@ -22,7 +22,8 @@ CREATE TABLE my_datalake.default.write_modes_transactions (id INTEGER, v VARCHAR
 statement ok
 INSERT INTO my_datalake.default.write_modes_transactions VALUES (1, 'a'), (2, 'b');
 
-# UPDATE must use the property changed in this transaction, not the catalog's committed value
+# UPDATE must use the property changed in this transaction, not the catalog's committed value: it rewrites the data
+# file instead of writing a delete file
 
 statement ok
 BEGIN;
@@ -31,15 +32,21 @@ statement ok
 CALL set_iceberg_table_properties(my_datalake.default.write_modes_transactions,
     {'write.update.mode': 'copy-on-write'});
 
-statement error
+query I
 UPDATE my_datalake.default.write_modes_transactions SET v = 'z' WHERE id = 1;
 ----
-<REGEX>:.*Not implemented Error.*write.update.mode.*copy-on-write.*
+1
+
+query II
+SELECT id, v FROM my_datalake.default.write_modes_transactions ORDER BY id;
+----
+1	z
+2	b
 
 statement ok
 ROLLBACK;
 
-# DELETE must also observe an uncommitted property change
+# DELETE must also observe an uncommitted property change: it rewrites the data file instead of writing a delete file
 
 statement ok
 BEGIN;
@@ -48,16 +55,26 @@ statement ok
 CALL set_iceberg_table_properties(my_datalake.default.write_modes_transactions,
     {'write.delete.mode': 'copy-on-write'});
 
-statement error
+query I
 DELETE FROM my_datalake.default.write_modes_transactions WHERE id = 1;
 ----
-<REGEX>:.*Not implemented Error.*write.delete.mode.*copy-on-write.*
+1
+
+query I
+SELECT id FROM my_datalake.default.write_modes_transactions ORDER BY id;
+----
+2
 
 statement ok
 ROLLBACK;
 
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.write_modes_transactions) WHERE content = 'POSITION_DELETES';
+----
+0
+
 # Append-only writes remain allowed after an uncommitted change to all three modes.
-# A subsequent modifying MERGE is refused, including its insert action.
+# A subsequent modifying MERGE then rewrites the data file and appends its insert, until the rollback.
 
 statement ok
 BEGIN;
@@ -93,12 +110,21 @@ SELECT id, v FROM my_datalake.default.write_modes_transactions ORDER BY id;
 3	c
 4	d
 
-statement error
+query I
 MERGE INTO my_datalake.default.write_modes_transactions AS t USING (VALUES (2, 'z'), (5, 'e')) AS s(id, v) ON t.id = s.id
 WHEN MATCHED THEN UPDATE SET v = s.v
 WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
 ----
-<REGEX>:.*Not implemented Error.*write.merge.mode.*copy-on-write.*
+2
+
+query II
+SELECT id, v FROM my_datalake.default.write_modes_transactions ORDER BY id;
+----
+1	a
+2	z
+3	c
+4	d
+5	e
 
 statement ok
 ROLLBACK;
