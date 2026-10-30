@@ -1,0 +1,97 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_in_transaction.test
+# description: Data files replaced by iceberg_rewrite_data_files are hidden from later statements in the same transaction
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SNAPSHOT_HISTORY_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.rewrite_in_transaction;
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_in_transaction (id INTEGER, v INTEGER) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_in_transaction VALUES (1, 0), (2, 0);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_in_transaction VALUES (3, 0), (4, 0);
+
+statement ok
+BEGIN;
+
+query IIIII
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_in_transaction', rewrite_all => true);
+----
+2	1	<REGEX>:[1-9][0-9]*	0	0
+
+# The replaced files must not be counted or scanned next to their replacement
+query I
+SELECT count(*) FROM my_datalake.default.rewrite_in_transaction;
+----
+4
+
+query II
+SELECT id, v FROM my_datalake.default.rewrite_in_transaction ORDER BY id;
+----
+1	0
+2	0
+3	0
+4	0
+
+statement ok
+UPDATE my_datalake.default.rewrite_in_transaction SET v = 9 WHERE id = 2;
+
+query II
+SELECT id, v FROM my_datalake.default.rewrite_in_transaction ORDER BY id;
+----
+1	0
+2	9
+3	0
+4	0
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_in_transaction SELECT id + 10, v FROM my_datalake.default.rewrite_in_transaction;
+
+query I
+SELECT count(*) FROM my_datalake.default.rewrite_in_transaction;
+----
+8
+
+statement ok
+COMMIT;
+
+query II
+SELECT id, v FROM my_datalake.default.rewrite_in_transaction ORDER BY id;
+----
+1	0
+2	9
+3	0
+4	0
+11	0
+12	9
+13	0
+14	0
+
+query IT
+SELECT sequence_number, operation FROM iceberg_snapshots(my_datalake.default.rewrite_in_transaction)
+ORDER BY sequence_number;
+----
+1	append
+2	append
+3	replace
+4	overwrite
+5	append
+
+# The compacted file, the UPDATE's file and the INSERT's file; the two replaced files are not live
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.rewrite_in_transaction)
+WHERE content = 'DATA' AND status <> 'DELETED';
+----
+3
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_in_transaction;
