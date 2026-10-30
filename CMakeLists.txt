@@ -64,3 +64,14 @@ install(
   EXPORT "${DUCKDB_EXPORT_SET}"
   LIBRARY DESTINATION "${INSTALL_LIB_DIR}"
   ARCHIVE DESTINATION "${INSTALL_LIB_DIR}")
+
+# The IcebergFileCredentialsCallback the file credentials tests under
+# test/sql/local/native_catalog load with 'require iceberg_test_credentials'.
+# Test-only, so linked into unittest alone; it must share a binary with this
+# extension, so its own CMakeLists.txt links it only when the extension is
+# linked.
+if(BUILD_UNITTESTS
+   AND NOT CLANG_TIDY
+   AND DUCKDB_EXTENSION_ICEBERG_SHOULD_BUILD)
+  add_subdirectory(test/extension/iceberg_test_credentials)
+endif()

@@ -9,6 +9,7 @@
 #include "planning/scan_plan/iceberg_scan_planner.hpp"
 #include "function/scan_planning/iceberg_scan_task_codec.hpp"
 #include "function/scan_planning/iceberg_row_filter.hpp"
+#include "catalog/rest/iceberg_file_credentials.hpp"
 
 namespace duckdb {
 
@@ -112,6 +113,12 @@ static unique_ptr<FunctionData> IcebergScanPlanBind(ClientContext &context, Tabl
 		}
 		table_entry = &table.Cast<IcebergTableSchemaVersion>();
 		auto &metadata = table_entry->table_info.table_metadata;
+		if (!IcebergFileCredentialsCallback::Get(context, table_entry->table_info).empty()) {
+			// a scan task names its files by path, so iceberg_scan_tasks would open them with the secret matched to it
+			throw InvalidInputException("iceberg_scan_plan is not supported for table '%s', whose files are read with "
+			                            "file credentials; query the table directly",
+			                            input_string);
+		}
 		auto snapshot = metadata.GetSnapshot(*options.snapshot_lookup);
 		auto &schema = metadata.GetSchemaFromId(snapshot.schema_id);
 		auto &fs = FileSystem::GetFileSystem(context);

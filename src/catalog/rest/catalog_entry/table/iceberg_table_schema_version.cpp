@@ -25,6 +25,7 @@
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "common/iceberg_default.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
+#include "catalog/rest/iceberg_file_credentials.hpp"
 
 namespace duckdb {
 class OAuth2Authorization;
@@ -84,8 +85,19 @@ TableFunction IcebergTableSchemaVersion::GetScanFunction(ClientContext &context,
 	snapshot_info.schema_id = schema_id;
 
 	auto &fs = FileSystem::GetFileSystem(context);
-	auto scan_info =
-	    make_shared_ptr<IcebergScanInfo>(metadata.GetMetadataPath(fs), metadata, snapshot_info, iceberg_schema);
+	shared_ptr<IcebergScanInfo> scan_info;
+	auto file_secret = IcebergFileCredentialsCallback::Get(context, table_info);
+	if (!file_secret.empty()) {
+		// the scan's own copy of the metadata carries the file secret: the table's is shared with other connections
+		auto scan_metadata = make_uniq<IcebergScanTemporaryData>(metadata.Copy());
+		scan_metadata->metadata.SetFileSecret(std::move(file_secret));
+		auto &scan_schema = scan_metadata->metadata.GetSchemaFromId(schema_id);
+		scan_info = make_shared_ptr<IcebergScanInfo>(metadata.GetMetadataPath(fs), std::move(scan_metadata),
+		                                             snapshot_info, scan_schema);
+	} else {
+		scan_info =
+		    make_shared_ptr<IcebergScanInfo>(metadata.GetMetadataPath(fs), metadata, snapshot_info, iceberg_schema);
+	}
 	if (table_info.transaction_data && snapshot_lookup.IsLatest()) {
 		scan_info->transaction_data = table_info.transaction_data.get();
 	}

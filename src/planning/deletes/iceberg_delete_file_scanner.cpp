@@ -66,7 +66,8 @@ static void ScanPuffinFile(const IcebergDeleteExecutionContext &context, const I
 
 	FileOpenFlags flags = FileFlags::FILE_FLAGS_READ;
 	flags.SetCachingMode(CachingMode::CACHE_REMOTE_ONLY);
-	auto file_handle = context.fs.OpenFile(puffin_path, flags);
+	auto puffin_file = OpenFileInfo(puffin_path).WithFileSecret(context.metadata.file_secret);
+	auto file_handle = context.fs.OpenFile(puffin_file, flags);
 	if (!data_file.content_offset) {
 		throw InvalidConfigurationException("Puffin delete file is missing 'content_offset");
 	}
@@ -278,6 +279,7 @@ static void ScanParquetDeleteFiles(const IcebergDeleteExecutionContext &context,
 		delete_file_infos.emplace_back(delete_file_path);
 		auto &file_info = delete_file_infos.back();
 		file_info.extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
+		context.metadata.ApplyFileSecret(file_info);
 		file_info.extended_info->options["file_size"] = Value::UBIGINT(data_file.file_size_in_bytes);
 		file_info.extended_info->options["validate_external_file_cache"] = Value::BOOLEAN(false);
 		file_info.extended_info->options["etag"] = Value("");
