@@ -62,7 +62,8 @@
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/partitioning/test_partitioning_pushdown_bucket.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_data_manifest_late_materialization.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/partitioned_reads/test_in_filter_partition_pruning.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/test_requests_to_partitioned_table.test"
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/test_requests_to_partitioned_table.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_merge_append_no_manifest_reads.test"
 			]
 		}
 	]

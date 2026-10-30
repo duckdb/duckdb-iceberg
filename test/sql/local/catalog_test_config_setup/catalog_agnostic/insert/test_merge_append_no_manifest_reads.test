@@ -6,6 +6,10 @@ require-env CATALOG_TEST_CONFIG_SETUP
 
 include test/sql/init_requires
 
+# No cached manifest, so every manifest the commit loads is a GET in the HTTP log
+statement ok
+set enable_external_file_cache=false;
+
 statement ok
 drop table if exists my_datalake.default.no_manifest_reads;
 
@@ -18,9 +22,6 @@ statement ok
 insert into my_datalake.default.no_manifest_reads select range from range(10);
 
 endloop
-
-# A fresh database, so no manifest is cached
-restart
 
 statement ok
 CALL enable_logging('HTTP');
@@ -43,3 +44,6 @@ select count(*) from my_datalake.default.no_manifest_reads;
 
 statement ok
 drop table my_datalake.default.no_manifest_reads;
+
+statement ok
+reset enable_external_file_cache;
