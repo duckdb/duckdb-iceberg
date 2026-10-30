@@ -1,0 +1,116 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_after_pending_changes.test
+# description: iceberg_rewrite_data_files is refused when the transaction already changed the table's files; a rewrite first, after a metadata change, or in its own transaction still works
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.rewrite_pending;
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_pending (id INTEGER, v INTEGER) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_pending VALUES (1, 0), (2, 0);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_pending VALUES (3, 0), (4, 0);
+
+# Two rewrites in one transaction: the second would rewrite the same files again and double every row.
+statement ok
+BEGIN;
+
+statement ok
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_pending', rewrite_all = true);
+
+statement error
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_pending', rewrite_all = true);
+----
+already has data changes in this transaction
+
+statement ok
+ROLLBACK;
+
+# A rewrite after DML on the table in the same transaction is refused the same way.
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_pending VALUES (5, 0);
+
+statement error
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_pending', rewrite_all = true);
+----
+already has data changes in this transaction
+
+statement ok
+ROLLBACK;
+
+# A metadata-only change (schema, properties) doesn't touch the files, so a rewrite after it is fine.
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.rewrite_pending ADD COLUMN w INTEGER;
+
+query I
+SELECT rewritten_data_files_count FROM iceberg_rewrite_data_files('my_datalake.default.rewrite_pending', rewrite_all = true);
+----
+2
+
+statement ok
+ROLLBACK;
+
+# Nothing of the above was committed.
+query II
+SELECT count(*), sum(v) FROM my_datalake.default.rewrite_pending;
+----
+4	0
+
+# Pending changes to another table don't block the rewrite.
+statement ok
+CREATE TABLE my_datalake.default.rewrite_pending_other (id INTEGER) WITH ('format-version' = '2');
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_pending_other VALUES (1);
+
+query I
+SELECT rewritten_data_files_count FROM iceberg_rewrite_data_files('my_datalake.default.rewrite_pending', rewrite_all = true);
+----
+2
+
+statement ok
+COMMIT;
+
+query I
+SELECT count(*) FROM my_datalake.default.rewrite_pending;
+----
+4
+
+query I
+SELECT count(*) FROM my_datalake.default.rewrite_pending_other;
+----
+1
+
+# Outside a transaction block each rewrite commits on its own, so a second one is allowed; with rewrite_all it
+# rewrites the one compacted file again.
+query I
+SELECT rewritten_data_files_count FROM iceberg_rewrite_data_files('my_datalake.default.rewrite_pending', rewrite_all = true);
+----
+1
+
+query I
+SELECT count(*) FROM my_datalake.default.rewrite_pending;
+----
+4
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_pending;
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_pending_other;
