@@ -66,7 +66,8 @@
 		{
 			"reason": "Nessie ignores the requested 'format-version' on CREATE TABLE and creates the table as V2, so V1 tables cannot be created",
 			"paths": [
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/test_v1_unsupported_writes.test"
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/test_v1_unsupported_writes.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_manifests_v1.test"
 			]
 		},
 		{

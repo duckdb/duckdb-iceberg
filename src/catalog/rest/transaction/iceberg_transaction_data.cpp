@@ -226,6 +226,24 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 	AddSnapshotUpdate(std::move(add_snapshot), std::move(altered_manifests), merge_action);
 }
 
+RewriteManifestsResult IcebergTransactionData::AddRewriteManifests(const RewriteManifestsSpec &spec) {
+	lock_guard<mutex> guard(lock);
+	//! The plan is made against the base manifest list; data changes staged earlier would not be part of it.
+	if (!alters.empty()) {
+		throw NotImplementedException(
+		    "iceberg_rewrite_manifests: table '%s' already has data changes in this transaction; commit them first",
+		    table_info.name);
+	}
+	CacheExistingManifestList(guard, table_info.table_metadata);
+	auto planned = PlanRewriteManifests(existing_manifest_list, spec);
+	if (planned.rewritten_manifests_count == 0) {
+		return planned;
+	}
+	AddSnapshotUpdate(make_uniq<IcebergRewriteManifestsSnapshot>(table_info, spec, planned), IcebergManifestDeletes(),
+	                  false);
+	return planned;
+}
+
 void IcebergTransactionData::AddPendingDeleteManifests(IcebergAddSnapshot &add_snapshot,
                                                        partitioned_manifest_entry_map_t &&delete_files) {
 	auto &table_metadata = table_info.table_metadata;

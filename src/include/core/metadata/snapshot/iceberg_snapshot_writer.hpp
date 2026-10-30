@@ -39,6 +39,7 @@ public:
 	                                                  optional<int64_t> first_row_id);
 	void RemoveManifestEntry(const IcebergManifestEntry &entry);
 	void SetTotalFilesSize(int64_t total_files_size);
+	void SetManifestRewriteCounts(idx_t created, idx_t kept, idx_t replaced);
 
 private:
 	//! Preserve the content's schema and spec, but serialize new manifests in the target table's format.
