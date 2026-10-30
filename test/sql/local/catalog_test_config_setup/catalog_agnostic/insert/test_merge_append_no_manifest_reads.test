@@ -1,0 +1,49 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_merge_append_no_manifest_reads.test
+# description: A commit that merges no manifests must not read the existing manifests (#1628)
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+# No cached manifest, so every manifest the commit loads is a GET in the HTTP log
+statement ok
+set enable_external_file_cache=false;
+
+statement ok
+drop table if exists my_datalake.default.no_manifest_reads;
+
+statement ok
+create table my_datalake.default.no_manifest_reads (v BIGINT);
+
+loop i 0 5
+
+statement ok
+insert into my_datalake.default.no_manifest_reads select range from range(10);
+
+endloop
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+insert into my_datalake.default.no_manifest_reads select range from range(10);
+
+# 5 manifests stay below the default commit.manifest.min-count-to-merge (100): none of them is read
+query I
+SELECT count(*)
+FROM duckdb_logs_parsed('HTTP')
+WHERE request.type = 'GET' AND regexp_matches(request.url, '-m[0-9]+\.avro');
+----
+0
+
+query I
+select count(*) from my_datalake.default.no_manifest_reads;
+----
+60
+
+statement ok
+drop table my_datalake.default.no_manifest_reads;
+
+statement ok
+reset enable_external_file_cache;
