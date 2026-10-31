@@ -1153,6 +1153,11 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::LookupEntry(CatalogTransaction tr
 		if (view_entry) {
 			return view_entry;
 		}
+		// a schema created in this transaction is not on the server until commit
+		auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
+		if (iceberg_transaction.created_schemas.Contains(name.GetIdentifierName())) {
+			return nullptr;
+		}
 		// verify the schema exists
 		if (!IRCAPI::VerifySchemaExistence(context, ic_catalog, name.GetIdentifierName())) {
 			// set exists to false here
