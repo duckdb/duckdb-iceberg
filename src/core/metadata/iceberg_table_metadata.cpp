@@ -598,6 +598,10 @@ string IcebergTableMetadata::GetTableProperty(string property_string) const {
 	return "";
 }
 
+bool IcebergTableMetadata::UsesCopyOnWrite(const string &write_mode_property) const {
+	return StringUtil::CIEquals(GetTableProperty(write_mode_property), "copy-on-write");
+}
+
 bool IcebergTableMetadata::AllowsMergeOnRead(const string &write_mode_property) const {
 	auto mode = GetTableProperty(write_mode_property);
 	// if unset or merge-on-read, it supports positional deletes

@@ -1,5 +1,5 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/table_properties/test_write_mode_properties.test
-# description: Copy-on-write modes reject UPDATE, DELETE and modifying MERGE actions while allowing appends
+# description: Copy-on-write modes reject modifying MERGE actions while allowing appends
 # group: [table_properties]
 
 require-env CATALOG_TEST_CONFIG_SETUP
@@ -17,21 +17,12 @@ CREATE TABLE my_datalake.default.write_modes (id INTEGER, v VARCHAR) WITH ('form
 statement ok
 INSERT INTO my_datalake.default.write_modes VALUES (1, 'a'), (2, 'b'), (3, 'c');
 
-# UPDATE and DELETE are refused when their respective modes are copy-on-write
+# A copy-on-write UPDATE or DELETE on a v2 table rewrites the matched data files instead of being refused;
+# test_copy_on_write_update.test and test_copy_on_write_delete.test cover them.
 
 statement ok
 CALL set_iceberg_table_properties(my_datalake.default.write_modes,
     {'write.update.mode': 'copy-on-write', 'write.delete.mode': 'copy-on-write'});
-
-statement error
-DELETE FROM my_datalake.default.write_modes WHERE id = 2;
-----
-<REGEX>:.*Not implemented Error.*write.delete.mode.*copy-on-write.*
-
-statement error
-UPDATE my_datalake.default.write_modes SET v = 'z' WHERE id = 2;
-----
-<REGEX>:.*Not implemented Error.*write.update.mode.*copy-on-write.*
 
 # MERGE with an UPDATE or DELETE action is refused when write.merge.mode is copy-on-write
 
@@ -124,16 +115,6 @@ MERGE INTO my_datalake.default.write_modes AS t USING (SELECT 3 AS id) AS s ON t
 WHEN MATCHED THEN DELETE;
 ----
 1
-
-statement error
-DELETE FROM my_datalake.default.write_modes WHERE id = 1;
-----
-<REGEX>:.*Not implemented Error.*write.delete.mode.*copy-on-write.*
-
-statement error
-UPDATE my_datalake.default.write_modes SET v = 'y' WHERE id = 1;
-----
-<REGEX>:.*Not implemented Error.*write.update.mode.*copy-on-write.*
 
 query II
 SELECT id, v FROM my_datalake.default.write_modes ORDER BY id;

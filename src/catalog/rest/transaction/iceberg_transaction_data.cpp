@@ -208,6 +208,7 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 	switch (operation) {
 	case IcebergSnapshotOperationType::APPEND:
 	case IcebergSnapshotOperationType::REPLACE:
+	case IcebergSnapshotOperationType::OVERWRITE:
 		//! This helper currently writes DATA manifest entries; REPLACE itself is not limited to data files.
 		manifest_content_type = IcebergManifestContentType::DATA;
 		break;

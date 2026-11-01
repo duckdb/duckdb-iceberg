@@ -8,6 +8,7 @@
 #include "duckdb/execution/operator/scan/physical_table_scan.hpp"
 
 #include "execution/operator/iceberg_delete.hpp"
+#include "execution/operator/iceberg_copy_on_write_delete.hpp"
 #include "execution/operator/iceberg_insert.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
@@ -217,6 +218,26 @@ InsertionOrderPreservingMap<string> IcebergUpdate::ParamsToString() const {
 	InsertionOrderPreservingMap<string> result;
 	result["Table Name"] = table.name.GetIdentifierName();
 	return result;
+}
+
+PhysicalOperator &IcebergCatalog::PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner,
+                                             LogicalUpdate &op) {
+	auto &irc_transaction = IcebergTransaction::Get(context, *this);
+	//! A MERGE plans its update action below, which applies write.merge.mode instead
+	if (!op.return_chunk && !irc_transaction.planning_merge_into) {
+		auto &table_entry = op.table.Cast<IcebergTableSchemaVersion>();
+		auto &alter = irc_transaction.GetOrCreateAlter();
+		auto &updated_table = alter.GetOrInitializeTable(table_entry.table_info);
+		auto &table_metadata = updated_table.table_metadata;
+		//! As for DELETE, a V3 table continues below, where a copy-on-write mode is refused as before
+		if (table_metadata.iceberg_version == 2 && table_metadata.UsesCopyOnWrite(WRITE_UPDATE_MODE)) {
+			table_entry.table_info.VerifyWriteEncryptionSupported();
+			table_entry.PrepareIcebergScanFromEntry(context);
+			auto &updated_table_entry = *updated_table.schema_versions[table_metadata.GetLatestSchema().schema_id];
+			return IcebergCopyOnWriteDeleteFilter::PlanUpdate(context, planner, op, updated_table_entry);
+		}
+	}
+	return Catalog::PlanUpdate(context, planner, op);
 }
 
 PhysicalOperator &IcebergCatalog::PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
