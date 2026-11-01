@@ -187,6 +187,47 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 	return result;
 }
 
+static void ThrowSchemaNotEmpty(const string &schema_name, const string &entry_type, const string &entry_name) {
+	throw DependencyException("Cannot drop schema \"%s\" because it is not empty: it contains %s \"%s\"", schema_name,
+	                          entry_type, entry_name);
+}
+
+//! Some catalogs (e.g. AWS Glue) drop a non-empty namespace together with its tables instead of refusing it
+static void VerifySchemaIsEmpty(ClientContext &context, IcebergCatalog &catalog, const string &schema_name) {
+	auto namespace_items = IRCAPI::ParseSchemaName(schema_name);
+	auto &transaction = IcebergTransaction::Get(context, catalog);
+
+	auto tables = IcebergListTablesRequest(namespace_items, false).Execute(context, catalog);
+	if (!tables) {
+		throw CatalogException("Cannot drop schema \"%s\": its tables could not be listed to verify that it is empty",
+		                       schema_name);
+	}
+	for (auto &table : *tables) {
+		auto state = transaction.GetLatestTableState(IcebergTable::GetTableKey(catalog, namespace_items, table.name));
+		if (!state || state->IsAlive()) {
+			ThrowSchemaNotEmpty(schema_name, "table", table.name);
+		}
+	}
+	for (auto &entry : transaction.current_table_data) {
+		auto &state = entry.second;
+		if (state.IsAlive() && state.GetInfo().schema.namespace_items == namespace_items) {
+			ThrowSchemaNotEmpty(schema_name, "table", state.GetInfo().name);
+		}
+	}
+
+	if (!catalog.supported_urls.count("GET /v1/{prefix}/namespaces/{namespace}/views")) {
+		return;
+	}
+	auto views = IcebergListViewsRequest(namespace_items).Execute(context, catalog);
+	if (!views) {
+		throw CatalogException("Cannot drop schema \"%s\": its views could not be listed to verify that it is empty",
+		                       schema_name);
+	}
+	if (!views->empty()) {
+		ThrowSchemaNotEmpty(schema_name, "view", views->front().name);
+	}
+}
+
 void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 	if (info.cascade) {
 		throw NotImplementedException(
@@ -206,6 +247,8 @@ void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 		}
 		throw CatalogException("Schema with name \"%s\" does not exist", info.GetQualifiedName().Name());
 	}
+
+	VerifySchemaIsEmpty(context, *this, info.GetQualifiedName().Name().GetIdentifierName());
 
 	// Schema exists - defer the server deletion to commit
 	auto &iceberg_transaction = IcebergTransaction::Get(context, *this);

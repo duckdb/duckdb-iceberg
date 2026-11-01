@@ -46,7 +46,7 @@ my_table
 statement error
 drop schema my_datalake.new_schema_1;
 ----
-<REGEX>:.*[N|n]amespace.*is not empty.*
+Dependency Error: Cannot drop schema "new_schema_1" because it is not empty
 
 statement ok
 drop table my_datalake.new_schema_1.my_table;
