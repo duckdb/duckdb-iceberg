@@ -4,10 +4,51 @@
 #include "duckdb/execution/physical_plan_generator.hpp"
 #include "duckdb/execution/operator/persistent/physical_merge_into.hpp"
 #include "duckdb/planner/operator/logical_merge_into.hpp"
+#include "execution/operator/iceberg_copy_on_write_delete.hpp"
 #include "execution/operator/iceberg_delete.hpp"
 #include "execution/operator/iceberg_insert.hpp"
 
 namespace duckdb {
+
+//! A copy-on-write MERGE plans its actions as a merge-on-read MERGE does, except that its UPDATE and DELETE actions
+//! hand the rows they remove to a rewrite that runs after the MERGE, instead of writing delete files. That rewrite
+//! replaces the matched data files in the snapshot the MERGE's own data files are staged in.
+PhysicalOperator &IcebergCatalog::PlanCopyOnWriteMergeInto(ClientContext &context, PhysicalPlanGenerator &planner,
+                                                           LogicalMergeInto &op, PhysicalOperator &plan,
+                                                           IcebergTableSchemaVersion &table) {
+	auto &irc_transaction = IcebergTransaction::Get(context, *this);
+	op.table.Cast<IcebergTableSchemaVersion>().PrepareIcebergScanFromEntry(context);
+	irc_transaction.planning_merge_into = true;
+	optional_ptr<PhysicalOperator> merge;
+	try {
+		merge = Catalog::PlanMergeInto(context, planner, op, plan);
+		irc_transaction.planning_merge_into = false;
+	} catch (...) {
+		irc_transaction.planning_merge_into = false;
+		throw;
+	}
+	auto merge_rows = make_shared_ptr<IcebergCopyOnWriteMergeRows>();
+	for (auto &action : merge->Cast<PhysicalMergeInto>().actions) {
+		switch (action->action_type) {
+		case MergeActionType::MERGE_INSERT:
+			action->op->Cast<IcebergInsert>().merge_action = true;
+			break;
+		case MergeActionType::MERGE_UPDATE: {
+			// The updated rows are written as new files; the rows they replace are dropped by the rewrite
+			auto &insert = action->op->Cast<IcebergInsert>();
+			insert.merge_action = true;
+			insert.update_delete_op->Cast<IcebergDelete>().copy_on_write_merge_rows = merge_rows;
+			break;
+		}
+		case MergeActionType::MERGE_DELETE:
+			action->op->Cast<IcebergDelete>().copy_on_write_merge_rows = merge_rows;
+			break;
+		default:
+			break;
+		}
+	}
+	return IcebergCopyOnWriteDeleteFilter::PlanMerge(context, planner, table, *merge, std::move(merge_rows));
+}
 
 PhysicalOperator &IcebergCatalog::PlanMergeInto(ClientContext &context, PhysicalPlanGenerator &planner,
                                                 LogicalMergeInto &op, PhysicalOperator &plan) {
@@ -27,7 +68,14 @@ PhysicalOperator &IcebergCatalog::PlanMergeInto(ClientContext &context, Physical
 	if (update_delete_count > 0) {
 		auto &table_entry = op.table.Cast<IcebergTableSchemaVersion>();
 		auto &updated_table = irc_transaction.GetOrCreateAlter().GetOrInitializeTable(table_entry.table_info);
-		VerifyMergeOnRead(updated_table.table_metadata, table_entry.name.GetIdentifierName(), WRITE_MERGE_MODE);
+		auto &table_metadata = updated_table.table_metadata;
+		//! As for DELETE and UPDATE, a V3 table refuses a copy-on-write mode below
+		if (table_metadata.iceberg_version == 2 && table_metadata.UsesCopyOnWrite(WRITE_MERGE_MODE) &&
+		    !op.return_chunk) {
+			auto &updated_table_entry = *updated_table.schema_versions[table_metadata.GetLatestSchema().schema_id];
+			return PlanCopyOnWriteMergeInto(context, planner, op, plan, updated_table_entry);
+		}
+		VerifyMergeOnRead(table_metadata, table_entry.name.GetIdentifierName(), WRITE_MERGE_MODE);
 	}
 	irc_transaction.planning_merge_into = true;
 	try {

@@ -117,6 +117,8 @@ public:
 
 	const case_insensitive_map_t<string> &GetTableProperties() const;
 	string GetTableProperty(string property_string) const;
+	//! Whether the given write mode property is explicitly set to copy-on-write
+	bool UsesCopyOnWrite(const string &write_mode_property) const;
 	//! Whether the given write mode property (write.delete.mode, write.update.mode or write.merge.mode) allows
 	//! writing merge-on-read delete files
 	bool AllowsMergeOnRead(const string &write_mode_property) const;
