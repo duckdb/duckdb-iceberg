@@ -55,5 +55,20 @@ CALL remove_iceberg_schema_properties(my_datalake.myschema123, ['non_exisiting_p
 ----
 3
 
+query I
+CALL set_iceberg_schema_properties(my_datalake.myschema123, {'myprop2': '2', 'myprop4': '4'});
+----
+5
+
+query I
+CALL remove_iceberg_schema_properties(my_datalake.myschema123, ['myprop1', 'myprop3', 'myprop4']);
+----
+2
+
+query II
+FROM iceberg_schema_properties(my_datalake.myschema123) WHERE key != 'location' ORDER BY ALL;
+----
+myprop2	2
+
 statement ok
 DROP SCHEMA my_datalake.myschema123;
