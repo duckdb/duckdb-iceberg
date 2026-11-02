@@ -81,7 +81,7 @@ bool IcebergSchemaEntry::HandleCreateConflict(CatalogTransaction &transaction, C
 optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateTable(CatalogTransaction &transaction, ClientContext &context,
                                                            BoundCreateTableInfo &info) {
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
-	if (!exists && iceberg_transaction.created_schemas.find(name) == iceberg_transaction.created_schemas.end()) {
+	if (!exists && !iceberg_transaction.created_schemas.Contains(name)) {
 		throw InvalidInputException("Schema with name \"%s\" does not exist", name);
 	}
 	auto &base_info = info.Base();
@@ -754,6 +754,11 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::LookupEntry(CatalogTransaction tr
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto table_entry = GetCatalogSet(type).GetEntry(context, lookup_info);
 	if (!table_entry) {
+		// a schema created in this transaction is not on the server until commit
+		auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
+		if (iceberg_transaction.created_schemas.Contains(name)) {
+			return nullptr;
+		}
 		// verify the schema exists
 		if (!IRCAPI::VerifySchemaExistence(context, ic_catalog, name)) {
 			// set exists to false here

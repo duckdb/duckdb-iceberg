@@ -3,6 +3,7 @@
 
 #include "duckdb/transaction/transaction.hpp"
 #include "catalog/rest/iceberg_schema_set.hpp"
+#include "catalog/rest/transaction/iceberg_pending_schema_creates.hpp"
 
 namespace duckdb {
 class IcebergCatalog;
@@ -112,7 +113,7 @@ public:
 	//! The latest state of a table (either points into 'transaction_updates' or 'tables')
 	case_insensitive_map_t<IcebergTransactionTableState> current_table_data;
 
-	unordered_set<string> created_schemas;
+	IcebergPendingSchemaCreates created_schemas;
 	unordered_set<string> deleted_schemas;
 
 	bool called_list_schemas = false;
