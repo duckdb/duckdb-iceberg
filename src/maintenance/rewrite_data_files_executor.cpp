@@ -57,19 +57,6 @@ void CleanupRewriteFiles(ClientContext &context, const IcebergTable &table_info,
 	}
 }
 
-void VerifyCandidatesNotReplaced(ClientContext &context, const RewritePlan &plan) {
-	auto transaction_data = GetRewriteTransactionData(context, *plan.table_info);
-	if (!transaction_data) {
-		return;
-	}
-	for (auto &cand : plan.selected_candidates) {
-		if (transaction_data->IsFileInvalidated(cand.file_path)) {
-			throw TransactionException(
-			    "iceberg_rewrite_data_files: data file '%s' was replaced earlier in this transaction", cand.file_path);
-		}
-	}
-}
-
 void CommitRewrite(ClientContext &context, const RewritePlan &plan, RewriteExecutionResult &result) {
 	if (result.rewritten_candidates.empty()) {
 		return;
@@ -81,20 +68,28 @@ void CommitRewrite(ClientContext &context, const RewritePlan &plan, RewriteExecu
 	ValidateRewriteSnapshot(plan, table_info, "commit");
 
 	auto &iceberg_transaction = IcebergTransaction::Get(context, table_info.catalog);
-	//! Rewrites in one statement finalize concurrently: check the candidates and commit as one step
-	static mutex commit_lock;
-	lock_guard<mutex> guard(commit_lock);
+	//! Rewrites in one statement finish concurrently: check the candidates and commit as one step
+	lock_guard<mutex> guard(iceberg_transaction.rewrite_commit_lock);
 	ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTable &tbl) {
 		ValidateRewriteSnapshot(plan, tbl, "transaction commit");
 		auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
 		IcebergManifestDeletes deletes;
 		for (auto &cand : result.rewritten_candidates) {
 			if (transaction_data.IsFileInvalidated(cand.file_path)) {
-				throw TransactionException(
-				    "iceberg_rewrite_data_files: data file '%s' was replaced earlier in this transaction",
-				    cand.file_path);
+				throw CatalogException("iceberg_rewrite_data_files: data file '%s' was replaced by another rewrite in "
+				                       "this transaction or statement",
+				                       cand.file_path);
 			}
 			deletes.InvalidateFile(cand.file_path);
+		}
+		//! A file can only have no live row when a delete applies to it: otherwise the scan missed its rows
+		if (result.new_entries.empty()) {
+			for (auto &cand : result.rewritten_candidates) {
+				if (!cand.may_have_deletes) {
+					throw InternalException(
+					    "iceberg_rewrite_data_files: COPY returned no written files for selected candidates");
+				}
+			}
 		}
 		transaction_data.AddSnapshot(IcebergSnapshotOperationType::REPLACE, std::move(result.new_entries),
 		                             std::move(deletes));

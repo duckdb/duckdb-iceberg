@@ -78,12 +78,93 @@ select * from iceberg_rewrite_data_files('my_datalake.default.rewrite_repeated',
 union all
 select * from iceberg_rewrite_data_files('my_datalake.default.rewrite_repeated', rewrite_all := true);
 ----
-<REGEX>:.*was replaced earlier in this transaction.*
+<REGEX>:.*was replaced by another rewrite in this transaction or statement.*
 
 query I
 select list(id order by id) from my_datalake.default.rewrite_repeated;
 ----
 [1, 2, 3, 4, 5, 6]
 
+# the same, in an explicit transaction after a write to the table
+statement ok
+BEGIN;
+
+statement ok
+insert into my_datalake.default.rewrite_repeated values (7);
+
+statement error
+select * from iceberg_rewrite_data_files('my_datalake.default.rewrite_repeated', rewrite_all := true)
+union all
+select * from iceberg_rewrite_data_files('my_datalake.default.rewrite_repeated', rewrite_all := true);
+----
+<REGEX>:.*was replaced by another rewrite in this transaction or statement.*
+
+statement ok
+ROLLBACK;
+
+query I
+select list(id order by id) from my_datalake.default.rewrite_repeated;
+----
+[1, 2, 3, 4, 5, 6]
+
+# two rewrites in one statement whose files overlap without being the same
+statement ok
+insert into my_datalake.default.rewrite_repeated values (7);
+
+statement ok
+insert into my_datalake.default.rewrite_repeated values (8);
+
+statement error
+select * from iceberg_rewrite_data_files('my_datalake.default.rewrite_repeated', rewrite_all := true, max_files_to_rewrite := 1)
+union all
+select * from iceberg_rewrite_data_files('my_datalake.default.rewrite_repeated', rewrite_all := true);
+----
+<REGEX>:.*was replaced by another rewrite in this transaction or statement.*
+
+query I
+select list(id order by id) from my_datalake.default.rewrite_repeated;
+----
+[1, 2, 3, 4, 5, 6, 7, 8]
+
 statement ok
 drop table my_datalake.default.rewrite_repeated;
+
+# a partitioned table: a second rewrite in the same transaction finds nothing left to rewrite
+statement ok
+drop table if exists my_datalake.default.rewrite_repeated_partitioned;
+
+statement ok
+create table my_datalake.default.rewrite_repeated_partitioned (id INTEGER, k VARCHAR) partitioned by (k);
+
+statement ok
+insert into my_datalake.default.rewrite_repeated_partitioned values (1, 'a'), (2, 'b');
+
+statement ok
+insert into my_datalake.default.rewrite_repeated_partitioned values (3, 'a'), (4, 'b');
+
+statement ok
+BEGIN;
+
+query II
+select rewritten_data_files_count, added_data_files_count
+from iceberg_rewrite_data_files('my_datalake.default.rewrite_repeated_partitioned', rewrite_all := true);
+----
+4	2
+
+query II
+select rewritten_data_files_count, added_data_files_count
+from iceberg_rewrite_data_files('my_datalake.default.rewrite_repeated_partitioned', rewrite_all := true);
+----
+0	0
+
+statement ok
+COMMIT;
+
+query II
+select k, list(id order by id) from my_datalake.default.rewrite_repeated_partitioned group by k order by k;
+----
+a	[1, 3]
+b	[2, 4]
+
+statement ok
+drop table my_datalake.default.rewrite_repeated_partitioned;

@@ -31,7 +31,11 @@ public:
 	bool RetryStateMatches(const IcebergTable &table_info) const;
 	//! Whether this transaction stages a DELETE snapshot; gates the commit-retry safety check.
 	bool ContainsDelete() const;
+	//! Whether a statement of this transaction staged a delete or an update of the table's rows
+	bool HasStagedDeletes() const;
+	//! Thread-safe: a rewrite may commit while another statement's scan of the same transaction reads these
 	bool IsFileInvalidated(const IcebergFileIdentity &file) const;
+	bool HasInvalidatedFiles() const;
 	shared_ptr<IcebergMergeDeleteCollector> GetMergeDeleteCollector(idx_t action_count);
 	void VerifyMergeDeletesComplete() const;
 
@@ -109,7 +113,7 @@ public:
 	bool assert_schema_id = false;
 	//! Whether this transaction explicitly requires the table to be newly created.
 	bool has_assert_create = false;
-	mutex lock;
+	mutable mutex lock;
 };
 
 } // namespace duckdb

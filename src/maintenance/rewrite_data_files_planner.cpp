@@ -5,6 +5,7 @@
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/value.hpp"
+#include "duckdb/common/unordered_set.hpp"
 
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
@@ -287,6 +288,35 @@ void CollectPartitionedCandidates(std::map<string, RewriteBucket> &per_partition
 	}
 }
 
+//! Mark the candidates a delete may apply to: a live delete file that references the candidate, one that does not
+//! say which data file it applies to, or a delete or update this transaction staged for the table
+void MarkCandidatesWithDeletes(RewritePlan &plan, const vector<IcebergManifestListEntry> &manifest_files,
+                               optional_ptr<const IcebergTransactionData> transaction_data) {
+	bool any_file = transaction_data && transaction_data->HasStagedDeletes();
+	unordered_set<string> referenced_files;
+	for (const auto &list_entry : manifest_files) {
+		if (any_file) {
+			break;
+		}
+		if (list_entry.GetFile().content != IcebergManifestContentType::DELETE || !list_entry.HasManifestEntries()) {
+			continue;
+		}
+		for (const auto &entry : list_entry.GetManifestEntries()) {
+			if (entry.status == IcebergManifestEntryStatusType::DELETED) {
+				continue;
+			}
+			if (!entry.data_file.referenced_data_file) {
+				any_file = true;
+				break;
+			}
+			referenced_files.insert(*entry.data_file.referenced_data_file);
+		}
+	}
+	for (auto &cand : plan.selected_candidates) {
+		cand.may_have_deletes = any_file || referenced_files.count(cand.file_path) > 0;
+	}
+}
+
 } // namespace
 
 optional_ptr<const IcebergTransactionData> GetRewriteTransactionData(ClientContext &context, IcebergTable &table_info) {
@@ -357,11 +387,6 @@ RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input)
 		return plan;
 	}
 
-	for (const auto &list_entry : manifest_files) {
-		if (list_entry.GetFile().content == IcebergManifestContentType::DELETE) {
-			plan.has_delete_files = true;
-		}
-	}
 	auto transaction_data = GetRewriteTransactionData(context, table_info);
 	const bool unpartitioned = !table_metadata.HasPartitionSpec();
 	if (unpartitioned) {
@@ -379,6 +404,7 @@ RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input)
 		                             transaction_data);
 		SelectCandidates(plan, input, per_partition, other_specs);
 	}
+	MarkCandidatesWithDeletes(plan, manifest_files, transaction_data);
 
 	return plan;
 }

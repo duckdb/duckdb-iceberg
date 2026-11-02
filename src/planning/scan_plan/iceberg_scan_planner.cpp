@@ -302,7 +302,7 @@ idx_t IcebergScanPlanner::GetTotalFileCount() const {
 
 bool IcebergScanPlanner::HasInvalidatedFiles() const {
 	auto &transaction_data = shared_state->Configuration().scan_info->transaction_data;
-	return transaction_data && !transaction_data->manifest_deletes.IsEmpty();
+	return transaction_data && transaction_data->HasInvalidatedFiles();
 }
 
 unique_ptr<NodeStatistics> IcebergScanPlanner::GetCardinality() const {

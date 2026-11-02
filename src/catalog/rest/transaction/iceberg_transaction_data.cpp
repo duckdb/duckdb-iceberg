@@ -129,8 +129,28 @@ bool IcebergTransactionData::ContainsDelete() const {
 	return false;
 }
 
+bool IcebergTransactionData::HasStagedDeletes() const {
+	lock_guard<mutex> guard(lock);
+	for (auto &update : updates) {
+		if (update->type != IcebergTableUpdateType::ADD_SNAPSHOT) {
+			continue;
+		}
+		auto operation = update->Cast<IcebergAddSnapshot>().GetOperation();
+		if (operation == IcebergSnapshotOperationType::DELETE || operation == IcebergSnapshotOperationType::OVERWRITE) {
+			return true;
+		}
+	}
+	return false;
+}
+
 bool IcebergTransactionData::IsFileInvalidated(const IcebergFileIdentity &file) const {
+	lock_guard<mutex> guard(lock);
 	return manifest_deletes.IsInvalidated(file);
+}
+
+bool IcebergTransactionData::HasInvalidatedFiles() const {
+	lock_guard<mutex> guard(lock);
+	return !manifest_deletes.IsEmpty();
 }
 
 shared_ptr<IcebergMergeDeleteCollector> IcebergTransactionData::GetMergeDeleteCollector(idx_t action_count) {

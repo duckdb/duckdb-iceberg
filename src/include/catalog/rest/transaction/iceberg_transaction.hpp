@@ -166,6 +166,8 @@ public:
 
 	unordered_set<string> looked_up_entries;
 	mutex lock;
+	//! Rewrites of one statement finish concurrently: each checks its files and commits under this lock
+	mutex rewrite_commit_lock;
 
 	unordered_map<string, SchemaPropertyUpdates> schema_property_updates;
 };

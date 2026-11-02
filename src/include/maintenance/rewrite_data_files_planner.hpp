@@ -20,6 +20,9 @@ struct RewriteCandidate {
 	int64_t file_size_in_bytes = 0;
 	int64_t record_count = 0;
 	vector<IcebergPartitionInfo> partition_info;
+	//! Whether a delete, committed or staged in this transaction, may apply to the file, so that it can have no
+	//! live row
+	bool may_have_deletes = false;
 };
 
 struct RewriteBucket {
@@ -39,8 +42,6 @@ struct RewritePlan {
 	shared_ptr<IcebergTable> table_info;
 	//! Files selected for rewrite after per-partition size / min_input_files gating.
 	vector<RewriteCandidate> selected_candidates;
-	//! Whether the snapshot has delete manifests, the only way a candidate can have no live row
-	bool has_delete_files = false;
 };
 
 struct RewriteDataFilesPlanInput {
