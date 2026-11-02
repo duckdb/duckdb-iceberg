@@ -188,20 +188,19 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 }
 
 static void ThrowSchemaNotEmpty(const string &schema_name, const string &entry_type, const string &entry_name) {
-	throw DependencyException("Cannot drop schema \"%s\" because it is not empty: it contains %s \"%s\"", schema_name,
-	                          entry_type, entry_name);
+	throw DependencyException("Cannot drop schema \"%s\" because it is not empty: it contains %s \"%s\". Drop its "
+	                          "tables and views first",
+	                          schema_name, entry_type, entry_name);
 }
 
 //! Some catalogs (e.g. AWS Glue) drop a non-empty namespace together with its tables instead of refusing it
-static void VerifySchemaIsEmpty(ClientContext &context, IcebergCatalog &catalog, const string &schema_name) {
+void IcebergCatalog::VerifySchemaIsEmpty(ClientContext &context, IcebergCatalog &catalog, const string &schema_name) {
 	auto namespace_items = IRCAPI::ParseSchemaName(schema_name);
 	auto &transaction = IcebergTransaction::Get(context, catalog);
 
+	// refusing to list (401/403) throws here, so the schema is never dropped unchecked
 	auto tables = IcebergListTablesRequest(namespace_items, false).Execute(context, catalog);
-	if (!tables) {
-		throw CatalogException("Cannot drop schema \"%s\": its tables could not be listed to verify that it is empty",
-		                       schema_name);
-	}
+	D_ASSERT(tables);
 	for (auto &table : *tables) {
 		auto state = transaction.GetLatestTableState(IcebergTable::GetTableKey(catalog, namespace_items, table.name));
 		if (!state || state->IsAlive()) {
@@ -215,6 +214,13 @@ static void VerifySchemaIsEmpty(ClientContext &context, IcebergCatalog &catalog,
 		}
 	}
 
+	// views created earlier in the transaction count, and views dropped earlier in it do not
+	for (auto &created : transaction.created_views) {
+		auto &view_name = created.second->GetViewName().GetIdentifierName();
+		if (IcebergTable::GetTableKey(catalog, namespace_items, view_name) == created.first) {
+			ThrowSchemaNotEmpty(schema_name, "view", view_name);
+		}
+	}
 	if (!catalog.supported_urls.count("GET /v1/{prefix}/namespaces/{namespace}/views")) {
 		return;
 	}
@@ -223,8 +229,10 @@ static void VerifySchemaIsEmpty(ClientContext &context, IcebergCatalog &catalog,
 		throw CatalogException("Cannot drop schema \"%s\": its views could not be listed to verify that it is empty",
 		                       schema_name);
 	}
-	if (!views->empty()) {
-		ThrowSchemaNotEmpty(schema_name, "view", views->front().name);
+	for (auto &view : *views) {
+		if (!transaction.deleted_views.count(IcebergTable::GetTableKey(catalog, namespace_items, view.name))) {
+			ThrowSchemaNotEmpty(schema_name, "view", view.name);
+		}
 	}
 }
 

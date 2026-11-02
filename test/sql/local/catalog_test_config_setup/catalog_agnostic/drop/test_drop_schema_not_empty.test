@@ -19,6 +19,12 @@ statement ok
 DROP SCHEMA IF EXISTS my_datalake.drop_schema_pending;
 
 statement ok
+DROP TABLE IF EXISTS my_datalake.drop_schema_raced.t;
+
+statement ok
+DROP SCHEMA IF EXISTS my_datalake.drop_schema_raced;
+
+statement ok
 CREATE SCHEMA my_datalake.drop_schema_not_empty;
 
 statement ok
@@ -98,3 +104,62 @@ statement error
 DROP SCHEMA my_datalake.drop_schema_pending;
 ----
 <REGEX>:.*Catalog Error: Schema with name .*drop_schema_pending.* does not exist.*
+
+# A table renamed in the same transaction still counts, under its new name
+statement ok
+CREATE SCHEMA my_datalake.drop_schema_pending;
+
+statement ok
+CREATE TABLE my_datalake.drop_schema_pending.t (i INTEGER);
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.drop_schema_pending.t RENAME TO renamed;
+
+statement error
+DROP SCHEMA my_datalake.drop_schema_pending;
+----
+Dependency Error: Cannot drop schema "drop_schema_pending" because it is not empty: it contains table "renamed"
+
+statement ok
+ROLLBACK;
+
+statement ok
+DROP TABLE my_datalake.drop_schema_pending.t;
+
+statement ok
+DROP SCHEMA my_datalake.drop_schema_pending;
+
+# A table another connection creates after the schema was dropped is checked for again at commit
+statement ok
+CREATE SCHEMA my_datalake.drop_schema_raced;
+
+statement ok con1
+BEGIN;
+
+statement ok con1
+DROP SCHEMA my_datalake.drop_schema_raced;
+
+statement ok con2
+CREATE TABLE my_datalake.drop_schema_raced.t (i INTEGER);
+
+statement ok con2
+INSERT INTO my_datalake.drop_schema_raced.t VALUES (7);
+
+statement error con1
+COMMIT;
+----
+Failed to commit Iceberg transaction: Cannot drop schema "drop_schema_raced" because it is not empty: it contains table "t"
+
+query I con2
+SELECT i FROM my_datalake.drop_schema_raced.t;
+----
+7
+
+statement ok con2
+DROP TABLE my_datalake.drop_schema_raced.t;
+
+statement ok con2
+DROP SCHEMA my_datalake.drop_schema_raced;

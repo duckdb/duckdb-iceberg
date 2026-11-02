@@ -154,6 +154,9 @@ public:
 		return true;
 	}
 	void DropSchema(ClientContext &context, DropInfo &info) override;
+	//! Throws if the schema still holds a table or a view, as the transaction of `context` sees it. Run when the
+	//! schema is dropped and again before the catalog deletes the namespace at commit.
+	static void VerifySchemaIsEmpty(ClientContext &context, IcebergCatalog &catalog, const string &schema_name);
 	optional_ptr<CatalogEntry> CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) override;
 	void ScanSchemas(ClientContext &context, std::function<void(SchemaCatalogEntry &)> callback) override;
 	IcebergSchemaSet &GetSchemas();

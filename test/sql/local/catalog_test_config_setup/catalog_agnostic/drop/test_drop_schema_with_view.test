@@ -18,6 +18,12 @@ statement ok
 DROP SCHEMA IF EXISTS my_datalake.drop_schema_with_view;
 
 statement ok
+DROP VIEW IF EXISTS my_datalake.drop_schema_view_pending.v;
+
+statement ok
+DROP SCHEMA IF EXISTS my_datalake.drop_schema_view_pending;
+
+statement ok
 CREATE SCHEMA my_datalake.drop_schema_with_view;
 
 statement ok
@@ -32,6 +38,48 @@ query I
 SELECT answer FROM my_datalake.drop_schema_with_view.v;
 ----
 42
+
+# A view dropped earlier in the same transaction does not count. The commit is still refused, since a view
+# change commits on its own, so the view and the schema stay.
+statement ok
+BEGIN;
+
+statement ok
+DROP VIEW my_datalake.drop_schema_with_view.v;
+
+statement ok
+DROP SCHEMA my_datalake.drop_schema_with_view;
+
+statement error
+COMMIT;
+----
+cannot commit view changes atomically with other catalog changes
+
+query I
+SELECT answer FROM my_datalake.drop_schema_with_view.v;
+----
+42
+
+# A view created earlier in the same transaction counts
+statement ok
+CREATE SCHEMA my_datalake.drop_schema_view_pending;
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE VIEW my_datalake.drop_schema_view_pending.v AS SELECT 1 AS one;
+
+statement error
+DROP SCHEMA my_datalake.drop_schema_view_pending;
+----
+Dependency Error: Cannot drop schema "drop_schema_view_pending" because it is not empty: it contains view "v"
+
+statement ok
+ROLLBACK;
+
+statement ok
+DROP SCHEMA my_datalake.drop_schema_view_pending;
 
 statement ok
 DROP VIEW my_datalake.drop_schema_with_view.v;
