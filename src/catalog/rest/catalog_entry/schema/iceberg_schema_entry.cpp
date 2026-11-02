@@ -28,8 +28,10 @@
 #include "catalog/rest/transaction/iceberg_transaction_update.hpp"
 #include "common/iceberg_default.hpp"
 #include "common/iceberg_geography_type.hpp"
+#include "core/metadata/schema/iceberg_field_mapping.hpp"
 #include "iceberg_options.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
+#include "duckdb/logging/logger.hpp"
 
 namespace duckdb {
 
@@ -531,6 +533,32 @@ static void UpdatePerColumnProperties(IcebergTable &updated_table, IcebergTransa
 		}
 	}
 }
+//! The name mapping names the fields of data files that have no field ids, so it follows the schema the way Iceberg
+//! Java keeps it: a renamed field keeps its old name and gets the new one, an added field gets an entry.
+static void UpdateNameMapping(ClientContext &context, IcebergTable &updated_table,
+                              IcebergTransactionData &transaction_data, const unordered_map<int32_t, string> &renamed,
+                              const vector<pair<int32_t, reference<const IcebergColumnDefinition>>> &added) {
+	auto &properties = updated_table.table_metadata.table_properties;
+	auto mapping = properties.find(IcebergFieldMapping::PROPERTY);
+	if (mapping == properties.end()) {
+		return;
+	}
+	auto updated = IcebergFieldMapping::Update(mapping->second, renamed, added);
+	if (!updated) {
+		//! As Iceberg Java, the schema change goes through and the mapping is left as it is
+		DUCKDB_LOG_WARNING(context,
+		                   "Table property '%s' of '%s' is not a valid name mapping, it is not updated for "
+		                   "the schema change: %s",
+		                   IcebergFieldMapping::PROPERTY, updated_table.name, mapping->second);
+		return;
+	}
+	if (*updated == mapping->second) {
+		return;
+	}
+	transaction_data.TableSetProperties({{IcebergFieldMapping::PROPERTY, *updated}});
+	mapping->second = *updated;
+}
+
 //! DuckDB can't read or write geography values, so a change to a geography field, or to a column that holds one, is
 //! refused
 static void ThrowIfGeography(const IcebergTableSchema &schema, const vector<Identifier> &column_path) {
@@ -699,8 +727,11 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 
 		auto new_schema = current_schema.Copy();
 		new_schema->columns.push_back(std::move(new_iceberg_column));
+		auto &added_column = *new_schema->columns.back();
 
 		IntroduceNewSchema(updated_table, transaction_data, new_schema);
+		UpdateNameMapping(context, updated_table, transaction_data, {},
+		                  {{IcebergFieldMapping::TABLE_ROOT_ID, added_column}});
 
 		return;
 	}
@@ -853,6 +884,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 
 		IntroduceNewSchema(updated_table, transaction_data, new_schema);
 		UpdatePerColumnProperties(updated_table, transaction_data, current_schema, *new_schema);
+		UpdateNameMapping(context, updated_table, transaction_data, {{column.id, column.name}}, {});
 		return;
 	}
 	case AlterTableType::SET_TABLE_OPTIONS: {
@@ -1002,6 +1034,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 
 		parent.AddChild(std::move(new_iceberg_column));
 		IntroduceNewSchema(updated_table, transaction_data, new_schema);
+		UpdateNameMapping(context, updated_table, transaction_data, {}, {{parent.id, *parent.GetChildren().back()}});
 		return;
 	}
 	case AlterTableType::RENAME_FIELD: {
@@ -1041,6 +1074,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		column_p->RewriteType();
 		IntroduceNewSchema(updated_table, transaction_data, new_schema);
 		UpdatePerColumnProperties(updated_table, transaction_data, current_schema, *new_schema);
+		UpdateNameMapping(context, updated_table, transaction_data, {{column_p->id, column_p->name}}, {});
 		return;
 	}
 	case AlterTableType::REMOVE_FIELD: {
