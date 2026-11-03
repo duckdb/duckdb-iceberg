@@ -50,6 +50,10 @@ public:
 
 public:
 	static IcebergPartitionSpec ParseFromJson(const rest_api_objects::PartitionSpec &spec, int32_t iceberg_version);
+	//! A spec from a bare array of partition fields, the form of a v1 table's deprecated 'partition-spec' and of a
+	//! manifest's 'partition-spec' key, which store no spec id. v1 fields without a 'field-id' get 1000 + position.
+	static IcebergPartitionSpec FromFields(const vector<rest_api_objects::PartitionField> &fields, int32_t spec_id,
+	                                       int32_t iceberg_version);
 
 public:
 	bool IsUnpartitioned() const;
@@ -60,8 +64,9 @@ public:
 	string FieldsToJSONString() const;
 	const vector<IcebergPartitionSpecField> &GetFields() const;
 	//! Spec compatibility: ordered source IDs, full transforms, and field names must match.
-	//! Spec IDs and partition field IDs are ignored, like Java's PartitionSpec.compatibleWith.
-	bool Equals(const IcebergPartitionSpec &other) const;
+	//! Spec IDs and partition field IDs are ignored, like Java's PartitionSpec.compatibleWith, unless
+	//! 'compare_field_ids' is set: a manifest's partition values are keyed by the partition field IDs.
+	bool Equals(const IcebergPartitionSpec &other, bool compare_field_ids = false) const;
 
 private:
 	JSONMutableValue FieldsToJSON(JSONWriter &writer) const;

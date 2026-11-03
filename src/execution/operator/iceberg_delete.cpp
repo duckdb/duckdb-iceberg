@@ -556,6 +556,8 @@ InsertionOrderPreservingMap<string> IcebergDelete::ParamsToString() const {
 PhysicalOperator &IcebergDelete::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner,
                                             IcebergTableSchemaVersion &table, PhysicalOperator &child_plan,
                                             vector<idx_t> &&row_id_indexes) {
+	// DELETE, UPDATE and MERGE all plan their delete files here.
+	table.table_info.table_metadata.VerifyDeleteFileFormat();
 	auto scan = FindIcebergScan(child_plan);
 
 	optional_ptr<IcebergMultiFileList> multi_file_list;

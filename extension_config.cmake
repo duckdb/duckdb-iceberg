@@ -31,14 +31,14 @@ if (NOT EMSCRIPTEN)
   #  duckdb_extension_load(ducklake
   #        LOAD_TESTS
   #        GIT_URL https://github.com/duckdb/ducklake
-  #        GIT_TAG a92abf755a7b4e2f3e410f8b89c72b990a0698da
+  #        GIT_TAG 417a9117f590e8141742ac0579d02f6a90162e37
   #)
 
   if (NOT MINGW)
     duckdb_extension_load(aws
             LOAD_TESTS
             GIT_URL https://github.com/duckdb/duckdb-aws
-            GIT_TAG 16ae9c135300f750478d648c2496f2952a6f2827 # main 2026-10-18 pin
+            GIT_TAG 16ae9c135300f750478d648c2496f2952a6f2827
     )
     duckdb_extension_statically_link(aws)
   endif()

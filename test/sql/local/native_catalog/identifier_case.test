@@ -1,0 +1,91 @@
+# name: test/sql/local/native_catalog/identifier_case.test
+# description: IDENTIFIER_CASE 'lowercase' sends lowercase namespace and table names to the catalog
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+statement error
+ATTACH '' AS case_db (TYPE ICEBERG, URI 'http://iceberg-mock.invalid', AUTHORIZATION_TYPE 'none',
+	ACCESS_DELEGATION_MODE 'none', IDENTIFIER_CASE 'upper');
+----
+Unrecognized 'identifier_case' (upper), accepted options are: preserve_case, lowercase
+
+statement ok
+ATTACH '' AS case_db (TYPE ICEBERG, URI 'http://iceberg-mock.invalid', AUTHORIZATION_TYPE 'none',
+	ACCESS_DELEGATION_MODE 'none', STAGE_CREATE_TABLES true, IDENTIFIER_CASE 'lowercase');
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+CREATE SCHEMA case_db.Case_NS;
+
+statement ok
+CREATE TABLE case_db.Case_NS.T AS SELECT 42 AS MixedCol;
+
+# the catalog only ever sees lowercase namespace and table names
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%Case_NS%' OR request.url LIKE '%/tables/T%';
+----
+0
+
+query I
+SELECT table_name FROM duckdb_tables() WHERE database_name = 'case_db' AND schema_name = 'case_ns';
+----
+t
+
+# lookups fold the same way, whatever case they are written in; column names are left alone
+query I
+SELECT MixedCol FROM case_db.CASE_NS.t;
+----
+42
+
+query I
+SELECT column_name FROM duckdb_columns() WHERE database_name = 'case_db' AND table_name = 't';
+----
+MixedCol
+
+statement ok
+ALTER TABLE case_db.case_ns.T RENAME TO Renamed;
+
+query I
+SELECT MixedCol FROM case_db.case_ns.renamed;
+----
+42
+
+statement ok
+DROP TABLE case_db.Case_NS.RENAMED;
+
+statement ok
+DROP SCHEMA case_db.CASE_NS;
+
+statement ok
+DETACH case_db;
+
+# DEFAULT_SCHEMA is folded too, so it matches the lowercase namespace
+statement ok
+CREATE SCHEMA my_datalake.case_default;
+
+statement ok
+ATTACH '' AS case_db (TYPE ICEBERG, URI 'http://iceberg-mock.invalid', AUTHORIZATION_TYPE 'none',
+	ACCESS_DELEGATION_MODE 'none', STAGE_CREATE_TABLES true, IDENTIFIER_CASE 'lowercase',
+	DEFAULT_SCHEMA 'Case_Default');
+
+statement ok
+CREATE TABLE case_db.T AS SELECT 1 AS i;
+
+query I
+SELECT i FROM case_db.case_default.t;
+----
+1
+
+statement ok
+DROP TABLE case_db.t;
+
+statement ok
+DETACH case_db;
+
+statement ok
+DROP SCHEMA my_datalake.case_default;

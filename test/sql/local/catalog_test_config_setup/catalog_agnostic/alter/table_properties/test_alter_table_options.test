@@ -65,7 +65,7 @@ write.update.mode	copy-on-write
 statement error
 delete from my_datalake.default.alter_table_set_options where a % 2 = 0;
 ----
-<REGEX>:.*Not implemented Error.*write.delete.mode.*copy-on-write.*alter_table_set_options.*
+<REGEX>:.*Not implemented Error.*write.delete.mode.*copy-on-write.*alter_table_set_options.*ALTER TABLE alter_table_set_options SET \('write.delete.mode' = 'merge-on-read'\).*
 
 # set write.delete.mode back to merge-on-read
 statement ok

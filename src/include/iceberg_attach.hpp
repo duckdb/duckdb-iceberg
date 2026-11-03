@@ -21,6 +21,16 @@ enum class IRCAccessDelegationMode : uint8_t { NONE, VENDED_CREDENTIALS };
 //! 'information_schema.columns' report real columns, at the cost of one request per table.
 enum class IcebergTableResolution : uint8_t { LAZY, EAGER };
 
+//! How ATTACH treats the namespace named by DEFAULT_SCHEMA:
+//!   THROW      - check it exists, fail the ATTACH if it does not
+//!   CREATE     - check it exists, create it if it does not
+//!   UNENFORCED - do not check at ATTACH; the first use of the default schema checks it instead
+enum class IcebergDefaultSchemaPolicy : uint8_t { THROW, CREATE, UNENFORCED };
+
+//! How namespace and table names are sent to the catalog. LOWERCASE suits catalogs that only accept
+//! (S3 Tables) or only store (Glue) lowercase names; column names are never changed.
+enum class IcebergIdentifierCase : uint8_t { PRESERVE_CASE, LOWERCASE };
+
 struct IcebergAttachOptions {
 	string catalog_uri;
 	string warehouse;
@@ -48,6 +58,8 @@ struct IcebergAttachOptions {
 	// the embedded response metadata, see duckdb-iceberg#1403
 	bool use_metadata_location = false;
 	IcebergTableResolution table_resolution = IcebergTableResolution::LAZY;
+	IcebergDefaultSchemaPolicy default_schema_policy = IcebergDefaultSchemaPolicy::THROW;
+	IcebergIdentifierCase identifier_case = IcebergIdentifierCase::PRESERVE_CASE;
 	IRCAccessDelegationMode access_mode = IRCAccessDelegationMode::VENDED_CREDENTIALS;
 	IcebergAuthorizationType authorization_type = IcebergAuthorizationType::INVALID;
 	unordered_map<string, Value> options;
