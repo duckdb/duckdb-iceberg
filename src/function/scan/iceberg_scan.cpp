@@ -30,6 +30,7 @@
 #include "duckdb/common/file_opener.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
+#include "duckdb/transaction/meta_transaction.hpp"
 
 #include "common/iceberg_utils.hpp"
 #include "planning/iceberg_multi_file_reader.hpp"
@@ -38,6 +39,7 @@
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/rest/transaction/iceberg_transaction.hpp"
 
 #include "duckdb/common/multi_file/multi_file_states.hpp"
 #include "duckdb/function/partition_stats.hpp"
@@ -84,6 +86,13 @@ static void IcebergScanSerialize(Serializer &serializer, const optional_ptr<Func
 		throw NotImplementedException("IcebergScan serialization is only supported for catalog tables");
 	}
 	auto &scan_info = function.function_info->Cast<IcebergScanInfo>();
+	auto &context = file_list.GetScanPlanner().GetContext();
+	if (!scan_info.serialization_query_id.IsValid() ||
+	    scan_info.serialization_query_id.GetIndex() == MAXIMUM_QUERY_ID || !context.HasActiveTransaction() ||
+	    scan_info.serialization_query_id.GetIndex() != context.ActiveTransaction().active_query.load()) {
+		throw NotImplementedException(
+		    "IcebergScan serialization is only supported within the statement that bound the scan");
+	}
 	auto &table_info = table->table_info;
 	auto qualified_name =
 	    QualifiedName(table_info.catalog.GetName(), table_info.schema.name, Identifier(table_info.name));
@@ -111,6 +120,8 @@ static void IcebergScanSerialize(Serializer &serializer, const optional_ptr<Func
 			object.WriteProperty(101, "filter", entry.second);
 		});
 	});
+	serializer.WriteProperty(108, "transaction_id", scan_info.serialization_transaction_id);
+	serializer.WriteProperty(109, "query_id", scan_info.serialization_query_id);
 }
 
 //! Plan-copying optimizers such as CTE inlining and partitioned execution only fall back to the original, uncopied
@@ -143,6 +154,23 @@ static unique_ptr<FunctionData> IcebergScanDeserialize(Deserializer &deserialize
 			planner_filters.PushFilter(column_index, unique_ptr_cast<TableFilter, ExpressionFilter>(std::move(filter)));
 		});
 	});
+	auto transaction_id = deserializer.ReadPropertyWithExplicitDefault<hugeint_t>(108, "transaction_id", hugeint_t(0));
+	auto query_id = deserializer.ReadPropertyWithDefault<optional_idx>(109, "query_id");
+
+	// Snapshot/schema IDs do not identify transaction-local writes, credentials, or attachment options.
+	// Reject delayed and cross-connection replay before resolving any table state.
+	if (!context.HasActiveTransaction() || !query_id.IsValid() || query_id.GetIndex() == MAXIMUM_QUERY_ID ||
+	    query_id.GetIndex() != context.ActiveTransaction().active_query.load()) {
+		ThrowCannotCopyScan(qualified_name, "serialization is only supported within the statement that bound the scan");
+	}
+	auto catalog = Catalog::GetCatalogEntry(context, qualified_name.Catalog());
+	if (!catalog || catalog->GetCatalogType() != "iceberg") {
+		ThrowCannotCopyScan(qualified_name, "the Iceberg catalog is no longer attached");
+	}
+	auto &transaction = IcebergTransaction::Get(context, *catalog);
+	if (transaction.scan_serialization_id != transaction_id) {
+		ThrowCannotCopyScan(qualified_name, "serialization is only supported within the statement that bound the scan");
+	}
 
 	EntryLookupInfo current_lookup(CatalogType::TABLE_ENTRY, qualified_name);
 	auto catalog_entry = Catalog::GetEntry(context, current_lookup, OnEntryNotFound::RETURN_NULL);
@@ -160,6 +188,10 @@ static unique_ptr<FunctionData> IcebergScanDeserialize(Deserializer &deserialize
 	auto schema_entry = table.schema_versions.find(schema_id);
 	if (schema_entry == table.schema_versions.end()) {
 		ThrowCannotCopyScan(qualified_name, StringUtil::Format("schema id %d is no longer available", schema_id));
+	}
+	if (snapshot_id && !table.table_metadata.FindSnapshotByIdInternal(*snapshot_id)) {
+		ThrowCannotCopyScan(qualified_name,
+		                    StringUtil::Format("snapshot id %lld is no longer available", *snapshot_id));
 	}
 
 	unique_ptr<BoundAtClause> at_clause;
