@@ -148,7 +148,7 @@ static bool ContainsFixedType(const LogicalType &type) {
 }
 
 static void ThrowFixedTypeOutsideIceberg(const Identifier &name) {
-	throw NotImplementedException("Cannot store \"%s\": ICEBERG_FIXED can only be used in Iceberg tables. Cast it to "
+	throw NotImplementedException("Cannot store %s: ICEBERG_FIXED can only be used in Iceberg tables. Cast it to "
 	                              "BLOB to store it in a DuckDB table.",
 	                              name);
 }

@@ -408,9 +408,10 @@ IcebergTable &IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCat
 		bootstrap_metadata.location = location;
 	}
 	for (auto &option : info.options) {
-		if (option.first == "format-version" || option.first == "location") {
+		if (StringUtil::CIEquals(option.first, "format-version") || StringUtil::CIEquals(option.first, "location")) {
 			continue;
 		}
+		IcebergTableMetadata::VerifyNotReservedProperty(option.first, "CREATE TABLE ... WITH");
 		auto option_val =
 		    ParseTableProperty(property_binder, context, *option.second, option.first, LogicalType::VARCHAR)
 		        .GetValue<string>();
