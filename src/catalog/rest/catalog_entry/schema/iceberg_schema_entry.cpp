@@ -599,7 +599,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		if (tables.GetViewEntry(context, info.GetQualifiedName().Name().GetIdentifierName())) {
 			throw NotImplementedException("ALTER VIEW is not supported in Iceberg catalogs");
 		}
-		throw CatalogException("Table with name \"%s\" does not exist!", info.GetQualifiedName().Name());
+		throw CatalogException("Table with name %s does not exist!", info.GetQualifiedName().Name());
 	}
 	auto &table_entry = catalog_entry->Cast<IcebergTableSchemaVersion>();
 	auto &catalog_table_info = table_entry.table_info;
