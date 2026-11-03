@@ -261,7 +261,8 @@ join chosen_parts d on s.part=d.part where d.chosen;
 ----
 100001	4999950042
 
-# NULL constants retain missing-column defaults, including under pushed filters.
+# A NULL identity partition value is the value of the missing column, also under pushed filters;
+# it takes precedence over the column's initial-default.
 statement ok
 set variable default_filter_tasks = (select list(t order by file_path) from (
  select * replace({'3':NULL::integer} as partition_constants) from filter_tasks
@@ -276,7 +277,7 @@ call truncate_duckdb_logs();
 query II
 select count(*), sum(id) from iceberg_scan_tasks(getvariable('default_filter_tasks')) where part=2001;
 ----
-200000	9999900000
+0	NULL
 
 query II
 select count(*) filter (where message='Iceberg scan tasks executor mode=multi_file task_count=2'),
@@ -291,7 +292,7 @@ call disable_logging();
 query I
 select count(*) from iceberg_scan_tasks(getvariable('default_filter_tasks')) where part is null;
 ----
-0
+200000
 
 # Pushed NULL predicates on physically absent, nullable fields remain correct.
 query I

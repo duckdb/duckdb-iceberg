@@ -45,37 +45,37 @@ SELECT
     range,
     chr((65 + (range % 16))::INTEGER),
     'payload-' || range::VARCHAR
-FROM range(1000000);
+FROM range(500000);
 INSERT INTO my_datalake.default.partitioned_rewrite_bench
 SELECT
-    range + 16000,
+    range + 500000,
     chr((65 + (range % 16))::INTEGER),
-    'payload-' || (range + 16000)::VARCHAR
-FROM range(1000000);
+    'payload-' || (range + 500000)::VARCHAR
+FROM range(500000);
 INSERT INTO my_datalake.default.partitioned_rewrite_bench
 SELECT
-    range + 32000,
+    range + 1000000,
     chr((65 + (range % 16))::INTEGER),
-    'payload-' || (range + 32000)::VARCHAR
-FROM range(1000000);
+    'payload-' || (range + 1000000)::VARCHAR
+FROM range(500000);
 INSERT INTO my_datalake.default.partitioned_rewrite_bench
 SELECT
-    range + 48000,
+    range + 1500000,
     chr((65 + (range % 16))::INTEGER),
-    'payload-' || (range + 48000)::VARCHAR
-FROM range(1000000);
+    'payload-' || (range + 1500000)::VARCHAR
+FROM range(500000);
 INSERT INTO my_datalake.default.partitioned_rewrite_bench
 SELECT
-    range + 64000,
+    range + 2000000,
     chr((65 + (range % 16))::INTEGER),
-    'payload-' || (range + 64000)::VARCHAR
-FROM range(1000000);
+    'payload-' || (range + 2000000)::VARCHAR
+FROM range(500000);
 INSERT INTO my_datalake.default.partitioned_rewrite_bench
 SELECT
-    range + 80000,
+    range + 2500000,
     chr((65 + (range % 16))::INTEGER),
-    'payload-' || (range + 80000)::VARCHAR
-FROM range(1000000);
+    'payload-' || (range + 2500000)::VARCHAR
+FROM range(500000);
 drop table if exists my_datalake.default.pre_rewrite_snapshot;
 create table my_datalake.default.pre_rewrite_snapshot as
     SELECT snapshot_id::BIGINT snapshot_id

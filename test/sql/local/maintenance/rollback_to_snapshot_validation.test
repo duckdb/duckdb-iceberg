@@ -7,17 +7,17 @@ include test/sql/init_requires
 statement error
 SELECT * FROM iceberg_rollback_to_snapshot('bad', 1);
 ----
-table identifier must be 'catalog.schema.table'
+does not exist
 
 statement error
 SELECT * FROM iceberg_rollback_to_snapshot('a.b', 1);
 ----
-table identifier must be 'catalog.schema.table'
+does not exist
 
 statement error
 SELECT * FROM iceberg_rollback_to_snapshot('a.b.c.d', 1);
 ----
-table identifier must be 'catalog.schema.table'
+Too many identifiers in table name
 
 statement error
 SELECT * FROM iceberg_rollback_to_snapshot('.b.c', 1);
