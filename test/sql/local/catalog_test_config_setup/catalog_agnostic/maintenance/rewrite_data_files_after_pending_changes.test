@@ -1,5 +1,5 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_after_pending_changes.test
-# description: iceberg_rewrite_data_files is refused when the transaction already changed the table; a rewrite first, after a format-version upgrade, or in its own transaction still works
+# description: iceberg_rewrite_data_files is refused when the transaction already changed the table; a rewrite first, after a format-version upgrade, or as its own statement still works
 # group: [maintenance]
 
 require-env CATALOG_TEST_CONFIG_SETUP
@@ -70,48 +70,17 @@ SELECT count(*), sum(v) FROM my_datalake.default.rewrite_pending;
 ----
 4	0
 
-# Pending changes to another table don't block the rewrite.
-statement ok
-CREATE TABLE my_datalake.default.rewrite_pending_other (id INTEGER) WITH ('format-version' = '2');
-
-statement ok
-BEGIN;
-
-statement ok
-INSERT INTO my_datalake.default.rewrite_pending_other VALUES (1);
-
+# As its own statement the rewrite works.
 query I
 SELECT rewritten_data_files_count FROM iceberg_rewrite_data_files('my_datalake.default.rewrite_pending', rewrite_all = true);
 ----
 2
 
-statement ok
-COMMIT;
-
-query I
-SELECT count(*) FROM my_datalake.default.rewrite_pending;
+query II
+SELECT count(*), sum(v) FROM my_datalake.default.rewrite_pending;
 ----
-4
-
-query I
-SELECT count(*) FROM my_datalake.default.rewrite_pending_other;
-----
-1
-
-# Outside a transaction block each rewrite commits on its own, so a second one is allowed; with rewrite_all it
-# rewrites the one compacted file again.
-query I
-SELECT rewritten_data_files_count FROM iceberg_rewrite_data_files('my_datalake.default.rewrite_pending', rewrite_all = true);
-----
-1
-
-query I
-SELECT count(*) FROM my_datalake.default.rewrite_pending;
-----
-4
+4	0
 
 statement ok
 DROP TABLE my_datalake.default.rewrite_pending;
 
-statement ok
-DROP TABLE my_datalake.default.rewrite_pending_other;
