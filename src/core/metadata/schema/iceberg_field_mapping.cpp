@@ -5,11 +5,53 @@ namespace duckdb {
 
 namespace {
 
+bool IsValidMapping(JSONValue entries) {
+	if (!entries.IsArray()) {
+		return false;
+	}
+	bool valid = true;
+	entries.IterateArray([&](JSONValue entry) {
+		if (!valid || !entry.IsObject()) {
+			valid = false;
+			return;
+		}
+		auto field_id = entry.GetMember("field-id");
+		if (field_id.IsValid() && !field_id.IsNull()) {
+			if (!field_id.IsInteger()) {
+				valid = false;
+				return;
+			}
+			if (field_id.GetType() == JSONValueType::SIGNED_INTEGER) {
+				auto id = field_id.GetSignedInteger();
+				if (id < NumericLimits<int32_t>::Minimum() || id > NumericLimits<int32_t>::Maximum()) {
+					valid = false;
+					return;
+				}
+			} else if (field_id.GetUnsignedInteger() > uint64_t(NumericLimits<int32_t>::Maximum())) {
+				valid = false;
+				return;
+			}
+		}
+		auto names = entry.GetMember("names");
+		if (!names.IsArray()) {
+			valid = false;
+			return;
+		}
+		names.IterateArray([&](JSONValue name) { valid = valid && name.IsString(); });
+		auto fields = entry.GetMember("fields");
+		if (fields.IsValid() && !fields.IsNull()) {
+			valid = valid && IsValidMapping(fields);
+		}
+	});
+	return valid;
+}
+
 optional<int32_t> GetFieldId(JSONValue entry) {
 	auto field_id = entry.GetMember("field-id");
-	if (!field_id.IsValid() || !field_id.IsInteger()) {
+	if (!field_id.IsValid() || field_id.IsNull()) {
 		return nullopt;
 	}
+	D_ASSERT(field_id.IsInteger());
 	return field_id.GetType() == JSONValueType::SIGNED_INTEGER ? static_cast<int32_t>(field_id.GetSignedInteger())
 	                                                           : static_cast<int32_t>(field_id.GetUnsignedInteger());
 }
@@ -43,13 +85,10 @@ AddedUnder(const vector<pair<int32_t, reference<const IcebergColumnDefinition>>>
 	return result;
 }
 
-//! The entries of one struct, list or map (or of the table) after the changes; invalid when they are not a mapping
+//! The entries of one struct, list or map (or of the table) after the changes. The input is already validated.
 JSONMutableValue UpdateEntries(JSONWriter &writer, JSONValue entries, optional<int32_t> parent_id,
                                const unordered_map<int32_t, string> &renamed,
                                const vector<pair<int32_t, reference<const IcebergColumnDefinition>>> &added) {
-	if (!entries.IsArray()) {
-		return JSONMutableValue();
-	}
 	//! A name that now belongs to one of these fields leaves the entries of the others
 	unordered_map<string, int32_t> assigned;
 	entries.IterateArray([&](JSONValue entry) {
@@ -64,14 +103,9 @@ JSONMutableValue UpdateEntries(JSONWriter &writer, JSONValue entries, optional<i
 		assigned.emplace(column.get().name, column.get().id);
 	}
 
-	bool valid = true;
 	auto result = writer.CreateArray();
 	entries.IterateArray([&](JSONValue entry) {
 		auto names = entry.GetMember("names");
-		if (!valid || !entry.IsObject() || !names.IsArray()) {
-			valid = false;
-			return;
-		}
 		auto field_id = GetFieldId(entry);
 		auto rename = field_id ? renamed.find(*field_id) : renamed.end();
 		auto new_entry = writer.CreateObject();
@@ -96,10 +130,6 @@ JSONMutableValue UpdateEntries(JSONWriter &writer, JSONValue entries, optional<i
 		auto fields = entry.GetMember("fields");
 		if (fields.IsValid() && !fields.IsNull()) {
 			auto new_fields = UpdateEntries(writer, fields, field_id, renamed, added);
-			if (!new_fields.IsValid()) {
-				valid = false;
-				return;
-			}
 			new_entry.Add("fields", new_fields);
 		} else {
 			auto added_below = AddedUnder(added, field_id);
@@ -113,9 +143,6 @@ JSONMutableValue UpdateEntries(JSONWriter &writer, JSONValue entries, optional<i
 		}
 		result.Append(new_entry);
 	});
-	if (!valid) {
-		return JSONMutableValue();
-	}
 	for (auto &column : added_here) {
 		result.Append(CreateEntry(writer, column));
 	}
@@ -129,16 +156,22 @@ IcebergFieldMapping::Update(const string &mapping_json, const unordered_map<int3
                             const vector<pair<int32_t, reference<const IcebergColumnDefinition>>> &added) {
 	JSONParseError error;
 	auto doc = JSONDocument::TryParse(mapping_json.c_str(), mapping_json.size(), error);
-	if (!doc) {
+	if (!doc || !IsValidMapping(doc->GetRoot())) {
 		return nullopt;
 	}
 	JSONWriter writer;
 	auto root = UpdateEntries(writer, doc->GetRoot(), IcebergFieldMapping::TABLE_ROOT_ID, renamed, added);
-	if (!root.IsValid()) {
-		return nullopt;
-	}
 	writer.SetRoot(root);
 	return writer.ToString();
+}
+
+vector<IcebergFieldMapping> IcebergFieldMapping::Parse(const string &mapping_json) {
+	auto doc = JSONDocument::Parse(mapping_json.c_str(), mapping_json.size());
+	vector<IcebergFieldMapping> mappings;
+	mappings.emplace_back();
+	idx_t mapping_index = 1;
+	ParseFieldMappings(doc->GetRoot(), mappings, mapping_index, 0);
+	return mappings;
 }
 
 void IcebergFieldMapping::ParseFieldMappings(JSONValue obj, vector<IcebergFieldMapping> &mappings, idx_t &mapping_index,

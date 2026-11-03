@@ -17,8 +17,7 @@ public:
 	static constexpr int32_t TABLE_ROOT_ID = -1;
 
 public:
-	static void ParseFieldMappings(JSONValue obj, vector<IcebergFieldMapping> &mappings, idx_t &mapping_index,
-	                               idx_t parent_mapping_index);
+	static vector<IcebergFieldMapping> Parse(const string &mapping_json);
 	//! The mapping after fields were renamed (field id -> new name) or added (parent id -> field), the way Iceberg
 	//! Java keeps it: a renamed field keeps its old name and gets the new one, an added field gets an entry under its
 	//! parent (with entries for its nested fields), and a name that now belongs to another field leaves the entry it
@@ -32,6 +31,10 @@ public:
 	int32_t field_id = NumericLimits<int32_t>::Maximum();
 	//! "Fields which exist only in the Iceberg schema and not in imported data files may use an empty names list."
 	case_insensitive_map_t<idx_t> field_mapping_indexes;
+
+private:
+	static void ParseFieldMappings(JSONValue obj, vector<IcebergFieldMapping> &mappings, idx_t &mapping_index,
+	                               idx_t parent_mapping_index);
 };
 
 } // namespace duckdb
