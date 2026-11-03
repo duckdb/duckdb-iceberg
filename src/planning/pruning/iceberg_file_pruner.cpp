@@ -331,8 +331,8 @@ bool IcebergFilePruner::DeleteManifestMatchesDataFile(const IcebergManifest &del
 	return true;
 }
 
-bool IcebergFilePruner::EqualityDeleteMatchesDataFile(const IcebergDataFile &delete_file,
-                                                      const IcebergDataFile &data_file) const {
+void IcebergFilePruner::InitializeEqualityDeleteBounds(const IcebergDataFile &delete_file,
+                                                       IcebergEqualityDeleteBounds &bounds) const {
 	auto &equality_ids = delete_file.equality_ids;
 
 	for (auto field_id : equality_ids) {
@@ -344,10 +344,7 @@ bool IcebergFilePruner::EqualityDeleteMatchesDataFile(const IcebergDataFile &del
 
 		auto delete_lower = delete_file.lower_bounds.find(field_id);
 		auto delete_upper = delete_file.upper_bounds.find(field_id);
-		auto data_lower = data_file.lower_bounds.find(field_id);
-		auto data_upper = data_file.upper_bounds.find(field_id);
-		if (delete_lower == delete_file.lower_bounds.end() || delete_upper == delete_file.upper_bounds.end() ||
-		    data_lower == data_file.lower_bounds.end() || data_upper == data_file.upper_bounds.end()) {
+		if (delete_lower == delete_file.lower_bounds.end() || delete_upper == delete_file.upper_bounds.end()) {
 			continue;
 		}
 
@@ -368,24 +365,51 @@ bool IcebergFilePruner::EqualityDeleteMatchesDataFile(const IcebergDataFile &del
 		try {
 			auto delete_stats = IcebergPredicateStats::DeserializeBounds(
 			    context, delete_lower->second, delete_upper->second, column.name, column.type);
+			if (!delete_stats.lower_bound || !delete_stats.upper_bound || delete_stats.lower_bound->IsNull() ||
+			    delete_stats.upper_bound->IsNull()) {
+				continue;
+			}
+			bounds.columns.push_back({column, *delete_stats.lower_bound, *delete_stats.upper_bound});
+		} catch (std::exception &e) {
+			ErrorData error(e);
+			DUCKDB_LOG_DEBUG(context,
+			                 "Bounds for equality delete file failed to deserialize in "
+			                 "InitializeEqualityDeleteBounds, ignoring error: %s",
+			                 error.Message());
+		}
+	}
+	bounds.initialized = true;
+}
+
+bool IcebergFilePruner::EqualityDeleteMatchesDataFile(const IcebergDataFile &delete_file,
+                                                      const IcebergDataFile &data_file,
+                                                      const IcebergEqualityDeleteBounds &bounds) const {
+	for (auto &delete_stats : bounds.columns) {
+		auto &column = delete_stats.column.get();
+		auto field_id = column.id;
+		auto data_lower = data_file.lower_bounds.find(field_id);
+		auto data_upper = data_file.upper_bounds.find(field_id);
+		if (data_lower == data_file.lower_bounds.end() || data_upper == data_file.upper_bounds.end()) {
+			continue;
+		}
+		try {
 			auto data_stats = IcebergPredicateStats::DeserializeBounds(context, data_lower->second, data_upper->second,
 			                                                           column.name, column.type);
-			if (!delete_stats.lower_bound || !delete_stats.upper_bound || !data_stats.lower_bound ||
-			    !data_stats.upper_bound || delete_stats.lower_bound->IsNull() || delete_stats.upper_bound->IsNull() ||
-			    data_stats.lower_bound->IsNull() || data_stats.upper_bound->IsNull()) {
+			if (!data_stats.lower_bound || !data_stats.upper_bound || data_stats.lower_bound->IsNull() ||
+			    data_stats.upper_bound->IsNull()) {
 				continue;
 			}
 			//! Test for either of these conditions:
 			//! data:                   L --------- U
 			//! delete:                               L --------- U
 			//! delete:   L --------- U
-			if (*delete_stats.upper_bound < *data_stats.lower_bound ||
-			    *delete_stats.lower_bound > *data_stats.upper_bound) {
+			if (delete_stats.upper_bound < *data_stats.lower_bound ||
+			    delete_stats.lower_bound > *data_stats.upper_bound) {
 				DUCKDB_LOG(context, IcebergLogType,
 				           "Iceberg Equality Delete Pruning, skipped 'equality_delete_file': '%s' for 'data_file': "
 				           "'%s', equality field '%s' (field id %d) has bounds [%s, %s] outside data bounds [%s, %s]",
 				           delete_file.file_path, data_file.file_path, column.name, field_id,
-				           delete_stats.lower_bound->ToString(), delete_stats.upper_bound->ToString(),
+				           delete_stats.lower_bound.ToString(), delete_stats.upper_bound.ToString(),
 				           data_stats.lower_bound->ToString(), data_stats.upper_bound->ToString());
 				return false;
 			}
@@ -413,7 +437,8 @@ bool IcebergFilePruner::DeleteFileMatchesDataFile(const IcebergManifest &delete_
                                                   const IcebergManifestEntry &delete_manifest_entry,
                                                   const IcebergManifest &data_manifest,
                                                   const IcebergManifestEntry &data_manifest_entry,
-                                                  const partition_value_map_t &data_partition_values) const {
+                                                  const partition_value_map_t &data_partition_values,
+                                                  optional_ptr<IcebergEqualityDeleteBounds> delete_bounds) const {
 	auto &delete_file = delete_manifest_entry.data_file;
 	auto &data_file = data_manifest_entry.data_file;
 	if (delete_file.referenced_data_file && *delete_file.referenced_data_file != data_file.file_path) {
@@ -474,7 +499,11 @@ bool IcebergFilePruner::DeleteFileMatchesDataFile(const IcebergManifest &delete_
 		}
 	}
 	if (delete_file.content == IcebergManifestEntryContentType::EQUALITY_DELETES) {
-		return EqualityDeleteMatchesDataFile(delete_file, data_file);
+		D_ASSERT(delete_bounds);
+		if (!delete_bounds->initialized) {
+			InitializeEqualityDeleteBounds(delete_file, *delete_bounds);
+		}
+		return EqualityDeleteMatchesDataFile(delete_file, data_file, *delete_bounds);
 	}
 	return true;
 }

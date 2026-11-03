@@ -368,9 +368,15 @@ IcebergScanPlanner::ResolveApplicableDeleteFiles(const BoundIcebergManifestEntry
 			                        delete_file.entry_idx, delete_file.manifest_idx);
 		}
 		auto &delete_entry = entries[delete_file.entry_idx];
-		if (IcebergDeletePlanner::DeleteEntryMatchesFilters(delete_context, delete_file.manifest_idx, delete_entry) &&
-		    IcebergDeletePlanner::DeleteEntryAppliesToDataFile(delete_context, delete_file.manifest_idx, delete_entry,
-		                                                       data_manifest_entry, partition_values)) {
+		if (!IcebergDeletePlanner::DeleteEntryMatchesFilters(delete_context, delete_file.manifest_idx, delete_entry)) {
+			continue;
+		}
+		optional_ptr<IcebergEqualityDeleteBounds> delete_bounds;
+		if (delete_entry.data_file.content == IcebergManifestEntryContentType::EQUALITY_DELETES) {
+			delete_bounds = &shared_state->equality_delete_bounds[delete_file.manifest_idx][delete_file.entry_idx];
+		}
+		if (IcebergDeletePlanner::DeleteEntryAppliesToDataFile(delete_context, delete_file.manifest_idx, delete_entry,
+		                                                       data_manifest_entry, partition_values, delete_bounds)) {
 			result.emplace_back(delete_entry.data_file);
 		}
 	}
