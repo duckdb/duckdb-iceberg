@@ -206,59 +206,14 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 	return result;
 }
 
-static void ThrowSchemaNotEmpty(const string &schema_name, const string &entry_type, const string &entry_name) {
-	throw DependencyException("Cannot drop schema \"%s\" because it is not empty: it contains %s \"%s\". Drop its "
-	                          "tables and views first",
-	                          schema_name, entry_type, entry_name);
-}
-
-//! Some catalogs (e.g. AWS Glue) drop a non-empty namespace together with its tables instead of refusing it
-void IcebergCatalog::VerifySchemaIsEmpty(ClientContext &context, IcebergCatalog &catalog, const string &schema_name) {
-	auto namespace_items = IRCAPI::ParseSchemaName(schema_name);
-	auto &transaction = IcebergTransaction::Get(context, catalog);
-
-	// refusing to list (401/403) throws here, so the schema is never dropped unchecked
-	auto tables = IcebergListTablesRequest(namespace_items, false).Execute(context, catalog);
-	D_ASSERT(tables);
-	for (auto &table : *tables) {
-		auto state = transaction.GetLatestTableState(IcebergTable::GetTableKey(catalog, namespace_items, table.name));
-		if (!state || state->IsAlive()) {
-			ThrowSchemaNotEmpty(schema_name, "table", table.name);
-		}
-	}
-	for (auto &entry : transaction.current_table_data) {
-		auto &state = entry.second;
-		if (state.IsAlive() && state.GetInfo().schema.namespace_items == namespace_items) {
-			ThrowSchemaNotEmpty(schema_name, "table", state.GetInfo().name);
-		}
-	}
-
-	// views created earlier in the transaction count, and views dropped earlier in it do not
-	for (auto &created : transaction.created_views) {
-		auto &view_name = created.second->GetViewName().GetIdentifierName();
-		if (IcebergTable::GetTableKey(catalog, namespace_items, view_name) == created.first) {
-			ThrowSchemaNotEmpty(schema_name, "view", view_name);
-		}
-	}
-	if (!catalog.supported_urls.count("GET /v1/{prefix}/namespaces/{namespace}/views")) {
-		return;
-	}
-	auto views = IcebergListViewsRequest(namespace_items).Execute(context, catalog);
-	if (!views) {
-		throw CatalogException("Cannot drop schema \"%s\": its views could not be listed to verify that it is empty",
-		                       schema_name);
-	}
-	for (auto &view : *views) {
-		if (!transaction.deleted_views.count(IcebergTable::GetTableKey(catalog, namespace_items, view.name))) {
-			ThrowSchemaNotEmpty(schema_name, "view", view.name);
-		}
-	}
-}
-
 void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
-	if (info.cascade) {
+	if (info.cascade && endpoint_type != IcebergEndpointType::AWS_GLUE) {
 		throw NotImplementedException(
 		    "DROP SCHEMA <schema_name> CASCADE is not supported for Iceberg schemas currently");
+	}
+	if (!info.cascade && endpoint_type == IcebergEndpointType::AWS_GLUE) {
+		throw NotImplementedException("DROP SCHEMA without CASCADE is not supported for AWS Glue: deleting a namespace "
+		                              "also deletes its tables. Use DROP SCHEMA <schema_name> CASCADE");
 	}
 	info.SetQualifiedName(FoldName(info.GetQualifiedName()));
 
@@ -275,8 +230,6 @@ void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 		}
 		throw CatalogException("Schema with name %s does not exist", info.GetQualifiedName().Name());
 	}
-
-	VerifySchemaIsEmpty(context, *this, info.GetQualifiedName().Name().GetIdentifierName());
 
 	// Schema exists - defer the server deletion to commit
 	auto &iceberg_transaction = IcebergTransaction::Get(context, *this);
@@ -519,6 +472,7 @@ void IcebergCatalog::ParsePrefix() {
 
 void IcebergCatalog::Configure(ClientContext &context, const rest_api_objects::CatalogConfig &catalog_config,
                                IcebergEndpointType endpoint_type) {
+	this->endpoint_type = endpoint_type;
 	base_uri = attach_options.catalog_uri;
 	StringUtil::RTrim(base_uri, "/");
 	if (base_uri.empty()) {

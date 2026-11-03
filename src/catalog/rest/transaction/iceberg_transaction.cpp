@@ -709,9 +709,6 @@ void IcebergTransaction::DoSchemaCreates(ClientContext &context) {
 void IcebergTransaction::DoSchemaDeletes(ClientContext &context) {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	for (auto &schema_name : deleted_schemas) {
-		// checked again: another client may have created a table in the schema since it was dropped, and some
-		// catalogs delete a namespace together with its tables
-		IcebergCatalog::VerifySchemaIsEmpty(context, ic_catalog, schema_name);
 		vector<string> namespace_items;
 		auto namespace_identifier = IRCAPI::ParseSchemaName(schema_name);
 		IRCAPI::CommitNamespaceDrop(context, ic_catalog, namespace_identifier);
