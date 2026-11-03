@@ -240,6 +240,16 @@ IcebergDeleteFileInfo IcebergDelete::WritePositionalDeleteFile(ClientContext &co
 	field_input.push_back(std::move(field_ids));
 	info->options["field_ids"] = std::move(field_input);
 
+	// The delete file codec defaults to the data file codec
+	auto &table_metadata = table.table_info.table_metadata;
+	auto codec = table_metadata.GetTableProperty(WRITE_DELETE_PARQUET_COMPRESSION_CODEC);
+	if (codec.empty()) {
+		codec = table_metadata.GetTableProperty(WRITE_PARQUET_COMPRESSION_CODEC);
+	}
+	if (!codec.empty()) {
+		info->options["codec"].emplace_back(codec);
+	}
+
 	vector<string> names_to_write {"file_path", "pos"};
 	vector<LogicalType> types_to_write {LogicalType::VARCHAR, LogicalType::BIGINT};
 
