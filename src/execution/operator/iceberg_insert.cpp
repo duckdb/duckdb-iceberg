@@ -42,6 +42,7 @@
 #include "common/iceberg_utils.hpp"
 #include "common/iceberg_math.hpp"
 #include "common/iceberg_fixed_type.hpp"
+#include "common/iceberg_geography_type.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_update.hpp"
 #include "iceberg_logging.hpp"
 #include "iceberg_options.hpp"
@@ -674,6 +675,11 @@ static bool NeedsProjection(const IcebergWriteLayout &layout, const IcebergCopyI
 static IcebergWriteLayout BuildWriteLayout(ClientContext &context, const IcebergCopyInput &copy_input) {
 	IcebergWriteLayout layout;
 	auto &schema = copy_input.schema;
+	for (auto &column : schema.columns) {
+		if (IcebergGeographyType::ContainsGeography(column->type)) {
+			throw NotImplementedException("Writing to Iceberg tables with geography columns is not supported");
+		}
+	}
 
 	// Physical columns, in schema order. The child plan produces every schema column, so the source
 	// index is the schema index even when earlier columns are omitted.

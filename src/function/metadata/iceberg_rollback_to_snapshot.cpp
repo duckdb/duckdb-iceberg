@@ -64,18 +64,6 @@ static unique_ptr<FunctionData> IcebergRollbackToSnapshotBind(ClientContext &con
 
 	auto input_string = input.inputs[0].ToString();
 	VerifyInputIsNotAFile(context, input_string);
-	auto parts = QualifiedName::ParseComponents(input_string);
-	if (parts.size() != 3) {
-		throw InvalidInputException(
-		    "iceberg_rollback_to_snapshot: table identifier must be 'catalog.schema.table', got '%s'", input_string);
-	}
-	for (auto &part : parts) {
-		if (part.empty()) {
-			throw InvalidInputException("iceberg_rollback_to_snapshot: table identifier '%s' has an empty component",
-			                            input_string);
-		}
-	}
-
 	auto iceberg_table = IcebergUtils::GetTableEntry(context, input_string);
 	if (!CheckTableIsIcebergTable(iceberg_table)) {
 		throw InvalidInputException("Cannot call iceberg_rollback_to_snapshot on non-iceberg table");

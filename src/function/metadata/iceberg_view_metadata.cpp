@@ -65,15 +65,8 @@ static unique_ptr<HTTPResponse> MakeRequest(ClientContext &context, const Iceber
 static unique_ptr<FunctionData> IcebergViewMetadataBind(ClientContext &context, TableFunctionBindInput &input,
                                                         vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto input_string = input.inputs[0].ToString();
-	auto qualified_name = QualifiedName::ParseComponents(input_string);
-
-	if (qualified_name.size() != 3) {
-		throw InvalidInputException("Expected fully qualified view name (catalog.schema.view), got: %s", input_string);
-	}
-
-	EntryLookupInfo view_lookup(CatalogType::VIEW_ENTRY,
-	                            QualifiedName(qualified_name[0], qualified_name[1], qualified_name[2]));
-	auto catalog_entry = Catalog::GetEntry(context, view_lookup, OnEntryNotFound::THROW_EXCEPTION);
+	auto catalog_entry =
+	    IcebergUtils::GetCatalogEntry(context, CatalogType::VIEW_ENTRY, input_string, OnEntryNotFound::THROW_EXCEPTION);
 
 	if (catalog_entry->type != CatalogType::VIEW_ENTRY) {
 		throw InvalidInputException("'%s' is not a view", input_string);
@@ -87,7 +80,7 @@ static unique_ptr<FunctionData> IcebergViewMetadataBind(ClientContext &context, 
 	auto &ic_catalog = view_catalog.Cast<IcebergCatalog>();
 	auto &ic_schema = view_entry.schema.Cast<IcebergSchemaEntry>();
 
-	auto ret = make_uniq<IcebergViewMetadataBindData>(ic_catalog, ic_schema, qualified_name[2].GetIdentifierName());
+	auto ret = make_uniq<IcebergViewMetadataBindData>(ic_catalog, ic_schema, view_entry.name.GetIdentifierName());
 
 	// metadata_location
 	names.push_back("metadata_location");

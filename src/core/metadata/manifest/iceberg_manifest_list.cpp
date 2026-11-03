@@ -21,6 +21,7 @@
 #include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
 #include "planning/metadata_io/manifest_list/iceberg_manifest_list_reader.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
+#include "duckdb/common/json_document.hpp"
 #include "re2/re2.h"
 
 #include <optional>
@@ -36,6 +37,185 @@ string IcebergManifestContentTypeToString(IcebergManifestContentType type) {
 	default:
 		throw InvalidConfigurationException("Invalid Manifest Content Type");
 	}
+}
+
+static optional<int32_t> TryGetMetadataInt(const InsertionOrderPreservingMap<Value> &metadata, const string &key) {
+	auto entry = metadata.find(key);
+	if (entry == metadata.end()) {
+		return nullopt;
+	}
+	try {
+		return std::stoi(entry->second.GetValue<string>());
+	} catch (...) {
+		return nullopt;
+	}
+}
+
+static optional<string> TryGetMetadataString(const InsertionOrderPreservingMap<Value> &metadata, const string &key) {
+	auto entry = metadata.find(key);
+	if (entry == metadata.end()) {
+		return nullopt;
+	}
+	return entry->second.GetValue<string>();
+}
+
+static bool HasMetadataKey(const InsertionOrderPreservingMap<Value> &metadata, const string &key) {
+	return metadata.find(key) != metadata.end();
+}
+
+static string ManifestMetadataErrorPrefix(const string &path) {
+	if (path.empty()) {
+		return "Manifest";
+	}
+	return StringUtil::Format("Manifest '%s'", path);
+}
+
+static int32_t GetRequiredMetadataInt(const InsertionOrderPreservingMap<Value> &metadata, const string &key,
+                                      const string &path) {
+	auto value = TryGetMetadataInt(metadata, key);
+	if (!value) {
+		throw InvalidConfigurationException("%s is missing required Avro key-value metadata field '%s'",
+		                                    ManifestMetadataErrorPrefix(path), key);
+	}
+	return *value;
+}
+
+static string GetRequiredMetadataString(const InsertionOrderPreservingMap<Value> &metadata, const string &key,
+                                        const string &path) {
+	auto value = TryGetMetadataString(metadata, key);
+	if (!value) {
+		throw InvalidConfigurationException("%s is missing required Avro key-value metadata field '%s'",
+		                                    ManifestMetadataErrorPrefix(path), key);
+	}
+	return *value;
+}
+
+static optional<int32_t> TryParseSchemaIdFromSchemaJson(const string &schema_json) {
+	JSONParseError error;
+	auto doc = JSONDocument::TryParse(schema_json.c_str(), schema_json.size(), error);
+	if (!doc) {
+		return nullopt;
+	}
+	auto root = doc->GetRoot();
+	if (!root.IsValid()) {
+		return nullopt;
+	}
+	auto schema_id_val = root.GetMember("schema-id");
+	if (!schema_id_val.IsInteger()) {
+		return nullopt;
+	}
+	return static_cast<int32_t>(schema_id_val.GetType() == JSONValueType::SIGNED_INTEGER
+	                                ? schema_id_val.GetSignedInteger()
+	                                : schema_id_val.GetUnsignedInteger());
+}
+
+//! Parses the 'partition-spec' key: the partition spec a v1 manifest was written with. Partition field ids are
+//! optional in v1, and IcebergPartitionSpec::FromFields assigns 1000 + position when they're missing.
+static IcebergPartitionSpec ParseManifestPartitionSpec(const string &spec_json, const string &path) {
+	JSONParseError parse_error;
+	auto doc = JSONDocument::TryParse(spec_json.c_str(), spec_json.size(), parse_error);
+	if (!doc || !doc->GetRoot().IsArray()) {
+		throw InvalidConfigurationException(
+		    "%s has Avro key-value metadata field 'partition-spec' that is not a JSON array of partition fields",
+		    ManifestMetadataErrorPrefix(path));
+	}
+	vector<rest_api_objects::PartitionField> fields;
+	string error;
+	doc->GetRoot().IterateArray([&](JSONValue field_val) {
+		if (!error.empty()) {
+			return;
+		}
+		rest_api_objects::PartitionField field;
+		error = field.TryFromJSON(field_val);
+		if (error.empty()) {
+			fields.push_back(std::move(field));
+		}
+	});
+	if (!error.empty()) {
+		throw InvalidConfigurationException("%s has an invalid 'partition-spec' in its Avro key-value metadata: %s",
+		                                    ManifestMetadataErrorPrefix(path), error);
+	}
+	//! The key has no spec id; the parsed spec is only compared with the table's specs, never stored
+	return IcebergPartitionSpec::FromFields(fields, 0, 1);
+}
+
+//! A v1 manifest without 'partition-spec-id' is read with the table's partition spec whose fields match the
+//! manifest's own 'partition-spec'. That's normally the spec the manifest list records for the manifest. Snapshots
+//! that list their manifests directly don't record one.
+static int32_t FindManifestPartitionSpecId(const InsertionOrderPreservingMap<Value> &metadata, const string &path,
+                                           const IcebergTableMetadata &table_metadata, int32_t manifest_list_spec_id) {
+	auto manifest_spec = ParseManifestPartitionSpec(GetRequiredMetadataString(metadata, "partition-spec", path), path);
+	auto listed_spec = table_metadata.FindPartitionSpecById(manifest_list_spec_id);
+	if (listed_spec && manifest_spec.Equals(*listed_spec, true)) {
+		return manifest_list_spec_id;
+	}
+	optional<int32_t> matching_spec_id;
+	for (auto &entry : table_metadata.partition_specs) {
+		if (!manifest_spec.Equals(entry.second, true)) {
+			continue;
+		}
+		if (matching_spec_id) {
+			throw InvalidConfigurationException("%s has no 'partition-spec-id', and its 'partition-spec' matches "
+			                                    "more than one partition spec of the table",
+			                                    ManifestMetadataErrorPrefix(path));
+		}
+		matching_spec_id = entry.first;
+	}
+	if (!matching_spec_id) {
+		throw InvalidConfigurationException(
+		    "%s has no 'partition-spec-id', and its 'partition-spec' doesn't match any partition spec of the table",
+		    ManifestMetadataErrorPrefix(path));
+	}
+	return *matching_spec_id;
+}
+
+IcebergManifestMetadata IcebergManifestMetadata::FromAvroMetadata(const InsertionOrderPreservingMap<Value> &metadata,
+                                                                  const string &path,
+                                                                  const IcebergTableMetadata &table_metadata,
+                                                                  int32_t manifest_list_spec_id) {
+	//! 'format-version' and 'partition-spec-id' are optional in v1 manifests and required from v2, so a manifest
+	//! without 'format-version' is a v1 manifest
+	int32_t format_version = 1;
+	if (HasMetadataKey(metadata, "format-version")) {
+		format_version = GetRequiredMetadataInt(metadata, "format-version", path);
+	}
+	bool is_v1_manifest = format_version == 1;
+
+	auto schema_id = TryGetMetadataInt(metadata, "schema-id");
+	if (!schema_id) {
+		auto schema_json = GetRequiredMetadataString(metadata, "schema", path);
+		schema_id = TryParseSchemaIdFromSchemaJson(schema_json);
+		if (!schema_id) {
+			throw InvalidConfigurationException(
+			    "%s is missing required Avro key-value metadata field 'schema-id' and its 'schema' JSON does not "
+			    "contain one",
+			    ManifestMetadataErrorPrefix(path));
+		}
+	}
+
+	int32_t partition_spec_id;
+	if (!is_v1_manifest || HasMetadataKey(metadata, "partition-spec-id")) {
+		partition_spec_id = GetRequiredMetadataInt(metadata, "partition-spec-id", path);
+	} else {
+		partition_spec_id = FindManifestPartitionSpecId(metadata, path, table_metadata, manifest_list_spec_id);
+	}
+
+	IcebergManifestContentType content = IcebergManifestContentType::DATA;
+	auto content_str = TryGetMetadataString(metadata, "content");
+	if (content_str) {
+		if (*content_str == "data") {
+			content = IcebergManifestContentType::DATA;
+		} else if (*content_str == "deletes") {
+			content = IcebergManifestContentType::DELETE;
+		} else {
+			throw InvalidConfigurationException("%s has invalid Avro key-value metadata content '%s'",
+			                                    ManifestMetadataErrorPrefix(path), content);
+		}
+	} else if (format_version > 1) {
+		throw InvalidConfigurationException("%s has invalid Avro key-value metadata, content is missing",
+		                                    ManifestMetadataErrorPrefix(path));
+	}
+	return IcebergManifestMetadata(*schema_id, partition_spec_id, format_version, content);
 }
 
 IcebergManifestMetadata IcebergManifestMetadata::FromTableMetadata(const IcebergTableMetadata &table_metadata,

@@ -54,11 +54,16 @@ select * from iceberg_view_metadata('my_datalake.default.this_view_does_not_exis
 ----
 <REGEX>:.*does not exist.*
 
-# a non-qualified name is rejected
-statement error
-select * from iceberg_view_metadata('vm_view');
+# shorter names resolve through the search path, as in a query
+query I
+select count(*) from iceberg_view_metadata('vm_view');
 ----
-<REGEX>:.*fully qualified view name.*
+1
+
+query I
+select count(*) from iceberg_view_metadata('default.vm_view');
+----
+1
 
 # Clean up
 statement ok
