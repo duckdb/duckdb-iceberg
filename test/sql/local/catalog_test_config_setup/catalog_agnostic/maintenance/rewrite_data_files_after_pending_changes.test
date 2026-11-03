@@ -1,5 +1,5 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_after_pending_changes.test
-# description: iceberg_rewrite_data_files is refused when the transaction already changed the table's files; a rewrite first, after a metadata change, or in its own transaction still works
+# description: iceberg_rewrite_data_files is refused when the transaction already changed the table; a rewrite first, after a format-version upgrade, or in its own transaction still works
 # group: [maintenance]
 
 require-env CATALOG_TEST_CONFIG_SETUP
@@ -28,7 +28,7 @@ CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_pending', rewrite_a
 statement error
 CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_pending', rewrite_all = true);
 ----
-already has data changes in this transaction
+has uncommitted changes in this transaction
 
 statement ok
 ROLLBACK;
@@ -43,22 +43,23 @@ INSERT INTO my_datalake.default.rewrite_pending VALUES (5, 0);
 statement error
 CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_pending', rewrite_all = true);
 ----
-already has data changes in this transaction
+has uncommitted changes in this transaction
 
 statement ok
 ROLLBACK;
 
-# A metadata-only change (schema, properties) doesn't touch the files, so a rewrite after it is fine.
+# A pending schema change would not reach the files the rewrite writes: refused too. The one change a
+# rewrite follows is a format-version upgrade (rewrite_manifest_inheritance_upgrade.test).
 statement ok
 BEGIN;
 
 statement ok
 ALTER TABLE my_datalake.default.rewrite_pending ADD COLUMN w INTEGER;
 
-query I
-SELECT rewritten_data_files_count FROM iceberg_rewrite_data_files('my_datalake.default.rewrite_pending', rewrite_all = true);
+statement error
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_pending', rewrite_all = true);
 ----
-2
+has uncommitted changes in this transaction
 
 statement ok
 ROLLBACK;

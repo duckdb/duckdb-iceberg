@@ -282,17 +282,27 @@ void CollectPartitionedCandidates(std::map<string, RewriteBucket> &per_partition
 
 } // namespace
 
-//! The rewrite plans from the committed snapshot, so files this transaction already added, replaced or deleted
-//! would be rewritten again or lost
-static void ThrowIfTableHasPendingDataChanges(ClientContext &context, const IcebergTable &table_info) {
+//! The rewrite plans from the committed table: the files it selects and the schema and partition spec it writes
+//! with are the committed ones. Files this transaction already added, replaced or deleted would be rewritten
+//! again or lost, and a pending schema or spec change would not reach the files it writes, so the rewrite is
+//! refused after any change to the table. The one exception is a format-version upgrade, which the rewrite
+//! follows: its snapshot uses the new version.
+static void ThrowIfTableHasPendingChanges(ClientContext &context, const IcebergTable &table_info) {
 	auto &transaction = IcebergTransaction::Get(context, table_info.catalog);
 	auto state = transaction.GetLatestTableState(table_info.GetTableKey());
-	if (!state || state->IsMissing() || !state->GetInfo().transaction_data ||
-	    state->GetInfo().transaction_data->alters.empty()) {
+	if (!state || state->IsMissing() || !state->GetInfo().transaction_data) {
+		return;
+	}
+	auto &transaction_data = *state->GetInfo().transaction_data;
+	bool pending = !transaction_data.alters.empty();
+	for (auto &update : transaction_data.updates) {
+		pending |= update->type != IcebergTableUpdateType::UPGRADE_FORMAT_VERSION;
+	}
+	if (!pending) {
 		return;
 	}
 	throw NotImplementedException(
-	    "iceberg_rewrite_data_files: table '%s' already has data changes in this transaction; commit them first",
+	    "iceberg_rewrite_data_files: table '%s' has uncommitted changes in this transaction; commit them first",
 	    table_info.name);
 }
 
@@ -302,7 +312,7 @@ RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input)
 
 	auto table_info_ptr = ReloadIcebergTableShared(context, input.table_name, "iceberg_rewrite_data_files");
 	auto &table_info = *table_info_ptr;
-	ThrowIfTableHasPendingDataChanges(context, table_info);
+	ThrowIfTableHasPendingChanges(context, table_info);
 	auto &table_metadata = table_info.table_metadata;
 	if (table_metadata.iceberg_version < 2) {
 		throw NotImplementedException("iceberg_rewrite_data_files on Iceberg V%d tables",
