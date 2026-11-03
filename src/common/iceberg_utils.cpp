@@ -138,37 +138,72 @@ static string ExtractIcebergScanPath(const string &sql) {
 	return sql.substr(start, end - start);
 }
 
-optional_ptr<CatalogEntry> IcebergUtils::GetTableEntry(ClientContext &context, string &input_string) {
-	auto qualified_name = QualifiedName::ParseComponents(input_string);
-	auto default_db = DatabaseManager::GetDefaultDatabase(context);
-	auto &catalog = Catalog::GetCatalog(context, Identifier(default_db));
-	switch (qualified_name.size()) {
-	case 3: {
-		auto lookup_info = EntryLookupInfo(CatalogType::TABLE_ENTRY,
-		                                   QualifiedName(qualified_name[0], qualified_name[1], qualified_name[2]));
-		auto table = Catalog::GetEntry(context, lookup_info, OnEntryNotFound::THROW_EXCEPTION);
-		return table;
+QualifiedName IcebergUtils::ParseTableName(const string &input_string) {
+	auto components = QualifiedName::ParseComponents(input_string);
+	if (components.empty()) {
+		throw InvalidInputException("Table name is empty");
 	}
-	case 2: {
-		// make sure default catalog is iceberg
-		auto table_entry = catalog.GetEntry(context, CatalogType::TABLE_ENTRY, Identifier(qualified_name[0]),
-		                                    Identifier(qualified_name[1]), OnEntryNotFound::THROW_EXCEPTION);
-		return table_entry;
-	}
-	case 1: {
-		auto schema = catalog.GetDefaultSchema();
-		if (!schema) {
-			throw InvalidInputException(
-			    "Cannot resolve table name %s - catalog %s has no default schema, qualify the name with a schema",
-			    input_string, catalog.GetName());
-		}
-		auto table_entry = catalog.GetEntry(context, CatalogType::TABLE_ENTRY, *schema, Identifier(qualified_name[0]),
-		                                    OnEntryNotFound::THROW_EXCEPTION);
-		return table_entry;
-	}
-	default:
+	if (components.size() > 3) {
 		throw InvalidInputException("Too many identifiers in table name %s", input_string);
 	}
+	vector<Identifier> path;
+	for (auto &component : components) {
+		if (component.empty()) {
+			throw InvalidInputException("Table name %s has an empty component", input_string);
+		}
+		path.emplace_back(component);
+	}
+	return QualifiedName::FromPath(std::move(path));
+}
+
+optional_ptr<CatalogEntry> IcebergUtils::GetCatalogEntry(ClientContext &context, CatalogType type,
+                                                         const string &input_string, OnEntryNotFound if_not_found) {
+	//! Resolved as a reference in a query is: 'name' and 'schema.name' through the search path, so after
+	//! 'USE catalog.schema' they name entries of that catalog
+	EntryLookupInfo lookup_info(type, ParseTableName(input_string));
+	return Catalog::GetEntry(context, lookup_info, if_not_found);
+}
+
+optional_ptr<CatalogEntry> IcebergUtils::GetTableEntry(ClientContext &context, string &input_string) {
+	return GetCatalogEntry(context, CatalogType::TABLE_ENTRY, input_string, OnEntryNotFound::THROW_EXCEPTION);
+}
+
+optional_ptr<CatalogEntry> IcebergUtils::TryGetCatalogTable(ClientContext &context, const string &input) {
+	auto components = QualifiedName::ParseComponents(input);
+	if (components.size() == 3) {
+		EntryLookupInfo table_info(
+		    CatalogType::TABLE_ENTRY,
+		    QualifiedName(Identifier(components[0]), Identifier(components[1]), Identifier(components[2])));
+		return Catalog::GetEntry(context, table_info, OnEntryNotFound::RETURN_NULL);
+	}
+	//! A shorter string could also be a table location: anything that looks like a path, or is an existing file or
+	//! directory, stays a location
+	if (components.empty() || components.size() > 3 || input.find_first_of("/\\") != string::npos ||
+	    input.find("://") != string::npos) {
+		return nullptr;
+	}
+	for (auto &component : components) {
+		if (component.empty()) {
+			return nullptr;
+		}
+	}
+	auto &fs = FileSystem::GetFileSystem(context);
+	if (fs.FileExists(input) || fs.DirectoryExists(input)) {
+		return nullptr;
+	}
+	try {
+		return GetCatalogEntry(context, CatalogType::TABLE_ENTRY, input, OnEntryNotFound::RETURN_NULL);
+	} catch (CatalogException &) {
+		// e.g. 'a.b' where 'a' is neither a catalog nor a schema
+		return nullptr;
+	} catch (BinderException &) {
+		return nullptr;
+	}
+}
+
+QualifiedName IcebergUtils::GetQualifiedTableName(CatalogEntry &table_entry) {
+	auto &entry = table_entry.Cast<InCatalogEntry>();
+	return QualifiedName(entry.catalog.GetName(), entry.ParentSchema().name, entry.name);
 }
 
 optional_ptr<SchemaCatalogEntry> IcebergUtils::GetSchemaEntry(ClientContext &context, string &input_string) {
@@ -235,12 +270,8 @@ string IcebergUtils::GetStorageLocation(ClientContext &context, const string &in
 
 IcebergResolvedMetadata IcebergUtils::ResolveTableMetadata(ClientContext &context, const string &input,
                                                            const IcebergOptions &options) {
-	auto qualified_name = QualifiedName::ParseComponents(input);
-	if (qualified_name.size() == 3) {
-		auto table_name =
-		    QualifiedName(Identifier(qualified_name[0]), Identifier(qualified_name[1]), Identifier(qualified_name[2]));
-		EntryLookupInfo table_info(CatalogType::TABLE_ENTRY, std::move(table_name));
-		auto catalog_entry = Catalog::GetEntry(context, table_info, OnEntryNotFound::RETURN_NULL);
+	{
+		auto catalog_entry = TryGetCatalogTable(context, input);
 		if (catalog_entry && catalog_entry->type == CatalogType::TABLE_ENTRY) {
 			auto &table = catalog_entry->Cast<TableCatalogEntry>();
 			if (table.catalog.GetCatalogType() != "iceberg") {

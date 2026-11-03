@@ -134,7 +134,7 @@ void IcebergCatalog::ScanSchemas(ClientContext &context, std::function<void(Sche
 optional_ptr<SchemaCatalogEntry> IcebergCatalog::LookupSchema(CatalogTransaction transaction,
                                                               const EntryLookupInfo &schema_lookup,
                                                               OnEntryNotFound if_not_found) {
-	auto &schema_name = schema_lookup.GetEntryName();
+	auto schema_name = FoldIdentifier(schema_lookup.GetEntryName());
 	auto entry = schemas.GetEntry(transaction.GetContext(), schema_name, if_not_found);
 	if (!entry && if_not_found != OnEntryNotFound::RETURN_NULL) {
 		throw CatalogException(schema_lookup.GetErrorContext(), "Schema with name \"%s\" not found", schema_name);
@@ -147,6 +147,24 @@ optional<Identifier> IcebergCatalog::GetDefaultSchema() const {
 	return default_schema;
 }
 
+string IcebergCatalog::FoldIdentifier(const string &name) const {
+	if (attach_options.identifier_case == IcebergIdentifierCase::LOWERCASE) {
+		return StringUtil::Lower(name);
+	}
+	return name;
+}
+
+QualifiedName IcebergCatalog::FoldName(const QualifiedName &name) const {
+	if (attach_options.identifier_case == IcebergIdentifierCase::PRESERVE_CASE) {
+		return name;
+	}
+	auto path = name.Path();
+	for (idx_t i = name.Catalog().empty() ? 0 : 1; i < path.size(); i++) {
+		path[i] = Identifier(FoldIdentifier(path[i].GetIdentifierName()));
+	}
+	return QualifiedName::FromPath(std::move(path));
+}
+
 optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) {
 	optional_ptr<ClientContext> context = transaction.GetContext();
 	if (info.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT) {
@@ -155,14 +173,12 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 	}
 
 	D_ASSERT(context);
+	info.SetQualifiedName(FoldName(info.GetQualifiedName()));
 	auto &iceberg_transaction = IcebergTransaction::Get(*context, *this);
 	auto &schema_name = info.GetQualifiedName().Schema().GetIdentifierName();
-	auto created_schema = iceberg_transaction.created_schemas.find(schema_name);
-	if (created_schema != iceberg_transaction.created_schemas.end()) {
-		if (info.on_conflict == OnCreateConflict::IGNORE_ON_CONFLICT) {
-			return created_schema->second.get();
-		}
-		throw CatalogException("Schema with name \"%s\" already exists", info.GetQualifiedName().Schema());
+	auto created_schema = iceberg_transaction.created_schemas.CheckPending(schema_name, info.on_conflict);
+	if (created_schema) {
+		return created_schema.get();
 	}
 
 	// Verify schema existence on the server first
@@ -186,7 +202,7 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 	// Schema does not exist - stage it locally and defer the server creation and catalog publication to commit
 	auto new_schema = make_shared_ptr<IcebergSchemaEntry>(*this, info);
 	auto result = new_schema.get();
-	iceberg_transaction.created_schemas.emplace(schema_name, std::move(new_schema));
+	iceberg_transaction.created_schemas.Add(schema_name, std::move(new_schema), info.on_conflict);
 	return result;
 }
 
@@ -195,6 +211,7 @@ void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 		throw NotImplementedException(
 		    "DROP SCHEMA <schema_name> CASCADE is not supported for Iceberg schemas currently");
 	}
+	info.SetQualifiedName(FoldName(info.GetQualifiedName()));
 
 	// Verify schema existence on the server first
 	bool schema_exists =
@@ -461,6 +478,11 @@ void IcebergCatalog::Configure(ClientContext &context, const rest_api_objects::C
 	ParsePrefix();
 	namespace_separator = attach_options.namespace_separator;
 
+	catalog_properties = catalog_config.defaults;
+	for (auto &entry : catalog_config.overrides) {
+		catalog_properties[entry.first] = entry.second;
+	}
+
 	supported_urls.clear();
 	if (auto &endpoints = catalog_config.endpoints) {
 		for (auto &endpoint : *endpoints) {
@@ -522,11 +544,10 @@ void IcebergCatalog::VerifyMergeOnRead(const IcebergTableMetadata &metadata, con
 		return;
 	}
 	throw NotImplementedException(
-	    "DuckDB-Iceberg only supports merge-on-read for deletes, updates and merges. Table Property '%s' is set to "
-	    "'%s' for table %s. You can modify Iceberg table properties with the set_iceberg_table_properties() "
-	    "function, and remove them with the remove_iceberg_table_properties() function. You can view Iceberg table "
-	    "properties with the iceberg_table_properties() function",
-	    write_mode_property, metadata.GetTableProperty(write_mode_property), table_name);
+	    "Table property '%s' is set to '%s' for table %s, and only merge-on-read is supported for deletes, updates "
+	    "and merges. Set it with ALTER TABLE %s SET ('%s' = 'merge-on-read')",
+	    write_mode_property, metadata.GetTableProperty(write_mode_property), table_name, table_name,
+	    write_mode_property);
 }
 
 } // namespace duckdb

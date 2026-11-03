@@ -381,6 +381,11 @@ IcebergTableMetadata::IcebergTableMetadata(IcebergTableMetadataSchemas schemas) 
 }
 
 IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_objects::TableMetadata &table_metadata) {
+	if (table_metadata.format_version < 1) {
+		throw InvalidConfigurationException(
+		    "'format-version' %d in the metadata.json file is not a valid Iceberg format version",
+		    table_metadata.format_version);
+	}
 	if (table_metadata.format_version > MAX_ICEBERG_FORMAT_VERSION) {
 		throw NotImplementedException("Iceberg format-version %d is not supported, the highest supported version is %d",
 		                              table_metadata.format_version, MAX_ICEBERG_FORMAT_VERSION);
@@ -395,7 +400,10 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 	unordered_map<int32_t, shared_ptr<IcebergTableSchema>> schemas;
 	if (table_metadata.schemas) {
 		for (auto &schema : *table_metadata.schemas) {
-			D_ASSERT(schema.object_1.schema_id);
+			if (!schema.object_1.schema_id) {
+				throw InvalidConfigurationException(
+				    "'schema-id' field is missing from a schema in the metadata.json file");
+			}
 			schemas.emplace(*schema.object_1.schema_id, IcebergTableSchema::ParseSchema(schema));
 		}
 	} else if (table_metadata.format_version == 1 && table_metadata.schema) {
@@ -408,10 +416,14 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 	IcebergTableMetadata res(IcebergTableMetadataSchemas(std::move(schemas)));
 
 	res.table_uuid = table_metadata.table_uuid;
-	D_ASSERT(table_metadata.location);
+	if (!table_metadata.location) {
+		throw InvalidConfigurationException("'location' field is missing from the metadata.json file");
+	}
 	res.location = *table_metadata.location;
 	res.iceberg_version = table_metadata.format_version;
-	D_ASSERT(table_metadata.last_updated_ms);
+	if (!table_metadata.last_updated_ms) {
+		throw InvalidConfigurationException("'last-updated-ms' field is missing from the metadata.json file");
+	}
 	res.last_updated_ms = timestamp_ms_t(*table_metadata.last_updated_ms);
 
 	if (table_metadata.snapshots) {
@@ -434,16 +446,15 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 	}
 	if (table_metadata.partition_specs) {
 		for (auto &spec : *table_metadata.partition_specs) {
-			D_ASSERT(spec.spec_id);
+			if (!spec.spec_id) {
+				throw InvalidConfigurationException(
+				    "'spec-id' field is missing from a partition spec in the metadata.json file");
+			}
 			res.partition_specs.emplace(*spec.spec_id, IcebergPartitionSpec::ParseFromJson(spec, res.iceberg_version));
 		}
 	} else if (res.iceberg_version == 1 && table_metadata.partition_spec) {
-		rest_api_objects::PartitionSpec spec;
-		spec.spec_id = 0;
-		for (auto &field : *table_metadata.partition_spec) {
-			spec.fields.emplace_back(field.Copy());
-		}
-		res.partition_specs.emplace(0, IcebergPartitionSpec::ParseFromJson(spec, res.iceberg_version));
+		res.partition_specs.emplace(
+		    0, IcebergPartitionSpec::FromFields(*table_metadata.partition_spec, 0, res.iceberg_version));
 	}
 	if (table_metadata.sort_orders) {
 		for (auto &sort_order : *table_metadata.sort_orders) {
@@ -552,6 +563,27 @@ const case_insensitive_map_t<string> &IcebergTableMetadata::GetTableProperties()
 	return table_properties;
 }
 
+//! Iceberg derives these from table state; stored as plain properties they are wrong or misleading for other engines
+static const case_insensitive_set_t RESERVED_TABLE_PROPERTIES = {
+    "format-version",           "uuid",
+    "snapshot-count",           "current-snapshot-id",
+    "current-snapshot-summary", "current-snapshot-timestamp-ms",
+    "current-schema",           "default-partition-spec",
+    "default-sort-order"};
+
+void IcebergTableMetadata::VerifyNotReservedProperty(const string &key, const string &operation) {
+	if (RESERVED_TABLE_PROPERTIES.find(key) == RESERVED_TABLE_PROPERTIES.end()) {
+		return;
+	}
+	if (StringUtil::CIEquals(key, "format-version")) {
+		throw InvalidInputException("Cannot change 'format-version' with %s, use ALTER TABLE ... SET "
+		                            "('format-version' = ...) to upgrade the table",
+		                            operation);
+	}
+	throw InvalidInputException("'%s' is a reserved Iceberg table property and can't be changed with %s", key,
+	                            operation);
+}
+
 const string &IcebergTableMetadata::GetLocation() const {
 	return location;
 }
@@ -587,6 +619,30 @@ bool IcebergTableMetadata::AllowsMergeOnRead(const string &write_mode_property) 
 	auto mode = GetTableProperty(write_mode_property);
 	// if unset or merge-on-read, it supports positional deletes
 	return mode == "merge-on-read" || mode.empty();
+}
+
+static void VerifyParquetFileFormat(const case_insensitive_map_t<string> &table_properties, const string &property,
+                                    const char *file_kind) {
+	auto it = table_properties.find(property);
+	if (it != table_properties.end() && !StringUtil::CIEquals(it->second, "parquet")) {
+		throw NotImplementedException("Cannot write %s file with '%s'='%s': only parquet is supported", file_kind,
+		                              property, it->second);
+	}
+}
+
+void IcebergTableMetadata::VerifyDataFileFormat() const {
+	VerifyParquetFileFormat(table_properties, WRITE_FORMAT_DEFAULT, "data");
+}
+
+void IcebergTableMetadata::VerifyDeleteFileFormat() const {
+	// V3 tables write deletion vectors, which are always Puffin files
+	if (iceberg_version >= 3) {
+		return;
+	}
+	// The delete file format defaults to the data file format
+	auto &property =
+	    table_properties.count(WRITE_DELETE_FORMAT_DEFAULT) ? WRITE_DELETE_FORMAT_DEFAULT : WRITE_FORMAT_DEFAULT;
+	VerifyParquetFileFormat(table_properties, property, "delete");
 }
 
 JSONMutableValue IcebergTableMetadata::SchemasToJSON(JSONWriter &writer) const {

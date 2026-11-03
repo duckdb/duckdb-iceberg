@@ -556,6 +556,8 @@ InsertionOrderPreservingMap<string> IcebergDelete::ParamsToString() const {
 PhysicalOperator &IcebergDelete::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner,
                                             IcebergTableSchemaVersion &table, PhysicalOperator &child_plan,
                                             vector<idx_t> &&row_id_indexes) {
+	// DELETE, UPDATE and MERGE all plan their delete files here.
+	table.table_info.table_metadata.VerifyDeleteFileFormat();
 	auto scan = FindIcebergScan(child_plan);
 
 	optional_ptr<IcebergMultiFileList> multi_file_list;
@@ -589,6 +591,7 @@ PhysicalOperator &IcebergCatalog::PlanDeleteOperation(ClientContext &context, Ph
 		throw BinderException("RETURNING clause not yet supported for deletion from Iceberg table");
 	}
 	auto &table_entry = op.table.Cast<IcebergTableSchemaVersion>();
+	table_entry.table_info.VerifyWriteEncryptionSupported();
 	table_entry.PrepareIcebergScanFromEntry(context);
 
 	auto &irc_transaction = IcebergTransaction::Get(context, *this);

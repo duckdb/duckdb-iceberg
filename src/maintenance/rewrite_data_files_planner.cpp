@@ -77,12 +77,18 @@ bool BucketQualifies(const RewriteBucket &bucket, const RewriteDataFilesPlanInpu
 	if (input.rewrite_all) {
 		return true;
 	}
+	//! Spark SizeBasedFileRewriter.tooMuchContent: one file above max-file-size-bytes
+	//! is rewritten on its own so it can be split. A lone undersized file stays put.
+	if (bucket.eligible_count == 1 && bucket.eligible_bytes > input.max_file_size_bytes.value()) {
+		return true;
+	}
 	//! Spark SizeBasedFileRewriter: rewrite when the group has enough files,
 	//! or at least two files whose total size already meets the target.
 	if (bucket.eligible_count >= input.min_input_files) {
 		return true;
 	}
-	return bucket.eligible_count >= 2 && bucket.eligible_bytes >= target_file_size_bytes;
+	//! Spark enoughContent uses a strict greater-than comparison against the target.
+	return bucket.eligible_count >= 2 && bucket.eligible_bytes > target_file_size_bytes;
 }
 
 void ConsiderCandidate(RewriteBucket &bucket, RewriteCandidate cand, const RewriteDataFilesPlanInput &input) {
@@ -294,6 +300,7 @@ RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input)
 		                            input.min_file_size_bytes.value(), input.max_file_size_bytes.value());
 	}
 	plan.table_info = std::move(table_info_ptr);
+	table_info.VerifyWriteEncryptionSupported();
 
 	if (table_metadata.iceberg_version >= 3) {
 		throw NotImplementedException("iceberg_rewrite_data_files does not yet support V3 tables");

@@ -68,27 +68,6 @@ static void VerifyInputIsNotAFile(ClientContext &context, string &input_string, 
 	}
 }
 
-//! Iceberg derives these from table state; stored as plain properties they are wrong or misleading for other engines
-static const case_insensitive_set_t RESERVED_TABLE_PROPERTIES = {
-    "format-version",           "uuid",
-    "snapshot-count",           "current-snapshot-id",
-    "current-snapshot-summary", "current-snapshot-timestamp-ms",
-    "current-schema",           "default-partition-spec",
-    "default-sort-order"};
-
-static void VerifyNotReservedProperty(const string &key, const string &function_name) {
-	if (RESERVED_TABLE_PROPERTIES.find(key) == RESERVED_TABLE_PROPERTIES.end()) {
-		return;
-	}
-	if (StringUtil::CIEquals(key, "format-version")) {
-		throw InvalidInputException("Cannot change 'format-version' with %s(), use ALTER TABLE ... SET "
-		                            "('format-version' = ...) to upgrade the table",
-		                            function_name);
-	}
-	throw InvalidInputException("'%s' is a reserved Iceberg table property and can't be changed with %s()", key,
-	                            function_name);
-}
-
 static unique_ptr<FunctionData> SetIcebergTablePropertiesBind(ClientContext &context, TableFunctionBindInput &input,
                                                               vector<LogicalType> &return_types,
                                                               vector<Identifier> &names) {
@@ -116,7 +95,7 @@ static unique_ptr<FunctionData> SetIcebergTablePropertiesBind(ClientContext &con
 		auto &struct_children = StructValue::GetChildren(map_children[col_idx]);
 		auto &key = StringValue::Get(struct_children[0]);
 		auto &val = StringValue::Get(struct_children[1]);
-		VerifyNotReservedProperty(key, "set_iceberg_table_properties");
+		IcebergTableMetadata::VerifyNotReservedProperty(key, "set_iceberg_table_properties()");
 		ret->properties.emplace(key, val);
 	}
 
@@ -149,7 +128,7 @@ static unique_ptr<FunctionData> RemoveIcebergTablePropertiesBind(ClientContext &
 	auto &list_children = ListValue::GetChildren(remove_values);
 	for (idx_t col_idx = 0; col_idx < list_children.size(); col_idx++) {
 		auto &remove_property = StringValue::Get(list_children[col_idx]);
-		VerifyNotReservedProperty(remove_property, "remove_iceberg_table_properties");
+		IcebergTableMetadata::VerifyNotReservedProperty(remove_property, "remove_iceberg_table_properties()");
 		ret->remove_properties.push_back(remove_property);
 	}
 

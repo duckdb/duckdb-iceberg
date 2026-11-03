@@ -1,0 +1,88 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_oversized_single.test
+# description: a single file above max-file-size-bytes is rewritten; one undersized file is not
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+drop table if exists my_datalake.default.rewrite_oversized_single;
+
+statement ok
+create table my_datalake.default.rewrite_oversized_single (id INTEGER, payload VARCHAR)
+with ('write.target-file-size-bytes' = '20971520');
+
+statement ok
+insert into my_datalake.default.rewrite_oversized_single
+select i, i::VARCHAR || repeat('abcdefghij', 8)
+from range(100000) t(i);
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_oversized_single')
+where content = 'DATA' and status <> 'DELETED';
+----
+1
+
+# One file, below min_input_files, but larger than max_file_size_bytes: Spark tooMuchContent splits it.
+# A 64KB target can land in the teens (CI produced 19), so accept any added count of 2 or more.
+query IIIII
+call iceberg_rewrite_data_files(
+	'my_datalake.default.rewrite_oversized_single',
+	target_file_size_bytes => 65536,
+	min_file_size_bytes => 100,
+	max_file_size_bytes => 100,
+	min_input_files => 5
+);
+----
+1	<REGEX>:[2-9]|[1-9][0-9]+	<REGEX>:[1-9][0-9]*	0	0
+
+query I
+select count(*) from my_datalake.default.rewrite_oversized_single;
+----
+100000
+
+query I
+select count(*) > 1
+from iceberg_metadata('my_datalake.default.rewrite_oversized_single')
+where content = 'DATA' and status <> 'DELETED';
+----
+true
+
+statement ok
+drop table if exists my_datalake.default.rewrite_oversized_single;
+
+statement ok
+create table my_datalake.default.rewrite_oversized_single (id INTEGER, payload VARCHAR);
+
+statement ok
+insert into my_datalake.default.rewrite_oversized_single values (1, 'only');
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_oversized_single')
+where content = 'DATA' and status <> 'DELETED';
+----
+1
+
+# One undersized file stays below the two-file gate.
+query IIIII
+call iceberg_rewrite_data_files(
+	'my_datalake.default.rewrite_oversized_single',
+	min_file_size_bytes => 1000000000,
+	max_file_size_bytes => 1000000000,
+	min_input_files => 5
+);
+----
+0	0	0	0	0
+
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_oversized_single')
+where content = 'DATA' and status <> 'DELETED';
+----
+1
+
+statement ok
+drop table if exists my_datalake.default.rewrite_oversized_single;

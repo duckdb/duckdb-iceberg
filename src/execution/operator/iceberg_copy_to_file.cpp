@@ -76,6 +76,8 @@ void IcebergCopyToFile::EnsureTableCreated(ClientContext &context) const {
 		throw InternalException("Iceberg CTAS: CreateTable request failed");
 	}
 	auto &ic_table = table->Cast<IcebergTableSchemaVersion>();
+	// The table config from the create response is only known now, before any file is written.
+	ic_table.table_info.VerifyWriteEncryptionSupported();
 	// Load any per-table credentials (e.g. SigV4 for the data location).
 	ic_table.PrepareIcebergScanFromEntry(context);
 
