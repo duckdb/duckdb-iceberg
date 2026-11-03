@@ -125,6 +125,8 @@ IcebergTaskExecutor::IcebergTaskExecutor(ClientContext &context, shared_ptr<Iceb
 	vector<Value> arguments;
 	arguments.push_back(std::move(path_list));
 	named_argument_map_t parameters;
+	// writers leave NaN out of a float column's min/max, so without a nan_count the bounds do not cover NaN
+	parameters.insert("can_have_nan", Value::BOOLEAN(true));
 	vector<LogicalType> input_types;
 	vector<Identifier> input_names;
 	TableFunctionRef ref;
