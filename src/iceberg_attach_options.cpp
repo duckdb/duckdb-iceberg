@@ -45,6 +45,8 @@ static const IcebergOption OPTIONS[] = {
     {"use_metadata_location", "use_metadata_location"},
     {"table_resolution", "table_resolution"},
     {"default_schema", "default_schema"},
+    {"default_schema_policy", "default_schema_policy", false, false},
+    {"identifier_case", "identifier_case", false, false},
     {"encode_entire_prefix", "encode_entire_prefix"},
     {"max_table_staleness", "max_table_staleness"},
     // Local bootstrap controls are never accepted from a remote catalog.

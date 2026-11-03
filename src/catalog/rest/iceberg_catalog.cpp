@@ -134,7 +134,7 @@ void IcebergCatalog::ScanSchemas(ClientContext &context, std::function<void(Sche
 optional_ptr<SchemaCatalogEntry> IcebergCatalog::LookupSchema(CatalogTransaction transaction,
                                                               const EntryLookupInfo &schema_lookup,
                                                               OnEntryNotFound if_not_found) {
-	auto &schema_name = schema_lookup.GetEntryName();
+	auto schema_name = FoldIdentifier(schema_lookup.GetEntryName());
 	auto entry = schemas.GetEntry(transaction.GetContext(), schema_name, if_not_found);
 	if (!entry && if_not_found != OnEntryNotFound::RETURN_NULL) {
 		throw CatalogException(schema_lookup.GetErrorContext(), "Schema with name \"%s\" not found", schema_name);
@@ -147,6 +147,24 @@ optional<Identifier> IcebergCatalog::GetDefaultSchema() const {
 	return default_schema;
 }
 
+string IcebergCatalog::FoldIdentifier(const string &name) const {
+	if (attach_options.identifier_case == IcebergIdentifierCase::LOWERCASE) {
+		return StringUtil::Lower(name);
+	}
+	return name;
+}
+
+QualifiedName IcebergCatalog::FoldName(const QualifiedName &name) const {
+	if (attach_options.identifier_case == IcebergIdentifierCase::PRESERVE_CASE) {
+		return name;
+	}
+	auto path = name.Path();
+	for (idx_t i = name.Catalog().empty() ? 0 : 1; i < path.size(); i++) {
+		path[i] = Identifier(FoldIdentifier(path[i].GetIdentifierName()));
+	}
+	return QualifiedName::FromPath(std::move(path));
+}
+
 optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) {
 	optional_ptr<ClientContext> context = transaction.GetContext();
 	if (info.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT) {
@@ -155,6 +173,7 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 	}
 
 	D_ASSERT(context);
+	info.SetQualifiedName(FoldName(info.GetQualifiedName()));
 	auto &iceberg_transaction = IcebergTransaction::Get(*context, *this);
 	auto &schema_name = info.GetQualifiedName().Schema().GetIdentifierName();
 	auto created_schema = iceberg_transaction.created_schemas.CheckPending(schema_name, info.on_conflict);
@@ -192,6 +211,7 @@ void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 		throw NotImplementedException(
 		    "DROP SCHEMA <schema_name> CASCADE is not supported for Iceberg schemas currently");
 	}
+	info.SetQualifiedName(FoldName(info.GetQualifiedName()));
 
 	// Verify schema existence on the server first
 	bool schema_exists =
