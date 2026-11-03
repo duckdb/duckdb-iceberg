@@ -19,6 +19,7 @@
 
 namespace duckdb {
 
+class IcebergScanStatisticsCache;
 class IcebergTableSchemaVersion;
 struct IcebergScanPlanContext;
 
@@ -57,6 +58,7 @@ public:
 	optional<IcebergDataFileDescriptor> GetDataFileDescriptor(idx_t file_id) const;
 	idx_t GetTotalFileCount() const;
 	unique_ptr<NodeStatistics> GetCardinality() const;
+	unique_ptr<BaseStatistics> GetColumnStatistics(column_t column_index) const;
 	void GetStatistics(vector<PartitionStatistics> &result) const;
 	IcebergPartition GetPartitionForDataFile(const string &file_path) const;
 
@@ -76,7 +78,11 @@ private:
 	bool TryGetNextBatch(annotated_lock_guard<annotated_mutex> &guard) const DUCKDB_REQUIRES(shared_state->lock);
 	void FinishScanTasks(annotated_lock_guard<annotated_mutex> &guard) const DUCKDB_REQUIRES(shared_state->lock);
 	void StartDataManifestScan(annotated_lock_guard<annotated_mutex> &guard) const DUCKDB_REQUIRES(shared_state->lock);
+	const IcebergScanStatisticsCache &GetStatisticsCache(annotated_lock_guard<annotated_mutex> &guard) const
+	    DUCKDB_REQUIRES(shared_state->lock);
 	vector<IcebergDeleteFile> ResolveApplicableDeleteFiles(const BoundIcebergManifestEntry &data_manifest_entry) const;
+	bool ManifestStatisticsAllowed(annotated_lock_guard<annotated_mutex> &guard) const
+	    DUCKDB_REQUIRES(shared_state->lock);
 
 private:
 	shared_ptr<IcebergScanPlanState> shared_state;
@@ -92,6 +98,9 @@ private:
 	mutable vector<BoundIcebergManifestEntry> data_manifest_entries DUCKDB_GUARDED_BY(shared_state->lock);
 	mutable vector<BoundIcebergManifestListEntry> data_manifests DUCKDB_GUARDED_BY(shared_state->lock);
 	mutable vector<bool> data_manifest_matches DUCKDB_GUARDED_BY(shared_state->lock);
+	mutable unique_ptr<IcebergScanStatisticsCache> statistics_cache DUCKDB_GUARDED_BY(shared_state->lock);
+	//! Whether this view derives statistics from data manifests, decided once so that all callbacks agree
+	mutable optional<bool> manifest_statistics_allowed DUCKDB_GUARDED_BY(shared_state->lock);
 	mutable IcebergScanOrder scan_order DUCKDB_GUARDED_BY(shared_state->lock);
 };
 

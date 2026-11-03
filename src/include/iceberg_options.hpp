@@ -27,6 +27,16 @@ static constexpr int64_t DEFAULT_METADATA_LOG_CLOCK_SKEW_MS = 0;
 static constexpr const char *ENABLE_MULTI_FILE_SCAN_TASKS_CONFIG_VARIABLE = "iceberg_enable_multi_file_scan_tasks";
 static constexpr bool DEFAULT_ENABLE_MULTI_FILE_SCAN_TASKS = true;
 
+// Controls whether iceberg_scan derives optimizer column and per-file statistics from the
+// selected data manifests. Doing so reads every selected data manifest during planning.
+static constexpr const char *ENABLE_MANIFEST_STATISTICS_CONFIG_VARIABLE = "iceberg_enable_manifest_statistics";
+static constexpr bool DEFAULT_ENABLE_MANIFEST_STATISTICS = true;
+// The most live data files, counted from the manifest list after manifest pruning, that one iceberg_scan
+// may read data manifests for to derive statistics. Larger scans use manifest-list row counts. 0 means unlimited.
+static constexpr const char *MANIFEST_STATISTICS_MAX_DATA_FILES_CONFIG_VARIABLE =
+    "iceberg_manifest_statistics_max_data_files";
+static constexpr uint64_t DEFAULT_MANIFEST_STATISTICS_MAX_DATA_FILES = 5000;
+
 // Compatibility escape hatch for deletion-vector files written by DuckDB Iceberg 1.5.3,
 // which contain only the deletion-vector blob rather than a valid Puffin container.
 static constexpr const char *SKIP_PUFFIN_VERIFICATION_CONFIG_VARIABLE = "iceberg_unsafe_skip_puffin_verification";

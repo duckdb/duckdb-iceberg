@@ -89,7 +89,12 @@ IcebergDeletePlan IcebergMultiFileList::ProcessDeletes(const IcebergFileScanTask
 
 unique_ptr<IcebergMultiFileList>
 IcebergMultiFileList::PushdownInternal(TableFilterSet &new_filters, const vector<ColumnIndex> &column_indexes) const {
+	// A derived view refines this one. The scan can drop a filter after statistics prove it always true for this
+	// view, so the derived view must keep every filter that already pruned this one.
 	IcebergTableFilters result_filter_set;
+	for (auto &entry : planner->Filters()) {
+		result_filter_set.PushFilter(entry.first, entry.second->Copy());
+	}
 	for (auto &entry : new_filters) {
 		auto projection_index = ProjectionIndex(entry.GetIndex().GetIndex());
 		auto &column_index = column_indexes[projection_index];
@@ -98,7 +103,20 @@ IcebergMultiFileList::PushdownInternal(TableFilterSet &new_filters, const vector
 			continue;
 		}
 		auto &filter = ExpressionFilter::GetExpressionFilter(entry.Filter(), "IcebergMultiFileList::PushdownInternal");
-		result_filter_set.PushFilter(column_index, filter.Copy());
+		auto existing = result_filter_set.TryGetFilterByColumnIndex(column_index);
+		if (!existing) {
+			result_filter_set.PushFilter(column_index, filter.Copy());
+			continue;
+		}
+		if (IcebergTableFilters::FiltersEqual(filter, *existing)) {
+			continue;
+		}
+		auto combined = IcebergTableFilters::CombineFilters(*existing, filter);
+		if (!combined) {
+			// Keep the current view rather than drop either filter
+			return nullptr;
+		}
+		result_filter_set.ReplaceFilter(column_index, std::move(combined));
 	}
 	auto result = unique_ptr<IcebergMultiFileList>(
 	    new IcebergMultiFileList(planner->CreateView(std::move(result_filter_set)), delete_execution));
@@ -117,7 +135,6 @@ IcebergMultiFileList::DynamicFilterPushdown(MultiFileDynamicPushdownInfo &pushdo
 	}
 
 	auto filters_copy = filters.Copy();
-	D_ASSERT(filters_copy->FilterCount() >= planner->Filters().FilterCount());
 	bool filters_changed = false;
 	for (auto &entry : filters) {
 		auto &filter =

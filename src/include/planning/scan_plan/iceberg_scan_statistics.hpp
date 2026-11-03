@@ -15,6 +15,8 @@ public:
 
 	optional<idx_t> EstimateCardinality() const;
 	optional<idx_t> ExactRowCount() const;
+	//! The live data files in the matching data manifests, or nullopt if a manifest omits its file counts
+	optional<idx_t> CountDataFiles() const;
 
 private:
 	optional<idx_t> CountDataRows() const;

@@ -138,6 +138,16 @@ static void LoadInternal(ExtensionLoader &loader) {
 	    "Execute eligible delete-free iceberg_scan_tasks descriptor lists through one Parquet multi-file scan.",
 	    LogicalType::BOOLEAN, Value::BOOLEAN(DEFAULT_ENABLE_MULTI_FILE_SCAN_TASKS), nullptr, SetScope::GLOBAL);
 	config.AddExtensionOption(
+	    ENABLE_MANIFEST_STATISTICS_CONFIG_VARIABLE,
+	    "Derive iceberg_scan optimizer column and per-file statistics from the selected data manifests. This reads "
+	    "every selected data manifest during planning. Disable to use only manifest-list row counts.",
+	    LogicalType::BOOLEAN, Value::BOOLEAN(DEFAULT_ENABLE_MANIFEST_STATISTICS), nullptr, SetScope::GLOBAL);
+	config.AddExtensionOption(
+	    MANIFEST_STATISTICS_MAX_DATA_FILES_CONFIG_VARIABLE,
+	    "The most data files, counted from the manifest list after manifest pruning, for which one iceberg_scan "
+	    "derives statistics from data manifests. Larger scans use manifest-list row counts. 0 means unlimited.",
+	    LogicalType::UBIGINT, Value::UBIGINT(DEFAULT_MANIFEST_STATISTICS_MAX_DATA_FILES), nullptr, SetScope::GLOBAL);
+	config.AddExtensionOption(
 	    "iceberg_logging_post_body_truncate_limit",
 	    "Maximum number of characters of a REST catalog POST body to include in Iceberg log messages. "
 	    "Bodies longer than this are truncated with a trailing '... (truncated)' marker. Set to 0 to omit the body.",

@@ -7,7 +7,11 @@
 #include "planning/pruning/iceberg_file_pruner.hpp"
 #include "planning/scan_plan/iceberg_scan_plan_provider.hpp"
 #include "planning/scan_plan/iceberg_scan_statistics.hpp"
+#include "planning/scan_plan/iceberg_scan_statistics_cache.hpp"
+#include "duckdb/main/client_context.hpp"
+#include "duckdb/logging/logger.hpp"
 #include "duckdb/storage/table/row_group_reorderer.hpp"
+#include "iceberg_logging.hpp"
 
 namespace duckdb {
 
@@ -294,19 +298,53 @@ idx_t IcebergScanPlanner::GetTotalFileCount() const {
 	return file_id;
 }
 
+const IcebergScanStatisticsCache &
+IcebergScanPlanner::GetStatisticsCache(annotated_lock_guard<annotated_mutex> &guard) const {
+	InitializeView(guard);
+	if (!statistics_cache) {
+		idx_t file_id = 0;
+		while (GetDataFile(file_id, guard)) {
+			file_id++;
+		}
+		statistics_cache = make_uniq<IcebergScanStatisticsCache>(context, GetMetadata(), GetSchema(), data_manifests,
+		                                                         data_manifest_entries, HasTransactionData());
+	}
+	return *statistics_cache;
+}
+
 unique_ptr<NodeStatistics> IcebergScanPlanner::GetCardinality() const {
 	if (GetMetadata().iceberg_version == 1) {
 		return nullptr;
 	}
 	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
 	InitializeView(guard);
+	if (!has_matching_delete_manifests.load() && statistics_cache) {
+		auto cardinality = statistics_cache->Cardinality();
+		if (cardinality) {
+			return make_uniq<NodeStatistics>(*cardinality, *cardinality);
+		}
+	}
 	auto cardinality =
 	    IcebergScanStatistics(data_manifests, data_manifest_matches, delete_manifests, delete_manifest_matches)
 	        .EstimateCardinality();
 	if (!cardinality) {
 		return nullptr;
 	}
-	return make_uniq<NodeStatistics>(*cardinality, *cardinality);
+	if (!has_matching_delete_manifests.load()) {
+		return make_uniq<NodeStatistics>(*cardinality, *cardinality);
+	}
+	return make_uniq<NodeStatistics>(*cardinality);
+}
+
+unique_ptr<BaseStatistics> IcebergScanPlanner::GetColumnStatistics(column_t column_index) const {
+	if (GetMetadata().iceberg_version == 1) {
+		return nullptr;
+	}
+	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
+	if (!ManifestStatisticsAllowed(guard)) {
+		return nullptr;
+	}
+	return GetStatisticsCache(guard).GetColumnStatistics(column_index);
 }
 
 void IcebergScanPlanner::GetStatistics(vector<PartitionStatistics> &result) const {
@@ -315,6 +353,13 @@ void IcebergScanPlanner::GetStatistics(vector<PartitionStatistics> &result) cons
 	}
 	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
 	InitializeView(guard);
+	if (has_matching_delete_manifests.load()) {
+		return;
+	}
+	if (ManifestStatisticsAllowed(guard)) {
+		GetStatisticsCache(guard).GetPartitionStatistics(result);
+		return;
+	}
 	auto count = IcebergScanStatistics(data_manifests, data_manifest_matches, delete_manifests, delete_manifest_matches)
 	                 .ExactRowCount();
 	if (!count) {
@@ -324,6 +369,47 @@ void IcebergScanPlanner::GetStatistics(vector<PartitionStatistics> &result) cons
 	stats.count = *count;
 	stats.count_type = CountType::COUNT_EXACT;
 	result.push_back(stats);
+}
+
+bool IcebergScanPlanner::ManifestStatisticsAllowed(annotated_lock_guard<annotated_mutex> &guard) const {
+	if (manifest_statistics_allowed) {
+		return *manifest_statistics_allowed;
+	}
+	manifest_statistics_allowed = false;
+
+	Value setting;
+	bool enabled = DEFAULT_ENABLE_MANIFEST_STATISTICS;
+	if (context.TryGetCurrentSetting(ENABLE_MANIFEST_STATISTICS_CONFIG_VARIABLE, setting) && !setting.IsNull()) {
+		enabled = setting.GetValue<bool>();
+	}
+	if (!enabled) {
+		return false;
+	}
+
+	uint64_t max_data_files = DEFAULT_MANIFEST_STATISTICS_MAX_DATA_FILES;
+	if (context.TryGetCurrentSetting(MANIFEST_STATISTICS_MAX_DATA_FILES_CONFIG_VARIABLE, setting) &&
+	    !setting.IsNull()) {
+		max_data_files = setting.GetValue<uint64_t>();
+	}
+	if (max_data_files != 0) {
+		// The budget is checked against manifest-list counts, before any data manifest is read
+		InitializeView(guard);
+		auto data_file_count =
+		    IcebergScanStatistics(data_manifests, data_manifest_matches, delete_manifests, delete_manifest_matches)
+		        .CountDataFiles();
+		if (!data_file_count) {
+			DUCKDB_LOG(context, IcebergLogType,
+			           "Skipping manifest statistics: the manifest list omits data-file counts");
+			return false;
+		}
+		if (*data_file_count > max_data_files) {
+			DUCKDB_LOG(context, IcebergLogType, "Skipping manifest statistics: %llu data files exceed %s = %llu",
+			           *data_file_count, MANIFEST_STATISTICS_MAX_DATA_FILES_CONFIG_VARIABLE, max_data_files);
+			return false;
+		}
+	}
+	manifest_statistics_allowed = true;
+	return true;
 }
 
 IcebergPartition IcebergScanPlanner::GetPartitionForDataFile(const string &file_path) const {

@@ -6,6 +6,7 @@ add_library(
   iceberg_scan_plan_state.cpp
   iceberg_scan_planner.cpp
   iceberg_scan_statistics.cpp
+  iceberg_scan_statistics_cache.cpp
   iceberg_server_scan_plan_provider.cpp)
 set(ALL_OBJECT_FILES
     ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:iceberg_planning_scan_plan>

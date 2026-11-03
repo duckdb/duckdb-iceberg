@@ -10,6 +10,10 @@ require core_functions
 
 require icu
 
+# Keep metadata-only COUNT(*) optimization from bypassing the expected Parquet reads.
+statement ok
+SET iceberg_enable_manifest_statistics = false;
+
 # Reset this small fixture for each test.
 
 statement ok
@@ -703,3 +707,6 @@ query I
 select count(distinct request.url) from duckdb_logs_parsed('HTTP') where request.url like '%.parquet';
 ----
 2
+
+statement ok
+RESET iceberg_enable_manifest_statistics;
