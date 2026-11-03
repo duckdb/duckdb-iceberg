@@ -97,6 +97,13 @@ CREATE TEMP TABLE prf_cast_keys AS SELECT unnest([0::UTINYINT, 255::UTINYINT]) A
 statement ok
 SET disabled_optimizers='join_filter_pushdown';
 
+# A throwing cast must still report the out-of-range probe values.
+statement error
+SELECT list(t.k ORDER BY t.k)
+FROM my_datalake.default.prf_casts t JOIN prf_cast_keys s ON CAST(t.k AS UTINYINT) = s.k;
+----
+out of range
+
 query I
 SELECT list(t.k ORDER BY t.k)
 FROM my_datalake.default.prf_casts t JOIN prf_cast_keys s ON TRY_CAST(t.k AS UTINYINT) = s.k;
@@ -105,6 +112,13 @@ FROM my_datalake.default.prf_casts t JOIN prf_cast_keys s ON TRY_CAST(t.k AS UTI
 
 statement ok
 SET disabled_optimizers='';
+
+# The runtime filter must not suppress cast errors by pruning their files.
+statement error
+SELECT list(t.k ORDER BY t.k)
+FROM my_datalake.default.prf_casts t JOIN prf_cast_keys s ON CAST(t.k AS UTINYINT) = s.k;
+----
+out of range
 
 statement ok
 CALL truncate_duckdb_logs();

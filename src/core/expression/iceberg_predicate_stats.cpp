@@ -26,6 +26,10 @@ bool IcebergPredicateStats::BoundsAreNull() const {
 	return lower_bound && upper_bound && lower_bound->IsNull() && upper_bound->IsNull();
 }
 
+bool IcebergPredicateStats::HasMissingOrNullBounds() const {
+	return !lower_bound || !upper_bound || lower_bound->IsNull() || upper_bound->IsNull();
+}
+
 static shared_ptr<BaseStatistics> BuildGeometryStats(const Value &lower_bound, const Value &upper_bound,
                                                      const LogicalType &type) {
 	if (lower_bound.IsNull() || upper_bound.IsNull()) {

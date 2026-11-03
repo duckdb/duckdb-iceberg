@@ -433,8 +433,7 @@ static bool MatchBoundsExpression(ClientContext &context, const unique_ptr<Expre
 			}
 			column_stats = make_shared_ptr<BaseStatistics>(std::move(all_null_stats));
 		} else {
-			if (!stats.lower_bound || !stats.upper_bound || stats.lower_bound->IsNull() ||
-			    stats.upper_bound->IsNull()) {
+			if (stats.HasMissingOrNullBounds()) {
 				return true;
 			}
 			column_stats = stats.BuildColumnStats(stats.lower_bound->type());

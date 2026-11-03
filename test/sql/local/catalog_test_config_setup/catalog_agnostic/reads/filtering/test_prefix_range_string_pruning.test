@@ -27,12 +27,14 @@ CREATE TABLE my_datalake.default.prf_strings (k VARCHAR, id INTEGER)
 WITH ('write.metadata.metrics.default'='{metrics}');
 
 # Long, non-inline strings exercise the lifetime of reconstructed statistics.
-# The build-side prefixes are scattered around the middle file.
+# The build-side prefixes are scattered around the middle file. Mixed NULLs
+# must neither hide matching strings nor prevent pruning a nonmatching file.
 foreach prefix aaaa aaac aaae
 
 statement ok
 INSERT INTO my_datalake.default.prf_strings
-SELECT '{prefix}' || repeat('é', 20) || lpad(range::VARCHAR, 3, '0'), range FROM range(100);
+SELECT '{prefix}' || repeat('é', 20) || lpad(range::VARCHAR, 3, '0'), range FROM range(100)
+UNION ALL SELECT NULL, -1;
 
 endloop
 
