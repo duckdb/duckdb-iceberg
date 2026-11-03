@@ -28,6 +28,7 @@ public:
 		}
 		return entry->second.get();
 	}
+	//! Resolve a partition source path from IcebergTableSchema::GetSourceIdMap.
 	unique_ptr<ExpressionFilter> GetFilterForColumnIndex(const ColumnIndex &column_index) const;
 	static bool FiltersEqual(const ExpressionFilter &left, const ExpressionFilter &right);
 

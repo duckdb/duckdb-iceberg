@@ -12,10 +12,7 @@
 
 namespace duckdb {
 
-unique_ptr<HTTPResponse> APIUtils::Request(RequestType request_type, ClientContext &context,
-                                           const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
-                                           const string &data) {
-	// load httpfs since iceberg requests do not go through the file system api
+void APIUtils::LoadHttpfs(ClientContext &context) {
 	if (!context.db.get()) {
 		throw InvalidConfigurationException("Context does not have database instance when loading Httpfs in Iceberg");
 	}
@@ -23,6 +20,12 @@ unique_ptr<HTTPResponse> APIUtils::Request(RequestType request_type, ClientConte
 	if (!context.db->ExtensionIsLoaded("httpfs")) {
 		throw MissingExtensionException("The iceberg extension requires the httpfs extension to be loaded!");
 	}
+}
+
+unique_ptr<HTTPResponse> APIUtils::Request(RequestType request_type, ClientContext &context,
+                                           const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
+                                           const string &data) {
+	LoadHttpfs(context);
 
 	auto &db = DatabaseInstance::GetDatabase(context);
 	string request_url = AddHttpHostIfMissing(endpoint_builder.GetURLEncoded());

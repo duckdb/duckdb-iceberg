@@ -41,8 +41,10 @@ public:
 	idx_t GetChildCount() const;
 	void RewriteType();
 
-private:
+public:
 	Value GetInitialDefault() const;
+
+private:
 	Value GetWriteDefault() const;
 	//! Returns an internal, recursive description of a STRUCT write default.
 	//!

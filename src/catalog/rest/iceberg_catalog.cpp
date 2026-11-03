@@ -157,12 +157,9 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 	D_ASSERT(context);
 	auto &iceberg_transaction = IcebergTransaction::Get(*context, *this);
 	auto &schema_name = info.GetQualifiedName().Schema().GetIdentifierName();
-	auto created_schema = iceberg_transaction.created_schemas.find(schema_name);
-	if (created_schema != iceberg_transaction.created_schemas.end()) {
-		if (info.on_conflict == OnCreateConflict::IGNORE_ON_CONFLICT) {
-			return created_schema->second.get();
-		}
-		throw CatalogException("Schema with name \"%s\" already exists", info.GetQualifiedName().Schema());
+	auto created_schema = iceberg_transaction.created_schemas.CheckPending(schema_name, info.on_conflict);
+	if (created_schema) {
+		return created_schema.get();
 	}
 
 	// Verify schema existence on the server first
@@ -180,13 +177,13 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 			iceberg_transaction.schemas[schema_name] = new_schema;
 			return new_schema.get();
 		}
-		throw CatalogException("Schema with name \"%s\" already exists", info.GetQualifiedName().Schema());
+		throw CatalogException("Schema with name %s already exists", info.GetQualifiedName().Schema());
 	}
 
 	// Schema does not exist - stage it locally and defer the server creation and catalog publication to commit
 	auto new_schema = make_shared_ptr<IcebergSchemaEntry>(*this, info);
 	auto result = new_schema.get();
-	iceberg_transaction.created_schemas.emplace(schema_name, std::move(new_schema));
+	iceberg_transaction.created_schemas.Add(schema_name, std::move(new_schema), info.on_conflict);
 	return result;
 }
 
@@ -207,7 +204,7 @@ void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 			GetSchemas().RemoveEntry(info.GetQualifiedName().Name().GetIdentifierName());
 			return;
 		}
-		throw CatalogException("Schema with name \"%s\" does not exist", info.GetQualifiedName().Name());
+		throw CatalogException("Schema with name %s does not exist", info.GetQualifiedName().Name());
 	}
 
 	// Schema exists - defer the server deletion to commit
@@ -265,7 +262,7 @@ unique_ptr<SecretEntry> IcebergCatalog::GetStorageSecret(ClientContext &context,
 			}
 			throw InvalidConfigurationException(
 			    "Found a secret by the name of '%s', but it is not of an accepted type for a 'secret', "
-			    "accepted types are: 's3' or 'aws', found '%s'",
+			    "accepted types are: 's3' or 'aws', found %s",
 			    secret_name, secret_type);
 		}
 		throw InvalidConfigurationException(
@@ -527,11 +524,10 @@ void IcebergCatalog::VerifyMergeOnRead(const IcebergTableMetadata &metadata, con
 		return;
 	}
 	throw NotImplementedException(
-	    "DuckDB-Iceberg only supports merge-on-read for deletes, updates and merges. Table Property '%s' is set to "
-	    "'%s' for table %s. You can modify Iceberg table properties with the set_iceberg_table_properties() "
-	    "function, and remove them with the remove_iceberg_table_properties() function. You can view Iceberg table "
-	    "properties with the iceberg_table_properties() function",
-	    write_mode_property, metadata.GetTableProperty(write_mode_property), table_name);
+	    "Table property '%s' is set to '%s' for table %s, and only merge-on-read is supported for deletes, updates "
+	    "and merges. Set it with ALTER TABLE %s SET ('%s' = 'merge-on-read')",
+	    write_mode_property, metadata.GetTableProperty(write_mode_property), table_name, table_name,
+	    write_mode_property);
 }
 
 } // namespace duckdb

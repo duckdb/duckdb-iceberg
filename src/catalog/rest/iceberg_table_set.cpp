@@ -190,6 +190,7 @@ CatalogEntry &IcebergTableSet::GetScanEntry(IcebergTable &table_info) const {
 		// Surface resolved columns, including comments, instead of a listing placeholder.
 		auto resolved = table_info.GetLatestSchema();
 		if (resolved) {
+			D_ASSERT(&resolved->Cast<IcebergTableSchemaVersion>().table_info == &table_info);
 			return *resolved;
 		}
 	}
@@ -348,14 +349,12 @@ static Value ParseTableProperty(TableFunctionBinder &binder, ClientContext &cont
 
 shared_ptr<IcebergTable> IcebergTableSet::CreateEntryInternal(const string &name, IcebergTable &&table,
                                                               shared_ptr<IcebergTable> &old_entry) {
-	auto it = entries.find(name);
-	if (it != entries.end()) {
-		old_entry = std::move(it->second);
-		it->second = make_shared_ptr<IcebergTable>(std::move(table));
-	} else {
-		it = entries.emplace(name, make_shared_ptr<IcebergTable>(std::move(table))).first;
-	}
-	return it->second;
+	auto &entry = entries[name];
+	old_entry = std::move(entry);
+	entry = make_shared_ptr<IcebergTable>(std::move(table));
+	// The moved schema versions still point at the moved-from table, which the committing transaction frees.
+	entry->InitSchemaVersions();
+	return entry;
 }
 
 IcebergTable &IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCatalog &catalog,

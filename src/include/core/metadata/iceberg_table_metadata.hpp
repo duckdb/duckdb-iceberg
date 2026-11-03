@@ -21,6 +21,8 @@ const string WRITE_UPDATE_MODE = "write.update.mode";
 const string WRITE_DELETE_MODE = "write.delete.mode";
 const string WRITE_MERGE_MODE = "write.merge.mode";
 const string WRITE_DELETE_ISOLATION_LEVEL = "write.delete.isolation-level";
+const string WRITE_FORMAT_DEFAULT = "write.format.default";
+const string WRITE_DELETE_FORMAT_DEFAULT = "write.delete.format.default";
 
 struct IcebergMetadataLogItem {
 public:
@@ -118,6 +120,8 @@ public:
 	//! Whether the given write mode property (write.delete.mode, write.update.mode or write.merge.mode) allows
 	//! writing merge-on-read delete files
 	bool AllowsMergeOnRead(const string &write_mode_property) const;
+	void VerifyDataFileFormat() const;
+	void VerifyDeleteFileFormat() const;
 	string ToJSON() const;
 	void WriteMetadata(ClientContext &context, const string &path) const;
 	bool WriteVersionHint(ClientContext &context, const string &path, const string &metadata_json_path) const;
