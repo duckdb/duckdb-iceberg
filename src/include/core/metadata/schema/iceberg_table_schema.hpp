@@ -23,6 +23,10 @@ public:
 	optional<ColumnIndex> TryGetColumnIndexByFieldId(idx_t field_id) const;
 	optional_ptr<const IcebergColumnDefinition> TryGetColumnByFieldId(idx_t field_id) const;
 	const IcebergColumnDefinition &GetColumnByFieldId(idx_t field_id) const;
+	//! Every field's id with its full name: the names on the path to it joined with '.' ('s.sf', 'l.element',
+	//! 'm.key'), the name per-column properties and partition fields use
+	vector<pair<int32_t, string>> GetFullNames() const;
+	string GetFullColumnName(idx_t field_id) const;
 	optional_ptr<const IcebergColumnDefinition> GetFromPath(const vector<Identifier> &path,
 	                                                        optional_ptr<optional_idx> names_offset) const;
 	optional_ptr<IcebergColumnDefinition> GetMutableFromPath(const vector<Identifier> &path,

@@ -113,8 +113,8 @@ SET debug_verification_mode='verify_vectors';
 
 query I
 select count(*) from iceberg_metadata(my_datalake.default.ctas_partitioned_with_options)
-where file_path like '%identity_category_2=%'
-  and file_path like '%year_ts_3=%';
+where file_path like '%category=%'
+  and file_path like '%ts_year=%';
 ----
 4
 

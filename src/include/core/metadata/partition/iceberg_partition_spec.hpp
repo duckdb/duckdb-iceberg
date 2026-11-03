@@ -31,15 +31,16 @@ public:
 	//! Partition field IDs and names are deliberately ignored so historical fields can be reused.
 	bool Equals(const IcebergPartitionSpecField &other) const;
 
-	//! Sets the field name, derived from transform + column_name + source_id with Avro-compliance sanitization.
-	//! Must be called after transform and source_id are set.
+	//! Sets the default name Java gives a partition field (BaseUpdatePartitionSpec.PartitionNameGenerator): the
+	//! source column's full name, followed by the transform unless it is identity: 'dep', 'id_bucket_4',
+	//! 's_trunc_10', 'ts_day'. Must be called after transform is set.
 	void SetPartitionSpecFieldName(const string &column_name);
 	const string &GetPartitionSpecFieldName() const;
 
 private:
-	//! Spec field name. Derived using the column source id, the raw transform type, and the column name.
-	//! By using these three fields, names can never collide unless the same transform is used on the same column.
-	//! Eventually users will be able to choose a partition name themselves.
+	//! Spec field name. Engines address a field by its name (Spark's DROP PARTITION FIELD <name>, partition.<name>
+	//! in the metadata tables), so a new field gets the name Iceberg Java would give it, and a field recycled from
+	//! an older spec keeps its name. Eventually users will be able to choose a partition name themselves.
 	string name;
 };
 
@@ -67,6 +68,9 @@ public:
 	//! Spec IDs and partition field IDs are ignored, like Java's PartitionSpec.compatibleWith, unless
 	//! 'compare_field_ids' is set: a manifest's partition values are keyed by the partition field IDs.
 	bool Equals(const IcebergPartitionSpec &other, bool compare_field_ids = false) const;
+	//! Java's PartitionSpec.Builder rules, applied to a table's default spec when Java loads it: a name is used
+	//! once per spec, and a name that is also a column's belongs to the identity of that column
+	void VerifyFieldNames(const IcebergTableSchema &schema) const;
 
 private:
 	JSONMutableValue FieldsToJSON(JSONWriter &writer) const;
