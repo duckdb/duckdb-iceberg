@@ -90,6 +90,7 @@ bool IcebergSchemaEntry::HandleCreateConflict(CatalogTransaction &transaction, C
 optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateTable(CatalogTransaction &transaction, ClientContext &context,
                                                            BoundCreateTableInfo &info) {
 	auto &base_info = info.Base();
+	base_info.SetQualifiedName(catalog.Cast<IcebergCatalog>().FoldName(base_info.GetQualifiedName()));
 	for (auto &constraint : base_info.constraints) {
 		if (constraint->type != ConstraintType::NOT_NULL) {
 			throw NotImplementedException("Only NOT NULL constraints are supported for Iceberg tables");
@@ -135,6 +136,7 @@ void IcebergSchemaEntry::DropEntry(ClientContext &context, DropInfo &info) {
 }
 
 void IcebergSchemaEntry::DropEntry(ClientContext &context, DropInfo &info, bool delete_entry) {
+	info.SetQualifiedName(catalog.Cast<IcebergCatalog>().FoldName(info.GetQualifiedName()));
 	auto entry_name = info.GetQualifiedName().Name().GetIdentifierName();
 
 	// CASCADE is not part of the Iceberg REST spec — reject before any type-specific handling.
@@ -224,6 +226,7 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateView(CatalogTransaction tra
 	if (info.sql.empty() && !info.query) {
 		throw BinderException("Cannot create view in Iceberg without a query");
 	}
+	info.SetQualifiedName(catalog.Cast<IcebergCatalog>().FoldName(info.GetQualifiedName()));
 	auto &context = transaction.GetContext();
 
 	if (info.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT) {
@@ -546,6 +549,27 @@ static void ThrowIfGeography(const IcebergTableSchema &schema, const ParsedExpre
 	    expression, [&](const ColumnRefExpression &colref) { ThrowIfGeography(schema, colref.ColumnNames()); });
 }
 
+//! Iceberg doesn't allow changing a map's key, so a column path through one is refused
+static void ThrowIfMapKey(const IcebergTableSchema &schema, const vector<Identifier> &column_path) {
+	auto column = schema.GetFromPath({column_path[0]}, nullptr);
+	for (idx_t i = 1; column && i < column_path.size(); i++) {
+		if (column->type.id() == LogicalTypeId::VARIANT) {
+			return;
+		}
+		if (column->type.id() == LogicalTypeId::MAP &&
+		    StringUtil::CIEquals(column_path[i].GetIdentifierName(), "key")) {
+			throw CatalogException("Cannot alter '%s': map keys can't be changed",
+			                       StringUtil::Join(IdentifiersToStrings(column_path), "."));
+		}
+		column = column->GetChild(column_path[i].GetIdentifierName());
+	}
+}
+
+static void ThrowIfMapKey(const IcebergTableSchema &schema, const ParsedExpression &expression) {
+	ParsedExpressionIterator::VisitExpression<ColumnRefExpression>(
+	    expression, [&](const ColumnRefExpression &colref) { ThrowIfMapKey(schema, colref.ColumnNames()); });
+}
+
 template <typename T>
 IcebergColumnDefinition &ResolveColumn(T &alter_table_info, const shared_ptr<IcebergTableSchema> &new_schema) {
 	auto &column_path = alter_table_info.column_path;
@@ -566,6 +590,8 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 	}
 	auto &irc_transaction = GetICTransaction(transaction);
 	auto &context = transaction.GetContext();
+	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
+	info.SetQualifiedName(ic_catalog.FoldName(info.GetQualifiedName()));
 
 	EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, QualifiedName(info.GetQualifiedName().Name()));
 	auto catalog_entry = tables.GetEntry(context, lookup);
@@ -573,7 +599,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		if (tables.GetViewEntry(context, info.GetQualifiedName().Name().GetIdentifierName())) {
 			throw NotImplementedException("ALTER VIEW is not supported in Iceberg catalogs");
 		}
-		throw CatalogException("Table with name \"%s\" does not exist!", info.GetQualifiedName().Name());
+		throw CatalogException("Table with name %s does not exist!", info.GetQualifiedName().Name());
 	}
 	auto &table_entry = catalog_entry->Cast<IcebergTableSchemaVersion>();
 	auto &catalog_table_info = table_entry.table_info;
@@ -582,6 +608,8 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto &alter_table_info = info.Cast<AlterTableInfo>();
 		if (alter_table_info.alter_table_type == AlterTableType::RENAME_TABLE) {
 			auto &rename_table_info = alter_table_info.Cast<RenameTableInfo>();
+			rename_table_info.new_table_name =
+			    Identifier(ic_catalog.FoldIdentifier(rename_table_info.new_table_name.GetIdentifierName()));
 			auto &new_name = rename_table_info.new_table_name;
 
 			EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, QualifiedName(new_name));
@@ -639,6 +667,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto &partition_info = alter_table_info.Cast<SetPartitionedByInfo>();
 		for (auto &partition_key : partition_info.partition_keys) {
 			ThrowIfGeography(current_schema, *partition_key);
+			ThrowIfMapKey(current_schema, *partition_key);
 		}
 		if (updated_table.table_metadata.iceberg_version < 2) {
 			throw NotImplementedException("Partition evolution on Iceberg V%d tables",
@@ -657,6 +686,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto &sort_info = alter_table_info.Cast<SetSortedByInfo>();
 		for (auto &order : sort_info.orders) {
 			ThrowIfGeography(current_schema, *order.expression);
+			ThrowIfMapKey(current_schema, *order.expression);
 		}
 
 		// Ensure schema is the same as current
@@ -752,6 +782,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 	case AlterTableType::ALTER_COLUMN_TYPE: {
 		auto &change_type_info = alter_table_info.Cast<ChangeColumnTypeInfo>();
 		ThrowIfGeography(current_schema, change_type_info.column_path);
+		ThrowIfMapKey(current_schema, change_type_info.column_path);
 
 		auto new_schema = current_schema.Copy();
 
@@ -819,6 +850,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 	case AlterTableType::DROP_NOT_NULL: {
 		auto &drop_not_null_info = alter_table_info.Cast<DropNotNullInfo>();
 		ThrowIfGeography(current_schema, drop_not_null_info.column_path);
+		ThrowIfMapKey(current_schema, drop_not_null_info.column_path);
 
 		auto new_schema = current_schema.Copy();
 
@@ -883,6 +915,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 				}
 				new_format_version = casted_val->GetValue<int32_t>();
 			} else {
+				IcebergTableMetadata::VerifyNotReservedProperty(key, "ALTER TABLE ... SET");
 				auto casted_val = val.DefaultTryCastAs(LogicalType::VARCHAR, nullptr, true);
 				if (!casted_val) {
 					throw InvalidInputException("Can't cast '%s' property (%s) to VARCHAR", key, val.ToString());
@@ -930,6 +963,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 	case AlterTableType::SET_DEFAULT: {
 		auto &set_default_info = alter_table_info.Cast<SetDefaultInfo>();
 		ThrowIfGeography(current_schema, set_default_info.column_path);
+		ThrowIfMapKey(current_schema, set_default_info.column_path);
 		auto &column_path = set_default_info.column_path;
 		auto &expression = set_default_info.expression;
 
@@ -952,6 +986,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 	case AlterTableType::ADD_FIELD: {
 		auto &add_field_info = alter_table_info.Cast<AddFieldInfo>();
 		ThrowIfGeography(current_schema, add_field_info.column_path);
+		ThrowIfMapKey(current_schema, add_field_info.column_path);
 		auto &column_path = add_field_info.column_path;
 		auto &new_field = add_field_info.new_field;
 		auto &if_field_not_exists = add_field_info.if_field_not_exists;
@@ -1026,6 +1061,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 			throw CatalogException("Cannot rename field %s from column %s - can only rename fields inside a struct",
 			                       column_path.back(), column_path.front());
 		}
+		ThrowIfMapKey(current_schema, column_path);
 
 		auto new_path = column_path;
 		new_path.pop_back();
@@ -1083,6 +1119,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 			throw CatalogException("Cannot drop field %s from column %s - it's not a struct", column_path.back(),
 			                       column_path.front());
 		}
+		ThrowIfMapKey(current_schema, column_path);
 
 		if (parent.GetChildCount() == 1) {
 			throw CatalogException("Can't drop field '%s' because it's the last field of the STRUCT!",
@@ -1126,13 +1163,14 @@ void IcebergSchemaEntry::Scan(CatalogType type, const std::function<void(Catalog
 }
 
 optional_ptr<CatalogEntry> IcebergSchemaEntry::LookupEntry(CatalogTransaction transaction,
-                                                           const EntryLookupInfo &lookup_info) {
-	auto type = lookup_info.GetCatalogType();
+                                                           const EntryLookupInfo &original_lookup_info) {
+	auto type = original_lookup_info.GetCatalogType();
 	if (!CatalogTypeIsSupported(type)) {
 		return nullptr;
 	}
 	auto &context = transaction.GetContext();
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
+	EntryLookupInfo lookup_info(original_lookup_info, ic_catalog.FoldName(original_lookup_info.GetQualifiedName()));
 
 	// For VIEW_ENTRY, try the view path
 	if (type == CatalogType::VIEW_ENTRY) {
