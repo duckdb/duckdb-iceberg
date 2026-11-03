@@ -7,17 +7,12 @@ require-env CATALOG_TEST_CONFIG_SETUP
 include test/sql/init_requires
 
 statement ok
-DROP TABLE IF EXISTS my_datalake.default.codec_default;
-
-statement ok
 DROP TABLE IF EXISTS my_datalake.default.codec_data;
 
 statement ok
 DROP TABLE IF EXISTS my_datalake.default.codec_delete;
 
-# without any codec property, the writer's default codec is used
-statement ok
-CREATE TABLE my_datalake.default.codec_default (id INTEGER) WITH ('format-version' = '2');
+# Every table sets the data file codec, since some catalogs store a default codec on new tables
 
 # delete files use the data file codec when no delete codec is set
 statement ok
@@ -34,7 +29,7 @@ CREATE TABLE my_datalake.default.codec_delete (id INTEGER) WITH (
   'write.delete.parquet.compression-codec' = 'gzip'
 );
 
-foreach tbl codec_default codec_data codec_delete
+foreach tbl codec_data codec_delete
 
 statement ok
 INSERT INTO my_datalake.default.${tbl} SELECT range FROM range(100);
@@ -48,7 +43,7 @@ endloop
 statement ok
 BEGIN
 
-foreach tbl codec_default codec_data codec_delete
+foreach tbl codec_data codec_delete
 
 statement ok
 SET VARIABLE ${tbl}_data_file = (SELECT file_path FROM iceberg_metadata(my_datalake.default.${tbl}) WHERE content = 'DATA');
@@ -57,13 +52,6 @@ statement ok
 SET VARIABLE ${tbl}_delete_file = (SELECT file_path FROM iceberg_metadata(my_datalake.default.${tbl}) WHERE content = 'POSITION_DELETES');
 
 endloop
-
-query II
-SELECT
-  (SELECT DISTINCT compression FROM parquet_metadata(getvariable('codec_default_data_file'))),
-  (SELECT DISTINCT compression FROM parquet_metadata(getvariable('codec_default_delete_file')));
-----
-SNAPPY	SNAPPY
 
 query II
 SELECT
@@ -86,9 +74,6 @@ query I
 SELECT count(*) FROM my_datalake.default.codec_delete;
 ----
 50
-
-statement ok
-DROP TABLE IF EXISTS my_datalake.default.codec_default;
 
 statement ok
 DROP TABLE IF EXISTS my_datalake.default.codec_data;
