@@ -28,7 +28,7 @@ optional_ptr<CatalogEntry> IcebergSchemaSet::GetEntry(ClientContext &context, co
 	}
 
 	// If the schema was created in this transaction, return the local entry directly
-	if (iceberg_transaction.created_schemas.count(name)) {
+	if (iceberg_transaction.created_schemas.Contains(name)) {
 		auto entry = entries.find(name);
 		if (entry != entries.end()) {
 			return entry->second.get();
