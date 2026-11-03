@@ -453,12 +453,8 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 			res.partition_specs.emplace(*spec.spec_id, IcebergPartitionSpec::ParseFromJson(spec, res.iceberg_version));
 		}
 	} else if (res.iceberg_version == 1 && table_metadata.partition_spec) {
-		rest_api_objects::PartitionSpec spec;
-		spec.spec_id = 0;
-		for (auto &field : *table_metadata.partition_spec) {
-			spec.fields.emplace_back(field.Copy());
-		}
-		res.partition_specs.emplace(0, IcebergPartitionSpec::ParseFromJson(spec, res.iceberg_version));
+		res.partition_specs.emplace(
+		    0, IcebergPartitionSpec::FromFields(*table_metadata.partition_spec, 0, res.iceberg_version));
 	}
 	if (table_metadata.sort_orders) {
 		for (auto &sort_order : *table_metadata.sort_orders) {
