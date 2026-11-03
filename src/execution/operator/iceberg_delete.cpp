@@ -13,7 +13,8 @@
 #include "duckdb/execution/physical_operator.hpp"
 #include "duckdb/function/copy_function.hpp"
 #include "duckdb/common/types/uuid.hpp"
-#include "duckdb/parallel/task_executor.hpp"
+#include "duckdb/parallel/base_pipeline_event.hpp"
+#include "duckdb/parallel/executor_task.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 
 #include "catalog/rest/iceberg_catalog.hpp"
@@ -321,49 +322,23 @@ static void PopulateAlteredManifests(IcebergManifestDeletes &out, const IcebergD
 	}
 }
 
-void IcebergDelete::FlushDeletes(ClientContext &context, IcebergDeleteGlobalState &global_state) const {
-	auto pending_deletes = global_state.TakePendingDeletes();
-	if (pending_deletes.IsEmpty()) {
-		// An empty UPDATE may have no source scan after optimization.
-		return;
-	}
-	lock_guard<mutex> guard(global_state.lock);
-	WriteDeletes(context, pending_deletes, global_state.write_result);
-}
-
-void IcebergDelete::FinalizeMergeDeletes(ClientContext &context, IcebergDeleteGlobalState &global_state) const {
-	D_ASSERT(global_state.merge_deletes);
-	D_ASSERT(!is_equality_delete);
-	auto pending_deletes = global_state.merge_deletes->CompleteAction(merge_delete_action_index.GetIndex(),
-	                                                                  global_state.TakePendingDeletes());
-	if (!pending_deletes || pending_deletes->IsEmpty()) {
-		return;
-	}
-
-	// All contributors scan the same MERGE target. No action writes a vector before this batch is complete.
-	WriteDeletes(context, *pending_deletes, global_state.write_result);
-	auto manifest_entries = GenerateDeleteManifestEntries(global_state);
-	auto &transaction = IcebergTransaction::Get(context, table.catalog);
-	ApplyTableUpdate(table.table_info, transaction, [&](IcebergTable &tbl) {
-		auto &transaction_data = tbl.GetOrCreateTransactionData(transaction);
-		transaction_data.AddDeleteSnapshot(std::move(manifest_entries),
-		                                   std::move(global_state.write_result.altered_manifests), true);
-	});
-}
-
 namespace {
 
 //! Writes the delete file of one data file, so that the delete files of a statement are written in parallel
-class IcebergDeleteFileWriteTask : public BaseExecutorTask {
+class IcebergDeleteFileWriteTask : public ExecutorTask {
 public:
-	IcebergDeleteFileWriteTask(TaskExecutor &executor, ClientContext &context, const IcebergDelete &op,
+	IcebergDeleteFileWriteTask(Executor &executor, shared_ptr<Event> event, const IcebergDelete &delete_op,
 	                           const string &filename, const vector<idx_t> &deleted_rows, IcebergDeleteFileWrite &out)
-	    : BaseExecutorTask(executor), context(context), op(op), filename(filename), deleted_rows(deleted_rows),
-	      out(out) {
+	    : ExecutorTask(executor, std::move(event)), delete_op(delete_op), filename(filename),
+	      deleted_rows(deleted_rows), out(out) {
 	}
 
-	void ExecuteTask() override {
-		out = op.WriteDeleteFile(context, filename, deleted_rows);
+	TaskExecutionResult ExecuteTask(TaskExecutionMode mode) override {
+		auto &context = event->GetClientContext();
+		context.InterruptCheck();
+		out = delete_op.WriteDeleteFile(context, filename, deleted_rows);
+		event->FinishTask();
+		return TaskExecutionResult::TASK_FINISHED;
 	}
 
 	string TaskType() const override {
@@ -371,44 +346,82 @@ public:
 	}
 
 private:
-	ClientContext &context;
-	const IcebergDelete &op;
+	const IcebergDelete &delete_op;
 	const string &filename;
 	const vector<idx_t> &deleted_rows;
 	IcebergDeleteFileWrite &out;
 };
 
+class IcebergDeleteFileWriteEvent : public BasePipelineEvent {
+public:
+	IcebergDeleteFileWriteEvent(Pipeline &pipeline, const IcebergDelete &op, IcebergDeleteGlobalState &global_state,
+	                            IcebergPendingDeletes pending_deletes, bool stage_snapshot)
+	    : BasePipelineEvent(pipeline), op(op), global_state(global_state), pending_deletes(std::move(pending_deletes)),
+	      writes(this->pending_deletes.rows_by_file.size()), stage_snapshot(stage_snapshot) {
+	}
+
+	void Schedule() override {
+		vector<shared_ptr<Task>> tasks;
+		tasks.reserve(writes.size());
+		idx_t index = 0;
+		for (const auto &entry : pending_deletes.rows_by_file) {
+			tasks.push_back(make_shared_ptr<IcebergDeleteFileWriteTask>(executor, shared_from_this(), op, entry.first,
+			                                                            entry.second, writes[index++]));
+		}
+		SetTasks(std::move(tasks));
+	}
+
+	void FinishEvent() override {
+		{
+			lock_guard<mutex> guard(global_state.lock);
+			auto &result = global_state.write_result;
+			idx_t index = 0;
+			for (const auto &entry : pending_deletes.rows_by_file) {
+				auto &write = writes[index++];
+				if (write.superseded_deletes) {
+					PopulateAlteredManifests(result.altered_manifests, *write.superseded_deletes);
+				}
+				result.written_files.emplace(entry.first, std::move(write.delete_file));
+			}
+		}
+		if (stage_snapshot) {
+			op.AddDeleteSnapshot(GetClientContext(), global_state);
+		}
+	}
+
+private:
+	const IcebergDelete &op;
+	IcebergDeleteGlobalState &global_state;
+	IcebergPendingDeletes pending_deletes;
+	vector<IcebergDeleteFileWrite> writes;
+	bool stage_snapshot;
+};
+
 } // namespace
 
-void IcebergDelete::WriteDeletes(ClientContext &context, const IcebergPendingDeletes &pending_deletes,
-                                 IcebergDeleteWriteResult &result) const {
+void IcebergDelete::ScheduleDeletes(Pipeline &pipeline, Event &event, IcebergDeleteGlobalState &global_state,
+                                    bool stage_snapshot) const {
+	D_ASSERT(!is_equality_delete);
+	auto pending_deletes = global_state.TakePendingDeletes();
+	if (global_state.merge_deletes) {
+		D_ASSERT(stage_snapshot);
+		// Earlier actions must finish so that the remaining contributors can run.
+		auto merged_deletes = global_state.merge_deletes->CompleteAction(merge_delete_action_index.GetIndex(),
+		                                                                 std::move(pending_deletes));
+		if (!merged_deletes) {
+			return;
+		}
+		pending_deletes = std::move(*merged_deletes);
+	}
+	if (pending_deletes.IsEmpty()) {
+		// An empty UPDATE may have no source scan after optimization.
+		return;
+	}
 	if (!multi_file_list) {
 		throw InternalException("IcebergDelete multi_file_list is NULL");
 	}
-
-	// Each data file gets its own delete file, written with its own object store round trips
-	vector<reference<const string>> filenames;
-	vector<IcebergDeleteFileWrite> writes(pending_deletes.rows_by_file.size());
-	if (writes.size() == 1) {
-		auto &entry = *pending_deletes.rows_by_file.begin();
-		filenames.push_back(entry.first);
-		writes[0] = WriteDeleteFile(context, entry.first, entry.second);
-	} else {
-		TaskExecutor executor(context);
-		for (const auto &entry : pending_deletes.rows_by_file) {
-			executor.ScheduleTask(make_uniq<IcebergDeleteFileWriteTask>(executor, context, *this, entry.first,
-			                                                            entry.second, writes[filenames.size()]));
-			filenames.push_back(entry.first);
-		}
-		executor.WorkOnTasks();
-	}
-
-	for (idx_t i = 0; i < writes.size(); i++) {
-		if (writes[i].superseded_deletes) {
-			PopulateAlteredManifests(result.altered_manifests, *writes[i].superseded_deletes);
-		}
-		result.written_files.emplace(filenames[i].get(), std::move(writes[i].delete_file));
-	}
+	event.InsertEvent(make_shared_ptr<IcebergDeleteFileWriteEvent>(pipeline, *this, global_state,
+	                                                               std::move(pending_deletes), stage_snapshot));
 }
 
 IcebergDeleteFileWrite IcebergDelete::WriteDeleteFile(ClientContext &context, const string &filename,
@@ -533,50 +546,37 @@ SinkFinalizeType IcebergDelete::Finalize(Pipeline &pipeline, Event &event, Clien
                                          OperatorSinkFinalizeInput &input) const {
 	auto &global_state = input.global_state.Cast<IcebergDeleteGlobalState>();
 
-	if (global_state.merge_deletes) {
-		// Empty actions must also report completion, so an empty final branch cannot strand collected deletes.
-		FinalizeMergeDeletes(context, global_state);
-		return SinkFinalizeType::READY;
-	}
-
-	if (is_equality_delete) {
-		//! Ensure the equality-delete file is written even if Sink never ran (e.g. zero matching rows).
-		bool should_write = false;
-		{
-			lock_guard<mutex> guard(global_state.lock);
-			if (!global_state.equality_delete_written) {
-				global_state.equality_delete_written = true;
-				should_write = true;
-			}
-		}
-		if (should_write) {
-			WriteEqualityDeleteFile(context, global_state);
-		}
-	} else if (global_state.pending_deletes.IsEmpty()) {
-		// FIXME: replace with get deleted rows
-		return SinkFinalizeType::READY;
-	}
-
-	auto &iceberg_transaction = IcebergTransaction::Get(context, table.catalog);
 	if (!is_equality_delete) {
-		// write out the delete rows
-		FlushDeletes(context, global_state);
+		ScheduleDeletes(pipeline, event, global_state, true);
+		return SinkFinalizeType::READY;
 	}
 
-	// write out the new manifest file
-	auto &irc_table = table.Cast<IcebergTableSchemaVersion>();
+	//! Ensure the equality-delete file is written even if Sink never ran (e.g. zero matching rows).
+	bool should_write = false;
+	{
+		lock_guard<mutex> guard(global_state.lock);
+		if (!global_state.equality_delete_written) {
+			global_state.equality_delete_written = true;
+			should_write = true;
+		}
+	}
+	if (should_write) {
+		WriteEqualityDeleteFile(context, global_state);
+	}
+	AddDeleteSnapshot(context, global_state);
+	return SinkFinalizeType::READY;
+}
 
-	auto &table_info = irc_table.table_info;
+void IcebergDelete::AddDeleteSnapshot(ClientContext &context, IcebergDeleteGlobalState &global_state) const {
+	auto &iceberg_transaction = IcebergTransaction::Get(context, table.catalog);
 	auto iceberg_delete_files = GenerateDeleteManifestEntries(global_state);
-
 	if (!global_state.write_result.written_files.empty()) {
-		ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTable &tbl) {
+		ApplyTableUpdate(table.table_info, iceberg_transaction, [&](IcebergTable &tbl) {
 			auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
 			transaction_data.AddDeleteSnapshot(std::move(iceberg_delete_files),
 			                                   std::move(global_state.write_result.altered_manifests), merge_action);
 		});
 	}
-	return SinkFinalizeType::READY;
 }
 
 //===--------------------------------------------------------------------===//

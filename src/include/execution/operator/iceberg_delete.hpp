@@ -217,14 +217,12 @@ public:
 
 	string GetName() const override;
 	InsertionOrderPreservingMap<string> ParamsToString() const override;
-	//! Drain this action's collected positions and materialize them at the existing finalization point.
-	void FlushDeletes(ClientContext &context, IcebergDeleteGlobalState &global_state) const;
-	//! Contribute this action's positions, materializing and staging deletes only for the last participant.
-	void FinalizeMergeDeletes(ClientContext &context, IcebergDeleteGlobalState &global_state) const;
-	//! Materialize a collected batch using the target scan's existing deletes and partition metadata.
-	//! All new positions for a data file must be collected before calling this writer.
-	void WriteDeletes(ClientContext &context, const IcebergPendingDeletes &pending_deletes,
-	                  IcebergDeleteWriteResult &result) const;
+	//! Schedule the collected deletes after finalization, or contribute to MERGE until its last action completes.
+	//! UPDATE leaves snapshot staging to the downstream insert sink.
+	void ScheduleDeletes(Pipeline &pipeline, Event &event, IcebergDeleteGlobalState &global_state,
+	                     bool stage_snapshot) const;
+	//! Stage the materialized delete files in this statement's snapshot.
+	void AddDeleteSnapshot(ClientContext &context, IcebergDeleteGlobalState &global_state) const;
 	//! Write the delete file for the newly deleted `deleted_rows` of one data file. Safe to call concurrently for
 	//! different data files.
 	IcebergDeleteFileWrite WriteDeleteFile(ClientContext &context, const string &filename,
