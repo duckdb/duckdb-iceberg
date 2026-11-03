@@ -1,0 +1,307 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/add_field_default_null_struct.test
+# description: A struct field added with a DEFAULT reads NULL on old rows whose struct is NULL
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env COLUMN_DEFAULT_SUPPORT
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+drop table if exists my_datalake.default.add_field_default_null_struct;
+
+statement ok
+create table my_datalake.default.add_field_default_null_struct (
+	id INTEGER,
+	s STRUCT(a VARCHAR)
+) WITH ('format-version' = 3);
+
+# Row 2 has a NULL struct. Row 3 has a non-NULL struct whose only field is NULL.
+statement ok
+insert into my_datalake.default.add_field_default_null_struct values
+	(1, {'a': 'one'}),
+	(2, NULL),
+	(3, {'a': NULL});
+
+statement ok
+ALTER TABLE my_datalake.default.add_field_default_null_struct ADD COLUMN s.x INTEGER DEFAULT 7;
+
+# Written after the ALTER, so this file contains s.x.
+statement ok
+insert into my_datalake.default.add_field_default_null_struct values
+	(4, NULL);
+
+# A NULL struct stays NULL. The default only fills the field of a struct that exists.
+query II
+select id, s from my_datalake.default.add_field_default_null_struct order by id;
+----
+1	{'a': one, 'x': 7}
+2	NULL
+3	{'a': NULL, 'x': 7}
+4	NULL
+
+# Reading a field of a NULL struct gives NULL, matching the NULL that reading s returns above.
+query II
+select id, s.x from my_datalake.default.add_field_default_null_struct order by id;
+----
+1	7
+2	NULL
+3	7
+4	NULL
+
+query II
+select id, struct_extract(s, 'x') from my_datalake.default.add_field_default_null_struct order by id;
+----
+1	7
+2	NULL
+3	7
+4	NULL
+
+query I
+select id from my_datalake.default.add_field_default_null_struct where s.x = 7 order by id;
+----
+1
+3
+
+query I
+select id from my_datalake.default.add_field_default_null_struct where s.x IS NULL order by id;
+----
+2
+4
+
+query I
+select count(*) from my_datalake.default.add_field_default_null_struct where s.x = 7;
+----
+2
+
+query III
+select id, s.a, s.x from my_datalake.default.add_field_default_null_struct order by id;
+----
+1	one	7
+2	NULL	NULL
+3	NULL	7
+4	NULL	NULL
+
+query II
+select id, s.x::VARCHAR from my_datalake.default.add_field_default_null_struct order by id;
+----
+1	7
+2	NULL
+3	7
+4	NULL
+
+# A field added two levels down reads NULL when either struct above it is NULL.
+
+statement ok
+drop table if exists my_datalake.default.add_field_default_null_nested_struct;
+
+statement ok
+create table my_datalake.default.add_field_default_null_nested_struct (
+	id INTEGER,
+	s STRUCT(a VARCHAR, n STRUCT(b INTEGER))
+) WITH ('format-version' = 3);
+
+statement ok
+insert into my_datalake.default.add_field_default_null_nested_struct values
+	(1, {'a': 'one', 'n': {'b': 1}}),
+	(2, {'a': 'two', 'n': NULL}),
+	(3, NULL);
+
+statement ok
+ALTER TABLE my_datalake.default.add_field_default_null_nested_struct ADD COLUMN s.n.y INTEGER DEFAULT 5;
+
+query III
+select id, s.n, s.n.y from my_datalake.default.add_field_default_null_nested_struct order by id;
+----
+1	{'b': 1, 'y': 5}	5
+2	NULL	NULL
+3	NULL	NULL
+
+query II
+select id, s.n.y from my_datalake.default.add_field_default_null_nested_struct order by id;
+----
+1	5
+2	NULL
+3	NULL
+
+query I
+select id from my_datalake.default.add_field_default_null_nested_struct where s.n.y = 5 order by id;
+----
+1
+
+query I
+select id from my_datalake.default.add_field_default_null_nested_struct where s.n.y IS NULL order by id;
+----
+2
+3
+
+# The struct's only other field is a struct.
+
+statement ok
+drop table if exists my_datalake.default.add_field_default_null_struct_of_struct;
+
+statement ok
+create table my_datalake.default.add_field_default_null_struct_of_struct (
+	id INTEGER,
+	s STRUCT(n STRUCT(b INTEGER))
+) WITH ('format-version' = 3);
+
+statement ok
+insert into my_datalake.default.add_field_default_null_struct_of_struct values
+	(1, {'n': {'b': 1}}),
+	(2, {'n': NULL}),
+	(3, NULL);
+
+statement ok
+ALTER TABLE my_datalake.default.add_field_default_null_struct_of_struct ADD COLUMN s.x INTEGER DEFAULT 7;
+
+query II
+select id, s.x from my_datalake.default.add_field_default_null_struct_of_struct order by id;
+----
+1	7
+2	7
+3	NULL
+
+query I
+select count(*) from my_datalake.default.add_field_default_null_struct_of_struct where s.x = 7;
+----
+2
+
+# The struct's only other field is a list.
+
+statement ok
+drop table if exists my_datalake.default.add_field_default_null_struct_of_list;
+
+statement ok
+create table my_datalake.default.add_field_default_null_struct_of_list (
+	id INTEGER,
+	s STRUCT(l INTEGER[])
+) WITH ('format-version' = 3);
+
+statement ok
+insert into my_datalake.default.add_field_default_null_struct_of_list values
+	(1, {'l': [1, 2]}),
+	(2, {'l': NULL}),
+	(3, NULL);
+
+statement ok
+ALTER TABLE my_datalake.default.add_field_default_null_struct_of_list ADD COLUMN s.x INTEGER DEFAULT 7;
+
+query II
+select id, s.x from my_datalake.default.add_field_default_null_struct_of_list order by id;
+----
+1	7
+2	7
+3	NULL
+
+query I
+select count(*) from my_datalake.default.add_field_default_null_struct_of_list where s.x = 7;
+----
+2
+
+# A field added to the struct inside a list reads NULL for NULL elements.
+
+statement ok
+drop table if exists my_datalake.default.add_field_default_null_list_element;
+
+statement ok
+create table my_datalake.default.add_field_default_null_list_element (
+	id INTEGER,
+	l STRUCT(a INTEGER)[]
+) WITH ('format-version' = 3);
+
+statement ok
+insert into my_datalake.default.add_field_default_null_list_element values
+	(1, [{'a': 1}, NULL]),
+	(2, NULL),
+	(3, []);
+
+statement ok
+ALTER TABLE my_datalake.default.add_field_default_null_list_element ADD COLUMN l.element.x INTEGER DEFAULT 7;
+
+# Written after the ALTER, so this file contains l.element.x.
+statement ok
+insert into my_datalake.default.add_field_default_null_list_element values
+	(4, [{'a': 4, 'x': 9}, NULL]);
+
+query II
+select id, l from my_datalake.default.add_field_default_null_list_element order by id;
+----
+1	[{'a': 1, 'x': 7}, NULL]
+2	NULL
+3	[]
+4	[{'a': 4, 'x': 9}, NULL]
+
+query II
+select id, [e.x for e in l] from my_datalake.default.add_field_default_null_list_element order by id;
+----
+1	[7, NULL]
+2	NULL
+3	[]
+4	[9, NULL]
+
+query III
+select id, l[1].x, l[2].x from my_datalake.default.add_field_default_null_list_element order by id;
+----
+1	7	NULL
+2	NULL	NULL
+3	NULL	NULL
+4	9	NULL
+
+query II
+select id, e.x from (select id, unnest(l) as e from my_datalake.default.add_field_default_null_list_element) order by id, e.x;
+----
+1	7
+1	NULL
+4	9
+4	NULL
+
+query I
+select count(*) from (select unnest(l) as e from my_datalake.default.add_field_default_null_list_element) where e.x = 7;
+----
+1
+
+query I
+select count(*) from (select unnest(l) as e from my_datalake.default.add_field_default_null_list_element) where e.x IS NULL;
+----
+2
+
+# The same for the struct inside a map value.
+
+statement ok
+drop table if exists my_datalake.default.add_field_default_null_map_value;
+
+statement ok
+create table my_datalake.default.add_field_default_null_map_value (
+	id INTEGER,
+	m MAP(VARCHAR, STRUCT(a INTEGER))
+) WITH ('format-version' = 3);
+
+statement ok
+insert into my_datalake.default.add_field_default_null_map_value values
+	(1, MAP {'k1': {'a': 1}, 'k2': NULL}),
+	(2, NULL);
+
+statement ok
+ALTER TABLE my_datalake.default.add_field_default_null_map_value ADD COLUMN m.value.x INTEGER DEFAULT 7;
+
+query II
+select id, m from my_datalake.default.add_field_default_null_map_value order by id;
+----
+1	{k1={'a': 1, 'x': 7}, k2=NULL}
+2	NULL
+
+query III
+select id, m['k1'].x, m['k2'].x from my_datalake.default.add_field_default_null_map_value order by id;
+----
+1	7	NULL
+2	NULL	NULL
+
+query II
+select id, [v.x for v in map_values(m)] from my_datalake.default.add_field_default_null_map_value order by id;
+----
+1	[7, NULL]
+2	NULL
