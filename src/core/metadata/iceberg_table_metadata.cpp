@@ -567,6 +567,27 @@ const case_insensitive_map_t<string> &IcebergTableMetadata::GetTableProperties()
 	return table_properties;
 }
 
+//! Iceberg derives these from table state; stored as plain properties they are wrong or misleading for other engines
+static const case_insensitive_set_t RESERVED_TABLE_PROPERTIES = {
+    "format-version",           "uuid",
+    "snapshot-count",           "current-snapshot-id",
+    "current-snapshot-summary", "current-snapshot-timestamp-ms",
+    "current-schema",           "default-partition-spec",
+    "default-sort-order"};
+
+void IcebergTableMetadata::VerifyNotReservedProperty(const string &key, const string &operation) {
+	if (RESERVED_TABLE_PROPERTIES.find(key) == RESERVED_TABLE_PROPERTIES.end()) {
+		return;
+	}
+	if (StringUtil::CIEquals(key, "format-version")) {
+		throw InvalidInputException("Cannot change 'format-version' with %s, use ALTER TABLE ... SET "
+		                            "('format-version' = ...) to upgrade the table",
+		                            operation);
+	}
+	throw InvalidInputException("'%s' is a reserved Iceberg table property and can't be changed with %s", key,
+	                            operation);
+}
+
 const string &IcebergTableMetadata::GetLocation() const {
 	return location;
 }

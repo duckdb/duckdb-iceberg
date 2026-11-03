@@ -883,6 +883,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 				}
 				new_format_version = casted_val->GetValue<int32_t>();
 			} else {
+				IcebergTableMetadata::VerifyNotReservedProperty(key, "ALTER TABLE ... SET");
 				auto casted_val = val.DefaultTryCastAs(LogicalType::VARCHAR, nullptr, true);
 				if (!casted_val) {
 					throw InvalidInputException("Can't cast '%s' property (%s) to VARCHAR", key, val.ToString());
