@@ -498,14 +498,9 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 
 	if (table_metadata.properties) {
 		auto &properties = *table_metadata.properties;
-		auto name_mapping = properties.find("schema.name-mapping.default");
+		auto name_mapping = properties.find(IcebergFieldMapping::PROPERTY);
 		if (name_mapping != properties.end()) {
-			auto doc = JSONDocument::Parse(name_mapping->second.c_str(), name_mapping->second.size());
-			auto root = doc->GetRoot();
-			idx_t mapping_index = 0;
-			res.mappings.emplace_back();
-			mapping_index++;
-			IcebergFieldMapping::ParseFieldMappings(root, res.mappings, mapping_index, 0);
+			res.mappings = IcebergFieldMapping::Parse(name_mapping->second);
 		}
 
 		// parse all table properties
