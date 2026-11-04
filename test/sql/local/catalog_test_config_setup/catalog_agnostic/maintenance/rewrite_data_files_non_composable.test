@@ -1,0 +1,171 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_non_composable.test
+# description: Rewriting data files cannot be combined with row changes in the same transaction
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.rewrite_non_composable;
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_non_composable (id INTEGER);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_non_composable VALUES (1), (2);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_non_composable VALUES (3), (4);
+
+# Every kind of row change must be refused after a rewrite.
+statement ok
+BEGIN;
+
+statement ok
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_non_composable', rewrite_all = true);
+
+statement error
+INSERT INTO my_datalake.default.rewrite_non_composable VALUES (5);
+----
+after rewriting its data files in the same transaction
+
+# Committing the aborted transaction must publish neither the rewrite nor the INSERT.
+statement ok
+COMMIT;
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.rewrite_non_composable)
+WHERE content = 'DATA' AND status <> 'DELETED';
+----
+2
+
+statement ok
+BEGIN;
+
+statement ok
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_non_composable', rewrite_all = true);
+
+statement error
+UPDATE my_datalake.default.rewrite_non_composable SET id = 20 WHERE id = 2;
+----
+after rewriting its data files in the same transaction
+
+statement ok
+ROLLBACK;
+
+statement ok
+BEGIN;
+
+statement ok
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_non_composable', rewrite_all = true);
+
+statement error
+DELETE FROM my_datalake.default.rewrite_non_composable WHERE id = 2;
+----
+after rewriting its data files in the same transaction
+
+statement ok
+ROLLBACK;
+
+statement ok
+BEGIN;
+
+statement ok
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_non_composable', rewrite_all = true);
+
+statement error
+MERGE INTO my_datalake.default.rewrite_non_composable t USING (SELECT 5 AS id) s
+ON t.id = s.id WHEN NOT MATCHED THEN INSERT VALUES (s.id);
+----
+after rewriting its data files in the same transaction
+
+statement ok
+ROLLBACK;
+
+# The guard also applies when both operations were bound in the same statement.
+statement error
+INSERT INTO my_datalake.default.rewrite_non_composable
+SELECT rewritten_data_files_count
+FROM iceberg_rewrite_data_files('my_datalake.default.rewrite_non_composable', rewrite_all = true);
+----
+after rewriting its data files in the same transaction
+
+# UPDATE and MERGE also block a later rewrite.
+statement ok
+BEGIN;
+
+statement ok
+UPDATE my_datalake.default.rewrite_non_composable SET id = 20 WHERE id = 2;
+
+statement error
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_non_composable', rewrite_all = true);
+----
+has uncommitted changes in this transaction
+
+statement ok
+ROLLBACK;
+
+statement ok
+BEGIN;
+
+statement ok
+MERGE INTO my_datalake.default.rewrite_non_composable t USING (SELECT 5 AS id) s
+ON t.id = s.id WHEN NOT MATCHED THEN INSERT VALUES (s.id);
+
+statement error
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_non_composable', rewrite_all = true);
+----
+has uncommitted changes in this transaction
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.rewrite_non_composable;
+----
+[1, 2, 3, 4]
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.rewrite_non_composable)
+WHERE content = 'DATA' AND status <> 'DELETED';
+----
+2
+
+# Rewrites in separate transactions are allowed, and reads see the replacement immediately.
+statement ok
+BEGIN;
+
+query II
+SELECT rewritten_data_files_count, added_data_files_count
+FROM iceberg_rewrite_data_files('my_datalake.default.rewrite_non_composable', rewrite_all = true);
+----
+2	1
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.rewrite_non_composable;
+----
+[1, 2, 3, 4]
+
+statement ok
+COMMIT;
+
+statement ok
+BEGIN;
+
+query II
+SELECT rewritten_data_files_count, added_data_files_count
+FROM iceberg_rewrite_data_files('my_datalake.default.rewrite_non_composable', rewrite_all = true);
+----
+1	1
+
+statement ok
+COMMIT;
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.rewrite_non_composable;
+----
+[1, 2, 3, 4]
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_non_composable;

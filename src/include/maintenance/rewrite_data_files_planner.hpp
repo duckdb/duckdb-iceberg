@@ -13,16 +13,12 @@
 namespace duckdb {
 
 struct IcebergTable;
-struct IcebergTransactionData;
 
 struct RewriteCandidate {
 	string file_path;
 	int64_t file_size_in_bytes = 0;
 	int64_t record_count = 0;
 	vector<IcebergPartitionInfo> partition_info;
-	//! Whether a delete, committed or staged in this transaction, may apply to the file, so that it can have no
-	//! live row
-	bool may_have_deletes = false;
 };
 
 struct RewriteBucket {
@@ -42,6 +38,9 @@ struct RewritePlan {
 	shared_ptr<IcebergTable> table_info;
 	//! Files selected for rewrite after per-partition size / min_input_files gating.
 	vector<RewriteCandidate> selected_candidates;
+	//! Distinct delete-file paths whose referenced data files were all selected.
+	//! Invalidated on the same REPLACE commit as the rewritten data files.
+	vector<string> delete_files_to_remove;
 };
 
 struct RewriteDataFilesPlanInput {
@@ -60,7 +59,5 @@ struct RewriteDataFilesPlanInput {
 };
 
 RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input);
-//! The changes this transaction made to the table so far, if any
-optional_ptr<const IcebergTransactionData> GetRewriteTransactionData(ClientContext &context, IcebergTable &table_info);
 
 } // namespace duckdb

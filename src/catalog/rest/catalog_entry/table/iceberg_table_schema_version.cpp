@@ -86,6 +86,9 @@ TableFunction IcebergTableSchemaVersion::GetScanFunction(ClientContext &context,
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto scan_info =
 	    make_shared_ptr<IcebergScanInfo>(metadata.GetMetadataPath(fs), metadata, snapshot_info, iceberg_schema);
+	auto &transaction = IcebergTransaction::Get(context, catalog);
+	scan_info->serialization_transaction_id = transaction.scan_serialization_id;
+	scan_info->serialization_query_id = transaction.active_query.load();
 	if (table_info.transaction_data && snapshot_lookup.IsLatest()) {
 		scan_info->transaction_data = table_info.transaction_data.get();
 	}

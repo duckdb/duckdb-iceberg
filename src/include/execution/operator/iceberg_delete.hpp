@@ -77,6 +77,17 @@ struct IcebergDeleteFileInfo {
 	unordered_map<int32_t, int64_t> nan_value_counts;
 };
 
+struct IcebergDeleteData;
+
+//! Materialized deletes for one data file.
+struct IcebergDeleteFileWrite {
+	IcebergDeleteFileInfo delete_file;
+	//! Serialized v3 vector, held until the size-based Puffin write tasks have been scheduled.
+	vector<data_t> deletion_vector;
+	//! The existing deletes of the data file that a written deletion vector supersedes
+	shared_ptr<IcebergDeleteData> superseded_deletes;
+};
+
 //! Materialized deletes and the old deletion vectors they supersede.
 struct IcebergDeleteWriteResult {
 	unordered_map<string, IcebergDeleteFileInfo> written_files;
@@ -208,14 +219,15 @@ public:
 
 	string GetName() const override;
 	InsertionOrderPreservingMap<string> ParamsToString() const override;
-	//! Drain this action's collected positions and materialize them at the existing finalization point.
-	void FlushDeletes(ClientContext &context, IcebergDeleteGlobalState &global_state) const;
-	//! Contribute this action's positions, materializing and staging deletes only for the last participant.
-	void FinalizeMergeDeletes(ClientContext &context, IcebergDeleteGlobalState &global_state) const;
-	//! Materialize a collected batch using the target scan's existing deletes and partition metadata.
-	//! All new positions for a data file must be collected before calling this writer.
-	void WriteDeletes(ClientContext &context, const IcebergPendingDeletes &pending_deletes,
-	                  IcebergDeleteWriteResult &result) const;
+	//! Schedule the collected deletes after finalization, or contribute to MERGE until its last action completes.
+	//! UPDATE leaves snapshot staging to the downstream insert sink.
+	void ScheduleDeletes(Pipeline &pipeline, Event &event, IcebergDeleteGlobalState &global_state,
+	                     bool stage_snapshot) const;
+	//! Stage the materialized delete files in this statement's snapshot.
+	void AddDeleteSnapshot(ClientContext &context, IcebergDeleteGlobalState &global_state) const;
+	//! Write a v2 delete file or serialize a v3 vector for subsequent size-based Puffin packing.
+	IcebergDeleteFileWrite MaterializeDeletes(ClientContext &context, const string &filename,
+	                                          const vector<idx_t> &deleted_rows) const;
 
 private:
 	//! Walk `plan` for the PhysicalTableScan that emits the row-id virtual columns the delete needs.
@@ -223,9 +235,7 @@ private:
 	IcebergDeleteFileInfo WritePositionalDeleteFile(ClientContext &context, const string &filename,
 	                                                IcebergDeleteFileInfo delete_file,
 	                                                const set<idx_t> &sorted_deletes) const;
-	IcebergDeleteFileInfo WriteDeletionVectorFile(ClientContext &context, const string &filename,
-	                                              IcebergDeleteFileInfo delete_file,
-	                                              const set<idx_t> &sorted_deletes) const;
+	vector<data_t> SerializeDeletionVector(const set<idx_t> &sorted_deletes) const;
 	//! Writes the Iceberg equality-delete parquet file (one column per equality field, one row of
 	//! constants) and records it in `global_state.write_result`.
 	void WriteEqualityDeleteFile(ClientContext &context, IcebergDeleteGlobalState &global_state) const;

@@ -1,5 +1,5 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_repeated.test
-# description: A data file replaced by iceberg_rewrite_data_files is not rewritten again in the same transaction or statement
+# description: Rewrites of the same table cannot be combined in one transaction or statement
 # group: [maintenance]
 
 require-env CATALOG_TEST_CONFIG_SETUP
@@ -18,7 +18,7 @@ insert into my_datalake.default.rewrite_repeated values (1), (2);
 statement ok
 insert into my_datalake.default.rewrite_repeated values (3), (4);
 
-# a second rewrite in the same transaction finds nothing left to rewrite
+# a second rewrite in the same transaction is refused
 statement ok
 BEGIN;
 
@@ -28,21 +28,20 @@ from iceberg_rewrite_data_files('my_datalake.default.rewrite_repeated', rewrite_
 ----
 2	1
 
-query II
-select rewritten_data_files_count, added_data_files_count
-from iceberg_rewrite_data_files('my_datalake.default.rewrite_repeated', rewrite_all := true);
+statement error
+select * from iceberg_rewrite_data_files('my_datalake.default.rewrite_repeated', rewrite_all := true);
 ----
-0	0
+has uncommitted changes in this transaction
 
 statement ok
-COMMIT;
+ROLLBACK;
 
 query I
 select list(id order by id) from my_datalake.default.rewrite_repeated;
 ----
 [1, 2, 3, 4]
 
-# a rewrite of some files, then of the rest, in one transaction
+# a partial rewrite also prevents another rewrite in the same transaction
 statement ok
 insert into my_datalake.default.rewrite_repeated values (5);
 
@@ -58,14 +57,13 @@ from iceberg_rewrite_data_files('my_datalake.default.rewrite_repeated', rewrite_
 ----
 1
 
-query I
-select rewritten_data_files_count
-from iceberg_rewrite_data_files('my_datalake.default.rewrite_repeated', rewrite_all := true);
+statement error
+select * from iceberg_rewrite_data_files('my_datalake.default.rewrite_repeated', rewrite_all := true);
 ----
-2
+has uncommitted changes in this transaction
 
 statement ok
-COMMIT;
+ROLLBACK;
 
 query I
 select list(id order by id) from my_datalake.default.rewrite_repeated;
@@ -78,7 +76,7 @@ select * from iceberg_rewrite_data_files('my_datalake.default.rewrite_repeated',
 union all
 select * from iceberg_rewrite_data_files('my_datalake.default.rewrite_repeated', rewrite_all := true);
 ----
-<REGEX>:.*was replaced by another rewrite in this transaction or statement.*
+after rewriting its data files in the same transaction
 
 query I
 select list(id order by id) from my_datalake.default.rewrite_repeated;
@@ -97,7 +95,7 @@ select * from iceberg_rewrite_data_files('my_datalake.default.rewrite_repeated',
 union all
 select * from iceberg_rewrite_data_files('my_datalake.default.rewrite_repeated', rewrite_all := true);
 ----
-<REGEX>:.*was replaced by another rewrite in this transaction or statement.*
+has uncommitted changes in this transaction
 
 statement ok
 ROLLBACK;
@@ -119,17 +117,24 @@ select * from iceberg_rewrite_data_files('my_datalake.default.rewrite_repeated',
 union all
 select * from iceberg_rewrite_data_files('my_datalake.default.rewrite_repeated', rewrite_all := true);
 ----
-<REGEX>:.*was replaced by another rewrite in this transaction or statement.*
+after rewriting its data files in the same transaction
 
 query I
 select list(id order by id) from my_datalake.default.rewrite_repeated;
 ----
 [1, 2, 3, 4, 5, 6, 7, 8]
 
+# Failed rewrites must leave the original data files in place.
+query I
+select count(*) from iceberg_metadata(my_datalake.default.rewrite_repeated)
+where content = 'DATA' and status <> 'DELETED';
+----
+6
+
 statement ok
 drop table my_datalake.default.rewrite_repeated;
 
-# a partitioned table: a second rewrite in the same transaction finds nothing left to rewrite
+# a partitioned table also refuses a second rewrite in the same transaction
 statement ok
 drop table if exists my_datalake.default.rewrite_repeated_partitioned;
 
@@ -151,14 +156,13 @@ from iceberg_rewrite_data_files('my_datalake.default.rewrite_repeated_partitione
 ----
 4	2
 
-query II
-select rewritten_data_files_count, added_data_files_count
-from iceberg_rewrite_data_files('my_datalake.default.rewrite_repeated_partitioned', rewrite_all := true);
+statement error
+select * from iceberg_rewrite_data_files('my_datalake.default.rewrite_repeated_partitioned', rewrite_all := true);
 ----
-0	0
+has uncommitted changes in this transaction
 
 statement ok
-COMMIT;
+ROLLBACK;
 
 query II
 select k, list(id order by id) from my_datalake.default.rewrite_repeated_partitioned group by k order by k;

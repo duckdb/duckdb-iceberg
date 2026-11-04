@@ -170,8 +170,7 @@ SinkFinalizeType PhysicalRewriteDataFiles::Finalize(Pipeline &pipeline, Event &e
 	auto &gstate = input.global_state.Cast<RewriteDataFilesGlobalState>();
 	{
 		lock_guard<mutex> guard(gstate.lock);
-		//! CommitRewrite checks the candidates against other rewrites, and that a missing output is explained by
-		//! deletes, under the transaction's rewrite lock
+		//! A fully deleted partition produces no output files, but its inputs must still be invalidated.
 		gstate.result.new_entries = IcebergInsert::GetInsertManifestEntries(gstate.insert_state);
 		PinRewriteSequenceNumbers(gstate.result.new_entries, gstate.plan.starting_sequence_number);
 		gstate.result.added_data_files = static_cast<int64_t>(gstate.result.new_entries.size());
@@ -200,18 +199,19 @@ SourceResultType PhysicalRewriteDataFiles::GetDataInternal(ExecutionContext &con
 	int64_t rewritten_data_files = 0;
 	int64_t added_data_files = 0;
 	int64_t rewritten_bytes = 0;
+	int64_t removed_delete_files = 0;
 	if (!children.empty()) {
 		auto &gstate = sink_state->Cast<RewriteDataFilesGlobalState>();
 		rewritten_data_files = gstate.result.rewritten_data_files;
 		added_data_files = gstate.result.added_data_files;
 		rewritten_bytes = gstate.result.rewritten_bytes;
+		removed_delete_files = gstate.result.removed_delete_files;
 	}
 	chunk.data[0].Append(Value::BIGINT(rewritten_data_files));
 	chunk.data[1].Append(Value::BIGINT(added_data_files));
 	chunk.data[2].Append(Value::BIGINT(rewritten_bytes));
-	//! Failed commits and removed deletes stay zero until those controls are wired.
 	chunk.data[3].Append(Value::BIGINT(0));
-	chunk.data[4].Append(Value::BIGINT(0));
+	chunk.data[4].Append(Value::BIGINT(removed_delete_files));
 	return SourceResultType::FINISHED;
 }
 

@@ -15,6 +15,7 @@ namespace duckdb {
 void AccountSelectedCandidates(const RewritePlan &plan, RewriteExecutionResult &result) {
 	result.rewritten_data_files = static_cast<int64_t>(plan.selected_candidates.size());
 	result.rewritten_bytes = 0;
+	result.removed_delete_files = static_cast<int64_t>(plan.delete_files_to_remove.size());
 	result.rewritten_candidates.clear();
 	result.rewritten_candidates.reserve(plan.selected_candidates.size());
 	for (auto &candidate : plan.selected_candidates) {
@@ -68,29 +69,20 @@ void CommitRewrite(ClientContext &context, const RewritePlan &plan, RewriteExecu
 	ValidateRewriteSnapshot(plan, table_info, "commit");
 
 	auto &iceberg_transaction = IcebergTransaction::Get(context, table_info.catalog);
-	//! Rewrites in one statement finish concurrently: check the candidates and commit as one step
+	IcebergManifestDeletes deletes;
+	for (auto &cand : result.rewritten_candidates) {
+		deletes.InvalidateFile(cand.file_path);
+	}
+	//! Same invalidation path drops delete-manifest entries. Position delete files have no content offset.
+	for (auto &delete_path : plan.delete_files_to_remove) {
+		deletes.InvalidateFile(delete_path);
+	}
+
+	//! Rewrites in one statement may finalize concurrently, including initializing the transaction's table state.
 	lock_guard<mutex> guard(iceberg_transaction.rewrite_commit_lock);
 	ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTable &tbl) {
 		ValidateRewriteSnapshot(plan, tbl, "transaction commit");
 		auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
-		IcebergManifestDeletes deletes;
-		for (auto &cand : result.rewritten_candidates) {
-			if (transaction_data.IsFileInvalidated(cand.file_path)) {
-				throw CatalogException("iceberg_rewrite_data_files: data file '%s' was replaced by another rewrite in "
-				                       "this transaction or statement",
-				                       cand.file_path);
-			}
-			deletes.InvalidateFile(cand.file_path);
-		}
-		//! A file can only have no live row when a delete applies to it: otherwise the scan missed its rows
-		if (result.new_entries.empty()) {
-			for (auto &cand : result.rewritten_candidates) {
-				if (!cand.may_have_deletes) {
-					throw InternalException(
-					    "iceberg_rewrite_data_files: COPY returned no written files for selected candidates");
-				}
-			}
-		}
 		transaction_data.AddSnapshot(IcebergSnapshotOperationType::REPLACE, std::move(result.new_entries),
 		                             std::move(deletes));
 	});

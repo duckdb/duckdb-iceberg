@@ -5,7 +5,7 @@
 #include "duckdb/parser/column_definition.hpp"
 #include "duckdb/common/multi_file/multi_file_data.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
-#include "duckdb/function/scalar/generic_functions.hpp"
+#include "duckdb/function/scalar/struct_functions.hpp"
 #include "common/iceberg_default.hpp"
 #include "common/iceberg_fixed_type.hpp"
 #include "common/iceberg_geography_type.hpp"
@@ -372,24 +372,12 @@ ColumnDefinition IcebergColumnDefinition::GetColumnDefinition() const {
 		// Geography fields can't be written, and a default expression would name the geography type, which isn't a
 		// registered DuckDB type, so binding any INSERT or UPDATE would fail before the write is refused
 	} else if (type.id() == LogicalTypeId::STRUCT) {
-		// DuckDB's default projection hook receives the bound default expression, but not the Iceberg column
-		// metadata from which it originated. Carry the recursive field defaults through that existing interface in
-		// a real `constant_or_null` expression:
-		//
-		//   constant_or_null(<whole-STRUCT default>, <non-NULL recursive descriptor>)
-		//
-		// The second argument is deliberately non-NULL, so ordinary evaluation of the expression returns the first
-		// argument unchanged. Consequently an omitted/DEFAULT whole STRUCT still observes `write_default`: normally
-		// typed NULL, or a materialized STRUCT under the test-only compatibility setting.
-		//
-		// The expression is parsed here, where no ClientContext is available. DuckDB binds the registered scalar
-		// function later. The Iceberg projection resolver recognizes that bound function through
-		// ConstantOrNull::IsConstantOrNull and extracts the second argument only when it needs to remap a supplied
-		// non-NULL STRUCT. This envelope is internal and is not serialized into Iceberg metadata.
+		// struct_extract(<descriptor>, 'struct_default') evaluates to the STRUCT's own default, and also carries
+		// its fields' defaults for the projection resolver
 		vector<unique_ptr<ParsedExpression>> arguments;
-		arguments.push_back(ConstantExpression::FromValue(write_default));
 		arguments.push_back(ConstantExpression::FromValue(GetWriteDefaultDescriptor()));
-		res.SetDefaultValue(make_uniq<FunctionExpression>(Identifier(ConstantOrNullFun::Name), std::move(arguments)));
+		arguments.push_back(ConstantExpression::FromValue(Value("struct_default")));
+		res.SetDefaultValue(make_uniq<FunctionExpression>(Identifier(StructExtractFun::Name), std::move(arguments)));
 	} else if (!write_default.IsNull()) {
 		if (type.IsNested()) {
 			throw NotImplementedException("DEFAULT values for nested types are not supported yet");

@@ -10,7 +10,7 @@ UnsupportedIcebergViewEntry::UnsupportedIcebergViewEntry(Catalog &catalog, Schem
 }
 
 const SelectStatement &UnsupportedIcebergViewEntry::GetQuery() {
-	throw BinderException("Cannot query Iceberg view '%s': %s", name, reason);
+	throw BinderException("Cannot query Iceberg view %s: %s", name, reason);
 }
 
 void UnsupportedIcebergViewEntry::BindView(ClientContext &context, BindViewAction action) {

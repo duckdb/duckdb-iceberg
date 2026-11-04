@@ -5,15 +5,16 @@
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/value.hpp"
+#include "duckdb/common/unordered_map.hpp"
 #include "duckdb/common/unordered_set.hpp"
 
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
-#include "catalog/rest/iceberg_catalog.hpp"
-#include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "iceberg_options.hpp"
 #include "maintenance/maintenance_table_loader.hpp"
+#include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/rest/transaction/iceberg_transaction.hpp"
 
 #include <algorithm>
 #include <map>
@@ -194,16 +195,11 @@ int32_t ResolveOutputSpecId(const RewriteDataFilesPlanInput &input, const Iceber
 	return spec->spec_id;
 }
 
-optional<RewriteCandidate> TryMakeRewriteCandidate(const IcebergManifestEntry &entry,
-                                                   optional_ptr<const IcebergTransactionData> transaction_data) {
+optional<RewriteCandidate> TryMakeRewriteCandidate(const IcebergManifestEntry &entry) {
 	if (entry.status == IcebergManifestEntryStatusType::DELETED) {
 		return nullopt;
 	}
 	if (entry.data_file.content != IcebergManifestEntryContentType::DATA) {
-		return nullopt;
-	}
-	//! An earlier statement of this transaction already replaced the file
-	if (transaction_data && transaction_data->IsFileInvalidated(entry.data_file.file_path)) {
 		return nullopt;
 	}
 	RewriteCandidate cand;
@@ -215,8 +211,7 @@ optional<RewriteCandidate> TryMakeRewriteCandidate(const IcebergManifestEntry &e
 }
 
 void CollectUnpartitionedCandidates(RewriteBucket &bucket, const vector<IcebergManifestListEntry> &manifest_files,
-                                    const RewriteDataFilesPlanInput &input, int64_t target_file_size_bytes,
-                                    optional_ptr<const IcebergTransactionData> transaction_data) {
+                                    const RewriteDataFilesPlanInput &input, int64_t target_file_size_bytes) {
 	for (const auto &list_entry : manifest_files) {
 		if (list_entry.GetFile().content != IcebergManifestContentType::DATA) {
 			continue;
@@ -225,7 +220,7 @@ void CollectUnpartitionedCandidates(RewriteBucket &bucket, const vector<IcebergM
 			continue;
 		}
 		for (const auto &entry : list_entry.GetManifestEntries()) {
-			auto cand = TryMakeRewriteCandidate(entry, transaction_data);
+			auto cand = TryMakeRewriteCandidate(entry);
 			if (!cand) {
 				continue;
 			}
@@ -265,8 +260,7 @@ string PartitionBucketKey(const vector<IcebergPartitionInfo> &partition_info) {
 
 void CollectPartitionedCandidates(std::map<string, RewriteBucket> &per_partition, RewriteBucket &other_specs,
                                   const vector<IcebergManifestListEntry> &manifest_files,
-                                  const RewriteDataFilesPlanInput &input, int32_t output_spec_id,
-                                  optional_ptr<const IcebergTransactionData> transaction_data) {
+                                  const RewriteDataFilesPlanInput &input, int32_t output_spec_id) {
 	for (const auto &list_entry : manifest_files) {
 		if (list_entry.GetFile().content != IcebergManifestContentType::DATA) {
 			continue;
@@ -274,7 +268,7 @@ void CollectPartitionedCandidates(std::map<string, RewriteBucket> &per_partition
 		//! Spark keeps output-spec files in per-partition buckets and groups every other spec together.
 		const auto on_output_spec = list_entry.GetFile().partition_spec_id == output_spec_id;
 		for (const auto &entry : list_entry.GetManifestEntries()) {
-			auto cand = TryMakeRewriteCandidate(entry, transaction_data);
+			auto cand = TryMakeRewriteCandidate(entry);
 			if (!cand) {
 				continue;
 			}
@@ -288,44 +282,177 @@ void CollectPartitionedCandidates(std::map<string, RewriteBucket> &per_partition
 	}
 }
 
-//! Mark the candidates a delete may apply to: a live delete file that references the candidate, one that does not
-//! say which data file it applies to, or a delete or update this transaction staged for the table
-void MarkCandidatesWithDeletes(RewritePlan &plan, const vector<IcebergManifestListEntry> &manifest_files,
-                               optional_ptr<const IcebergTransactionData> transaction_data) {
-	bool any_file = transaction_data && transaction_data->HasStagedDeletes();
-	unordered_set<string> referenced_files;
-	for (const auto &list_entry : manifest_files) {
-		if (any_file) {
-			break;
+const Value *PartitionFieldValue(const vector<IcebergPartitionInfo> &partition_info, uint64_t field_id) {
+	for (auto &partition : partition_info) {
+		if (partition.field_id == field_id) {
+			return &partition.value;
 		}
-		if (list_entry.GetFile().content != IcebergManifestContentType::DELETE || !list_entry.HasManifestEntries()) {
+	}
+	return nullptr;
+}
+
+enum class DeleteApplyMatch { NO, YES, AMBIGUOUS };
+
+using LiveDataFiles = unordered_map<string, std::pair<const IcebergManifest *, const IcebergManifestEntry *>>;
+
+//! Apply the partition and sequence rules from IcebergFilePruner::DeleteFileMatchesDataFile.
+//! A missing spec or partition value is ambiguous, so the caller leaves the delete file in place.
+DeleteApplyMatch PositionDeleteApplies(const IcebergTableMetadata &metadata, const IcebergManifest &delete_manifest,
+                                       const IcebergManifestEntry &delete_entry, const IcebergManifest &data_manifest,
+                                       const IcebergManifestEntry &data_entry) {
+	if (delete_entry.GetSequenceNumber(delete_manifest) < data_entry.GetSequenceNumber(data_manifest)) {
+		return DeleteApplyMatch::NO;
+	}
+	auto spec_it = metadata.GetPartitionSpecs().find(delete_manifest.partition_spec_id);
+	if (spec_it == metadata.GetPartitionSpecs().end()) {
+		return DeleteApplyMatch::AMBIGUOUS;
+	}
+	if (spec_it->second.IsUnpartitioned()) {
+		return DeleteApplyMatch::YES;
+	}
+	if (delete_manifest.partition_spec_id != data_manifest.partition_spec_id) {
+		return DeleteApplyMatch::NO;
+	}
+	for (auto &field : spec_it->second.GetFields()) {
+		auto delete_value = PartitionFieldValue(delete_entry.data_file.partition_info, field.partition_field_id);
+		auto data_value = PartitionFieldValue(data_entry.data_file.partition_info, field.partition_field_id);
+		if (!delete_value || !data_value) {
+			return DeleteApplyMatch::AMBIGUOUS;
+		}
+		if (!Value::NotDistinctFrom(*delete_value, *data_value)) {
+			return DeleteApplyMatch::NO;
+		}
+	}
+	return DeleteApplyMatch::YES;
+}
+
+//! Drop a delete file only when every data file it references is in the rewritten set.
+//! referenced_data_file names that file directly. Otherwise a position delete is removed only when every
+//! live data file it can match was rewritten. Dangling deletes stay (Spark remove-dangling-deletes defaults
+//! to false). Equality deletes without referenced_data_file stay.
+bool DeleteFileFullyApplied(const IcebergTableMetadata &metadata, const IcebergManifest &delete_manifest,
+                            const IcebergManifestEntry &delete_entry, const LiveDataFiles &live_data,
+                            const unordered_set<string> &rewritten_paths) {
+	auto &delete_file = delete_entry.data_file;
+	//! InvalidateFile(path) addresses an ordinary file. An offset identifies a deletion-vector blob.
+	if (delete_file.content_offset || delete_file.file_path.empty()) {
+		return false;
+	}
+	const bool has_reference = delete_file.referenced_data_file && !delete_file.referenced_data_file->empty();
+	if (delete_file.content == IcebergManifestEntryContentType::EQUALITY_DELETES) {
+		return has_reference && rewritten_paths.count(*delete_file.referenced_data_file) > 0;
+	}
+	if (delete_file.content != IcebergManifestEntryContentType::POSITION_DELETES) {
+		return false;
+	}
+	if (has_reference) {
+		if (rewritten_paths.count(*delete_file.referenced_data_file) == 0) {
+			return false;
+		}
+		auto live = live_data.find(*delete_file.referenced_data_file);
+		//! A reference identifies the file, but a stale delete may no longer apply to it.
+		return live != live_data.end() &&
+		       PositionDeleteApplies(metadata, delete_manifest, delete_entry, *live->second.first,
+		                             *live->second.second) == DeleteApplyMatch::YES;
+	}
+
+	bool matched_live_file = false;
+	for (auto &live : live_data) {
+		auto match =
+		    PositionDeleteApplies(metadata, delete_manifest, delete_entry, *live.second.first, *live.second.second);
+		if (match == DeleteApplyMatch::AMBIGUOUS) {
+			return false;
+		}
+		if (match == DeleteApplyMatch::NO) {
 			continue;
 		}
+		matched_live_file = true;
+		if (rewritten_paths.count(live.first) == 0) {
+			return false;
+		}
+	}
+	return matched_live_file;
+}
+
+void CollectFullyAppliedDeleteFiles(RewritePlan &plan, const IcebergTableMetadata &metadata,
+                                    const vector<IcebergManifestListEntry> &manifest_files) {
+	if (plan.selected_candidates.empty()) {
+		return;
+	}
+	unordered_set<string> rewritten_paths;
+	for (auto &candidate : plan.selected_candidates) {
+		rewritten_paths.insert(candidate.file_path);
+	}
+
+	LiveDataFiles live_data;
+	for (const auto &list_entry : manifest_files) {
+		auto &manifest = list_entry.GetManifest();
 		for (const auto &entry : list_entry.GetManifestEntries()) {
 			if (entry.status == IcebergManifestEntryStatusType::DELETED) {
 				continue;
 			}
-			if (!entry.data_file.referenced_data_file) {
-				any_file = true;
-				break;
+			if (entry.data_file.content != IcebergManifestEntryContentType::DATA) {
+				continue;
 			}
-			referenced_files.insert(*entry.data_file.referenced_data_file);
+			live_data.emplace(entry.data_file.file_path, std::make_pair(&manifest, &entry));
 		}
 	}
-	for (auto &cand : plan.selected_candidates) {
-		cand.may_have_deletes = any_file || referenced_files.count(cand.file_path) > 0;
+
+	unordered_set<string> blocked_paths;
+	vector<string> removable_paths;
+	unordered_set<string> seen_removable;
+	for (const auto &list_entry : manifest_files) {
+		auto &manifest = list_entry.GetManifest();
+		for (const auto &entry : list_entry.GetManifestEntries()) {
+			if (entry.status == IcebergManifestEntryStatusType::DELETED) {
+				continue;
+			}
+			auto &delete_file = entry.data_file;
+			if (delete_file.content != IcebergManifestEntryContentType::POSITION_DELETES &&
+			    delete_file.content != IcebergManifestEntryContentType::EQUALITY_DELETES) {
+				continue;
+			}
+			if (!DeleteFileFullyApplied(metadata, manifest, entry, live_data, rewritten_paths)) {
+				blocked_paths.insert(delete_file.file_path);
+				continue;
+			}
+			if (seen_removable.insert(delete_file.file_path).second) {
+				removable_paths.push_back(delete_file.file_path);
+			}
+		}
+	}
+	for (auto &path : removable_paths) {
+		if (blocked_paths.count(path)) {
+			continue;
+		}
+		plan.delete_files_to_remove.push_back(path);
 	}
 }
 
 } // namespace
 
-optional_ptr<const IcebergTransactionData> GetRewriteTransactionData(ClientContext &context, IcebergTable &table_info) {
+//! The rewrite plans from the committed table: the files it selects and the schema and partition spec it writes
+//! with are the committed ones. Files this transaction already added, replaced or deleted would be rewritten
+//! again or lost, and a pending schema or spec change would not reach the files it writes, so the rewrite is
+//! refused after any change to the table. The one exception is a format-version upgrade, which the rewrite
+//! follows: its snapshot uses the new version.
+static void ThrowIfTableHasPendingChanges(ClientContext &context, const IcebergTable &table_info) {
 	auto &transaction = IcebergTransaction::Get(context, table_info.catalog);
 	auto state = transaction.GetLatestTableState(table_info.GetTableKey());
-	if (!state || !state->IsAlive()) {
-		return nullptr;
+	if (!state || state->IsMissing() || !state->GetInfo().transaction_data) {
+		return;
 	}
-	return state->GetInfo().transaction_data.get();
+	auto &transaction_data = *state->GetInfo().transaction_data;
+	bool pending = !transaction_data.alters.empty();
+	for (auto &update : transaction_data.updates) {
+		pending |= update->type != IcebergTableUpdateType::UPGRADE_FORMAT_VERSION;
+	}
+	if (!pending) {
+		return;
+	}
+	throw NotImplementedException(
+	    "iceberg_rewrite_data_files: table '%s' has uncommitted changes in this transaction; commit them first",
+	    table_info.name);
 }
 
 RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input) {
@@ -334,6 +461,7 @@ RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input)
 
 	auto table_info_ptr = ReloadIcebergTableShared(context, input.table_name, "iceberg_rewrite_data_files");
 	auto &table_info = *table_info_ptr;
+	ThrowIfTableHasPendingChanges(context, table_info);
 	auto &table_metadata = table_info.table_metadata;
 	if (table_metadata.iceberg_version < 2) {
 		throw NotImplementedException("iceberg_rewrite_data_files on Iceberg V%d tables",
@@ -387,25 +515,23 @@ RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input)
 		return plan;
 	}
 
-	auto transaction_data = GetRewriteTransactionData(context, table_info);
 	const bool unpartitioned = !table_metadata.HasPartitionSpec();
 	if (unpartitioned) {
 		//! All files share the same output partition, including files written before partitioning was removed.
 		//! Apply size/count gating and the rewrite cap to that single group.
 		RewriteBucket bucket;
-		CollectUnpartitionedCandidates(bucket, manifest_files, input, plan.target_file_size_bytes, transaction_data);
+		CollectUnpartitionedCandidates(bucket, manifest_files, input, plan.target_file_size_bytes);
 		SelectCandidates(plan, input, bucket);
 	} else {
 		//! Files already on the output spec keep per-partition gating. Every other spec shares one group,
 		//! then the existing COPY rewrites both with the current spec (which partitions output files).
 		RewriteBucket other_specs;
 		std::map<string, RewriteBucket> per_partition;
-		CollectPartitionedCandidates(per_partition, other_specs, manifest_files, input, output_spec_id,
-		                             transaction_data);
+		CollectPartitionedCandidates(per_partition, other_specs, manifest_files, input, output_spec_id);
 		SelectCandidates(plan, input, per_partition, other_specs);
 	}
-	MarkCandidatesWithDeletes(plan, manifest_files, transaction_data);
 
+	CollectFullyAppliedDeleteFiles(plan, table_metadata, manifest_files);
 	return plan;
 }
 

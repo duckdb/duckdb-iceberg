@@ -78,7 +78,7 @@ select list(id order by id) from my_datalake.default.rewrite_deleted_rows;
 statement ok
 drop table my_datalake.default.rewrite_deleted_rows;
 
-# rows deleted earlier in the same transaction: all of them, then some of them
+# A rewrite after an uncommitted DELETE is refused, whether all or some rows were deleted.
 statement ok
 drop table if exists my_datalake.default.rewrite_deleted_rows_tx;
 
@@ -94,58 +94,38 @@ BEGIN;
 statement ok
 delete from my_datalake.default.rewrite_deleted_rows_tx;
 
-query II
-select rewritten_data_files_count, added_data_files_count
-from iceberg_rewrite_data_files('my_datalake.default.rewrite_deleted_rows_tx', rewrite_all := true);
+statement error
+select * from iceberg_rewrite_data_files('my_datalake.default.rewrite_deleted_rows_tx', rewrite_all := true);
 ----
-1	0
-
-query I
-select count(*) from my_datalake.default.rewrite_deleted_rows_tx;
-----
-0
+has uncommitted changes in this transaction
 
 statement ok
-COMMIT;
+ROLLBACK;
 
 query I
-select count(*) from my_datalake.default.rewrite_deleted_rows_tx;
+select list(id order by id) from my_datalake.default.rewrite_deleted_rows_tx;
 ----
-0
-
-query I
-select count(*) from iceberg_metadata(my_datalake.default.rewrite_deleted_rows_tx)
-where manifest_content = 'DATA' and status != 'DELETED';
-----
-0
-
-statement ok
-insert into my_datalake.default.rewrite_deleted_rows_tx values (3), (4);
+[1, 2]
 
 statement ok
 BEGIN;
 
 statement ok
-delete from my_datalake.default.rewrite_deleted_rows_tx where id = 3;
+delete from my_datalake.default.rewrite_deleted_rows_tx where id = 1;
 
-query II
-select rewritten_data_files_count, added_data_files_count
-from iceberg_rewrite_data_files('my_datalake.default.rewrite_deleted_rows_tx', rewrite_all := true);
+statement error
+select * from iceberg_rewrite_data_files('my_datalake.default.rewrite_deleted_rows_tx', rewrite_all := true);
 ----
-1	1
+has uncommitted changes in this transaction
 
-query I
-select list(id order by id) from my_datalake.default.rewrite_deleted_rows_tx;
-----
-[4]
-
+# Committing an aborted transaction must not publish its DELETE.
 statement ok
 COMMIT;
 
 query I
 select list(id order by id) from my_datalake.default.rewrite_deleted_rows_tx;
 ----
-[4]
+[1, 2]
 
 statement ok
 drop table my_datalake.default.rewrite_deleted_rows_tx;
