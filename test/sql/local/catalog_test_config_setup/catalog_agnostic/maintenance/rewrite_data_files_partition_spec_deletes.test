@@ -50,7 +50,14 @@ WHERE m.content = 'DATA' AND m.status <> 'DELETED' AND s.partition_spec_id = 0;
 ----
 1
 
-# Deletes on both the rewritten and untouched historical files must still apply.
+# Only the delete belonging to the untouched historical file remains live.
+query I
+SELECT count(*) FROM iceberg_metadata('my_datalake.default.rewrite_spec_deletes')
+WHERE content = 'POSITION_DELETES' AND status <> 'DELETED';
+----
+1
+
+# Deleted rows must stay absent from both rewritten and untouched files.
 query IT
 SELECT id, ts FROM my_datalake.default.rewrite_spec_deletes ORDER BY id;
 ----
@@ -96,6 +103,12 @@ SELECT count(*) FROM (
     SELECT filename FROM my_datalake.default.rewrite_spec_deletes
     GROUP BY filename HAVING count(DISTINCT date_trunc('hour', ts)) > 1
 );
+----
+0
+
+query I
+SELECT count(*) FROM iceberg_metadata('my_datalake.default.rewrite_spec_deletes')
+WHERE content = 'POSITION_DELETES' AND status <> 'DELETED';
 ----
 0
 

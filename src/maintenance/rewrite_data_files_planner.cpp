@@ -5,6 +5,7 @@
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/value.hpp"
+#include "duckdb/common/unordered_map.hpp"
 #include "duckdb/common/unordered_set.hpp"
 
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
@@ -290,9 +291,10 @@ const Value *PartitionFieldValue(const vector<IcebergPartitionInfo> &partition_i
 
 enum class DeleteApplyMatch { NO, YES, AMBIGUOUS };
 
-//! Position-delete applicability without referenced_data_file: same spec and partition key, plus the
-//! sequence rule from IcebergFilePruner::DeleteFileMatchesDataFile. A missing spec or partition value
-//! is ambiguous, so the caller leaves the delete file in place.
+using LiveDataFiles = unordered_map<string, std::pair<const IcebergManifest *, const IcebergManifestEntry *>>;
+
+//! Apply the partition and sequence rules from IcebergFilePruner::DeleteFileMatchesDataFile.
+//! A missing spec or partition value is ambiguous, so the caller leaves the delete file in place.
 DeleteApplyMatch PositionDeleteApplies(const IcebergTableMetadata &metadata, const IcebergManifest &delete_manifest,
                                        const IcebergManifestEntry &delete_entry, const IcebergManifest &data_manifest,
                                        const IcebergManifestEntry &data_entry) {
@@ -327,8 +329,7 @@ DeleteApplyMatch PositionDeleteApplies(const IcebergTableMetadata &metadata, con
 //! live data file it can match was rewritten. Dangling deletes stay (Spark remove-dangling-deletes defaults
 //! to false). Equality deletes without referenced_data_file stay.
 bool DeleteFileFullyApplied(const IcebergTableMetadata &metadata, const IcebergManifest &delete_manifest,
-                            const IcebergManifestEntry &delete_entry,
-                            const vector<std::pair<const IcebergManifest *, const IcebergManifestEntry *>> &live_data,
+                            const IcebergManifestEntry &delete_entry, const LiveDataFiles &live_data,
                             const unordered_set<string> &rewritten_paths) {
 	auto &delete_file = delete_entry.data_file;
 	//! InvalidateFile(path) addresses an ordinary file. An offset identifies a deletion-vector blob.
@@ -343,12 +344,20 @@ bool DeleteFileFullyApplied(const IcebergTableMetadata &metadata, const IcebergM
 		return false;
 	}
 	if (has_reference) {
-		return rewritten_paths.count(*delete_file.referenced_data_file) > 0;
+		if (rewritten_paths.count(*delete_file.referenced_data_file) == 0) {
+			return false;
+		}
+		auto live = live_data.find(*delete_file.referenced_data_file);
+		//! A reference identifies the file, but a stale delete may no longer apply to it.
+		return live != live_data.end() &&
+		       PositionDeleteApplies(metadata, delete_manifest, delete_entry, *live->second.first,
+		                             *live->second.second) == DeleteApplyMatch::YES;
 	}
 
 	bool matched_live_file = false;
 	for (auto &live : live_data) {
-		auto match = PositionDeleteApplies(metadata, delete_manifest, delete_entry, *live.first, *live.second);
+		auto match =
+		    PositionDeleteApplies(metadata, delete_manifest, delete_entry, *live.second.first, *live.second.second);
 		if (match == DeleteApplyMatch::AMBIGUOUS) {
 			return false;
 		}
@@ -356,7 +365,7 @@ bool DeleteFileFullyApplied(const IcebergTableMetadata &metadata, const IcebergM
 			continue;
 		}
 		matched_live_file = true;
-		if (rewritten_paths.count(live.second->data_file.file_path) == 0) {
+		if (rewritten_paths.count(live.first) == 0) {
 			return false;
 		}
 	}
@@ -373,7 +382,7 @@ void CollectFullyAppliedDeleteFiles(RewritePlan &plan, const IcebergTableMetadat
 		rewritten_paths.insert(candidate.file_path);
 	}
 
-	vector<std::pair<const IcebergManifest *, const IcebergManifestEntry *>> live_data;
+	LiveDataFiles live_data;
 	for (const auto &list_entry : manifest_files) {
 		auto &manifest = list_entry.GetManifest();
 		for (const auto &entry : list_entry.GetManifestEntries()) {
@@ -383,7 +392,7 @@ void CollectFullyAppliedDeleteFiles(RewritePlan &plan, const IcebergTableMetadat
 			if (entry.data_file.content != IcebergManifestEntryContentType::DATA) {
 				continue;
 			}
-			live_data.emplace_back(&manifest, &entry);
+			live_data.emplace(entry.data_file.file_path, std::make_pair(&manifest, &entry));
 		}
 	}
 

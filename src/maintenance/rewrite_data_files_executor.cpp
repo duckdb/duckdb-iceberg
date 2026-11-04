@@ -59,7 +59,7 @@ void CleanupRewriteFiles(ClientContext &context, const IcebergTable &table_info,
 }
 
 void CommitRewrite(ClientContext &context, const RewritePlan &plan, RewriteExecutionResult &result) {
-	if (result.new_entries.empty()) {
+	if (result.rewritten_candidates.empty()) {
 		return;
 	}
 	if (!plan.table_info) {

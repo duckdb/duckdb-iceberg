@@ -170,10 +170,7 @@ SinkFinalizeType PhysicalRewriteDataFiles::Finalize(Pipeline &pipeline, Event &e
 	auto &gstate = input.global_state.Cast<RewriteDataFilesGlobalState>();
 	{
 		lock_guard<mutex> guard(gstate.lock);
-		if (gstate.insert_state.written_files.empty()) {
-			throw InternalException(
-			    "iceberg_rewrite_data_files: COPY returned no written files for selected candidates");
-		}
+		//! A fully deleted partition produces no output files, but its inputs must still be invalidated.
 		gstate.result.new_entries = IcebergInsert::GetInsertManifestEntries(gstate.insert_state);
 		PinRewriteSequenceNumbers(gstate.result.new_entries, gstate.plan.starting_sequence_number);
 		gstate.result.added_data_files = static_cast<int64_t>(gstate.result.new_entries.size());
