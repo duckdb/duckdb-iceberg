@@ -271,7 +271,10 @@ IcebergManifestMerge::MergeManifests(vector<IcebergManifestListEntry> &&input, I
 	map<int32_t, idx_t> manifests_per_spec;
 	bool can_merge = false;
 	for (auto &member : input) {
-		if (++manifests_per_spec[member.GetFile().partition_spec_id] >= config.min_count_to_merge) {
+		auto spec_id = member.GetFile().partition_spec_id;
+		auto &manifest_count = manifests_per_spec[spec_id];
+		manifest_count++;
+		if (manifest_count >= config.min_count_to_merge) {
 			can_merge = true;
 			break;
 		}
