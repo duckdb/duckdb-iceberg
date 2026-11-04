@@ -14,17 +14,17 @@ require httpfs
 statement error
 SELECT payload FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/map', version='1')
 ----
-Invalid Input Error: Field ""key"" (field id 3) is missing from the file schema and has no default expression
+Invalid Input Error: Field "key" (field id 3) is missing from the file schema and has no default expression
 
 statement error
 SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/map', version='1')
 ----
-Invalid Input Error: Field ""key"" (field id 3) is missing from the file schema and has no default expression
+Invalid Input Error: Field "key" (field id 3) is missing from the file schema and has no default expression
 
 statement error
 SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/map', version='1') WHERE payload IS NOT NULL
 ----
-Invalid Input Error: Field ""key"" (field id 3) is missing from the file schema and has no default expression
+Invalid Input Error: Field "key" (field id 3) is missing from the file schema and has no default expression
 
 query I
 SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/map', version='1')
@@ -36,17 +36,17 @@ SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_map_key
 statement error
 SELECT payload FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/struct', version='1')
 ----
-Invalid Input Error: Field ""key"" (field id 4) is missing from the file schema and has no default expression
+Invalid Input Error: Field "key" (field id 4) is missing from the file schema and has no default expression
 
 statement error
 SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/struct', version='1')
 ----
-Invalid Input Error: Field ""key"" (field id 4) is missing from the file schema and has no default expression
+Invalid Input Error: Field "key" (field id 4) is missing from the file schema and has no default expression
 
 statement error
 SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/struct', version='1') WHERE payload IS NOT NULL
 ----
-Invalid Input Error: Field ""key"" (field id 4) is missing from the file schema and has no default expression
+Invalid Input Error: Field "key" (field id 4) is missing from the file schema and has no default expression
 
 query I
 SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/struct', version='1')
@@ -58,17 +58,17 @@ SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_map_key
 statement error
 SELECT payload FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/list', version='1')
 ----
-Invalid Input Error: Field ""key"" (field id 4) is missing from the file schema and has no default expression
+Invalid Input Error: Field "key" (field id 4) is missing from the file schema and has no default expression
 
 statement error
 SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/list', version='1')
 ----
-Invalid Input Error: Field ""key"" (field id 4) is missing from the file schema and has no default expression
+Invalid Input Error: Field "key" (field id 4) is missing from the file schema and has no default expression
 
 statement error
 SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/list', version='1') WHERE payload IS NOT NULL
 ----
-Invalid Input Error: Field ""key"" (field id 4) is missing from the file schema and has no default expression
+Invalid Input Error: Field "key" (field id 4) is missing from the file schema and has no default expression
 
 query I
 SELECT id FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/list', version='1')
@@ -90,7 +90,7 @@ NULL
 statement error
 SELECT * FROM iceberg_column_stats('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/manifest_column_sizes', version='1')
 ----
-Invalid Input Error: Field ""key"" (field id 117) is missing from the file schema and has no default expression
+Invalid Input Error: Field "key" (field id 117) is missing from the file schema and has no default expression
 
 query I
 SELECT 42
@@ -102,7 +102,7 @@ SELECT 42
 statement error
 SELECT * FROM iceberg_column_stats('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/manifest_value_counts', version='1')
 ----
-Invalid Input Error: Field ""key"" (field id 119) is missing from the file schema and has no default expression
+Invalid Input Error: Field "key" (field id 119) is missing from the file schema and has no default expression
 
 query I
 SELECT 42
@@ -114,7 +114,7 @@ SELECT 42
 statement error
 SELECT * FROM iceberg_column_stats('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/manifest_null_value_counts', version='1')
 ----
-Invalid Input Error: Field ""key"" (field id 121) is missing from the file schema and has no default expression
+Invalid Input Error: Field "key" (field id 121) is missing from the file schema and has no default expression
 
 query I
 SELECT 42
@@ -126,7 +126,7 @@ SELECT 42
 statement error
 SELECT * FROM iceberg_column_stats('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/manifest_nan_value_counts', version='1')
 ----
-Invalid Input Error: Field ""key"" (field id 138) is missing from the file schema and has no default expression
+Invalid Input Error: Field "key" (field id 138) is missing from the file schema and has no default expression
 
 query I
 SELECT 42
@@ -138,7 +138,7 @@ SELECT 42
 statement error
 SELECT * FROM iceberg_column_stats('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/manifest_lower_bounds', version='1')
 ----
-Invalid Input Error: Field ""key"" (field id 126) is missing from the file schema and has no default expression
+Invalid Input Error: Field "key" (field id 126) is missing from the file schema and has no default expression
 
 query I
 SELECT 42
@@ -150,7 +150,7 @@ SELECT 42
 statement error
 SELECT * FROM iceberg_column_stats('{WORKING_DIRECTORY}/data/persistent/missing_map_keys/manifest_upper_bounds', version='1')
 ----
-Invalid Input Error: Field ""key"" (field id 129) is missing from the file schema and has no default expression
+Invalid Input Error: Field "key" (field id 129) is missing from the file schema and has no default expression
 
 query I
 SELECT 42

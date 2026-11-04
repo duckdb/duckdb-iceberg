@@ -33,9 +33,9 @@ optional_ptr<CatalogEntry> IcebergSchemaSet::GetEntry(ClientContext &context, co
 	}
 
 	// Transaction-local creations take precedence over catalog entries with the same name.
-	auto created_schema = iceberg_transaction.created_schemas.find(name);
-	if (created_schema != iceberg_transaction.created_schemas.end()) {
-		return created_schema->second.get();
+	auto created_schema = iceberg_transaction.created_schemas.GetEntry(name);
+	if (created_schema) {
+		return created_schema.get();
 	}
 
 	// Track explicit lookups even when a discovery scan already pinned the schema.
@@ -107,10 +107,10 @@ vector<shared_ptr<IcebergSchemaEntry>> IcebergSchemaSet::GetEntries(ClientContex
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 	LoadEntriesInternal(context);
 	vector<shared_ptr<IcebergSchemaEntry>> result;
-	result.reserve(entries.size() + iceberg_transaction.created_schemas.size());
+	result.reserve(entries.size() + iceberg_transaction.created_schemas.Size());
 	for (auto &entry : entries) {
 		if (iceberg_transaction.deleted_schemas.count(entry.first) ||
-		    iceberg_transaction.created_schemas.count(entry.first)) {
+		    iceberg_transaction.created_schemas.Contains(entry.first)) {
 			continue;
 		}
 		auto transaction_entry = iceberg_transaction.schemas.find(entry.first);
@@ -122,7 +122,7 @@ vector<shared_ptr<IcebergSchemaEntry>> IcebergSchemaSet::GetEntries(ClientContex
 		}
 	}
 	for (auto &created_schema : iceberg_transaction.created_schemas) {
-		result.push_back(created_schema.second);
+		result.push_back(created_schema.second.entry);
 	}
 	return result;
 }

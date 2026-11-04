@@ -69,16 +69,8 @@ static unique_ptr<FunctionData> IcebergLoadTableResponseBind(ClientContext &cont
                                                              vector<LogicalType> &return_types,
                                                              vector<Identifier> &names) {
 	auto input_string = input.inputs[0].ToString();
-	auto qualified_name = QualifiedName::ParseComponents(input_string);
-
-	if (qualified_name.size() != 3) {
-		throw InvalidInputException("Expected fully qualified table name (catalog.schema.table), got: %s",
-		                            input_string);
-	}
-
-	EntryLookupInfo table_lookup(CatalogType::TABLE_ENTRY,
-	                             QualifiedName(qualified_name[0], qualified_name[1], qualified_name[2]));
-	auto catalog_entry = Catalog::GetEntry(context, table_lookup, OnEntryNotFound::THROW_EXCEPTION);
+	auto catalog_entry = IcebergUtils::GetCatalogEntry(context, CatalogType::TABLE_ENTRY, input_string,
+	                                                   OnEntryNotFound::THROW_EXCEPTION);
 
 	if (catalog_entry->type != CatalogType::TABLE_ENTRY) {
 		throw InvalidInputException("'%s' is not a table", input_string);
