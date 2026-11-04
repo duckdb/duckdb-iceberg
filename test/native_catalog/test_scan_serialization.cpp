@@ -115,6 +115,23 @@ TEST_CASE("Iceberg scan callbacks preserve repeated copies without optimizer fal
 	REQUIRE_NOTHROW(test.Deserialize(first, copy_stream));
 }
 
+TEST_CASE("Iceberg scan serialization setting requests optimizer fallback", "[iceberg_serialization]") {
+	ScanSerializationTest test;
+	Query(test.connection, "SET iceberg_enable_scan_serialization = false");
+	test.StartQuery();
+	auto disabled_scan = test.Bind();
+	MemoryStream disabled_stream;
+	REQUIRE_THROWS_WITH(test.Serialize(disabled_scan, disabled_stream),
+	                    Catch::Contains("disabled by iceberg_enable_scan_serialization"));
+
+	Query(test.connection, "SET iceberg_enable_scan_serialization = true");
+	test.StartQuery();
+	auto enabled_scan = test.Bind();
+	MemoryStream enabled_stream;
+	REQUIRE_NOTHROW(test.Serialize(enabled_scan, enabled_stream));
+	REQUIRE_NOTHROW(test.Deserialize(enabled_scan, enabled_stream));
+}
+
 TEST_CASE("Iceberg scan identity mismatches request optimizer fallback", "[iceberg_serialization]") {
 	ScanSerializationTest test;
 	auto original = test.Bind();

@@ -68,6 +68,35 @@ EXPLAIN SELECT order_no, count(*) OVER () FROM my_datalake.default.scan_serializ
 ----
 logical_opt	<REGEX>:.*WINDOW.*
 
+query I
+SELECT current_setting('iceberg_enable_scan_serialization')::BOOLEAN;
+----
+true
+
+statement ok
+SET iceberg_enable_scan_serialization = false;
+
+# Disabling catalog scan serialization asks copy-based optimizers to retain the original plan. The query remains
+# executable through the materialized CTE.
+query II
+EXPLAIN WITH copied AS NOT MATERIALIZED (
+    SELECT order_no FROM my_datalake.default.scan_serialization_sales
+)
+SELECT count(*) FROM copied a, copied b;
+----
+logical_opt	<REGEX>:.*CTE_SCAN.*
+
+query I
+WITH copied AS NOT MATERIALIZED (
+    SELECT order_no FROM my_datalake.default.scan_serialization_sales
+)
+SELECT count(*) FROM copied a, copied b;
+----
+36
+
+statement ok
+SET iceberg_enable_scan_serialization = true;
+
 # This is the relevant shape of TPC-DS Q95: a two-scan CTE is referenced twice under a LIMIT. DuckDB
 # automatically inlines it by deep-copying its Iceberg scans; before serialization support it retained a CTE_SCAN.
 query II

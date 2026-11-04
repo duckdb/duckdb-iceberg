@@ -33,6 +33,7 @@
 #include "duckdb/transaction/meta_transaction.hpp"
 
 #include "common/iceberg_utils.hpp"
+#include "iceberg_options.hpp"
 #include "planning/iceberg_multi_file_reader.hpp"
 #include "function/iceberg_functions.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
@@ -71,6 +72,14 @@ virtual_column_map_t IcebergVirtualColumns(ClientContext &context, optional_ptr<
 	return result;
 }
 
+static bool IcebergScanSerializationEnabled(ClientContext &context) {
+	Value setting;
+	if (context.TryGetCurrentSetting(ENABLE_SCAN_SERIALIZATION_CONFIG_VARIABLE, setting) && !setting.IsNull()) {
+		return setting.GetValue<bool>();
+	}
+	return DEFAULT_ENABLE_SCAN_SERIALIZATION;
+}
+
 static void IcebergScanSerialize(Serializer &serializer, const optional_ptr<FunctionData> bind_data,
                                  const BoundTableFunction &function) {
 	if (!bind_data || !function.function_info) {
@@ -87,6 +96,10 @@ static void IcebergScanSerialize(Serializer &serializer, const optional_ptr<Func
 	}
 	auto &scan_info = function.function_info->Cast<IcebergScanInfo>();
 	auto &context = file_list.GetScanPlanner().GetContext();
+	if (!IcebergScanSerializationEnabled(context)) {
+		throw NotImplementedException("IcebergScan serialization is disabled by %s",
+		                              ENABLE_SCAN_SERIALIZATION_CONFIG_VARIABLE);
+	}
 	if (!scan_info.serialization_query_id.IsValid() ||
 	    scan_info.serialization_query_id.GetIndex() == MAXIMUM_QUERY_ID || !context.HasActiveTransaction() ||
 	    scan_info.serialization_query_id.GetIndex() != context.ActiveTransaction().active_query.load()) {
@@ -134,6 +147,10 @@ static void IcebergScanSerialize(Serializer &serializer, const optional_ptr<Func
 static unique_ptr<FunctionData> IcebergScanDeserialize(Deserializer &deserializer, BoundTableFunction &function) {
 	auto &context = deserializer.Get<ClientContext &>();
 	auto qualified_name = deserializer.ReadProperty<QualifiedName>(100, "qualified_name");
+	if (!IcebergScanSerializationEnabled(context)) {
+		ThrowCannotCopyScan(qualified_name,
+		                    StringUtil::Format("disabled by %s", ENABLE_SCAN_SERIALIZATION_CONFIG_VARIABLE));
+	}
 	auto schema_id = deserializer.ReadProperty<int32_t>(101, "schema_id");
 	const bool has_snapshot = deserializer.ReadProperty<bool>(102, "has_snapshot");
 	optional<int64_t> snapshot_id;
