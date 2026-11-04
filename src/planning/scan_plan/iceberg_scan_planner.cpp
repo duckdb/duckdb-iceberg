@@ -1,6 +1,7 @@
 #include "planning/scan_plan/iceberg_scan_planner.hpp"
 
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/rest/transaction/iceberg_transaction_data.hpp"
 #include "common/iceberg_utils.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "core/metadata/partition/iceberg_partition_constants.hpp"
@@ -181,10 +182,10 @@ optional_ptr<const BoundIcebergManifestEntry>
 IcebergScanPlanner::GetDataFile(idx_t file_id, annotated_lock_guard<annotated_mutex> &guard) const {
 	InitializeView(guard);
 	StartDataManifestScan(guard);
+	auto &transaction_data = shared_state->Configuration().scan_info->transaction_data;
 	if (file_id < data_manifest_entries.size()) {
 		return data_manifest_entries[file_id];
 	}
-	auto &transaction_data = shared_state->Configuration().scan_info->transaction_data;
 	while (file_id >= data_manifest_entries.size()) {
 		if (!TryGetNextBatch(guard)) {
 			FinishScanTasks(guard);
@@ -326,6 +327,11 @@ void IcebergScanPlanner::GetStatistics(vector<PartitionStatistics> &result) cons
 		return;
 	}
 	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
+	auto &transaction_data = shared_state->Configuration().scan_info->transaction_data;
+	// Manifest counts still include files invalidated by uncommitted rewrites.
+	if (transaction_data && !transaction_data->manifest_deletes.IsEmpty()) {
+		return;
+	}
 	InitializeView(guard);
 	auto count = IcebergScanStatistics(data_manifests, data_manifest_matches, delete_manifests, delete_manifest_matches)
 	                 .ExactRowCount();

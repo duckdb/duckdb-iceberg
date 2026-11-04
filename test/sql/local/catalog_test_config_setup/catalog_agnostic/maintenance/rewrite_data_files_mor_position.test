@@ -4,7 +4,11 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
+require-env TIMETRAVEL_SUPPORT
+
 include test/sql/init_requires
+
+require json
 
 statement ok
 drop table if exists my_datalake.default.rewrite_mor_position;
@@ -67,10 +71,16 @@ set variable starting_seq = (
     where status <> 'DELETED'
 );
 
+statement ok
+set variable pre_rewrite_snapshot = (
+    select metadata::JSON->>'current-snapshot-id'
+    from iceberg_load_table_response(my_datalake.default.rewrite_mor_position)
+);
+
 query IIIII
 call iceberg_rewrite_data_files('my_datalake.default.rewrite_mor_position');
 ----
-6	1	<REGEX>:[1-9][0-9]*	0	0
+6	1	<REGEX>:[1-9][0-9]*	0	3
 
 query I
 select count(*) from my_datalake.default.rewrite_mor_position;
@@ -123,6 +133,43 @@ where content = 'DATA' and status <> 'DELETED'
   and file_sequence_number > data_sequence_number;
 ----
 1
+
+# Every live data file was rewritten, so the position deletes that referenced them are gone.
+query I
+select count(*)
+from iceberg_metadata('my_datalake.default.rewrite_mor_position')
+where content = 'POSITION_DELETES' and status <> 'DELETED';
+----
+0
+
+# Delete removal is part of the REPLACE commit, with accurate summary counts.
+query IIIII
+select (summary->>'removed-delete-files')::BIGINT,
+       (summary->>'removed-position-delete-files')::BIGINT,
+       (summary->>'removed-position-deletes')::BIGINT,
+       (summary->>'total-delete-files')::BIGINT,
+       (summary->>'total-position-deletes')::BIGINT
+from (
+    select unnest(metadata::JSON->'snapshots'->'$[*]')->'summary' as summary
+    from iceberg_load_table_response(my_datalake.default.rewrite_mor_position)
+)
+where summary->>'operation' = 'replace';
+----
+3	3	3	0	0
+
+# Removed delete files remain available to historical snapshots.
+query II
+select count(*), sum(id)
+from my_datalake.default.rewrite_mor_position
+at (version => getvariable('pre_rewrite_snapshot')::BIGINT);
+----
+9	57
+
+# A subsequent no-op must not count the removed delete files again.
+query IIIII
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_mor_position');
+----
+0	0	0	0	0
 
 statement ok
 drop table if exists my_datalake.default.rewrite_mor_position;
