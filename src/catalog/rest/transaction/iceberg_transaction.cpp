@@ -911,6 +911,7 @@ void IcebergTransaction::CleanupFiles() {
 			//! Batched per table: the keys PrepareIcebergScanFromEntry registers below belong to this table, so
 			//! the files have to be deleted before moving on to the next one.
 			vector<string> data_files;
+			unordered_set<string> seen_paths;
 			for (auto &update : transaction_data->updates) {
 				if (update->type != IcebergTableUpdateType::ADD_SNAPSHOT) {
 					continue;
@@ -922,7 +923,11 @@ void IcebergTransaction::CleanupFiles() {
 				auto &add_snapshot = update->Cast<IcebergAddSnapshot>();
 				for (const auto &manifest : add_snapshot.GetPendingManifests()) {
 					for (const auto &manifest_entry : manifest.GetEntries()) {
-						data_files.push_back(manifest_entry.data_file.file_path);
+						// Several deletion-vector entries can reference the same physical Puffin file.
+						const auto &path = manifest_entry.data_file.file_path;
+						if (seen_paths.insert(path).second) {
+							data_files.push_back(path);
+						}
 					}
 				}
 			}

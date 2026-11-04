@@ -79,9 +79,11 @@ struct IcebergDeleteFileInfo {
 
 struct IcebergDeleteData;
 
-//! The delete file written for one data file.
+//! Materialized deletes for one data file.
 struct IcebergDeleteFileWrite {
 	IcebergDeleteFileInfo delete_file;
+	//! Serialized v3 vector, held until the size-based Puffin write tasks have been scheduled.
+	vector<data_t> deletion_vector;
 	//! The existing deletes of the data file that a written deletion vector supersedes
 	shared_ptr<IcebergDeleteData> superseded_deletes;
 };
@@ -223,10 +225,9 @@ public:
 	                     bool stage_snapshot) const;
 	//! Stage the materialized delete files in this statement's snapshot.
 	void AddDeleteSnapshot(ClientContext &context, IcebergDeleteGlobalState &global_state) const;
-	//! Write the delete file for the newly deleted `deleted_rows` of one data file. Safe to call concurrently for
-	//! different data files.
-	IcebergDeleteFileWrite WriteDeleteFile(ClientContext &context, const string &filename,
-	                                       const vector<idx_t> &deleted_rows) const;
+	//! Write a v2 delete file or serialize a v3 vector for subsequent size-based Puffin packing.
+	IcebergDeleteFileWrite MaterializeDeletes(ClientContext &context, const string &filename,
+	                                          const vector<idx_t> &deleted_rows) const;
 
 private:
 	//! Walk `plan` for the PhysicalTableScan that emits the row-id virtual columns the delete needs.
@@ -234,9 +235,7 @@ private:
 	IcebergDeleteFileInfo WritePositionalDeleteFile(ClientContext &context, const string &filename,
 	                                                IcebergDeleteFileInfo delete_file,
 	                                                const set<idx_t> &sorted_deletes) const;
-	IcebergDeleteFileInfo WriteDeletionVectorFile(ClientContext &context, const string &filename,
-	                                              IcebergDeleteFileInfo delete_file,
-	                                              const set<idx_t> &sorted_deletes) const;
+	vector<data_t> SerializeDeletionVector(const set<idx_t> &sorted_deletes) const;
 	//! Writes the Iceberg equality-delete parquet file (one column per equality field, one row of
 	//! constants) and records it in `global_state.write_result`.
 	void WriteEqualityDeleteFile(ClientContext &context, IcebergDeleteGlobalState &global_state) const;
