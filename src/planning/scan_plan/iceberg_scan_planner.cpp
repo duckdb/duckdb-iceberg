@@ -184,6 +184,7 @@ IcebergScanPlanner::GetDataFile(idx_t file_id, annotated_lock_guard<annotated_mu
 	if (file_id < data_manifest_entries.size()) {
 		return data_manifest_entries[file_id];
 	}
+	auto &transaction_data = shared_state->Configuration().scan_info->transaction_data;
 	while (file_id >= data_manifest_entries.size()) {
 		if (!TryGetNextBatch(guard)) {
 			FinishScanTasks(guard);
@@ -209,6 +210,11 @@ IcebergScanPlanner::GetDataFile(idx_t file_id, annotated_lock_guard<annotated_mu
 			shared_state->data_file_partitions[data_file.file_path] = std::move(partition);
 			auto bound_entry = bound_manifest.BindEntry(manifest_entry);
 			if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
+				continue;
+			}
+			//! Replaced by an earlier statement of this transaction, e.g. a rewrite of the data files
+			if (transaction_data &&
+			    transaction_data->IsFileInvalidated({data_file.file_path, data_file.content_offset})) {
 				continue;
 			}
 			if (table_filters.HasFilters() && !IcebergFilePruner(context, GetMetadata(), GetSchema(), table_filters)
@@ -294,8 +300,14 @@ idx_t IcebergScanPlanner::GetTotalFileCount() const {
 	return file_id;
 }
 
+bool IcebergScanPlanner::HasInvalidatedFiles() const {
+	auto &transaction_data = shared_state->Configuration().scan_info->transaction_data;
+	return transaction_data && !transaction_data->manifest_deletes.IsEmpty();
+}
+
 unique_ptr<NodeStatistics> IcebergScanPlanner::GetCardinality() const {
-	if (GetMetadata().iceberg_version == 1) {
+	//! The manifest counts still include the files replaced earlier in this transaction
+	if (GetMetadata().iceberg_version == 1 || HasInvalidatedFiles()) {
 		return nullptr;
 	}
 	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
@@ -310,7 +322,7 @@ unique_ptr<NodeStatistics> IcebergScanPlanner::GetCardinality() const {
 }
 
 void IcebergScanPlanner::GetStatistics(vector<PartitionStatistics> &result) const {
-	if (GetMetadata().iceberg_version == 1) {
+	if (GetMetadata().iceberg_version == 1 || HasInvalidatedFiles()) {
 		return;
 	}
 	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
