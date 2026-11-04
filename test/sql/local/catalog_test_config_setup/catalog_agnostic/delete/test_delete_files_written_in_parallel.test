@@ -32,7 +32,7 @@ SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_parallel_delete_f
 ----
 16
 
-# Every data file loses rows, so every data file gets a delete file
+# Every data file loses rows, so every data file gets a delete manifest entry.
 query I
 DELETE FROM my_datalake.default.test_parallel_delete_files WHERE id % 7 = 0;
 ----
@@ -67,7 +67,7 @@ SELECT count(*), count(*) FILTER (WHERE id % 7 IN (0, 1)), count(DISTINCT p) FRO
 ----
 1142	0	16
 
-# An UPDATE over every partition writes a delete file per data file as well
+# An UPDATE over every partition writes a delete entry per data file as well.
 query I
 UPDATE my_datalake.default.test_parallel_delete_files SET id = id + 100000 WHERE id % 7 = 2;
 ----
