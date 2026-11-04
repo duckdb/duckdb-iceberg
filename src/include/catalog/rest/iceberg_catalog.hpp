@@ -210,6 +210,7 @@ public:
 	case_insensitive_map_t<string> catalog_properties;
 
 private:
+	IcebergEndpointType endpoint_type = IcebergEndpointType::INVALID;
 	//! Original client selector, used for ATTACH OR REPLACE comparisons.
 	const string attach_path;
 	//! warehouse
