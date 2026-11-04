@@ -23,6 +23,8 @@ const string WRITE_MERGE_MODE = "write.merge.mode";
 const string WRITE_DELETE_ISOLATION_LEVEL = "write.delete.isolation-level";
 const string WRITE_FORMAT_DEFAULT = "write.format.default";
 const string WRITE_DELETE_FORMAT_DEFAULT = "write.delete.format.default";
+const string WRITE_PARQUET_COMPRESSION_CODEC = "write.parquet.compression-codec";
+const string WRITE_DELETE_PARQUET_COMPRESSION_CODEC = "write.delete.parquet.compression-codec";
 
 struct IcebergMetadataLogItem {
 public:
