@@ -610,6 +610,15 @@ string IcebergTableMetadata::GetTableProperty(string property_string) const {
 	return "";
 }
 
+string IcebergTableMetadata::GetDeleteCompressionCodec() const {
+  // The delete file codec defaults to the data file codec
+  auto codec = GetTableProperty(WRITE_DELETE_PARQUET_COMPRESSION_CODEC);
+  if (codec.empty()) {
+    codec = GetTableProperty(WRITE_PARQUET_COMPRESSION_CODEC);
+  }
+  return codec;
+}
+
 bool IcebergTableMetadata::AllowsMergeOnRead(const string &write_mode_property) const {
 	auto mode = GetTableProperty(write_mode_property);
 	// if unset or merge-on-read, it supports positional deletes
