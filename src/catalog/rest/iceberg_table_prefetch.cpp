@@ -192,6 +192,28 @@ void IcebergTablePrefetch::PrefetchStatementTables(ClientContext &context, SQLSt
 void IcebergTablePrefetch::PrefetchTables(ClientContext &context, IcebergCatalog &catalog,
                                           const vector<QualifiedName> &tables) {
 	auto &transaction = IcebergTransaction::Get(context, catalog);
+	try {
+		ScheduleTables(context, catalog, transaction, tables);
+	} catch (...) {
+		auto prefetch = transaction.TryGetTablePrefetch();
+		if (prefetch) {
+			try {
+				prefetch->executor.Drain();
+			} catch (...) { // NOLINT
+			}
+		}
+		throw;
+	}
+	//! The requests use the client context's transactions, which a commit or rollback may destroy while a request
+	//! runs. Binding may not take every response (e.g. a temporary table shadows the table), so wait for all of them
+	auto prefetch = transaction.TryGetTablePrefetch();
+	if (prefetch) {
+		prefetch->executor.Drain();
+	}
+}
+
+void IcebergTablePrefetch::ScheduleTables(ClientContext &context, IcebergCatalog &catalog,
+                                          IcebergTransaction &transaction, const vector<QualifiedName> &tables) {
 	for (auto &name : tables) {
 		auto &table_name = name.Name().GetIdentifierName();
 		if (table_name.find_first_of("/\\") != string::npos) {
