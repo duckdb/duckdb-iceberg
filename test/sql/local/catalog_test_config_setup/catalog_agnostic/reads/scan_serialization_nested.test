@@ -1,0 +1,97 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/scan_serialization_nested.test
+# description: Iceberg scan copies preserve nested projections, filters, and virtual file columns
+# group: [reads]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require core_functions
+
+statement ok
+CREATE TABLE my_datalake.default.scan_serialization_nested (
+    part INTEGER,
+    s STRUCT(x INTEGER, label VARCHAR),
+    vals INTEGER[],
+    attrs MAP(VARCHAR, INTEGER)
+) PARTITIONED BY (part);
+
+statement ok
+INSERT INTO my_datalake.default.scan_serialization_nested VALUES
+    (1, {'x': 1, 'label': 'one'}, [10, 11], MAP {'k': 100}),
+    (1, {'x': 2, 'label': 'two'}, [20, 21], MAP {'k': 200});
+
+statement ok
+INSERT INTO my_datalake.default.scan_serialization_nested VALUES
+    (2, {'x': 3, 'label': 'three'}, [30], MAP {'k': 300}),
+    (2, NULL, NULL, NULL);
+
+statement ok
+SET profiling_renderer_settings = MAP {'operator_casing': 'upper'};
+
+statement ok
+PRAGMA explain_output = 'optimized_only';
+
+# Three references exercise repeated copies and nested column binding replacement.
+query II
+EXPLAIN WITH copied AS NOT MATERIALIZED (
+    SELECT * FROM my_datalake.default.scan_serialization_nested
+)
+SELECT a.s.label, b.vals[1], c.attrs['k']
+FROM copied a JOIN copied b ON a.s.x = b.s.x JOIN copied c ON b.s.x = c.s.x;
+----
+logical_opt	<!REGEX>:.*CTE_SCAN.*
+
+query TII rowsort
+WITH copied AS NOT MATERIALIZED (
+    SELECT * FROM my_datalake.default.scan_serialization_nested
+)
+SELECT a.s.label, b.vals[1], c.attrs['k']
+FROM copied a JOIN copied b ON a.s.x = b.s.x JOIN copied c ON b.s.x = c.s.x;
+----
+one	10	100
+three	30	300
+two	20	200
+
+statement ok
+RESET explain_output;
+
+statement ok
+SET debug_verify_serializer = true;
+
+# Round-trip after pruning on both a partition column and a nested field, with reordered projections.
+query TII
+SELECT s.label, attrs['k'], vals[2]
+FROM my_datalake.default.scan_serialization_nested
+WHERE part = 1 AND s.x >= 2 AND s.label IS NOT NULL;
+----
+two	200	21
+
+query I
+SELECT count(*)
+FROM my_datalake.default.scan_serialization_nested
+WHERE part = 2 AND s IS NULL AND vals IS NULL AND attrs IS NULL;
+----
+1
+
+# These virtual columns are rebound with the copied MultiFileBindData.
+query I
+WITH copied AS NOT MATERIALIZED (
+    SELECT filename, file_row_number FROM my_datalake.default.scan_serialization_nested
+)
+SELECT count(*)
+FROM copied a JOIN copied b USING (filename, file_row_number);
+----
+4
+
+query I
+SELECT part FROM my_datalake.default.scan_serialization_nested ORDER BY part DESC LIMIT 2 OFFSET 1;
+----
+2
+1
+
+statement ok
+RESET debug_verify_serializer;
+
+statement ok
+DROP TABLE my_datalake.default.scan_serialization_nested;

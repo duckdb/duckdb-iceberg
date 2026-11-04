@@ -138,6 +138,11 @@ static void LoadInternal(ExtensionLoader &loader) {
 	    "Execute eligible delete-free iceberg_scan_tasks descriptor lists through one Parquet multi-file scan.",
 	    LogicalType::BOOLEAN, Value::BOOLEAN(DEFAULT_ENABLE_MULTI_FILE_SCAN_TASKS), nullptr, SetScope::GLOBAL);
 	config.AddExtensionOption(
+	    ENABLE_SCAN_SERIALIZATION_CONFIG_VARIABLE,
+	    "Enable statement-local serialization of catalog-backed Iceberg scans for logical-plan copying. When disabled, "
+	    "copy-based optimizations retain the original plan.",
+	    LogicalType::BOOLEAN, Value::BOOLEAN(DEFAULT_ENABLE_SCAN_SERIALIZATION), nullptr, SetScope::GLOBAL);
+	config.AddExtensionOption(
 	    "iceberg_logging_post_body_truncate_limit",
 	    "Maximum number of characters of a REST catalog POST body to include in Iceberg log messages. "
 	    "Bodies longer than this are truncated with a trailing '... (truncated)' marker. Set to 0 to omit the body.",
