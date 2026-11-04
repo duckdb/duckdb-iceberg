@@ -101,13 +101,7 @@ static unique_ptr<FunctionData> IcebergScanPlanBind(ClientContext &context, Tabl
 	// resolves it (version hint, version, options).
 	IcebergTableSchemaVersion *table_entry = nullptr;
 	shared_ptr<IcebergScanInfo> scan_info;
-	auto qualified_name = QualifiedName::ParseComponents(input_string);
-	optional_ptr<CatalogEntry> catalog_entry;
-	if (qualified_name.size() == 3) {
-		EntryLookupInfo table_lookup(CatalogType::TABLE_ENTRY,
-		                             QualifiedName(qualified_name[0], qualified_name[1], qualified_name[2]));
-		catalog_entry = Catalog::GetEntry(context, table_lookup, OnEntryNotFound::RETURN_NULL);
-	}
+	auto catalog_entry = IcebergUtils::TryGetCatalogTable(context, input_string);
 	if (catalog_entry) {
 		if (catalog_entry->type != CatalogType::TABLE_ENTRY) {
 			throw InvalidInputException("'%s' is not a table", input_string);

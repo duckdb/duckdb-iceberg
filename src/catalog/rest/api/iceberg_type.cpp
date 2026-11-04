@@ -1,6 +1,7 @@
 #include "catalog/rest/api/iceberg_type.hpp"
 #include "common/iceberg_constants.hpp"
 #include "common/iceberg_fixed_type.hpp"
+#include "common/iceberg_geography_type.hpp"
 
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types.hpp"
@@ -72,6 +73,9 @@ string IcebergTypeHelper::LogicalTypeToIcebergType(const LogicalType &type) {
 	case LogicalTypeId::BLOB:
 		if (IcebergFixedType::IsFixed(type)) {
 			return StringUtil::Format("fixed[%d]", IcebergFixedType::GetLength(type));
+		}
+		if (IcebergGeographyType::IsGeography(type)) {
+			return IcebergGeographyType::GetIcebergType(type);
 		}
 		return "binary";
 	case LogicalTypeId::STRUCT:
@@ -272,6 +276,8 @@ int32_t IcebergTypeHelper::MinimumFormatVersion(const LogicalType &type) {
 	case LogicalTypeId::GEOMETRY:
 	case LogicalTypeId::SQLNULL:
 		return 3;
+	case LogicalTypeId::BLOB:
+		return IcebergGeographyType::IsGeography(type) ? 3 : 1;
 	case LogicalTypeId::STRUCT: {
 		int32_t result = 1;
 		for (auto &child : StructType::GetChildTypes(type)) {

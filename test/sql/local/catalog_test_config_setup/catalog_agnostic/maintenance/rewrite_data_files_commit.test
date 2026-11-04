@@ -53,10 +53,27 @@ set variable pre_rewrite_total_file_size = (
 	limit 1
 );
 
+statement ok
+BEGIN;
+
 query IIIII
 call iceberg_rewrite_data_files('my_datalake.default.rewrite_commit_basic');
 ----
 6	1	<REGEX>:[1-9][0-9]*	0	0
+
+# Both the metadata count optimization and a real scan must exclude invalidated inputs.
+query I
+select count(*) from my_datalake.default.rewrite_commit_basic;
+----
+12
+
+query II
+select count(*), sum(id) from my_datalake.default.rewrite_commit_basic;
+----
+12	78
+
+statement ok
+COMMIT;
 
 query III
 select

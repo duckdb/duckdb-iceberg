@@ -1,0 +1,64 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/partitioned_variant_projection.test
+# description: Identity partition fallback leaves VARIANT extraction to the column mapper
+# group: [reads]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+require-env VARIANT_SUPPORT
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.partitioned_variant_projection;
+
+statement ok
+CREATE TABLE my_datalake.default.partitioned_variant_projection(
+    id INTEGER, part VARCHAR, payload VARIANT
+) PARTITIONED BY (part) WITH ('format-version' = '3');
+
+statement ok
+INSERT INTO my_datalake.default.partitioned_variant_projection VALUES
+(1, 'a', {'value': 11, 'nested': {'value': 12}}::VARIANT),
+(2, 'b', {'value': 21, 'nested': {'value': 22}}::VARIANT),
+(3, NULL, NULL);
+
+# These pushdown paths contain names inside VARIANT, unlike the numeric indexes of STRUCT fields.
+query III
+SELECT id, payload.value::INTEGER, payload.nested.value::INTEGER
+FROM my_datalake.default.partitioned_variant_projection ORDER BY id;
+----
+1	11	12
+2	21	22
+3	NULL	NULL
+
+query I
+SELECT id FROM my_datalake.default.partitioned_variant_projection
+WHERE part = 'b' AND payload.value::INTEGER = 21 AND payload.nested.value::INTEGER = 22;
+----
+2
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE partitioned_variant_tasks = (
+    SELECT list(task) FROM (FROM iceberg_scan_plan('my_datalake.default.partitioned_variant_projection')) task
+);
+
+query III
+SELECT id, payload.value::INTEGER, payload.nested.value::INTEGER
+FROM iceberg_scan_tasks(getvariable('partitioned_variant_tasks')) ORDER BY id;
+----
+1	11	12
+2	21	22
+3	NULL	NULL
+
+statement ok
+COMMIT;
+
+statement ok
+DROP TABLE my_datalake.default.partitioned_variant_projection;

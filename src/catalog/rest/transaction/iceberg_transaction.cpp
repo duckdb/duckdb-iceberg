@@ -4,6 +4,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "duckdb/common/types/timestamp.hpp"
+#include "duckdb/common/types/uuid.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "duckdb/catalog/catalog_entry/index_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
@@ -72,7 +73,8 @@ IcebergTable &IcebergTransactionTableState::GetOrCreateTransactionInfo(IcebergTr
 }
 
 IcebergTransaction::IcebergTransaction(IcebergCatalog &ic_catalog, TransactionManager &manager, ClientContext &context)
-    : Transaction(manager, context), db(*context.db), catalog(ic_catalog), access_mode(ic_catalog.access_mode) {
+    : Transaction(manager, context), db(*context.db), catalog(ic_catalog), access_mode(ic_catalog.access_mode),
+      scan_serialization_id(UUID::GenerateRandomUUID()) {
 }
 
 IcebergTransaction::~IcebergTransaction() = default;
@@ -498,7 +500,7 @@ static bool CommitStateUnknown(const ErrorData &error) {
 }
 
 void IcebergTransaction::Commit() {
-	if (!HasTableUpdate() && created_schemas.empty() && deleted_schemas.empty() && schema_property_updates.empty() &&
+	if (!HasTableUpdate() && created_schemas.Empty() && deleted_schemas.empty() && schema_property_updates.empty() &&
 	    created_views.empty() && deleted_views.empty()) {
 		// Read-only transactions have no catalog commit work; temporary vended storage secrets
 		// are left to transaction/session cleanup.
@@ -507,7 +509,7 @@ void IcebergTransaction::Commit() {
 	// Views use individual REST endpoints, not the atomic table commit endpoint. Validate
 	// the entire write set before any schema, table, or view request can reach the catalog.
 	auto view_operations = created_views.size() + deleted_views.size();
-	if (view_operations && (view_operations > 1 || HasTableUpdate() || !created_schemas.empty() ||
+	if (view_operations && (view_operations > 1 || HasTableUpdate() || !created_schemas.Empty() ||
 	                        !deleted_schemas.empty() || !schema_property_updates.empty())) {
 		CleanupFiles();
 		throw TransactionException("Iceberg REST Catalog cannot commit view changes atomically with other catalog "
@@ -699,8 +701,10 @@ void IcebergTransaction::DoSchemaCreates(ClientContext &context) {
 		request.properties = case_insensitive_map_t<string>();
 		auto create_body = RESTObjectToJSONString(request);
 
-		IRCAPI::CommitNamespaceCreate(context, ic_catalog, create_body);
-		ic_catalog.GetSchemas().AddEntry(schema_name, created_schema.second);
+		if (!IRCAPI::CommitNamespaceCreate(context, ic_catalog, schema_name, create_body)) {
+			created_schemas.OnNamespaceExists(schema_name);
+		}
+		ic_catalog.GetSchemas().AddEntry(schema_name, created_schema.second.entry);
 	}
 }
 
@@ -907,6 +911,7 @@ void IcebergTransaction::CleanupFiles() {
 			//! Batched per table: the keys PrepareIcebergScanFromEntry registers below belong to this table, so
 			//! the files have to be deleted before moving on to the next one.
 			vector<string> data_files;
+			unordered_set<string> seen_paths;
 			for (auto &update : transaction_data->updates) {
 				if (update->type != IcebergTableUpdateType::ADD_SNAPSHOT) {
 					continue;
@@ -918,7 +923,11 @@ void IcebergTransaction::CleanupFiles() {
 				auto &add_snapshot = update->Cast<IcebergAddSnapshot>();
 				for (const auto &manifest : add_snapshot.GetPendingManifests()) {
 					for (const auto &manifest_entry : manifest.GetEntries()) {
-						data_files.push_back(manifest_entry.data_file.file_path);
+						// Several deletion-vector entries can reference the same physical Puffin file.
+						const auto &path = manifest_entry.data_file.file_path;
+						if (seen_paths.insert(path).second) {
+							data_files.push_back(path);
+						}
 					}
 				}
 			}

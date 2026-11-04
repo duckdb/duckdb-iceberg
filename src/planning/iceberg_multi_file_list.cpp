@@ -100,8 +100,12 @@ IcebergMultiFileList::PushdownInternal(TableFilterSet &new_filters, const vector
 		auto &filter = ExpressionFilter::GetExpressionFilter(entry.Filter(), "IcebergMultiFileList::PushdownInternal");
 		result_filter_set.PushFilter(column_index, filter.Copy());
 	}
+	return WithPlannerFilters(std::move(result_filter_set));
+}
+
+unique_ptr<IcebergMultiFileList> IcebergMultiFileList::WithPlannerFilters(IcebergTableFilters filters) const {
 	auto result = unique_ptr<IcebergMultiFileList>(
-	    new IcebergMultiFileList(planner->CreateView(std::move(result_filter_set)), delete_execution));
+	    new IcebergMultiFileList(planner->CreateView(std::move(filters)), delete_execution));
 	result->have_bound = true;
 	result->names = names;
 	result->types = types;

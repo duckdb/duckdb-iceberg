@@ -1,6 +1,3 @@
-> [!WARNING]
-> This extension is experimental. APIs and behavior may change, and some catalog-specific features are not yet supported.
-
 # DuckDB extension for Apache Iceberg
 
 This repository contains DuckDB's Apache Iceberg extension. It adds support for reading and writing Iceberg tables, inspecting Iceberg metadata, and attaching Iceberg REST catalogs.

@@ -7,17 +7,17 @@ include test/sql/init_requires
 statement error
 SELECT * FROM iceberg_rewrite_data_files('bad');
 ----
-table identifier must be 'catalog.schema.table'
+does not exist
 
 statement error
 SELECT * FROM iceberg_rewrite_data_files('a.b');
 ----
-table identifier must be 'catalog.schema.table'
+does not exist
 
 statement error
 SELECT * FROM iceberg_rewrite_data_files('a.b.c.d');
 ----
-table identifier must be 'catalog.schema.table'
+Too many identifiers in table name
 
 statement error
 SELECT * FROM iceberg_rewrite_data_files('.b.c');

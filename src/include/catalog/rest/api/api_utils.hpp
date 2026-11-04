@@ -20,6 +20,8 @@ namespace duckdb {
 
 class APIUtils {
 public:
+	//! Iceberg requests do not go through the file system api, so httpfs is not autoloaded for them
+	static void LoadHttpfs(ClientContext &context);
 	static unique_ptr<HTTPResponse> Request(RequestType request_type, ClientContext &context,
 	                                        const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
 	                                        const string &data);
