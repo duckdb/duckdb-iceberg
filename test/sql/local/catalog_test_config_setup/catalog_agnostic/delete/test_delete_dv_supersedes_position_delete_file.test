@@ -1,0 +1,97 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_delete_dv_supersedes_position_delete_file.test
+# description: A deletion vector written after a v2 to v3 upgrade removes the file-scoped position-delete file whose positions it absorbed
+# group: [delete]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+require-env SNAPSHOT_HISTORY_SUPPORT
+
+require-env TIMETRAVEL_SUPPORT
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.dv_supersedes_position_delete;
+
+statement ok
+CREATE TABLE my_datalake.default.dv_supersedes_position_delete (id INTEGER) WITH ('format-version' = '2');
+
+# Two inserts, two data files
+statement ok
+INSERT INTO my_datalake.default.dv_supersedes_position_delete SELECT range FROM range(10);
+
+statement ok
+INSERT INTO my_datalake.default.dv_supersedes_position_delete SELECT range FROM range(10, 20);
+
+# v2: one file-scoped position-delete file per data file (two positions for the first, one for the second)
+statement ok
+DELETE FROM my_datalake.default.dv_supersedes_position_delete WHERE id IN (1, 2, 15);
+
+statement ok
+ALTER TABLE my_datalake.default.dv_supersedes_position_delete SET ('format-version' = '3');
+
+statement ok
+SET VARIABLE v2_delete_snapshot = (
+    SELECT snapshot_id FROM iceberg_snapshots(my_datalake.default.dv_supersedes_position_delete)
+    WHERE sequence_number = 3
+);
+
+# v3: the deletion vector for the first data file absorbs its two earlier positions
+statement ok
+DELETE FROM my_datalake.default.dv_supersedes_position_delete WHERE id = 5;
+
+query I
+SELECT string_agg(id, ',' ORDER BY id) FROM my_datalake.default.dv_supersedes_position_delete;
+----
+0,3,4,6,7,8,9,10,11,12,13,14,16,17,18,19
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.dv_supersedes_position_delete)
+WHERE content = 'DATA' AND status <> 'DELETED';
+----
+2
+
+# The absorbed position-delete file is removed; the one for the untouched data file stays live
+query III
+SELECT file_format, status = 'DELETED', record_count
+FROM iceberg_metadata(my_datalake.default.dv_supersedes_position_delete)
+WHERE content = 'POSITION_DELETES'
+ORDER BY file_format, record_count;
+----
+parquet	false	1
+parquet	true	2
+puffin	false	3
+
+query IIIIIIIIII
+WITH snaps AS (
+    SELECT unnest(json_extract(metadata::JSON, '$.snapshots[*]')) AS snap
+    FROM iceberg_load_table_response(my_datalake.default.dv_supersedes_position_delete)
+)
+SELECT json_extract_string(snap, '$.summary."added-delete-files"')::BIGINT,
+       json_extract_string(snap, '$.summary."removed-delete-files"')::BIGINT,
+       json_extract_string(snap, '$.summary."total-delete-files"')::BIGINT,
+       json_extract_string(snap, '$.summary."added-position-delete-files"')::BIGINT,
+       json_extract_string(snap, '$.summary."removed-position-delete-files"')::BIGINT,
+       json_extract_string(snap, '$.summary."added-dvs"')::BIGINT,
+       json_extract_string(snap, '$.summary."removed-dvs"')::BIGINT,
+       json_extract_string(snap, '$.summary."added-position-deletes"')::BIGINT,
+       json_extract_string(snap, '$.summary."removed-position-deletes"')::BIGINT,
+       json_extract_string(snap, '$.summary."total-position-deletes"')::BIGINT
+FROM snaps
+WHERE json_extract_string(snap, '$."sequence-number"')::BIGINT = 4;
+----
+1	1	2	0	1	1	0	3	2	4
+
+# The earlier snapshot keeps its position-delete files
+query I
+SELECT string_agg(id, ',' ORDER BY id) FROM my_datalake.default.dv_supersedes_position_delete
+AT (VERSION => getvariable('v2_delete_snapshot'));
+----
+0,3,4,5,6,7,8,9,10,11,12,13,14,16,17,18,19
+
+statement ok
+DROP TABLE my_datalake.default.dv_supersedes_position_delete;

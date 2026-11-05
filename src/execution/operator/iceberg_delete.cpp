@@ -293,9 +293,6 @@ IcebergDeleteFileInfo IcebergDelete::WritePositionalDeleteFile(ClientContext &co
 }
 
 static void PopulateAlteredManifests(IcebergManifestDeletes &out, const IcebergDeleteData &delete_data) {
-	if (delete_data.type != IcebergDeleteType::DELETION_VECTOR) {
-		return;
-	}
 	for (auto &file : delete_data.source_files) {
 		out.InvalidateFile(file);
 	}
