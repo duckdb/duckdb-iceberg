@@ -83,4 +83,3 @@ SELECT count(*), sum(v) FROM my_datalake.default.rewrite_pending;
 
 statement ok
 DROP TABLE my_datalake.default.rewrite_pending;
-

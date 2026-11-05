@@ -32,7 +32,7 @@ call iceberg_rewrite_data_files(
 	'my_datalake.default.rewrite_oversized_single',
 	target_file_size_bytes => 65536,
 	min_file_size_bytes => 100,
-	max_file_size_bytes => 100,
+	max_file_size_bytes => 120000,
 	min_input_files => 5
 );
 ----
@@ -70,7 +70,7 @@ where content = 'DATA' and status <> 'DELETED';
 query IIIII
 call iceberg_rewrite_data_files(
 	'my_datalake.default.rewrite_oversized_single',
-	min_file_size_bytes => 1000000000,
+	min_file_size_bytes => 100000000,
 	max_file_size_bytes => 1000000000,
 	min_input_files => 5
 );

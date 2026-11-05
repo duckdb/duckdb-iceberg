@@ -133,6 +133,35 @@ select list(id order by id) from my_datalake.default.rollback_in_transaction;
 ----
 [1, 2]
 
+# A rewrite and a rollback also cannot be combined, in either order.
+statement ok
+BEGIN;
+
+statement ok
+CALL iceberg_rewrite_data_files('my_datalake.default.rollback_in_transaction', rewrite_all = true);
+
+statement error
+select * from iceberg_rollback_to_snapshot('my_datalake.default.rollback_in_transaction', getvariable('first_snapshot'));
+----
+it was already changed in this transaction
+
+statement ok
+ROLLBACK;
+
+statement ok
+BEGIN;
+
+statement ok
+select * from iceberg_rollback_to_snapshot('my_datalake.default.rollback_in_transaction', getvariable('first_snapshot'));
+
+statement error
+CALL iceberg_rewrite_data_files('my_datalake.default.rollback_in_transaction', rewrite_all = true);
+----
+has uncommitted changes in this transaction
+
+statement ok
+ROLLBACK;
+
 # a property change in the same transaction commits with the rollback
 statement ok
 BEGIN;

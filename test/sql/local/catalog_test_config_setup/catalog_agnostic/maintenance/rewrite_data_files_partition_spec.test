@@ -98,13 +98,15 @@ call iceberg_rewrite_data_files(
 current default partition spec
 
 # Anything larger than 100 bytes is oversized, so the old-spec file qualifies at min_input_files 1.
+# The resolved target must sit strictly inside that band, so it is set explicitly.
 # output_spec_id is omitted and therefore the table's current default spec.
 query I
 select count(*)
 from iceberg_rewrite_data_files(
     'my_datalake.default.rewrite_partition_spec_evolution',
     min_input_files => 1,
-    min_file_size_bytes => 100,
+    min_file_size_bytes => 1,
+    target_file_size_bytes => 50,
     max_file_size_bytes => 100
 )
 where rewritten_data_files_count >= cast(getvariable('old_file_count') as bigint)
