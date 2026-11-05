@@ -27,6 +27,10 @@ static constexpr int64_t DEFAULT_METADATA_LOG_CLOCK_SKEW_MS = 0;
 static constexpr const char *ENABLE_MULTI_FILE_SCAN_TASKS_CONFIG_VARIABLE = "iceberg_enable_multi_file_scan_tasks";
 static constexpr bool DEFAULT_ENABLE_MULTI_FILE_SCAN_TASKS = true;
 
+// Operational kill switch for statement-local copies of catalog-backed Iceberg scans.
+static constexpr const char *ENABLE_SCAN_SERIALIZATION_CONFIG_VARIABLE = "iceberg_enable_scan_serialization";
+static constexpr bool DEFAULT_ENABLE_SCAN_SERIALIZATION = true;
+
 // Compatibility escape hatch for deletion-vector files written by DuckDB Iceberg 1.5.3,
 // which contain only the deletion-vector blob rather than a valid Puffin container.
 static constexpr const char *SKIP_PUFFIN_VERIFICATION_CONFIG_VARIABLE = "iceberg_unsafe_skip_puffin_verification";

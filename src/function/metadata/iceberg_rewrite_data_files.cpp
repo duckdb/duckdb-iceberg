@@ -14,6 +14,7 @@
 #include "duckdb/parser/tableref/basetableref.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
+#include "common/iceberg_utils.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "function/iceberg_functions.hpp"
 #include "maintenance/rewrite_data_files_operator.hpp"
@@ -25,19 +26,17 @@ namespace {
 
 constexpr int64_t MIN_TARGET_FILE_SIZE_BYTES = 100;
 
-static QualifiedName ParseRewriteTableName(const string &identifier) {
-	auto parts = QualifiedName::ParseComponents(identifier);
-	if (parts.size() != 3) {
-		throw InvalidInputException(
-		    "iceberg_rewrite_data_files: table identifier must be 'catalog.schema.table', got '%s'", identifier);
+static QualifiedName ParseRewriteTableName(ClientContext &context, string identifier) {
+	auto name = IcebergUtils::ParseTableName(identifier);
+	if (name.Path().size() == 3) {
+		return name;
 	}
-	for (auto &part : parts) {
-		if (part.empty()) {
-			throw InvalidInputException("iceberg_rewrite_data_files: table identifier '%s' has an empty component",
-			                            identifier);
-		}
+	//! The plan reloads the table by name when it runs, so keep the name it resolved to now
+	auto entry = IcebergUtils::GetTableEntry(context, identifier);
+	if (entry->Cast<InCatalogEntry>().catalog.GetCatalogType() != "iceberg") {
+		throw InvalidInputException("iceberg_rewrite_data_files: '%s' is not an Iceberg table", identifier);
 	}
-	return QualifiedName {parts[0], parts[1], parts[2]};
+	return IcebergUtils::GetQualifiedTableName(*entry);
 }
 
 static int64_t ParseByteSizeNamedParameter(const Value &value, const char *parameter_name) {
@@ -65,9 +64,9 @@ static int64_t ParseByteSizeNamedParameter(const Value &value, const char *param
 	return static_cast<int64_t>(parsed_value);
 }
 
-static RewriteDataFilesPlanInput ParseRewritePlanInput(TableFunctionBindInput &input) {
+static RewriteDataFilesPlanInput ParseRewritePlanInput(ClientContext &context, TableFunctionBindInput &input) {
 	RewriteDataFilesPlanInput result;
-	result.table_name = ParseRewriteTableName(StringValue::Get(input.inputs[0]));
+	result.table_name = ParseRewriteTableName(context, StringValue::Get(input.inputs[0]));
 
 	for (auto &kv : input.named_parameters) {
 		auto opt = StringUtil::Lower(kv.first.GetIdentifierName());
@@ -171,7 +170,7 @@ static unique_ptr<LogicalOperator> RewriteDataFilesBindOperator(ClientContext &c
 	if (!input.binder) {
 		throw InternalException("iceberg_rewrite_data_files: bind_operator called without a binder");
 	}
-	auto plan_input = ParseRewritePlanInput(input);
+	auto plan_input = ParseRewritePlanInput(context, input);
 	input.binder->SetAlwaysRequireRebind();
 	auto plan = PlanRewrite(context, plan_input);
 

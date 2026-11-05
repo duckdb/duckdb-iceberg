@@ -40,7 +40,18 @@ public:
 	static string GetStorageLocation(ClientContext &context, const string &input);
 	static IcebergResolvedMetadata ResolveTableMetadata(ClientContext &context, const string &input,
 	                                                    const IcebergOptions &options);
+	//! Parse a 'table', 'schema.table' or 'catalog.schema.table' string
+	static QualifiedName ParseTableName(const string &input_string);
+	//! Look up a table named by a 'table', 'schema.table' or 'catalog.schema.table' string
 	static optional_ptr<CatalogEntry> GetTableEntry(ClientContext &context, string &input_string);
+	//! Look up a catalog entry of 'type' named by a 'name', 'schema.name' or 'catalog.schema.name' string
+	static optional_ptr<CatalogEntry> GetCatalogEntry(ClientContext &context, CatalogType type,
+	                                                  const string &input_string, OnEntryNotFound if_not_found);
+	//! For functions that take either a table name or a table location: the catalog table the string names, or
+	//! nullptr when it names a location (or nothing in the catalog)
+	static optional_ptr<CatalogEntry> TryGetCatalogTable(ClientContext &context, const string &input);
+	//! The 'catalog.schema.table' name of a table entry
+	static QualifiedName GetQualifiedTableName(CatalogEntry &table_entry);
 	static optional_ptr<SchemaCatalogEntry> GetSchemaEntry(ClientContext &context, string &input_string);
 	static idx_t CountOccurrences(const string &input, const string &to_find);
 	static CopyFunctionCatalogEntry &GetCopyFunction(ClientContext &context, const Identifier &name);

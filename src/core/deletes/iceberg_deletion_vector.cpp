@@ -1,10 +1,10 @@
 #include "core/deletes/iceberg_deletion_vector.hpp"
 
 #include "duckdb/common/allocator.hpp"
+#include "duckdb/common/array.hpp"
 #include "duckdb/common/bswap.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/string_util.hpp"
-#include "duckdb/common/json_document.hpp"
 #include "duckdb/common/vector_operations/unary_executor.hpp"
 
 namespace duckdb {
@@ -14,30 +14,11 @@ namespace {
 class CRC32 {
 public:
 	CRC32() : crc(0xFFFFFFFF) {
-		InitTable();
-	}
-
-public:
-	static void InitTable() {
-		if (table_initialized)
-			return;
-
-		for (uint32_t i = 0; i < 256; i++) {
-			uint32_t c = i;
-			for (int j = 0; j < 8; j++) {
-				if (c & 1) {
-					c = 0xEDB88320 ^ (c >> 1);
-				} else {
-					c = c >> 1;
-				}
-			}
-			crc_table[i] = c;
-		}
-		table_initialized = true;
 	}
 
 public:
 	void Update(const data_t *data, idx_t length) {
+		auto &crc_table = GetTable();
 		for (idx_t i = 0; i < length; i++) {
 			crc = crc_table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
 		}
@@ -56,13 +37,30 @@ public:
 	}
 
 private:
-	uint32_t crc;
-	static uint32_t crc_table[256];
-	static bool table_initialized;
-};
+	//! Deletion vectors are read and written by several threads at once, so the table is built by a thread-safe
+	//! static initializer
+	static const array<uint32_t, 256> &GetTable() {
+		static const array<uint32_t, 256> crc_table = [] {
+			array<uint32_t, 256> table;
+			for (uint32_t i = 0; i < 256; i++) {
+				uint32_t c = i;
+				for (int j = 0; j < 8; j++) {
+					if (c & 1) {
+						c = 0xEDB88320 ^ (c >> 1);
+					} else {
+						c = c >> 1;
+					}
+				}
+				table[i] = c;
+			}
+			return table;
+		}();
+		return crc_table;
+	}
 
-uint32_t CRC32::crc_table[256];
-bool CRC32::table_initialized = false;
+private:
+	uint32_t crc;
+};
 
 } // namespace
 
@@ -260,71 +258,6 @@ vector<data_t> IcebergDeletionVectorData::ToBlob(const unordered_map<int32_t, ro
 	// Write CRC checksum (placeholder - set to 0)
 	Store<uint32_t>(BSwap(checksum), blob_ptr);
 	return blob_output;
-}
-
-vector<data_t> IcebergDeletionVectorData::ToPuffinFile(const vector<data_t> &blob, const string &referenced_data_file,
-                                                       idx_t cardinality) {
-	//! Wrap a `deletion-vector-v1` blob in a valid Puffin file container.
-	//! https://iceberg.apache.org/puffin-spec/
-	//! File layout:   Magic | Blob | Footer
-	//! Footer layout: Magic | FooterPayload (JSON) | FooterPayloadSize (4 bytes, little-endian) |
-	//!                Flags (4 bytes) | Magic
-	constexpr data_t PUFFIN_MAGIC[4] = {0x50, 0x46, 0x41, 0x31}; //! "PFA1"
-	const idx_t blob_offset = sizeof(PUFFIN_MAGIC);
-
-	//! Build the FooterPayload (FileMetadata). Per the spec, for `deletion-vector-v1` the blob's
-	//! `snapshot-id` and `sequence-number` must be -1, and it must carry the `referenced-data-file`
-	//! and `cardinality` properties. The blob is not compressed (no `compression-codec`).
-	JSONWriter writer;
-	auto root = writer.CreateObject();
-	writer.SetRoot(root);
-	auto blobs = writer.CreateArray();
-	root.Add("blobs", blobs);
-	auto blob_meta = writer.CreateObject();
-	blobs.Append(blob_meta);
-	blob_meta.AddString("type", "deletion-vector-v1");
-	blob_meta.Add("fields", writer.CreateArray());
-	blob_meta.Add("snapshot-id", writer.CreateSignedInteger(-1));
-	blob_meta.Add("sequence-number", writer.CreateSignedInteger(-1));
-	blob_meta.Add("offset", writer.CreateSignedInteger(static_cast<int64_t>(blob_offset)));
-	blob_meta.Add("length", writer.CreateSignedInteger(static_cast<int64_t>(blob.size())));
-	auto props = writer.CreateObject();
-	blob_meta.Add("properties", props);
-	props.AddString("referenced-data-file", referenced_data_file);
-	props.AddString("cardinality", std::to_string(cardinality));
-	auto footer_payload = writer.ToString(JSONWriteFlags::ALLOW_INF_AND_NAN);
-
-	const idx_t footer_payload_size = footer_payload.size();
-	const idx_t total_size = blob_offset + blob.size() + sizeof(PUFFIN_MAGIC) + footer_payload_size +
-	                         sizeof(int32_t) /* FooterPayloadSize */ + sizeof(uint32_t) /* Flags */ +
-	                         sizeof(PUFFIN_MAGIC);
-
-	vector<data_t> file_output;
-	file_output.resize(total_size);
-	data_ptr_t ptr = file_output.data();
-
-	//! Magic
-	memcpy(ptr, PUFFIN_MAGIC, sizeof(PUFFIN_MAGIC));
-	ptr += sizeof(PUFFIN_MAGIC);
-	//! Blob (starts at blob_offset == 4)
-	memcpy(ptr, blob.data(), blob.size());
-	ptr += blob.size();
-	//! Footer: leading Magic
-	memcpy(ptr, PUFFIN_MAGIC, sizeof(PUFFIN_MAGIC));
-	ptr += sizeof(PUFFIN_MAGIC);
-	//! Footer: FooterPayload (uncompressed UTF-8 JSON)
-	memcpy(ptr, footer_payload.c_str(), footer_payload_size);
-	ptr += footer_payload_size;
-	//! Footer: FooterPayloadSize (4-byte signed int, little-endian)
-	Store<int32_t>(static_cast<int32_t>(footer_payload_size), ptr);
-	ptr += sizeof(int32_t);
-	//! Footer: Flags (4 bytes; bit 0 of byte 0 = FooterPayload compressed -> 0 == uncompressed)
-	Store<uint32_t>(0, ptr);
-	ptr += sizeof(uint32_t);
-	//! Footer: trailing Magic
-	memcpy(ptr, PUFFIN_MAGIC, sizeof(PUFFIN_MAGIC));
-
-	return file_output;
 }
 
 } // namespace duckdb

@@ -550,7 +550,7 @@ void IRCAPI::CommitTableRename(ClientContext &context, IcebergCatalog &catalog, 
 	}
 }
 
-void IRCAPI::CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catalog, string body) {
+bool IRCAPI::CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catalog, const string &schema, string body) {
 	auto url_builder = catalog.GetBaseUrl();
 	url_builder.AddPrefixComponents(catalog.prefix);
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("namespaces"));
@@ -558,11 +558,16 @@ void IRCAPI::CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catal
 	headers.Insert("Content-Type", "application/json");
 	ICUtils::LogPostBody(context, url_builder, body);
 	auto response = catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, body);
+	// some catalogs also answer other conflicts with a 409
+	if (response->status == HTTPStatusCode::Conflict_409 && VerifySchemaExistence(context, catalog, schema)) {
+		return false;
+	}
 	if (response->status != HTTPStatusCode::OK_200) {
 		throw HTTPException(*response, "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s",
 		                    url_builder.GetURLEncoded(), EnumUtil::ToString(response->status), response->reason,
 		                    response->body);
 	}
+	return true;
 }
 
 void IRCAPI::CommitNamespaceDrop(ClientContext &context, IcebergCatalog &catalog,

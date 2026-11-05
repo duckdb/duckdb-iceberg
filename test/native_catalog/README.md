@@ -56,6 +56,16 @@ cmake --build build/reldebug --target unittest_iceberg_native
 ./build/reldebug/test/unittest_iceberg_native
 ```
 
+The separate scan serialization API executable links Iceberg and exercises its callbacks
+directly, so optimizer fallback cannot hide a failed round trip:
+
+```sh
+./build/reldebug/test/unittest_iceberg_serialization
+```
+
+The CI build step also runs these serialization tests before packaging the SQL
+test runner.
+
 ## SQL test interfaces
 
 Load the test extension before using its SQL helpers. The native test config

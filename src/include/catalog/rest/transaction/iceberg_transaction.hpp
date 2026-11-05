@@ -4,6 +4,7 @@
 #include "duckdb/transaction/transaction.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "catalog/rest/iceberg_schema_set.hpp"
+#include "catalog/rest/transaction/iceberg_pending_schema_creates.hpp"
 #include "catalog/rest/api/iceberg_retry.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_update.hpp"
 
@@ -129,11 +130,14 @@ private:
 	AccessMode access_mode;
 
 public:
+	//! Process-independent identity for rejecting scan copies outside their originating transaction.
+	const hugeint_t scan_serialization_id;
+
 	//! Schemas referenced by this transaction that have to stay alive for the duration of the transaction.
 	unordered_map<string, shared_ptr<IcebergSchemaEntry>> schemas;
 	//! Schemas staged by this transaction. These are separate from catalog-referenced schemas so both generations stay
 	//! alive when a transaction creates a schema after referencing a stale entry with the same name.
-	unordered_map<string, shared_ptr<IcebergSchemaEntry>> created_schemas;
+	IcebergPendingSchemaCreates created_schemas;
 	//! Tables referenced by this transaction that have to stay alive for the duration of the transaction.
 	unordered_map<string, shared_ptr<IcebergTable>> tables;
 	//! The visible state of every resolved table in this transaction.
@@ -165,6 +169,8 @@ public:
 
 	unordered_set<string> looked_up_entries;
 	mutex lock;
+	//! Serialize rewrite finalization, including the initialization of transaction table state.
+	mutex rewrite_commit_lock;
 
 	unordered_map<string, SchemaPropertyUpdates> schema_property_updates;
 };

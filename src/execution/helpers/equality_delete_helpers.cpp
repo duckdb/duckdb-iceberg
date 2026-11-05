@@ -418,6 +418,11 @@ void IcebergDelete::WriteEqualityDeleteFile(ClientContext &context, IcebergDelet
 	field_input.push_back(Value::STRUCT(std::move(field_id_values)));
 	info->options["field_ids"] = std::move(field_input);
 
+	auto codec = table.table_info.table_metadata.GetDeleteCompressionCodec();
+	if (!codec.empty()) {
+		info->options["codec"].emplace_back(codec);
+	}
+
 	auto &copy_fun = IcebergUtils::GetCopyFunction(context, "parquet");
 	CopyFunctionBindInput bind_input(*info);
 

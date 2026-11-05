@@ -18,3 +18,23 @@ set_target_properties(
 # by the SQL suite over HTTPUtil/HTTPClient.
 target_link_libraries(unittest_iceberg_native duckdb_static)
 duckdb_link_extensions(unittest_iceberg_native httpfs iceberg_mock)
+
+# Exercise the scan callbacks directly, including failures that optimizer
+# fallback would otherwise hide from sqllogictests.
+add_executable(unittest_iceberg_serialization test_scan_serialization.cpp)
+target_include_directories(
+  unittest_iceberg_serialization
+  PRIVATE ${CMAKE_SOURCE_DIR}/third_party/catch
+          ${CMAKE_CURRENT_LIST_DIR}/../../src/include)
+set_target_properties(
+  unittest_iceberg_serialization PROPERTIES RUNTIME_OUTPUT_DIRECTORY
+                                            ${CMAKE_BINARY_DIR}/test)
+target_link_libraries(unittest_iceberg_serialization duckdb_static)
+duckdb_link_extensions(
+  unittest_iceberg_serialization
+  avro
+  parquet
+  json
+  iceberg
+  httpfs
+  iceberg_mock)

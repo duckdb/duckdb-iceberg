@@ -99,7 +99,7 @@ IcebergCopyOnWriteDeleteFilter::IcebergCopyOnWriteDeleteFilter(PhysicalPlan &phy
                                                                PhysicalOperator &match_plan,
                                                                vector<idx_t> match_row_id_indexes)
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, std::move(types),
-	                   keep_plan.estimated_cardinality),
+                       keep_plan.estimated_cardinality),
       match_row_id_indexes(std::move(match_row_id_indexes)) {
 	children.push_back(keep_plan);
 	children.push_back(match_plan);
