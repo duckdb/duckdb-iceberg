@@ -432,6 +432,13 @@
       ]
     },
     {
+      "reason": "Iceberg does not allow changing a map's key; DuckDB tests rename and drop fields of a key struct",
+      "paths": [
+        "test/sql/alter/map/rename_column_in_struct.test",
+        "test/sql/alter/map/drop_column_in_struct.test"
+      ]
+    },
+    {
       "reason": "ALTER TABLE SET PARTITIONED BY is supported in Iceberg but DuckDB tests expect failure",
       "paths": [
         "test/sql/alter/alter_table_set_partitioned_by.test",
@@ -586,6 +593,7 @@
       "reason": "Stats / memory_usage / transitive filter output reflects iceberg storage",
       "paths": [
         "test/sql/delete/in_memory_bulk_delete.test_slow",
+        "test/sql/storage/partial_blocks/partial_block_tail_memory.test",
         "test/sql/transactions/test_commit_cleanup_oom.test",
         "test/sql/function/date/date_part_stats.test",
         "test/sql/function/time/test_extract_stats.test",
@@ -1706,6 +1714,7 @@
         "test/sql/catalog/nested_schema/nested_table_dml_persist.test",
         "test/sql/catalog/nested_schema/nested_table_dml.test",
         "test/sql/catalog/nested_schema/nested_table.test",
+        "test/sql/parser/drop_qualified_names.test",
         "test/sql/catalog/nested_schema/nested_table_columnref.test",
         "test/sql/storage/wal/wal_null_update_row_group_pruning.test",
         "test/sql/catalog/nested_schema/nested_wal_replay_index.test"
@@ -2038,6 +2047,66 @@
         "test/sql/storage/compression/constant/constant_negative_zero.test",
         "test/sql/storage/compression/rle/rle_select_force_fetch_row.test",
         "test/sql/storage/reclaim_space/test_reclaim_space_update_large_string.test"
+      ]
+    },
+    {
+      "reason": "New bump (d54cbbe3df17e8e5ce68312f483b4155836112aa -> 910c73dabeafc0290907a0c37e09f6abed8e9446)",
+      "paths": [
+        "test/sql/catalog/system_functions/system_catalog_scanner.test",
+        "test/sql/join/inner/test_prefix_range_filter_allnull_pruning.test",
+        "test/sql/optimizer/modulo_zonemap_pruning.test",
+        "test/sql/pragma/profiling/test_profiling_operator_name.test",
+        "test/sql/settings/set_scoped_time_zone_schema.test",
+        "test/sql/storage/checkpoint/checkpoint_rolled_back_use.test",
+        "test/sql/storage/compression/alp/alp_corrupt_null_block.test",
+        "test/sql/storage/compression/compression_null_block.test",
+        "test/sql/storage/compression/dict_fsst/dict_fsst_corrupt_dict_count.test",
+        "test/sql/storage/compression/dict_fsst/dict_fsst_corrupt_dict_count_boundary.test",
+        "test/sql/storage/compression/dict_fsst/dict_fsst_corrupt_dict_count_lengths.test",
+        "test/sql/storage/compression/dict_fsst/dict_fsst_corrupt_dictionary_index.test",
+        "test/sql/storage/compression/dict_fsst/dict_fsst_corrupt_encoded_dictionary_index.test",
+        "test/sql/storage/compression/dict_fsst/dict_fsst_corrupt_fsst_only_dict_count.test",
+        "test/sql/storage/compression/dict_fsst/dict_fsst_corrupt_indices_width.test",
+        "test/sql/storage/compression/dict_fsst/dict_fsst_corrupt_mode.test",
+        "test/sql/storage/compression/dict_fsst/zero_width_lengths.test",
+        "test/sql/storage/compression/roaring/roaring_bitset_boundaries.test",
+        "test/sql/storage/compression/roaring/roaring_corrupt_boolean_metadata_offset.test",
+        "test/sql/storage/compression/roaring/roaring_corrupt_cardinality_bitset.test",
+        "test/sql/storage/compression/roaring/roaring_corrupt_container_count.test",
+        "test/sql/storage/compression/roaring/roaring_corrupt_container_type.test",
+        "test/sql/storage/compression/roaring/roaring_corrupt_metadata_offset.test",
+        "test/sql/storage/compression/roaring/roaring_corrupt_metadata_offset_rejected.test",
+        "test/sql/storage/compression/roaring/roaring_corrupt_metadata_truncated.test",
+        "test/sql/storage/compression/roaring/roaring_corrupt_null_block.test",
+        "test/sql/storage/compression/roaring/roaring_corrupt_run_segment_counts.test",
+        "test/sql/storage/compression/roaring/roaring_run_boundaries.test",
+        "test/sql/storage/compression/zstd/zstd_corrupt_compressed_size.test",
+        "test/sql/storage/compression/zstd/zstd_corrupt_count.test",
+        "test/sql/storage/compression/zstd/zstd_corrupt_next_page_id.test",
+        "test/sql/storage/compression/zstd/zstd_corrupt_page_id.test",
+        "test/sql/storage/compression/zstd/zstd_corrupt_page_offset.test",
+        "test/sql/storage/compression/zstd/zstd_corrupt_page_offset_boundary.test",
+        "test/sql/storage/compression/zstd/zstd_corrupt_page_offset_directory.test",
+        "test/sql/storage/compression/zstd/zstd_corrupt_string_length.test",
+        "test/sql/storage/compression/zstd/zstd_packed_segment.test",
+        "test/sql/storage/legacy_named_arguments_upgrade.test",
+        "test/sql/storage/revert_append_after_checkpoint_new_row_group.test",
+        "test/sql/storage/revert_append_nested_list.test",
+        "test/sql/topn/top_n_pruning_read_ahead.test"
+      ]
+    },
+    {
+      "reason": "New bump (910c73dabeafc0290907a0c37e09f6abed8e9446 -> dbde6f7aec17f9df7d9e23d027475fd84618ce8d)",
+      "paths": [
+        "test/sql/parallelism/async_task_synchronous_batch.test",
+        "test/sql/aggregate/group/perfect_hash_corrupt_stats_range.test",
+        "test/sql/aggregate/group/perfect_hash_corrupt_stats_wrapped_id.test",
+        "test/sql/alter/struct/add_col_struct_column_default.test",
+        "test/sql/catalog/nested_schema/nested_schema_search_path.test",
+        "test/sql/catalog/nested_schema/nested_view_function_attached.test",
+        "test/sql/catalog/nested_schema/nested_view_function_catalog.test",
+        "test/sql/catalog/system_functions/system_catalog_entry_pushdown.test",
+        "test/sql/optimizer/consistent_within_query_optimizations.test"
       ]
     }
   ]

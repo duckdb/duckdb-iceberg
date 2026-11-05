@@ -1,0 +1,82 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/file_properties/test_parquet_compression_codec.test
+# description: test that write.parquet.compression-codec and write.delete.parquet.compression-codec reach the parquet writer
+# group: [file_properties]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.codec_data;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.codec_delete;
+
+# Every table sets the data file codec, since some catalogs store a default codec on new tables
+
+# delete files use the data file codec when no delete codec is set
+statement ok
+CREATE TABLE my_datalake.default.codec_data (id INTEGER) WITH (
+  'format-version' = '2',
+  'write.parquet.compression-codec' = 'zstd'
+);
+
+# the delete codec only applies to delete files
+statement ok
+CREATE TABLE my_datalake.default.codec_delete (id INTEGER) WITH (
+  'format-version' = '2',
+  'write.parquet.compression-codec' = 'zstd',
+  'write.delete.parquet.compression-codec' = 'gzip'
+);
+
+foreach tbl codec_data codec_delete
+
+statement ok
+INSERT INTO my_datalake.default.${tbl} SELECT range FROM range(100);
+
+statement ok
+DELETE FROM my_datalake.default.${tbl} WHERE id % 2 = 0;
+
+endloop
+
+# Start transaction to keep necessary credentials in scope
+statement ok
+BEGIN
+
+foreach tbl codec_data codec_delete
+
+statement ok
+SET VARIABLE ${tbl}_data_file = (SELECT file_path FROM iceberg_metadata(my_datalake.default.${tbl}) WHERE content = 'DATA');
+
+statement ok
+SET VARIABLE ${tbl}_delete_file = (SELECT file_path FROM iceberg_metadata(my_datalake.default.${tbl}) WHERE content = 'POSITION_DELETES');
+
+endloop
+
+query II
+SELECT
+  (SELECT DISTINCT compression FROM parquet_metadata(getvariable('codec_data_data_file'))),
+  (SELECT DISTINCT compression FROM parquet_metadata(getvariable('codec_data_delete_file')));
+----
+ZSTD	ZSTD
+
+query II
+SELECT
+  (SELECT DISTINCT compression FROM parquet_metadata(getvariable('codec_delete_data_file'))),
+  (SELECT DISTINCT compression FROM parquet_metadata(getvariable('codec_delete_delete_file')));
+----
+ZSTD	GZIP
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM my_datalake.default.codec_delete;
+----
+50
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.codec_data;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.codec_delete;

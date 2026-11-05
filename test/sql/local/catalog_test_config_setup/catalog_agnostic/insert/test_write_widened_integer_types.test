@@ -96,6 +96,7 @@ SELECT count(*) FROM (
 
 # Reading through Iceberg can cast away a storage mismatch. Check every data file's
 # physical type AND integer annotation: TINYINT/SMALLINT also use physical INT32.
+# V3 UPDATE/MERGE files also carry the reserved row lineage columns, which are not widened.
 statement ok
 BEGIN;
 
@@ -108,7 +109,7 @@ SET VARIABLE widened_write_files = (
 query III
 SELECT DISTINCT name, type, converted_type
 FROM parquet_schema(getvariable('widened_write_files'))
-WHERE num_children IS NULL
+WHERE num_children IS NULL AND name NOT IN ('_row_id', '_last_updated_sequence_number')
 ORDER BY name;
 ----
 element	INT32	INT_32

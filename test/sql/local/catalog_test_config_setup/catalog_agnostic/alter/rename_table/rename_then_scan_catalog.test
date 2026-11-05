@@ -1,0 +1,39 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/rename_table/rename_then_scan_catalog.test
+# group: [rename_table]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+drop table if exists my_datalake.default.rename_scan_src;
+
+statement ok
+drop table if exists my_datalake.default.rename_scan_dst;
+
+statement ok
+create table my_datalake.default.rename_scan_src(i INTEGER);
+
+statement ok
+insert into my_datalake.default.rename_scan_src values (42);
+
+statement ok
+alter table my_datalake.default.rename_scan_src rename to rename_scan_dst;
+
+query I
+select count(*) from duckdb_columns() where database_name = 'my_datalake' and table_name = 'rename_scan_dst';
+----
+1
+
+query I
+select count(*) from duckdb_tables() where database_name = 'my_datalake' and table_name = 'rename_scan_dst';
+----
+1
+
+query I
+select * from my_datalake.default.rename_scan_dst;
+----
+42
+
+statement ok
+drop table my_datalake.default.rename_scan_dst;

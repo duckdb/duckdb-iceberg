@@ -167,6 +167,9 @@ jobs:
           "
 
       - name: Run Generic IRC tests
+        # Below the job timeout, so a slow suite still leaves time for the
+        # teardown step and GitHub keeps this step's log (with per-test timings).
+        timeout-minutes: 90
         run: |
           ./build/release/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" "exclude:*.test_slow" --list-test-names-only || true
           ./build/release/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" "exclude:*.test_slow" --test-config test/configs/cloud_s3tables.json

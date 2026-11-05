@@ -1,0 +1,123 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/name_mapping_update.test
+# description: schema.name-mapping.default follows the schema: RENAME adds the new name to the field's entry, ADD appends an entry under the parent
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.name_mapping_tbl;
+
+statement ok
+CREATE TABLE my_datalake.default.name_mapping_tbl (a INTEGER, b INTEGER, s STRUCT(x INTEGER, y INTEGER));
+
+# A table migrated from Hive: its files have no field ids, the mapping names them
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_tbl SET ('schema.name-mapping.default' =
+	'[{"field-id":1,"names":["a"]},{"field-id":2,"names":["b"]},{"field-id":3,"names":["s"],"fields":[{"field-id":4,"names":["x"]},{"field-id":5,"names":["y"]}]}]');
+
+statement ok
+CREATE OR REPLACE MACRO mapping_entries() AS TABLE
+SELECT (e->>'$."field-id"')::INTEGER AS field_id, json_extract_string(e, '$.names[*]') AS names, json_extract(e, '$.fields') AS fields
+FROM (
+	SELECT unnest(json_extract(value::JSON, '$[*]')) AS e
+	FROM iceberg_table_properties(my_datalake.default.name_mapping_tbl)
+	WHERE key = 'schema.name-mapping.default'
+);
+
+# --- Top level: RENAME keeps the old name and adds the new one, ADD appends an entry ---
+
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_tbl RENAME COLUMN a TO a2;
+
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_tbl ADD COLUMN c INTEGER;
+
+query II
+SELECT field_id, names FROM mapping_entries() ORDER BY field_id;
+----
+1	[a, a2]
+2	[b]
+3	[s]
+6	[c]
+
+# --- Nested: the same under a struct ---
+
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_tbl RENAME COLUMN s.x TO x2;
+
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_tbl ADD COLUMN s.z INTEGER;
+
+query II
+SELECT (f->>'$."field-id"')::INTEGER, json_extract_string(f, '$.names[*]')
+FROM (SELECT unnest(json_extract(fields, '$[*]')) AS f FROM mapping_entries() WHERE field_id = 3)
+ORDER BY 1;
+----
+4	[x, x2]
+5	[y]
+7	[z]
+
+# --- An added struct gets entries for its fields, a list its 'element', a map its 'key' and 'value' ---
+
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_tbl ADD COLUMN s.n STRUCT(p INTEGER, l INTEGER[], m MAP(VARCHAR, INTEGER));
+
+query I
+SELECT json_extract(fields, '$[3]') FROM mapping_entries() WHERE field_id = 3;
+----
+{"field-id":8,"names":["n"],"fields":[{"field-id":9,"names":["p"]},{"field-id":10,"names":["l"],"fields":[{"field-id":11,"names":["element"]}]},{"field-id":12,"names":["m"],"fields":[{"field-id":13,"names":["key"]},{"field-id":14,"names":["value"]}]}]}
+
+# --- A name that now belongs to another field leaves the entry it was an alias of ---
+
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_tbl DROP COLUMN a2;
+
+# The entry of a dropped field stays, as in Iceberg Java
+query II
+SELECT field_id, names FROM mapping_entries() WHERE field_id = 1;
+----
+1	[a, a2]
+
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_tbl ADD COLUMN a INTEGER;
+
+query II
+SELECT field_id, names FROM mapping_entries() WHERE field_id IN (1, 15) ORDER BY field_id;
+----
+1	[a2]
+15	[a]
+
+# The table still reads and takes writes under the new schema
+statement ok
+INSERT INTO my_datalake.default.name_mapping_tbl VALUES (1, {'x2': 2, 'y': 3, 'z': 4, 'n': {'p': 5, 'l': [6], 'm': MAP {'k': 7}}}, 8, 9);
+
+query IIII
+SELECT b, s.x2, c, a FROM my_datalake.default.name_mapping_tbl;
+----
+1	2	8	9
+
+statement ok
+DROP TABLE my_datalake.default.name_mapping_tbl;
+
+# --- A table without a mapping gets none ---
+
+statement ok
+CREATE TABLE my_datalake.default.name_mapping_none (a INTEGER);
+
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_none RENAME COLUMN a TO a2;
+
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_none ADD COLUMN c INTEGER;
+
+query I
+SELECT count(*) FROM iceberg_table_properties(my_datalake.default.name_mapping_none) WHERE key = 'schema.name-mapping.default';
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.name_mapping_none;

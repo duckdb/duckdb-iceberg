@@ -6,6 +6,8 @@
 #include "catalog/rest/storage/authorization/sigv4.hpp"
 #include "catalog/rest/storage/authorization/none.hpp"
 #include "duckdb/logging/logger.hpp"
+#include "duckdb/common/json_document.hpp"
+#include "rest_catalog/objects/list.hpp"
 #include "regex"
 
 namespace duckdb {
@@ -171,6 +173,10 @@ static void SetAWSCatalogOptions(IcebergAttachOptions &attach_options, case_inse
 	if (set_by_attach_options.find("purge_requested") == set_by_attach_options.end()) {
 		attach_options.purge_requested = true;
 	}
+	// S3 Tables rejects uppercase namespace and table names, and Glue lowercases them
+	if (set_by_attach_options.find("identifier_case") == set_by_attach_options.end()) {
+		attach_options.identifier_case = IcebergIdentifierCase::LOWERCASE;
+	}
 }
 
 } // namespace
@@ -249,6 +255,29 @@ static void ParseAttachOptions(IcebergAttachOptions &attach_options, optional<Id
 				continue;
 			}
 			default_schema = Identifier(schema_name);
+		} else if (lower_name == "default_schema_policy") {
+			auto value = StringUtil::Lower(argument.ToString());
+			if (value == "error") {
+				attach_options.default_schema_policy = IcebergDefaultSchemaPolicy::THROW;
+			} else if (value == "create") {
+				attach_options.default_schema_policy = IcebergDefaultSchemaPolicy::CREATE;
+			} else if (value == "unenforced") {
+				attach_options.default_schema_policy = IcebergDefaultSchemaPolicy::UNENFORCED;
+			} else {
+				throw InvalidConfigurationException(
+				    "Unrecognized 'default_schema_policy' (%s), accepted options are: error, create, unenforced",
+				    value);
+			}
+		} else if (lower_name == "identifier_case") {
+			auto value = StringUtil::Lower(argument.ToString());
+			if (value == "preserve_case") {
+				attach_options.identifier_case = IcebergIdentifierCase::PRESERVE_CASE;
+			} else if (value == "lowercase") {
+				attach_options.identifier_case = IcebergIdentifierCase::LOWERCASE;
+			} else {
+				throw InvalidConfigurationException(
+				    "Unrecognized 'identifier_case' (%s), accepted options are: preserve_case, lowercase", value);
+			}
 		} else if (lower_name == "encode_entire_prefix") {
 			attach_options.encode_entire_prefix = argument.DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
 		} else if (lower_name == "max_table_staleness") {
@@ -358,6 +387,16 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 		client_options["warehouse"] = info.path;
 	}
 	ParseAttachOptions(attach_options, default_schema, client_options);
+	if (client_options.count("default_schema_policy")) {
+		if (!client_options.count("default_schema")) {
+			throw InvalidConfigurationException("DEFAULT_SCHEMA_POLICY requires DEFAULT_SCHEMA");
+		}
+		// an empty DEFAULT_SCHEMA means no default schema, which leaves nothing to check or create
+		if (!default_schema && attach_options.default_schema_policy != IcebergDefaultSchemaPolicy::UNENFORCED) {
+			throw InvalidConfigurationException(
+			    "DEFAULT_SCHEMA_POLICY 'error' or 'create' requires a non-empty DEFAULT_SCHEMA");
+		}
+	}
 	for (auto &entry : info.options) {
 		if (StringUtil::CIEquals(entry.first, "endpoint")) {
 			DUCKDB_LOG_WARNING(context, "The Iceberg attach option 'endpoint' is deprecated; use 'uri' instead");
@@ -452,14 +491,49 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 		attach_options.options.clear();
 	}
 	catalog->attach_options = attach_options;
+	if (default_schema) {
+		default_schema = Identifier(catalog->FoldIdentifier(default_schema->GetIdentifierName()));
+	}
 	catalog->default_schema = default_schema;
 	catalog->Configure(context, config, endpoint_type);
-	if (default_schema && !IRCAPI::VerifySchemaExistence(context, *catalog, default_schema->GetIdentifierName())) {
-		throw InvalidConfigurationException(
-		    "default_schema '%s' does not exist. ATTACH with no DEFAULT_SCHEMA to successfully attach",
-		    default_schema->GetIdentifierName());
+	auto policy = attach_options.default_schema_policy;
+	if (!default_schema) {
+		return std::move(catalog);
 	}
-	return std::move(catalog);
+	auto &schema_name = default_schema->GetIdentifierName();
+	switch (policy) {
+	case IcebergDefaultSchemaPolicy::UNENFORCED:
+		// no round trip here: IcebergSchemaSet verifies the default schema on its first lookup
+		return std::move(catalog);
+	case IcebergDefaultSchemaPolicy::THROW:
+		if (!IRCAPI::VerifySchemaExistence(context, *catalog, schema_name)) {
+			throw InvalidConfigurationException(
+			    "default_schema '%s' does not exist. ATTACH with no DEFAULT_SCHEMA to successfully attach, or with "
+			    "DEFAULT_SCHEMA_POLICY 'create' to create it",
+			    schema_name);
+		}
+		return std::move(catalog);
+	case IcebergDefaultSchemaPolicy::CREATE: {
+		// check before creating: a create of an existing namespace costs a 409 plus a re-check
+		if (IRCAPI::VerifySchemaExistence(context, *catalog, schema_name)) {
+			return std::move(catalog);
+		}
+		if (options.access_mode == AccessMode::READ_ONLY) {
+			throw InvalidConfigurationException("default_schema '%s' does not exist, and DEFAULT_SCHEMA_POLICY "
+			                                    "'create' cannot create it on a READ_ONLY attach",
+			                                    schema_name);
+		}
+		rest_api_objects::CreateNamespaceRequest request;
+		request._namespace.value = IRCAPI::ParseSchemaName(schema_name);
+		request.properties = case_insensitive_map_t<string>();
+		JSONWriter writer;
+		writer.SetRoot(request.ToJSON(writer));
+		IRCAPI::CommitNamespaceCreate(context, *catalog, schema_name,
+		                              writer.ToString(JSONWriteFlags::ALLOW_INF_AND_NAN));
+		return std::move(catalog);
+	}
+	}
+	throw InternalException("Unknown IcebergDefaultSchemaPolicy");
 }
 
 } // namespace duckdb

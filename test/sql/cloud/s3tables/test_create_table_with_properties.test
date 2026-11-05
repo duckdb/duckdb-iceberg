@@ -57,5 +57,5 @@ WITH (
     'property2'='value2'
 );
 ----
-<REGEX>:.*The table is using version that is not supported.*
+<REGEX>:.*The highest supported iceberg version is 3.*
 
