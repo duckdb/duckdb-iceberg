@@ -130,7 +130,13 @@ bool IcebergTransactionData::ContainsDelete() const {
 }
 
 bool IcebergTransactionData::IsFileInvalidated(const IcebergFileIdentity &file) const {
+	lock_guard<mutex> guard(lock);
 	return manifest_deletes.IsInvalidated(file);
+}
+
+bool IcebergTransactionData::HasInvalidatedFiles() const {
+	lock_guard<mutex> guard(lock);
+	return !manifest_deletes.IsEmpty();
 }
 
 shared_ptr<IcebergMergeDeleteCollector> IcebergTransactionData::GetMergeDeleteCollector(idx_t action_count) {
@@ -247,6 +253,16 @@ void IcebergTransactionData::AddSnapshotUpdate(unique_ptr<IcebergAddSnapshot> ad
 		throw InvalidInputException("Cannot change table \"%s\" after rolling it back in the same transaction",
 		                            table_info.name);
 	}
+	if (rewrites_data_files) {
+		throw InvalidInputException("Cannot change table \"%s\" after rewriting its data files in the same transaction",
+		                            table_info.name);
+	}
+	const bool is_rewrite = add_snapshot->GetOperation() == IcebergSnapshotOperationType::REPLACE;
+	//! Multiple operators can be planned before any of them stages its snapshot.
+	if (is_rewrite && !alters.empty()) {
+		throw InvalidInputException("Cannot rewrite table \"%s\": it was already changed in this transaction",
+		                            table_info.name);
+	}
 	// All action sinks share this execution's query ID; a later statement gets a different ID.
 	auto query_id = transaction.active_query.load();
 	if (merge_action && merge_query_id && *merge_query_id == query_id) {
@@ -272,6 +288,7 @@ void IcebergTransactionData::AddSnapshotUpdate(unique_ptr<IcebergAddSnapshot> ad
 	}
 	alters.push_back(*add_snapshot);
 	updates.push_back(std::move(add_snapshot));
+	rewrites_data_files = is_rewrite;
 }
 
 void IcebergTransactionData::AddDeleteSnapshot(partitioned_manifest_entry_map_t &&delete_files,

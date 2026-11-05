@@ -42,6 +42,13 @@ SELECT id, v FROM my_datalake.default.rewrite_in_transaction ORDER BY id;
 3	0
 4	0
 
+# Row changes work again once the rewrite has committed.
+statement ok
+COMMIT;
+
+statement ok
+BEGIN;
+
 statement ok
 UPDATE my_datalake.default.rewrite_in_transaction SET v = 9 WHERE id = 2;
 

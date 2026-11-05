@@ -78,6 +78,8 @@ void CommitRewrite(ClientContext &context, const RewritePlan &plan, RewriteExecu
 		deletes.InvalidateFile(delete_path);
 	}
 
+	//! Rewrites in one statement may finalize concurrently, including initializing the transaction's table state.
+	lock_guard<mutex> guard(iceberg_transaction.rewrite_commit_lock);
 	ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTable &tbl) {
 		ValidateRewriteSnapshot(plan, tbl, "transaction commit");
 		auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
