@@ -496,9 +496,28 @@ IcebergDeletePlan IcebergDeleteExecutionState::ProcessDeletes(const IcebergDelet
 			assembled = position;
 		}
 	}
-	if (!assembled && positions.size() == 1) {
+	if (assembled) {
+		// Older writers may have left file-scoped position deletes live alongside the vector.
+		// The vector remains authoritative for rows, but its replacement also supersedes those files.
+		// Copy only when adding sources: descriptor loads are immutable and may be shared by scan tasks.
+		shared_ptr<IcebergDeletionVectorData> combined;
+		for (auto &position : positions) {
+			if (position->type != IcebergDeleteType::POSITIONAL_DELETE || position->source_files.empty()) {
+				continue;
+			}
+			if (!combined) {
+				combined = make_shared_ptr<IcebergDeletionVectorData>(
+				    static_cast<const IcebergDeletionVectorData &>(*assembled));
+			}
+			combined->source_files.insert(combined->source_files.end(), position->source_files.begin(),
+			                              position->source_files.end());
+		}
+		if (combined) {
+			assembled = std::move(combined);
+		}
+	} else if (positions.size() == 1) {
 		assembled = positions[0];
-	} else if (!assembled && !positions.empty()) {
+	} else if (!positions.empty()) {
 		auto combined = make_shared_ptr<IcebergPositionalDeleteData>();
 		for (auto &position : positions) {
 			auto &source = static_cast<const IcebergPositionalDeleteData &>(*position);
