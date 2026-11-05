@@ -1,0 +1,176 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_generic_function_filter_pruning_strings.test
+# description: String function filters preserve matching NULLs and prune only when metrics prove a miss
+# group: [filtering]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SCAN_PLANNING_MODE client
+
+include test/sql/init_requires
+
+statement ok
+SET threads=1;
+
+statement ok
+CALL enable_logging('Iceberg');
+
+foreach metrics none counts full
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.function_pruning_strings;
+
+statement ok
+CREATE TABLE my_datalake.default.function_pruning_strings (k VARCHAR, id INTEGER)
+WITH ('write.metadata.metrics.default'='{metrics}');
+
+statement ok
+INSERT INTO my_datalake.default.function_pruning_strings VALUES (NULL, 1), (NULL, 2);
+
+statement ok
+INSERT INTO my_datalake.default.function_pruning_strings VALUES ('aaaa', 3), (NULL, 4);
+
+statement ok
+INSERT INTO my_datalake.default.function_pruning_strings VALUES ('bbbb', 5), ('bbbc', 6);
+
+statement ok
+INSERT INTO my_datalake.default.function_pruning_strings VALUES ('zzzz0', 7), ('zzzz1', 8);
+
+# COALESCE makes NULLs match, both in an all-NULL file and in a file whose
+# non-NULL bounds do not match. Only the non-NULL [bbbb, bbbc] file can be pruned.
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.function_pruning_strings
+WHERE starts_with(coalesce(k, 'zzzz'), 'zzzz');
+----
+[1, 2, 4, 7, 8]
+
+query I
+SELECT count(DISTINCT message) = CASE WHEN '{metrics}' = 'full' THEN 1 ELSE 0 END
+FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE '%skipped ''data_file''%'
+	AND message LIKE '%starts_with(COALESCE%';
+----
+true
+
+# An empty prefix matches every non-NULL string. Counts suffice to prune the
+# all-NULL file, but FILTER_TRUE_OR_NULL must keep the mixed file.
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.function_pruning_strings
+WHERE starts_with(k, '');
+----
+[3, 5, 6, 7, 8]
+
+query I
+SELECT count(DISTINCT message) = CASE WHEN '{metrics}' = 'none' THEN 0 ELSE 1 END
+FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE '%skipped ''data_file''%'
+	AND message LIKE '%starts_with(k,%';
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.function_pruning_strings;
+
+endloop
+
+# Truncating the largest Unicode code point cannot produce an upper bound:
+# the lower bound is present, but the upper bound must be omitted.
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.function_pruning_missing_upper_bound;
+
+statement ok
+CREATE TABLE my_datalake.default.function_pruning_missing_upper_bound (k VARCHAR, id INTEGER)
+WITH ('write.metadata.metrics.default'='truncate(4)');
+
+statement ok
+INSERT INTO my_datalake.default.function_pruning_missing_upper_bound
+VALUES (chr(1114111) || 'a', 1), (chr(1114111) || 'z', 2);
+
+query III
+SELECT count(*), count(lower_bound), count(upper_bound)
+FROM iceberg_column_stats(my_datalake.default.function_pruning_missing_upper_bound)
+WHERE column_name = 'k';
+----
+1	1	0
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.function_pruning_missing_upper_bound
+WHERE starts_with(coalesce(k, 'fallback'), chr(1114111));
+----
+[1, 2]
+
+query I
+SELECT id FROM my_datalake.default.function_pruning_missing_upper_bound
+WHERE starts_with(coalesce(k, 'fallback'), 'zzzz');
+----
+
+query I
+SELECT count(DISTINCT message) FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE '%skipped ''data_file''%';
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.function_pruning_missing_upper_bound;
+
+# Without metrics, an explicit NULL identity partition is the only proof that
+# its values are all NULL. Keep it for COALESCE, but prune it for an empty prefix.
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.function_pruning_string_partitions;
+
+statement ok
+CREATE TABLE my_datalake.default.function_pruning_string_partitions (k VARCHAR, id INTEGER)
+PARTITIONED BY (k)
+WITH ('write.metadata.metrics.default'='none');
+
+statement ok
+INSERT INTO my_datalake.default.function_pruning_string_partitions
+VALUES (NULL, 1), ('aaaa', 2), ('zzzz', 3);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.function_pruning_string_partitions
+WHERE starts_with(coalesce(k, 'zzzz'), 'zzzz');
+----
+[1, 3]
+
+query I
+SELECT count(DISTINCT message) FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE '%skipped ''data_file''%'
+	AND message LIKE '%partition column ''k'' has raw value NULL%'
+	AND message LIKE '%starts_with(COALESCE%';
+----
+0
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.function_pruning_string_partitions
+WHERE starts_with(k, '');
+----
+[2, 3]
+
+query I
+SELECT count(DISTINCT message) FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE '%skipped ''data_file''%'
+	AND message LIKE '%partition column ''k'' has raw value NULL%'
+	AND message LIKE '%starts_with(k,%';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.function_pruning_string_partitions;
+
+statement ok
+RESET threads;
