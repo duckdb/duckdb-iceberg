@@ -1,0 +1,158 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_deleted_rows.test
+# description: iceberg_rewrite_data_files removes data files none of whose rows are live
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+drop table if exists my_datalake.default.rewrite_deleted_rows;
+
+statement ok
+create table my_datalake.default.rewrite_deleted_rows (id INTEGER);
+
+statement ok
+insert into my_datalake.default.rewrite_deleted_rows values (1), (2);
+
+statement ok
+delete from my_datalake.default.rewrite_deleted_rows;
+
+query II
+select rewritten_data_files_count, added_data_files_count
+from iceberg_rewrite_data_files('my_datalake.default.rewrite_deleted_rows', rewrite_all := true);
+----
+1	0
+
+query I
+select count(*) from my_datalake.default.rewrite_deleted_rows;
+----
+0
+
+# the snapshot only removes the file
+query III
+select
+	coalesce(json_extract_string(snap, '$.summary."added-data-files"'), '0'),
+	json_extract_string(snap, '$.summary."deleted-data-files"'),
+	json_extract_string(snap, '$.summary."total-data-files"')
+from (
+	select unnest(json_extract(metadata::JSON, '$.snapshots[*]')) as snap
+	from iceberg_load_table_response(my_datalake.default.rewrite_deleted_rows)
+)
+where json_extract_string(snap, '$.summary.operation') = 'replace'
+order by json_extract_string(snap, '$."sequence-number"')::BIGINT desc
+limit 1;
+----
+0	1	0
+
+# no live data file is left
+query I
+select count(*) from iceberg_metadata(my_datalake.default.rewrite_deleted_rows)
+where manifest_content = 'DATA' and status != 'DELETED';
+----
+0
+
+# a file whose rows are all deleted is removed next to files that are rewritten
+statement ok
+insert into my_datalake.default.rewrite_deleted_rows values (3), (4);
+
+statement ok
+insert into my_datalake.default.rewrite_deleted_rows values (5), (6);
+
+statement ok
+delete from my_datalake.default.rewrite_deleted_rows where id <= 4;
+
+query II
+select rewritten_data_files_count, added_data_files_count
+from iceberg_rewrite_data_files('my_datalake.default.rewrite_deleted_rows', rewrite_all := true);
+----
+2	1
+
+query I
+select list(id order by id) from my_datalake.default.rewrite_deleted_rows;
+----
+[5, 6]
+
+statement ok
+drop table my_datalake.default.rewrite_deleted_rows;
+
+# A rewrite after an uncommitted DELETE is refused, whether all or some rows were deleted.
+statement ok
+drop table if exists my_datalake.default.rewrite_deleted_rows_tx;
+
+statement ok
+create table my_datalake.default.rewrite_deleted_rows_tx (id INTEGER);
+
+statement ok
+insert into my_datalake.default.rewrite_deleted_rows_tx values (1), (2);
+
+statement ok
+BEGIN;
+
+statement ok
+delete from my_datalake.default.rewrite_deleted_rows_tx;
+
+statement error
+select * from iceberg_rewrite_data_files('my_datalake.default.rewrite_deleted_rows_tx', rewrite_all := true);
+----
+has uncommitted changes in this transaction
+
+statement ok
+ROLLBACK;
+
+query I
+select list(id order by id) from my_datalake.default.rewrite_deleted_rows_tx;
+----
+[1, 2]
+
+statement ok
+BEGIN;
+
+statement ok
+delete from my_datalake.default.rewrite_deleted_rows_tx where id = 1;
+
+statement error
+select * from iceberg_rewrite_data_files('my_datalake.default.rewrite_deleted_rows_tx', rewrite_all := true);
+----
+has uncommitted changes in this transaction
+
+# Committing an aborted transaction must not publish its DELETE.
+statement ok
+COMMIT;
+
+query I
+select list(id order by id) from my_datalake.default.rewrite_deleted_rows_tx;
+----
+[1, 2]
+
+statement ok
+drop table my_datalake.default.rewrite_deleted_rows_tx;
+
+# a partitioned table where every row of one partition is deleted
+statement ok
+drop table if exists my_datalake.default.rewrite_deleted_rows_partitioned;
+
+statement ok
+create table my_datalake.default.rewrite_deleted_rows_partitioned (id INTEGER, k VARCHAR) partitioned by (k);
+
+statement ok
+insert into my_datalake.default.rewrite_deleted_rows_partitioned values (1, 'a'), (2, 'a'), (3, 'b');
+
+statement ok
+delete from my_datalake.default.rewrite_deleted_rows_partitioned where k = 'a';
+
+query II
+select rewritten_data_files_count, added_data_files_count
+from iceberg_rewrite_data_files('my_datalake.default.rewrite_deleted_rows_partitioned', rewrite_all := true);
+----
+2	1
+
+query II
+select k, list(id order by id) from my_datalake.default.rewrite_deleted_rows_partitioned group by k order by k;
+----
+b	[3]
+
+statement ok
+drop table my_datalake.default.rewrite_deleted_rows_partitioned;
