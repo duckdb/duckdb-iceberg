@@ -1,0 +1,379 @@
+# name: test/sql/local/native_catalog/rewrite_shared_deletes.test
+# description: Rewrites retain residual, dangling and equality deletes and remove fully applied shared position deletes
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+# Model an external writer: DuckDB writes one referenced position-delete file per data file,
+# so shared position deletes and deletes without referenced_data_file need explicit manifests.
+statement ok
+CREATE TABLE my_datalake.default.rewrite_shared_deletes (id INTEGER, p VARCHAR)
+PARTITIONED BY (p) WITH ('format-version' = 2);
+
+statement ok
+SET VARIABLE rewrite_field_ids = (
+	SELECT {
+		id: max((field->>'id')::INTEGER) FILTER (WHERE field->>'name' = 'id'),
+		p: max((field->>'id')::INTEGER) FILTER (WHERE field->>'name' = 'p')
+	}
+	FROM (
+		SELECT unnest(metadata::JSON->'schemas'->0->'fields'->'$[*]') AS field
+		FROM iceberg_load_table_response(my_datalake.default.rewrite_shared_deletes)
+	)
+);
+
+statement ok
+CREATE TABLE rewrite_rows AS
+SELECT * FROM (VALUES
+	('a', 1, NULL), ('a', 2, NULL), ('a', 9, NULL),
+	('b', 3, NULL), ('b', 4, NULL),
+	('c', 5, NULL), ('c', 6, NULL),
+	('d', 7, 'other'), ('d', 8, 'other')
+) t(file, id, p);
+
+foreach file a b c d
+
+statement ok
+COPY (SELECT id, p FROM rewrite_rows WHERE file = '{file}' ORDER BY id)
+TO '{TEST_DIR}/rewrite_{file}.parquet' (
+	FORMAT PARQUET, FIELD_IDS getvariable('rewrite_field_ids')
+);
+
+endloop
+
+statement ok
+COPY (
+	SELECT '{TEST_DIR}/rewrite_' || file || '.parquet' AS file_path, 0::BIGINT AS pos
+	FROM (VALUES ('a'), ('b')) t(file)
+	ORDER BY file_path, pos
+) TO '{TEST_DIR}/rewrite_shared.parquet' (
+	FORMAT PARQUET, FIELD_IDS {file_path: 2147483546, pos: 2147483545}
+);
+
+statement ok
+COPY (SELECT '{TEST_DIR}/missing.parquet' AS file_path, 0::BIGINT AS pos)
+TO '{TEST_DIR}/rewrite_dangling.parquet' (
+	FORMAT PARQUET, FIELD_IDS {file_path: 2147483546, pos: 2147483545}
+);
+
+statement ok
+COPY (SELECT '{TEST_DIR}/missing.parquet' AS file_path, 0::BIGINT AS pos)
+TO '{TEST_DIR}/rewrite_dangling_old.parquet' (
+	FORMAT PARQUET, FIELD_IDS {file_path: 2147483546, pos: 2147483545}
+);
+
+statement ok
+COPY (SELECT '{TEST_DIR}/rewrite_a.parquet' AS file_path, 0::BIGINT AS pos)
+TO '{TEST_DIR}/rewrite_stale.parquet' (
+	FORMAT PARQUET, FIELD_IDS {file_path: 2147483546, pos: 2147483545}
+);
+
+statement ok
+COPY (SELECT id FROM (VALUES (2), (4)) t(id))
+TO '{TEST_DIR}/rewrite_equality.parquet' (
+	FORMAT PARQUET, FIELD_IDS {'id': getvariable('rewrite_field_ids').id}
+);
+
+# A and B are eligible for the shared delete (sequence 10); C is newer and D is in another partition.
+# C inherits sequence 11 from the manifest, exercising both explicit and inherited sequences.
+statement ok
+COPY (
+	SELECT 1::INTEGER AS status, 11::BIGINT AS snapshot_id,
+		CASE file WHEN 'a' THEN 9 WHEN 'b' THEN 10 WHEN 'd' THEN 9 END::BIGINT AS sequence_number,
+		11::BIGINT AS file_sequence_number,
+		{
+			content: 0::INTEGER,
+			file_path: '{TEST_DIR}/rewrite_' || file || '.parquet',
+			file_format: 'PARQUET',
+			partition: {p: p},
+			record_count: count(*)::BIGINT,
+			file_size_in_bytes: 1000::BIGINT
+		} AS data_file
+	FROM rewrite_rows GROUP BY file, p ORDER BY file
+) TO '{TEST_DIR}/rewrite_data.avro' (
+	FORMAT AVRO,
+	METADATA {'schema-id': '0', 'partition-spec-id': '0', 'format-version': '2', 'content': 'data'},
+	FIELD_IDS {
+		status: 0, snapshot_id: 1, sequence_number: 3, file_sequence_number: 4,
+		data_file: {__duckdb_field_id: 2, content: 134, file_path: 100, file_format: 101,
+			partition: {__duckdb_field_id: 102, p: 1000}, record_count: 103, file_size_in_bytes: 104}
+	}
+);
+
+# Two kinds of dangling delete: one names a missing file; the other is older than every live data file.
+# The stale referenced delete names A but cannot apply to it because its sequence is too old.
+statement ok
+COPY (
+	SELECT 1::INTEGER AS status, 10::BIGINT AS snapshot_id,
+		CASE kind WHEN 'old' THEN 0 WHEN 'stale' THEN 0 END::BIGINT AS sequence_number,
+		10::BIGINT AS file_sequence_number,
+		{
+			content: CASE WHEN kind = 'equality' THEN 2 ELSE 1 END::INTEGER,
+			file_path: '{TEST_DIR}/rewrite_' || filename || '.parquet',
+			file_format: 'PARQUET',
+			partition: {p: NULL::VARCHAR},
+			record_count: CASE WHEN kind IN ('shared', 'equality') THEN 2 ELSE 1 END::BIGINT,
+			file_size_in_bytes: 1000::BIGINT,
+			referenced_data_file: CASE kind
+				WHEN 'missing' THEN '{TEST_DIR}/missing.parquet'
+				WHEN 'stale' THEN '{TEST_DIR}/rewrite_a.parquet'
+			END,
+			equality_ids: CASE WHEN kind = 'equality' THEN [getvariable('rewrite_field_ids').id] END
+		} AS data_file
+	FROM (VALUES ('shared', 'shared'), ('missing', 'dangling'), ('old', 'dangling_old'),
+		('stale', 'stale'), ('equality', 'equality')) t(kind, filename)
+) TO '{TEST_DIR}/rewrite_deletes.avro' (
+	FORMAT AVRO,
+	METADATA {'schema-id': '0', 'partition-spec-id': '0', 'format-version': '2', 'content': 'deletes'},
+	FIELD_IDS {
+		status: 0, snapshot_id: 1, sequence_number: 3, file_sequence_number: 4,
+		data_file: {__duckdb_field_id: 2, content: 134, file_path: 100, file_format: 101,
+			partition: {__duckdb_field_id: 102, p: 1000}, record_count: 103, file_size_in_bytes: 104,
+			referenced_data_file: 143, equality_ids: {__duckdb_field_id: 135, list: 136}}
+	}
+);
+
+statement ok
+COPY (
+	SELECT '{TEST_DIR}/rewrite_' || kind || '.avro' AS manifest_path,
+		1000::BIGINT AS manifest_length, 0::INTEGER AS partition_spec_id,
+		content::INTEGER AS content, seq::BIGINT AS sequence_number,
+		0::BIGINT AS min_sequence_number, seq::BIGINT AS added_snapshot_id,
+		files::INTEGER AS added_files_count, 0::INTEGER AS existing_files_count,
+		0::INTEGER AS deleted_files_count,
+		rows::BIGINT AS added_rows_count, 0::BIGINT AS existing_rows_count,
+		0::BIGINT AS deleted_rows_count
+	FROM (VALUES ('data', 0, 11, 4, 9), ('deletes', 1, 10, 5, 7)) t(kind, content, seq, files, rows)
+) TO '{TEST_DIR}/rewrite_list.avro' (
+	FORMAT AVRO,
+	FIELD_IDS {
+		manifest_path: 500, manifest_length: 501, partition_spec_id: 502,
+		content: 517, sequence_number: 515, min_sequence_number: 516, added_snapshot_id: 503,
+		added_files_count: 504, existing_files_count: 505, deleted_files_count: 506,
+		added_rows_count: 512, existing_rows_count: 513, deleted_rows_count: 514
+	}
+);
+
+# Publish the external writer's snapshot through the REST protocol.
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/rewrite_shared_deletes',
+	json_object('requirements', json_array(), 'updates', json_array(
+		json_object('action', 'add-snapshot', 'snapshot', json_object(
+			'snapshot-id', 11, 'sequence-number', 11, 'schema-id', 0,
+			'timestamp-ms', epoch_ms(current_timestamp), 'manifest-list', '{TEST_DIR}/rewrite_list.avro',
+			'summary', json_object('operation', 'overwrite'))),
+		json_object('action', 'set-snapshot-ref', 'ref-name', 'main', 'type', 'branch', 'snapshot-id', 11))));
+----
+200
+
+# Equality deletes use a strict sequence comparison: A's id=2 is deleted, but B's id=4 survives.
+query I rowsort
+SELECT id FROM my_datalake.default.rewrite_shared_deletes;
+----
+4
+5
+6
+7
+8
+9
+
+query IIIII
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_shared_deletes', min_input_files => 99);
+----
+0	0	0	0	0
+
+statement ok
+BEGIN;
+
+# Only A is rewritten. The shared delete must remain for B; dangling and equality deletes also remain.
+query IIII
+SELECT rewritten_data_files_count, added_data_files_count, failed_data_files_count, removed_delete_files_count
+FROM iceberg_rewrite_data_files('my_datalake.default.rewrite_shared_deletes',
+	min_input_files => 2, max_files_to_rewrite => 1);
+----
+1	1	0	0
+
+query I rowsort
+SELECT id FROM my_datalake.default.rewrite_shared_deletes;
+----
+4
+5
+6
+7
+8
+9
+
+statement ok
+ROLLBACK;
+
+# A and B are now rewritten together. Neither newer C nor the other partition D blocks delete removal.
+query IIII
+SELECT rewritten_data_files_count, added_data_files_count, failed_data_files_count, removed_delete_files_count
+FROM iceberg_rewrite_data_files('my_datalake.default.rewrite_shared_deletes',
+	min_input_files => 2, max_files_to_rewrite => 2);
+----
+2	1	0	1
+
+query TI rowsort
+SELECT content, count(*) FROM iceberg_metadata('my_datalake.default.rewrite_shared_deletes')
+WHERE status <> 'DELETED' GROUP BY content;
+----
+DATA	3
+EQUALITY_DELETES	1
+POSITION_DELETES	3
+
+query I rowsort
+SELECT id FROM my_datalake.default.rewrite_shared_deletes;
+----
+4
+5
+6
+7
+8
+9
+
+# Old manifests remain readable for time travel; removing a file from the live snapshot never unlinks it.
+query I rowsort
+SELECT id FROM my_datalake.default.rewrite_shared_deletes AT (VERSION => 11);
+----
+4
+5
+6
+7
+8
+9
+
+# Rewriting again ignores the shared delete's tombstone and retains all dangling and equality deletes.
+query IIII
+SELECT rewritten_data_files_count, added_data_files_count, failed_data_files_count, removed_delete_files_count
+FROM iceberg_rewrite_data_files('my_datalake.default.rewrite_shared_deletes', rewrite_all => true);
+----
+3	2	0	0
+
+query TI rowsort
+SELECT content, count(*) FROM iceberg_metadata('my_datalake.default.rewrite_shared_deletes')
+WHERE status <> 'DELETED' GROUP BY content;
+----
+DATA	2
+EQUALITY_DELETES	1
+POSITION_DELETES	3
+
+query I rowsort
+SELECT id FROM my_datalake.default.rewrite_shared_deletes;
+----
+4
+5
+6
+7
+8
+9
+
+statement ok
+ALTER TABLE my_datalake.default.rewrite_shared_deletes RESET PARTITIONED BY;
+
+# Repeat with unpartitioned deletes and historical partitioned data. A delete in the
+# unpartitioned spec can also match D, even though D is in a different data partition.
+statement ok
+BEGIN;
+
+statement ok
+COPY (
+	SELECT * REPLACE (struct_update(data_file, partition := {}) AS data_file)
+	FROM read_avro('{TEST_DIR}/rewrite_deletes.avro')
+) TO '{TEST_DIR}/rewrite_global_deletes.avro' (
+	FORMAT AVRO,
+	METADATA {'schema-id': '0', 'partition-spec-id': '1', 'format-version': '2', 'content': 'deletes'},
+	FIELD_IDS {
+		status: 0, snapshot_id: 1, sequence_number: 3, file_sequence_number: 4,
+		data_file: {__duckdb_field_id: 2, content: 134, file_path: 100, file_format: 101,
+			partition: 102, record_count: 103, file_size_in_bytes: 104,
+			referenced_data_file: 143, equality_ids: {__duckdb_field_id: 135, list: 136}}
+	}
+);
+
+statement ok
+COPY (
+	SELECT * REPLACE (
+		CASE WHEN content = 1 THEN '{TEST_DIR}/rewrite_global_deletes.avro' ELSE manifest_path END AS manifest_path,
+		CASE WHEN content = 1 THEN 1 ELSE 0 END AS partition_spec_id
+	) FROM read_avro('{TEST_DIR}/rewrite_list.avro')
+) TO '{TEST_DIR}/rewrite_global_list.avro' (
+	FORMAT AVRO,
+	FIELD_IDS {
+		manifest_path: 500, manifest_length: 501, partition_spec_id: 502,
+		content: 517, sequence_number: 515, min_sequence_number: 516, added_snapshot_id: 503,
+		added_files_count: 504, existing_files_count: 505, deleted_files_count: 506,
+		added_rows_count: 512, existing_rows_count: 513, deleted_rows_count: 514
+	}
+);
+
+statement ok
+COMMIT;
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/rewrite_shared_deletes',
+	json_object('requirements', json_array(), 'updates', json_array(
+		json_object('action', 'add-snapshot', 'snapshot', json_object(
+			'snapshot-id', 21, 'sequence-number', 21, 'schema-id', 0,
+			'timestamp-ms', epoch_ms(current_timestamp), 'manifest-list', '{TEST_DIR}/rewrite_global_list.avro',
+			'summary', json_object('operation', 'overwrite'))),
+		json_object('action', 'set-snapshot-ref', 'ref-name', 'main', 'type', 'branch', 'snapshot-id', 21))));
+----
+200
+
+query I rowsort
+SELECT id FROM my_datalake.default.rewrite_shared_deletes;
+----
+4
+5
+6
+7
+8
+9
+
+# Rewriting A and B is insufficient while the global delete can still apply to untouched D.
+query IIII
+SELECT rewritten_data_files_count, added_data_files_count, failed_data_files_count, removed_delete_files_count
+FROM iceberg_rewrite_data_files('my_datalake.default.rewrite_shared_deletes',
+	min_input_files => 2, max_files_to_rewrite => 2);
+----
+2	1	0	0
+
+query TI rowsort
+SELECT content, count(*) FROM iceberg_metadata('my_datalake.default.rewrite_shared_deletes')
+WHERE status <> 'DELETED' GROUP BY content;
+----
+DATA	3
+EQUALITY_DELETES	1
+POSITION_DELETES	4
+
+query IIII
+SELECT rewritten_data_files_count, added_data_files_count, failed_data_files_count, removed_delete_files_count
+FROM iceberg_rewrite_data_files('my_datalake.default.rewrite_shared_deletes', rewrite_all => true);
+----
+3	1	0	1
+
+query TI rowsort
+SELECT content, count(*) FROM iceberg_metadata('my_datalake.default.rewrite_shared_deletes')
+WHERE status <> 'DELETED' GROUP BY content;
+----
+DATA	1
+EQUALITY_DELETES	1
+POSITION_DELETES	3
+
+query I rowsort
+SELECT id FROM my_datalake.default.rewrite_shared_deletes;
+----
+4
+5
+6
+7
+8
+9
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_shared_deletes;

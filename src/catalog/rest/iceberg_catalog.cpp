@@ -207,9 +207,13 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 }
 
 void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
-	if (info.cascade) {
+	if (info.cascade && endpoint_type != IcebergEndpointType::AWS_GLUE) {
 		throw NotImplementedException(
 		    "DROP SCHEMA <schema_name> CASCADE is not supported for Iceberg schemas currently");
+	}
+	if (!info.cascade && endpoint_type == IcebergEndpointType::AWS_GLUE) {
+		throw NotImplementedException("DROP SCHEMA without CASCADE is not supported for AWS Glue: deleting a namespace "
+		                              "also deletes its tables. Use DROP SCHEMA <schema_name> CASCADE");
 	}
 	info.SetQualifiedName(FoldName(info.GetQualifiedName()));
 
@@ -468,6 +472,7 @@ void IcebergCatalog::ParsePrefix() {
 
 void IcebergCatalog::Configure(ClientContext &context, const rest_api_objects::CatalogConfig &catalog_config,
                                IcebergEndpointType endpoint_type) {
+	this->endpoint_type = endpoint_type;
 	base_uri = attach_options.catalog_uri;
 	StringUtil::RTrim(base_uri, "/");
 	if (base_uri.empty()) {
