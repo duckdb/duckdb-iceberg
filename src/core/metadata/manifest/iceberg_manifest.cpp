@@ -812,7 +812,7 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 		copy_info.options["codec"].push_back(Value(avro_codec));
 	}
 
-	CopyFunctionBindInput input(copy_info);
+	CopyFunctionBindInput input(copy_info, copy.function_info);
 	input.file_extension = "avro";
 
 	ThreadContext thread_context(context);
