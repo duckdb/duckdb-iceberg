@@ -128,7 +128,10 @@ void IcebergManifestStore::LoadManifestList() {
 
 			idx_t reserve_size =
 			    *counts->existing_files_count + *counts->added_files_count + *counts->deleted_files_count;
-			list_entry.GetOrCreateManifestEntries().reserve(reserve_size);
+			//! The counts come from the manifest list and are only a hint, so bound the up-front allocation
+			static constexpr idx_t MAX_RESERVED_MANIFEST_ENTRIES = 65536;
+			auto reserve_count = MinValue<idx_t>(reserve_size, MAX_RESERVED_MANIFEST_ENTRIES);
+			list_entry.GetOrCreateManifestEntries().reserve(reserve_count);
 		}
 
 		if (!manifests_to_eagerly_load.empty()) {
