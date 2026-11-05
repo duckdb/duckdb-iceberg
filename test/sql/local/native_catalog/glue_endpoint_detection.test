@@ -1,0 +1,196 @@
+# name: test/sql/local/native_catalog/glue_endpoint_detection.test
+# description: Glue URLs apply catalog behavior without ENDPOINT_TYPE
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+CALL iceberg_test_catalog_init('{TEMP_DIR}/iceberg-native', origins := [
+	'https://glue.eu-west-1.amazonaws.com',
+	'http://glue.eu-west-1.amazonaws.com',
+	'https://GLUE.EU-WEST-1.AMAZONAWS.COM:443',
+	'https://glue.cn-north-1.amazonaws.com.cn',
+	'http://glue.eu-west-1.amazonaws.com.example.org',
+	'http://other.eu-west-1.amazonaws.com',
+	'http://glue.amazonaws.com'
+]);
+
+statement ok
+CREATE SECRET glue_url_s3 (TYPE S3, KEY_ID 'test-key', SECRET 'test-secret', REGION 'us-east-1');
+
+statement ok
+CREATE MACRO mock_response(request_method, request_path, response_status, response_body) AS TABLE
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	json_object('method', request_method, 'path', request_path, 'status', response_status,
+		'body', response_body::JSON)::VARCHAR);
+
+# Glue's ":" warehouse must be omitted from the config request.
+query I
+SELECT * FROM mock_response('GET', '/iceberg/v1/config', 200, '{"defaults":{},"overrides":{}}');
+----
+204
+
+query I
+SELECT * FROM mock_response('GET', '/iceberg/v1/namespaces/glue_url_schema', 200,
+	'{"namespace":["glue_url_schema"],"properties":{}}');
+----
+204
+
+query I
+SELECT * FROM mock_response('DELETE', '/iceberg/v1/namespaces/glue_url_schema', 204, NULL);
+----
+204
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+SET redact_http_logs = false;
+
+foreach uri https://glue.eu-west-1.amazonaws.com/iceberg glue.eu-west-1.amazonaws.com/iceberg http://glue.eu-west-1.amazonaws.com/iceberg https://GLUE.EU-WEST-1.AMAZONAWS.COM:443/iceberg/ https://glue.cn-north-1.amazonaws.com.cn/iceberg
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Authentication defaults to SigV4 and uses the URL region, not the secret's region.
+statement ok
+ATTACH ':' AS glue_url (TYPE ICEBERG, URI '{uri}', SECRET glue_url_s3, ACCESS_DELEGATION_MODE 'none');
+
+query I
+SELECT count(*) = 1 AND bool_and(
+	request.headers['Authorization'] LIKE '%/eu-west-1/glue/aws4_request%'
+	OR request.headers['Authorization'] LIKE '%/cn-north-1/glue/aws4_request%')
+FROM duckdb_logs_parsed('HTTP');
+----
+true
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement error
+DROP SCHEMA glue_url.glue_url_schema;
+----
+Not implemented Error: DROP SCHEMA without CASCADE is not supported for AWS Glue
+
+statement error
+DROP SCHEMA IF EXISTS glue_url.glue_url_schema RESTRICT;
+----
+Not implemented Error: DROP SCHEMA without CASCADE is not supported for AWS Glue
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP');
+----
+0
+
+# Explicit CASCADE still delegates deletion to Glue, with lowercase identifiers.
+statement ok
+DROP SCHEMA glue_url.Glue_URL_Schema CASCADE;
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP')
+WHERE request.type = 'DELETE' AND request.url LIKE '%/namespaces/glue_url_schema';
+----
+1
+
+statement ok
+DETACH glue_url;
+
+endloop
+
+# Existing URL-based attaches with explicit SigV4 remain valid; explicit signing
+# options override the inferred values.
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+ATTACH ':' AS glue_explicit_auth (TYPE ICEBERG, URI 'https://glue.eu-west-1.amazonaws.com/iceberg',
+	AUTHORIZATION_TYPE 'sigv4', SECRET glue_url_s3, SIGV4_REGION 'us-west-2', SIGV4_SERVICE 'custom');
+
+query I
+SELECT request.headers['Authorization'] LIKE '%/us-west-2/custom/aws4_request%'
+FROM duckdb_logs_parsed('HTTP');
+----
+true
+
+statement error
+DROP SCHEMA glue_explicit_auth.glue_url_schema;
+----
+Not implemented Error: DROP SCHEMA without CASCADE is not supported for AWS Glue
+
+statement ok
+DETACH glue_explicit_auth;
+
+# Detection is independent of the selected authentication method.
+statement ok
+ATTACH ':' AS glue_no_auth (TYPE ICEBERG, URI 'https://glue.eu-west-1.amazonaws.com/iceberg',
+	AUTHORIZATION_TYPE 'none');
+
+statement error
+DROP SCHEMA glue_no_auth.glue_url_schema;
+----
+Not implemented Error: DROP SCHEMA without CASCADE is not supported for AWS Glue
+
+statement ok
+DETACH glue_no_auth;
+
+# An explicit endpoint type takes precedence over URL detection.
+query I
+SELECT * FROM mock_response('GET',
+	'/iceberg/v1/config?warehouse=arn%3Aaws%3As3tables%3Aus-east-1%3A123456789012%3Abucket%2Ftest',
+	200, '{"defaults":{},"overrides":{}}');
+----
+204
+
+statement ok
+ATTACH 'arn:aws:s3tables:us-east-1:123456789012:bucket/test' AS explicit_endpoint (
+	TYPE ICEBERG, URI 'https://glue.eu-west-1.amazonaws.com/iceberg',
+	ENDPOINT_TYPE 's3_tables', SECRET glue_url_s3);
+
+statement error
+DROP SCHEMA explicit_endpoint.glue_url_schema CASCADE;
+----
+Not implemented Error: DROP SCHEMA <schema_name> CASCADE is not supported for Iceberg schemas currently
+
+statement ok
+DETACH explicit_endpoint;
+
+# Similar hostnames, another AWS service, and a Glue hostname in the path are
+# generic catalogs and retain normal empty-schema deletion.
+foreach uri http://glue.eu-west-1.amazonaws.com.example.org/iceberg http://other.eu-west-1.amazonaws.com/iceberg http://glue.amazonaws.com/iceberg http://iceberg-mock.invalid/glue.eu-west-1.amazonaws.com/iceberg
+
+query I
+SELECT * FROM mock_response('GET', regexp_replace('{uri}', '^http://[^/]+', '') || '/v1/config',
+	200, '{"defaults":{},"overrides":{"uri":"http://iceberg-mock.invalid"}}');
+----
+204
+
+statement ok
+ATTACH '' AS generic_url (TYPE ICEBERG, URI '{uri}', AUTHORIZATION_TYPE 'none');
+
+statement ok
+CREATE SCHEMA generic_url.glue_url_generic;
+
+statement ok
+DROP SCHEMA generic_url.glue_url_generic;
+
+statement error
+DROP SCHEMA generic_url.glue_url_generic CASCADE;
+----
+Not implemented Error: DROP SCHEMA <schema_name> CASCADE is not supported for Iceberg schemas currently
+
+statement ok
+DETACH generic_url;
+
+endloop
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+statement ok
+DROP SECRET glue_url_s3;
