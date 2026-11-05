@@ -1,0 +1,107 @@
+# name: test/sql/local/native_catalog/drop_schema_cascade.test
+# description: Glue requires explicit CASCADE for namespace deletion
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+CREATE SECRET drop_schema_s3 (TYPE S3, KEY_ID 'test-key', SECRET 'test-secret', REGION 'us-east-1');
+
+statement ok
+ATTACH ':' AS glue_catalog (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	ENDPOINT_TYPE 'glue', SECRET drop_schema_s3, ACCESS_DELEGATION_MODE 'none');
+
+statement ok
+CREATE SCHEMA my_datalake.drop_schema_cascade;
+
+statement ok
+CALL enable_logging('HTTP');
+
+# Even an empty Glue namespace requires explicit CASCADE, including IF EXISTS and RESTRICT.
+statement error
+DROP SCHEMA glue_catalog.drop_schema_cascade;
+----
+Not implemented Error: DROP SCHEMA without CASCADE is not supported for AWS Glue
+
+statement error
+DROP SCHEMA IF EXISTS glue_catalog.drop_schema_cascade;
+----
+Not implemented Error: DROP SCHEMA without CASCADE is not supported for AWS Glue
+
+statement error
+DROP SCHEMA glue_catalog.drop_schema_cascade RESTRICT;
+----
+Not implemented Error: DROP SCHEMA without CASCADE is not supported for AWS Glue
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP');
+----
+0
+
+statement ok
+CREATE TABLE my_datalake.drop_schema_cascade.t (i INTEGER);
+
+# Model Glue accepting deletion of a populated namespace; the client delegates CASCADE to the server.
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	'{"method":"DELETE","path":"/v1/namespaces/drop_schema_cascade","status":204,"body":null}');
+----
+204
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+BEGIN;
+
+statement ok
+DROP SCHEMA glue_catalog.drop_schema_cascade CASCADE;
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE request.type = 'DELETE';
+----
+0
+
+statement ok
+COMMIT;
+
+query II
+SELECT count(*) FILTER (WHERE request.type = 'DELETE' AND request.url LIKE '%/namespaces/drop_schema_cascade'),
+	count(*) FILTER (WHERE request.url LIKE '%/tables%' OR request.url LIKE '%/views%')
+FROM duckdb_logs_parsed('HTTP');
+----
+1	0
+
+# S3 Tables retains the existing CASCADE rejection.
+statement ok
+ATTACH 'arn:aws:s3tables:us-east-1:123456789012:bucket/test' AS s3_tables_catalog (
+	TYPE ICEBERG, URI 'http://iceberg-mock.invalid', ENDPOINT_TYPE 's3_tables', SECRET drop_schema_s3);
+
+statement error
+DROP SCHEMA s3_tables_catalog.drop_schema_cascade CASCADE;
+----
+Not implemented Error: DROP SCHEMA <schema_name> CASCADE is not supported for Iceberg schemas currently
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+statement ok
+DROP TABLE my_datalake.drop_schema_cascade.t;
+
+statement ok
+DROP SCHEMA my_datalake.drop_schema_cascade;
+
+statement ok
+DETACH s3_tables_catalog;
+
+statement ok
+DETACH glue_catalog;
+
+statement ok
+DROP SECRET drop_schema_s3;

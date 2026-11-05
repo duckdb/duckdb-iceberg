@@ -53,7 +53,7 @@ IcebergDeleteFile IcebergScanTaskCodec::ReadDeleteFile(const Value &descriptor) 
 	auto &values = StructValue::GetChildren(descriptor);
 	for (idx_t i = 0; i < 6; i++) {
 		if (values[i].IsNull()) {
-			throw InvalidInputException("iceberg_scan_tasks delete descriptor '%s' cannot be NULL",
+			throw InvalidInputException("iceberg_scan_tasks delete descriptor %s cannot be NULL",
 			                            StructType::GetChildName(descriptor.type(), i));
 		}
 	}
@@ -110,7 +110,7 @@ IcebergScanTaskCodec::BindInput(const LogicalType &task_type, vector<LogicalType
 	case_insensitive_map_t<idx_t> indexes;
 	for (idx_t i = 0; i < fields.size(); i++) {
 		if (!indexes.emplace(fields[i].first.GetIdentifierName(), i).second) {
-			throw BinderException("iceberg_scan_tasks input contains duplicate column '%s'", fields[i].first);
+			throw BinderException("iceberg_scan_tasks input contains duplicate column %s", fields[i].first);
 		}
 	}
 	auto expected = Columns(LogicalType::STRUCT({}), LogicalType::STRUCT({}));

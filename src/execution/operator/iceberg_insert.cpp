@@ -395,7 +395,7 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 		}
 		if (delete_global_state.merge_deletes) {
 			// Replacement files are now staged; even an empty UPDATE must complete its collector participant.
-			update_delete_op->Cast<IcebergDelete>().FinalizeMergeDeletes(context, delete_global_state);
+			update_delete_op->Cast<IcebergDelete>().ScheduleDeletes(pipeline, event, delete_global_state, true);
 		}
 	} else {
 		// Stage an INSERT statement or a MERGE insert action; the latter may join an overwrite snapshot.

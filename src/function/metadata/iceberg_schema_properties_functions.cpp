@@ -113,7 +113,7 @@ static unique_ptr<FunctionData> RemoveIcebergSchemaPropertiesBind(ClientContext 
 	auto &remove_values = input.inputs[1];
 	auto &list_children = ListValue::GetChildren(remove_values);
 	for (idx_t col_idx = 0; col_idx < list_children.size(); col_idx++) {
-		auto &remove_property = StringValue::Get(list_children[0]);
+		auto &remove_property = StringValue::Get(list_children[col_idx]);
 		ret->remove_properties.insert(remove_property);
 	}
 

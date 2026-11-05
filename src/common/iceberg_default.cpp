@@ -1,6 +1,5 @@
 #include "common/iceberg_default.hpp"
 #include "duckdb/execution/expression_executor.hpp"
-#include "duckdb/function/scalar/generic_common.hpp"
 #include "duckdb/function/scalar/struct_functions.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
@@ -54,7 +53,7 @@ Value IcebergDefaultBinder::Evaluate(optional_ptr<const ParsedExpression> expr, 
 
 namespace {
 
-//! Used to determine if the field of a struct is mapped or not
+//! The fields supplied for a STRUCT
 struct StructFieldMapping {
 	case_insensitive_map_t<unique_ptr<StructFieldMapping>> child_mapping;
 };
@@ -65,12 +64,13 @@ static Value CreateStructMapping(const LogicalType &struct_type, const string &n
 
 	auto &struct_children = StructType::GetChildTypes(struct_type);
 	for (auto &[field_name, field_type] : struct_children) {
+		//! Only a field supplied as a STRUCT gets a node for its own fields
 		auto &child_mapping = out_mapping[field_name.GetIdentifierName()];
-		if (!child_mapping) {
-			child_mapping = make_uniq<StructFieldMapping>();
-		}
 		Value mapping;
 		if (field_type.id() == LogicalTypeId::STRUCT) {
+			if (!child_mapping) {
+				child_mapping = make_uniq<StructFieldMapping>();
+			}
 			mapping = CreateStructMapping(field_type, field_name.GetIdentifierName(), child_mapping->child_mapping);
 		} else {
 			mapping = Value(field_name);
@@ -121,6 +121,10 @@ static Value CreateStructDefault(const Value &descriptor,
 
 		Value field_default;
 		if (IsStructDefaultDescriptor(field_value)) {
+			if (is_mapped && !it->second) {
+				// Supplied, but not as a STRUCT (e.g. NULL), so there are no fields to fill
+				continue;
+			}
 			if (is_mapped) {
 				// The nested STRUCT is present in the input. Recurse so that only its omitted children receive
 				// field defaults.
@@ -153,39 +157,44 @@ static Value CreateStructDefault(const Value &descriptor,
 	return Value::STRUCT(field_defaults);
 }
 
+//! Whether the STRUCT or any of its fields has a non-NULL default
+static bool HasNonNullDefault(const Value &descriptor) {
+  if (!GetStructDefault(descriptor).IsNull()) {
+    return true;
+  }
+
+  for (auto &field_default : StructValue::GetChildren(GetStructFieldDefaults(descriptor))) {
+    if (IsStructDefaultDescriptor(field_default) ? HasNonNullDefault(field_default) : !field_default.IsNull()) {
+      return true;
+    }
+  }
+  return false;
+}
+
 static Value EvaluateStructDefault(ClientContext &context, const Expression &default_expr) {
-	// This is called by DuckDB's default projection hook. At this point the parsed envelope created by
-	// IcebergColumnDefinition::GetColumnDefinition has been bound by DuckDB, so generic_common.hpp can identify it
-	// from the bound function and its bind data.
+	if (default_expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		auto &function_expr = default_expr.Cast<BoundFunctionExpression>();
+		auto &arguments = function_expr.GetChildren();
+		if (function_expr.Function().GetName() == StructExtractFun::Name && !arguments.empty() &&
+		    arguments[0]->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+			// A STRUCT column's default: return the descriptor it carries
+			auto &descriptor = arguments[0]->Cast<BoundConstantExpression>().GetValue();
+			if (IsStructDefaultDescriptor(descriptor)) {
+				return descriptor;
+			}
+		}
+	}
+
 	if (!default_expr.IsFoldable()) {
 		throw BinderException("Cannot resolve partial STRUCT insert with non-constant default value");
 	}
 
-	// Evaluate first because ConstantOrNull::IsConstantOrNull verifies that the function's bound constant is the
-	// value we expect. For the Iceberg envelope the descriptor (argument 2) is non-NULL, therefore normal
-	// constant_or_null semantics make this exactly the whole-STRUCT default from argument 1.
 	Value default_value;
 	if (!ExpressionExecutor::TryEvaluateScalar(context, default_expr, default_value)) {
 		throw BinderException("Cannot resolve partial STRUCT insert with non-constant default value");
 	}
-	if (default_expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-		// The catalog hook exposes the default as const, while the generic recognition helper accepts a mutable
-		// BoundFunctionExpression. Work on a normal expression copy instead of hardcoding function-name/bind-data
-		// detection here or casting away constness. Copying preserves the bound function and its bind data.
-		auto expression_copy = default_expr.Copy();
-		auto &function_expr = expression_copy->Cast<BoundFunctionExpression>();
-		if (ConstantOrNull::IsConstantOrNull(function_expr, default_value)) {
-			D_ASSERT(function_expr.GetChildren().size() == 2);
 
-			// This is the sole point where the envelope changes meaning: partial STRUCT projection needs the
-			// recursive descriptor, not the envelope's runtime value. Argument 2 is a foldable internal constant,
-			// so evaluate and return it for CreateStructDefault below.
-			return ExpressionExecutor::EvaluateScalar(context, *function_expr.GetChildren()[1]);
-		}
-	}
-
-	// Non-STRUCT Iceberg columns do not use the envelope. Return their ordinary default value; ResolveDefault's
-	// type check below will leave their input projection unchanged.
+	// Any other column: return its ordinary default
 	return default_value;
 }
 
@@ -197,16 +206,14 @@ unique_ptr<Expression> IcebergDefaultProjectionResolver::ResolveDefault(ClientCo
                                                                         ColumnBinding binding,
                                                                         const Expression &default_expr) {
 	auto default_descriptor = EvaluateStructDefault(context, default_expr);
-	if (default_descriptor.IsNull() || input_type.id() != LogicalTypeId::STRUCT ||
-	    result_type.id() != LogicalTypeId::STRUCT) {
-		// STRUCT inputs are bound without a target type, so an explicit NULL still needs the column's type.
+	if (!IsStructDefaultDescriptor(default_descriptor) || !HasNonNullDefault(default_descriptor) ||
+	    input_type.id() != LogicalTypeId::STRUCT || result_type.id() != LogicalTypeId::STRUCT) {
+		// No defaults to fill in, so only cast the input to the column's type
 		return BoundCastExpression::AddCastToType(context, make_uniq<BoundColumnRefExpression>(input_type, binding),
 		                                          result_type);
 	}
 
-	// A non-NULL STRUCT was supplied. Build a remap that preserves mapped fields and fills only omitted fields from
-	// the recursive descriptor. RemapStructFun propagates a NULL input STRUCT as NULL, so explicit NULL remains NULL
-	// even when the compatibility setting makes the whole-STRUCT default non-NULL.
+	// Keep the supplied fields and fill the omitted ones from their defaults. A NULL input STRUCT stays NULL.
 	vector<unique_ptr<Expression>> children;
 	children.push_back(make_uniq<BoundColumnRefExpression>(input_type, binding));
 	children.push_back(make_uniq<BoundConstantExpression>(Value(result_type)));

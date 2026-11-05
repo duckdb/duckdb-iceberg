@@ -12,6 +12,7 @@
 
 #include "iceberg_logging.hpp"
 #include "catalog/rest/storage/iceberg_authorization.hpp"
+#include "catalog/rest/api/api_utils.hpp"
 
 namespace duckdb {
 
@@ -195,6 +196,8 @@ HTTPHeaders AWSInput::SignRequest(RequestType request_type, ClientContext &conte
 
 unique_ptr<HTTPResponse> AWSInput::Request(RequestType request_type, ClientContext &context, HTTPHeaders &headers,
                                            const string &data) {
+	// before signing, so the signature uses the crypto module of httpfs
+	APIUtils::LoadHttpfs(context);
 	auto &db = DatabaseInstance::GetDatabase(context);
 	auto res = SignRequest(request_type, context, headers, data);
 

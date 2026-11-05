@@ -130,6 +130,9 @@ private:
 	AccessMode access_mode;
 
 public:
+	//! Process-independent identity for rejecting scan copies outside their originating transaction.
+	const hugeint_t scan_serialization_id;
+
 	//! Schemas referenced by this transaction that have to stay alive for the duration of the transaction.
 	unordered_map<string, shared_ptr<IcebergSchemaEntry>> schemas;
 	//! Schemas staged by this transaction. These are separate from catalog-referenced schemas so both generations stay

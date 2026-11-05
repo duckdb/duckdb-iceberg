@@ -23,6 +23,8 @@ const string WRITE_MERGE_MODE = "write.merge.mode";
 const string WRITE_DELETE_ISOLATION_LEVEL = "write.delete.isolation-level";
 const string WRITE_FORMAT_DEFAULT = "write.format.default";
 const string WRITE_DELETE_FORMAT_DEFAULT = "write.delete.format.default";
+const string WRITE_PARQUET_COMPRESSION_CODEC = "write.parquet.compression-codec";
+const string WRITE_DELETE_PARQUET_COMPRESSION_CODEC = "write.delete.parquet.compression-codec";
 
 struct IcebergMetadataLogItem {
 public:
@@ -117,6 +119,9 @@ public:
 
 	const case_insensitive_map_t<string> &GetTableProperties() const;
 	string GetTableProperty(string property_string) const;
+  string GetDeleteCompressionCodec() const;
+
+  static void VerifyNotReservedProperty(const string &key, const string &operation);
 	//! Whether the given write mode property (write.delete.mode, write.update.mode or write.merge.mode) allows
 	//! writing merge-on-read delete files
 	bool AllowsMergeOnRead(const string &write_mode_property) const;
