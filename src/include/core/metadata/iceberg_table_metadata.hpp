@@ -72,7 +72,7 @@ public:
 	IcebergTableMetadata &operator=(IcebergTableMetadata &&) = default;
 
 public:
-	//! Opens `file` with its extended information, such as its file secret
+	//! Opens `file` with its extended information, such as its named secret
 	static rest_api_objects::TableMetadata Parse(const OpenFileInfo &file, FileSystem &fs,
 	                                             const string &metadata_compression_codec);
 	static IcebergTableMetadata FromTableMetadata(const rest_api_objects::TableMetadata &table_metadata);
@@ -186,9 +186,9 @@ public:
 
 	vector<IcebergMetadataLogItem> metadata_log;
 
-	//! When set, the file secret every file of the table (manifest lists, manifests, data and delete files) is opened
-	//! with alone. Set only on a copy a read of the table makes (IcebergFileCredentialsCallback), never on the table's
-	//! own metadata, which other connections share; never written to a file. Set with SetFileSecret
+	//! The registered secret named by reads of the table's manifest lists, manifests, data and delete files.
+	//! Set only on a read's metadata copy, never on the table's shared metadata or in a metadata file.
+	//! Set with SetFileSecret.
 	string file_secret;
 	//! The name of the file secret as one value, which every file that names it shares
 	Value file_secret_value;
@@ -196,7 +196,7 @@ public:
 public:
 	explicit IcebergTableMetadata(IcebergTableMetadataSchemas schemas);
 	void SetFileSecret(string name);
-	//! Names the file secret, if any, in the options of `file`, whose extended information is its own
+	//! Names the secret, if any, in `file`'s options. Existing extended information must belong to this file.
 	void ApplyFileSecret(OpenFileInfo &file) const;
 
 private:

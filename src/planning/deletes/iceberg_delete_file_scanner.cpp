@@ -66,7 +66,8 @@ static void ScanPuffinFile(const IcebergDeleteExecutionContext &context, const I
 
 	FileOpenFlags flags = FileFlags::FILE_FLAGS_READ;
 	flags.SetCachingMode(CachingMode::CACHE_REMOTE_ONLY);
-	auto puffin_file = OpenFileInfo(puffin_path).WithFileSecret(context.metadata.file_secret);
+	auto puffin_file = OpenFileInfo(puffin_path);
+	context.metadata.ApplyFileSecret(puffin_file);
 	auto file_handle = context.fs.OpenFile(puffin_file, flags);
 	if (!data_file.content_offset) {
 		throw InvalidConfigurationException("Puffin delete file is missing 'content_offset");

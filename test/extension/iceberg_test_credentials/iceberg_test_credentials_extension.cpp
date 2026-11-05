@@ -22,22 +22,21 @@ namespace duckdb {
 
 namespace {
 
-//! The key id of the secret a table's file secret holds, unless it is given one
+//! The key id of a table's registered secret, unless it is given one
 static constexpr const char *CREDENTIALS_KEY_ID = "ICEBERG_TEST_CREDENTIALS";
 
 //! An open or a listing of a file under the recorded directory
 struct RecordedRead {
 	string path;
 	bool listing;
-	//! Whether it carried a file secret
+	//! Whether the file explicitly named a secret
 	bool has_credentials;
-	//! The key id its file secret gave it; empty when it gave none, or refused the path
+	//! The key id selected by the secret reader; empty when it gave none, or refused the path
 	string key_id;
 };
 
-//! Serves the local files below 'root', as the local file system does, and records each open and listing with the
-//! file secret it carries. Like httpfs's S3 file system, it reads the secret for the path, which refuses a path
-//! outside its scope, and passes a listing's file secret to each file it lists.
+//! Serves local files below 'root' and records each open and listing.
+//! Like httpfs's S3 file system, it resolves named secrets and otherwise looks them up by path.
 class RecordingFileSystem : public LocalFileSystem {
 public:
 	explicit RecordingFileSystem(string root_p) : root(std::move(root_p)) {
@@ -65,35 +64,33 @@ protected:
 	}
 	unique_ptr<FileHandle> OpenFileExtended(const OpenFileInfo &file, FileOpenFlags flags,
 	                                        optional_ptr<FileOpener> opener) override {
-		Record(file.path, false, file.GetFileSecret(), opener);
+		Record(file, false, opener);
 		return LocalFileSystem::OpenFile(file.path, flags, opener);
 	}
 	unique_ptr<MultiFileList> GlobFilesExtended(const string &path, const FileGlobInput &input,
 	                                            optional_ptr<FileOpener> opener) override {
-		Record(path, true, input.file_secret, opener);
-		auto files = LocalFileSystem::GlobFilesExtended(path, input, opener)->GetAllFiles();
-		for (auto &file : files) {
-			file = file.WithFileSecret(input.file_secret);
-		}
-		return make_uniq<SimpleMultiFileList>(std::move(files));
+		Record(OpenFileInfo(path), true, opener);
+		return LocalFileSystem::GlobFilesExtended(path, input, opener);
 	}
 
 private:
-	void Record(const string &path, bool listing, const string &file_secret, optional_ptr<FileOpener> opener) {
-		// recorded before the secret is read, so that a read the file secret refuses is recorded
+	void Record(const OpenFileInfo &file, bool listing, optional_ptr<FileOpener> opener) {
+		string secret_name;
+		auto has_credentials = file.extended_info && file.extended_info->TryGetSecretName(secret_name);
+		// Record failed secret lookups as well as successful reads.
 		idx_t index;
 		{
 			lock_guard<mutex> guard(lock);
 			index = reads.size();
-			reads.push_back(RecordedRead {path, listing, !file_secret.empty(), string()});
-		}
-		if (file_secret.empty()) {
-			return;
+			reads.push_back(RecordedRead {file.path, listing, has_credentials, string()});
 		}
 		if (!opener) {
-			throw InvalidConfigurationException("The file secret for '%s' cannot be used without a file opener", path);
+			if (has_credentials) {
+				throw InvalidConfigurationException("The named secret for '%s' requires a file opener", file.path);
+			}
+			return;
 		}
-		FileOpenerInfo info(OpenFileInfo(path).WithFileSecret(file_secret));
+		FileOpenerInfo info(file);
 		KeyValueSecretReader reader(*opener, &info, "s3");
 		Value key_id;
 		if (reader.TryGetSecretKey("key_id", key_id)) {
@@ -107,10 +104,11 @@ private:
 	vector<RecordedRead> reads;
 };
 
-//! The file secret the reads of a table get: an S3 secret with key id `key_id` for the paths under `scope`
+//! An existing named secret, or a transaction's S3 secret with key id `key_id` for paths under `scope`.
 struct TableCredentials {
 	string scope;
 	string key_id;
+	string secret_name;
 };
 
 //! `path`, from the working directory when it is relative: the native catalog's warehouse paths are absolute
@@ -126,8 +124,7 @@ string TableKey(const string &catalog, const string &schema, const string &table
 	return catalog + "." + schema + "." + table;
 }
 
-//! The file secret a connection's transaction registered for each table, so that the table's reads in it share
-//! it, as the callback contract asks
+//! The secret registered for each table in a connection's transaction.
 class TransactionCredentials : public ClientContextState {
 public:
 	void TransactionCommit(MetaTransaction &transaction, ClientContext &context) override {
@@ -140,7 +137,7 @@ public:
 	case_insensitive_map_t<string> by_table;
 };
 
-//! Gives the reads of the tables named with PRAGMA iceberg_test_credentials their file secret
+//! Gives the reads of tables named with PRAGMA iceberg_test_credentials their registered secret.
 class TestIcebergFileCredentials : public IcebergFileCredentialsCallback {
 public:
 	string GetFileSecret(ClientContext &context, const IcebergTable &table) override {
@@ -155,19 +152,24 @@ public:
 			}
 			config = entry->second;
 		}
+		if (!config.secret_name.empty()) {
+			return config.secret_name;
+		}
 		auto state = context.registered_state->GetOrCreate<TransactionCredentials>("iceberg_test_credentials");
 		auto &name = state->by_table[key];
 		if (name.empty()) {
-			auto key_id = config.key_id;
-			name = SecretManager::Get(context).RegisterFileSecret(context, config.scope, [key_id](ClientContext &) {
-				auto secret = make_shared_ptr<KeyValueSecret>(vector<string>(), Identifier("s3"), Identifier("config"),
-				                                              Identifier());
-				secret->secret_map[Identifier("key_id")] = Value(key_id);
-				secret->secret_map[Identifier("secret")] = Value("iceberg_test_credentials_secret");
-				secret->secret_map[Identifier("region")] = Value("us-east-1");
-				shared_ptr<const KeyValueSecret> result = std::move(secret);
-				return result;
-			});
+			CreateSecretInput input;
+			input.type = "s3";
+			input.provider = "config";
+			input.name = Identifier("__iceberg_test_credentials_" + key);
+			input.scope = {config.scope};
+			input.options["key_id"] = Value(config.key_id);
+			input.options["secret"] = Value("iceberg_test_credentials_secret");
+			input.options["region"] = Value("us-east-1");
+			input.on_conflict = OnCreateConflict::ERROR_ON_CONFLICT;
+			input.persist_type = SecretPersistType::TRANSACTION;
+			auto entry = SecretManager::Get(context).CreateSecret(context, input);
+			name = entry->secret->GetName().GetIdentifierName();
 		}
 		return name;
 	}
@@ -190,9 +192,8 @@ TestIcebergFileCredentials &GetTestCallback(ClientContext &context) {
 	throw InternalException("iceberg_test_credentials is not registered");
 }
 
-//! PRAGMA iceberg_test_credentials('<catalog>', '<schema>', '<table>', '<scope>'[, key_id = '<key id>']): the reads
-//! of the table of the attached catalog use credentials for the scope (from the working directory when relative),
-//! whose S3 secret has key id ICEBERG_TEST_CREDENTIALS (or key_id); an empty scope removes them
+//! Select an existing secret_name, or register a transaction's S3 secret for scope with the given key_id.
+//! An empty scope and secret_name remove the table's credentials.
 void TableCredentialsPragma(ClientContext &context, const FunctionParameters &parameters) {
 	auto key = TableKey(parameters.values[0].GetValue<string>(), parameters.values[1].GetValue<string>(),
 	                    parameters.values[2].GetValue<string>());
@@ -202,13 +203,18 @@ void TableCredentialsPragma(ClientContext &context, const FunctionParameters &pa
 	if (key_id_parameter != parameters.named_parameters.end() && !key_id_parameter->second.IsNull()) {
 		key_id = key_id_parameter->second.GetValue<string>();
 	}
+	string secret_name;
+	auto name_parameter = parameters.named_parameters.find(Identifier("secret_name"));
+	if (name_parameter != parameters.named_parameters.end() && !name_parameter->second.IsNull()) {
+		secret_name = name_parameter->second.GetValue<string>();
+	}
 	auto &callback = GetTestCallback(context);
 	lock_guard<mutex> guard(callback.lock);
-	if (scope.empty()) {
+	if (scope.empty() && secret_name.empty()) {
 		callback.tables.erase(key);
 		return;
 	}
-	callback.tables[key] = TableCredentials {Absolute(scope), key_id};
+	callback.tables[key] = TableCredentials {Absolute(scope), key_id, secret_name};
 }
 
 //! PRAGMA iceberg_test_credentials_register: registers a second callback
@@ -274,7 +280,7 @@ unique_ptr<GlobalTableFunctionState> ReadsInit(ClientContext &context, TableFunc
 }
 
 //! FROM iceberg_test_credentials_reads(): the opens and listings recorded since the last clear, in order. key_id is
-//! NULL for a read whose credentials gave it no secret, and for a read without credentials.
+//! NULL when no secret provided a key or when secret lookup failed.
 void ReadsScan(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
 	auto &reads = data.bind_data->Cast<ReadsBindData>().reads;
 	auto &state = data.global_state->Cast<ReadsState>();
@@ -292,14 +298,15 @@ void ReadsScan(ClientContext &context, TableFunctionInput &data, DataChunk &outp
 void LoadInternal(ExtensionLoader &loader) {
 	ExtensionCallback::Register(DBConfig::GetConfig(loader.GetDatabaseInstance()),
 	                            make_shared_ptr<TestIcebergFileCredentials>());
-	loader.RegisterFunction(
-	    PragmaFunction::PragmaCall(Identifier("iceberg_test_credentials"), TableCredentialsPragma,
-	                               FunctionSignature()
-	                                   .AddPositionalOnly("catalog_name", LogicalType::VARCHAR)
-	                                   .AddPositionalOnly("schema_name", LogicalType::VARCHAR)
-	                                   .AddPositionalOnly("table_name", LogicalType::VARCHAR)
-	                                   .AddPositionalOnly("scope", LogicalType::VARCHAR)
-	                                   .AddKeywordOnly("key_id", LogicalType::VARCHAR, Value(LogicalType::VARCHAR))));
+	loader.RegisterFunction(PragmaFunction::PragmaCall(
+	    Identifier("iceberg_test_credentials"), TableCredentialsPragma,
+	    FunctionSignature()
+	        .AddPositionalOnly("catalog_name", LogicalType::VARCHAR)
+	        .AddPositionalOnly("schema_name", LogicalType::VARCHAR)
+	        .AddPositionalOnly("table_name", LogicalType::VARCHAR)
+	        .AddPositionalOnly("scope", LogicalType::VARCHAR)
+	        .AddKeywordOnly("key_id", LogicalType::VARCHAR, Value(LogicalType::VARCHAR))
+	        .AddKeywordOnly("secret_name", LogicalType::VARCHAR, Value(LogicalType::VARCHAR))));
 	loader.RegisterFunction(
 	    PragmaFunction::PragmaCall(Identifier("iceberg_test_credentials_record"), RecordReads, {LogicalType::VARCHAR}));
 	loader.RegisterFunction(

@@ -565,8 +565,10 @@ void IcebergTableMetadata::ApplyFileSecret(OpenFileInfo &file) const {
 	if (file_secret.empty()) {
 		return;
 	}
-	D_ASSERT(file.extended_info);
-	file.extended_info->options[ExtendedOpenFileInfo::FILE_SECRET_OPTION] = file_secret_value;
+	if (!file.extended_info) {
+		file.extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
+	}
+	file.extended_info->options[ExtendedOpenFileInfo::SECRET_OPTION] = file_secret_value;
 }
 
 const case_insensitive_map_t<string> &IcebergTableMetadata::GetTableProperties() const {

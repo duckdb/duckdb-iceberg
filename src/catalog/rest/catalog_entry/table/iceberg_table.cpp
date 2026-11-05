@@ -891,8 +891,8 @@ IcebergTableMetadata IcebergTable::CreateMetadataFromLog(ClientContext &context,
 	}
 
 	auto fs = make_shared_ptr<CachingFileSystemWrapper>(FileSystem::GetFileSystem(context), *context.db);
-	auto metadata_file = OpenFileInfo(log[log_item_index.GetIndex()].metadata_file)
-	                         .WithFileSecret(IcebergFileCredentialsCallback::Get(context, *this));
+	auto metadata_file =
+	    IcebergFileCredentialsCallback::GetFileInfo(context, *this, log[log_item_index.GetIndex()].metadata_file);
 	auto parsed_metadata = IcebergTableMetadata::Parse(metadata_file, *fs, "");
 
 	return IcebergTableMetadata::FromTableMetadata(parsed_metadata);
@@ -994,8 +994,7 @@ void IcebergTable::InitializeFromCatalogResponse(ClientContext &context,
 		try {
 			auto &fs = FileSystem::GetFileSystem(context);
 			auto caching_fs = make_shared_ptr<CachingFileSystemWrapper>(fs, *context.db);
-			auto metadata_file =
-			    OpenFileInfo(metadata_location).WithFileSecret(IcebergFileCredentialsCallback::Get(context, *this));
+			auto metadata_file = IcebergFileCredentialsCallback::GetFileInfo(context, *this, metadata_location);
 			file_metadata = make_uniq<const rest_api_objects::TableMetadata>(
 			    IcebergTableMetadata::Parse(metadata_file, *caching_fs, "none"));
 		} catch (std::exception &ex) {
