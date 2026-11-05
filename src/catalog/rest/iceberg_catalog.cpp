@@ -196,7 +196,7 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 			iceberg_transaction.schemas[schema_name] = new_schema;
 			return new_schema.get();
 		}
-		throw CatalogException("Schema with name \"%s\" already exists", info.GetQualifiedName().Schema());
+		throw CatalogException("Schema with name %s already exists", info.GetQualifiedName().Schema());
 	}
 
 	// Schema does not exist - stage it locally and defer the server creation and catalog publication to commit
@@ -207,9 +207,13 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 }
 
 void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
-	if (info.cascade) {
+	if (info.cascade && endpoint_type != IcebergEndpointType::AWS_GLUE) {
 		throw NotImplementedException(
 		    "DROP SCHEMA <schema_name> CASCADE is not supported for Iceberg schemas currently");
+	}
+	if (!info.cascade && endpoint_type == IcebergEndpointType::AWS_GLUE) {
+		throw NotImplementedException("DROP SCHEMA without CASCADE is not supported for AWS Glue: deleting a namespace "
+		                              "also deletes its tables. Use DROP SCHEMA <schema_name> CASCADE");
 	}
 	info.SetQualifiedName(FoldName(info.GetQualifiedName()));
 
@@ -224,7 +228,7 @@ void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 			GetSchemas().RemoveEntry(info.GetQualifiedName().Name().GetIdentifierName());
 			return;
 		}
-		throw CatalogException("Schema with name \"%s\" does not exist", info.GetQualifiedName().Name());
+		throw CatalogException("Schema with name %s does not exist", info.GetQualifiedName().Name());
 	}
 
 	// Schema exists - defer the server deletion to commit
@@ -282,7 +286,7 @@ unique_ptr<SecretEntry> IcebergCatalog::GetStorageSecret(ClientContext &context,
 			}
 			throw InvalidConfigurationException(
 			    "Found a secret by the name of '%s', but it is not of an accepted type for a 'secret', "
-			    "accepted types are: 's3' or 'aws', found '%s'",
+			    "accepted types are: 's3' or 'aws', found %s",
 			    secret_name, secret_type);
 		}
 		throw InvalidConfigurationException(
@@ -468,6 +472,7 @@ void IcebergCatalog::ParsePrefix() {
 
 void IcebergCatalog::Configure(ClientContext &context, const rest_api_objects::CatalogConfig &catalog_config,
                                IcebergEndpointType endpoint_type) {
+	this->endpoint_type = endpoint_type;
 	base_uri = attach_options.catalog_uri;
 	StringUtil::RTrim(base_uri, "/");
 	if (base_uri.empty()) {

@@ -4,6 +4,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "duckdb/common/types/timestamp.hpp"
+#include "duckdb/common/types/uuid.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "duckdb/catalog/catalog_entry/index_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
@@ -72,7 +73,8 @@ IcebergTable &IcebergTransactionTableState::GetOrCreateTransactionInfo(IcebergTr
 }
 
 IcebergTransaction::IcebergTransaction(IcebergCatalog &ic_catalog, TransactionManager &manager, ClientContext &context)
-    : Transaction(manager, context), db(*context.db), catalog(ic_catalog), access_mode(ic_catalog.access_mode) {
+    : Transaction(manager, context), db(*context.db), catalog(ic_catalog), access_mode(ic_catalog.access_mode),
+      scan_serialization_id(UUID::GenerateRandomUUID()) {
 }
 
 IcebergTransaction::~IcebergTransaction() = default;
@@ -909,6 +911,7 @@ void IcebergTransaction::CleanupFiles() {
 			//! Batched per table: the keys PrepareIcebergScanFromEntry registers below belong to this table, so
 			//! the files have to be deleted before moving on to the next one.
 			vector<string> data_files;
+			unordered_set<string> seen_paths;
 			for (auto &update : transaction_data->updates) {
 				if (update->type != IcebergTableUpdateType::ADD_SNAPSHOT) {
 					continue;
@@ -920,7 +923,11 @@ void IcebergTransaction::CleanupFiles() {
 				auto &add_snapshot = update->Cast<IcebergAddSnapshot>();
 				for (const auto &manifest : add_snapshot.GetPendingManifests()) {
 					for (const auto &manifest_entry : manifest.GetEntries()) {
-						data_files.push_back(manifest_entry.data_file.file_path);
+						// Several deletion-vector entries can reference the same physical Puffin file.
+						const auto &path = manifest_entry.data_file.file_path;
+						if (seen_paths.insert(path).second) {
+							data_files.push_back(path);
+						}
 					}
 				}
 			}

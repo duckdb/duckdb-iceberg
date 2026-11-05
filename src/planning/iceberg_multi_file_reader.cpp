@@ -293,7 +293,7 @@ static void ApplyFieldMapping(MultiFileColumnDefinition &col, const vector<Icebe
 
 	auto it = fields.find(name.GetIdentifierName());
 	if (it == fields.end()) {
-		DUCKDB_LOG(context, IcebergLogType, "Column '%s' does not have a field-id, and no field-mapping exists for it!",
+		DUCKDB_LOG(context, IcebergLogType, "Column %s does not have a field-id, and no field-mapping exists for it!",
 		           name);
 		return;
 	}

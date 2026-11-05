@@ -28,8 +28,10 @@
 #include "catalog/rest/transaction/iceberg_transaction_update.hpp"
 #include "common/iceberg_default.hpp"
 #include "common/iceberg_geography_type.hpp"
+#include "core/metadata/schema/iceberg_field_mapping.hpp"
 #include "iceberg_options.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
+#include "duckdb/logging/logger.hpp"
 
 namespace duckdb {
 
@@ -442,22 +444,6 @@ static void ThrowIfColumnReferencedBySortOrder(const IcebergTableMetadata &table
 	    sort_order_field->null_order);
 }
 
-void IntroduceNewSchema(IcebergTable &updated_table, IcebergTransactionData &transaction_data,
-                        shared_ptr<IcebergTableSchema> new_schema) {
-	auto &schemas = updated_table.table_metadata.GetSchemasMutable();
-	auto new_schema_id = static_cast<int32_t>(updated_table.GetMaxSchemaId() + 1);
-	new_schema->schema_id = new_schema_id;
-	auto &result_schema = schemas.AddSchemaOrGetExisting(std::move(new_schema));
-	if (result_schema.schema_id == new_schema_id) {
-		// Update the Table Metadata to have our new schema
-		updated_table.CreateSchemaVersion(result_schema);
-		transaction_data.TableAddSchema(new_schema_id);
-	} else {
-		transaction_data.TableSetCurrentSchema(result_schema.schema_id);
-	}
-	updated_table.table_metadata.SetCurrentSchemaId(result_schema.schema_id);
-}
-
 //! Table properties that configure a single column. The key ends with the column's full name: the field names on
 //! the path to it joined with '.' (e.g. 's.sf', 'l.element', 'm.key'), the name used to look the setting up on write.
 static constexpr const char *PER_COLUMN_PROPERTY_PREFIXES[] = {
@@ -534,6 +520,81 @@ static void UpdatePerColumnProperties(IcebergTable &updated_table, IcebergTransa
 		}
 	}
 }
+
+//! Compare field ids, including children introduced by UNKNOWN -> nested type promotion. A new subtree is added
+//! once at its root; Update builds the entries for all its descendants.
+static void CollectNameMappingChanges(const IcebergTableSchema &old_schema, const IcebergColumnDefinition &column,
+                                      int32_t parent_id, unordered_map<int32_t, string> &renamed,
+                                      vector<pair<int32_t, reference<const IcebergColumnDefinition>>> &added) {
+	auto old_column = old_schema.TryGetColumnByFieldId(column.id);
+	if (!old_column) {
+		added.emplace_back(parent_id, column);
+		return;
+	}
+	if (column.name != old_column->name) {
+		renamed.emplace(column.id, column.name);
+	}
+	for (auto &child : column.GetChildren()) {
+		CollectNameMappingChanges(old_schema, *child, column.id, renamed, added);
+	}
+}
+
+//! The name mapping names the fields of data files that have no field ids, so it follows the schema the way Iceberg
+//! Java keeps it: a renamed field keeps its old name and gets the new one, an added field gets an entry.
+static void UpdateNameMapping(ClientContext &context, IcebergTable &updated_table,
+                              IcebergTransactionData &transaction_data, const IcebergTableSchema &old_schema,
+                              const IcebergTableSchema &new_schema) {
+	auto &properties = updated_table.table_metadata.table_properties;
+	auto mapping = properties.find(IcebergFieldMapping::PROPERTY);
+	if (mapping == properties.end()) {
+		return;
+	}
+	unordered_map<int32_t, string> renamed;
+	vector<pair<int32_t, reference<const IcebergColumnDefinition>>> added;
+	for (auto &column : new_schema.columns) {
+		CollectNameMappingChanges(old_schema, *column, IcebergFieldMapping::TABLE_ROOT_ID, renamed, added);
+	}
+	if (renamed.empty() && added.empty()) {
+		return;
+	}
+	auto updated = IcebergFieldMapping::Update(mapping->second, renamed, added);
+	if (!updated) {
+		//! As Iceberg Java, the schema change goes through and the mapping is left as it is
+		DUCKDB_LOG_WARNING(context,
+		                   "Table property '%s' of '%s' is not a valid name mapping, it is not updated for "
+		                   "the schema change: %s",
+		                   IcebergFieldMapping::PROPERTY, updated_table.name, mapping->second);
+		return;
+	}
+	auto updated_mappings = IcebergFieldMapping::Parse(*updated);
+	if (*updated != mapping->second) {
+		transaction_data.TableSetProperties({{IcebergFieldMapping::PROPERTY, *updated}});
+		mapping->second = *updated;
+	}
+	//! Scans in this transaction use the parsed mappings without reloading the table from the catalog.
+	updated_table.table_metadata.mappings = std::move(updated_mappings);
+}
+
+static void IntroduceNewSchema(ClientContext &context, IcebergTable &updated_table,
+                               IcebergTransactionData &transaction_data, shared_ptr<IcebergTableSchema> new_schema) {
+	auto &old_schema = updated_table.table_metadata.GetLatestSchema();
+	auto &schemas = updated_table.table_metadata.GetSchemasMutable();
+	auto new_schema_id = static_cast<int32_t>(updated_table.GetMaxSchemaId() + 1);
+	new_schema->schema_id = new_schema_id;
+	auto &result_schema = schemas.AddSchemaOrGetExisting(std::move(new_schema));
+	if (result_schema.schema_id == new_schema_id) {
+		updated_table.CreateSchemaVersion(result_schema);
+		transaction_data.TableAddSchema(new_schema_id);
+	} else {
+		transaction_data.TableSetCurrentSchema(result_schema.schema_id);
+	}
+	updated_table.table_metadata.SetCurrentSchemaId(result_schema.schema_id);
+
+	//! Keep schema-dependent properties together for every schema change, including historical schema reuse.
+	UpdatePerColumnProperties(updated_table, transaction_data, old_schema, result_schema);
+	UpdateNameMapping(context, updated_table, transaction_data, old_schema, result_schema);
+}
+
 //! DuckDB can't read or write geography values, so a change to a geography field, or to a column that holds one, is
 //! refused
 static void ThrowIfGeography(const IcebergTableSchema &schema, const vector<Identifier> &column_path) {
@@ -599,7 +660,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		if (tables.GetViewEntry(context, info.GetQualifiedName().Name().GetIdentifierName())) {
 			throw NotImplementedException("ALTER VIEW is not supported in Iceberg catalogs");
 		}
-		throw CatalogException("Table with name \"%s\" does not exist!", info.GetQualifiedName().Name());
+		throw CatalogException("Table with name %s does not exist!", info.GetQualifiedName().Name());
 	}
 	auto &table_entry = catalog_entry->Cast<IcebergTableSchemaVersion>();
 	auto &catalog_table_info = table_entry.table_info;
@@ -653,7 +714,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 			column.doc = comment_info.comment_value.GetValue<string>();
 		}
 
-		IntroduceNewSchema(updated_table, transaction_data, new_schema);
+		IntroduceNewSchema(context, updated_table, transaction_data, new_schema);
 		return;
 	}
 
@@ -730,7 +791,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto new_schema = current_schema.Copy();
 		new_schema->columns.push_back(std::move(new_iceberg_column));
 
-		IntroduceNewSchema(updated_table, transaction_data, new_schema);
+		IntroduceNewSchema(context, updated_table, transaction_data, new_schema);
 
 		return;
 	}
@@ -774,8 +835,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 			                       table_entry.name.GetIdentifierName());
 		}
 
-		IntroduceNewSchema(updated_table, transaction_data, new_schema);
-		UpdatePerColumnProperties(updated_table, transaction_data, current_schema, *new_schema);
+		IntroduceNewSchema(context, updated_table, transaction_data, new_schema);
 
 		return;
 	}
@@ -839,7 +899,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		column.type = change_type_info.target_type;
 		column.RewriteType();
 
-		IntroduceNewSchema(updated_table, transaction_data, new_schema);
+		IntroduceNewSchema(context, updated_table, transaction_data, new_schema);
 		return;
 	}
 	case AlterTableType::SET_NOT_NULL: {
@@ -858,7 +918,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 
 		column.required = false;
 
-		IntroduceNewSchema(updated_table, transaction_data, new_schema);
+		IntroduceNewSchema(context, updated_table, transaction_data, new_schema);
 		return;
 	}
 	case AlterTableType::RENAME_COLUMN: {
@@ -883,8 +943,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		column.name = new_name.GetIdentifierName();
 		column.RewriteType();
 
-		IntroduceNewSchema(updated_table, transaction_data, new_schema);
-		UpdatePerColumnProperties(updated_table, transaction_data, current_schema, *new_schema);
+		IntroduceNewSchema(context, updated_table, transaction_data, new_schema);
 		return;
 	}
 	case AlterTableType::SET_TABLE_OPTIONS: {
@@ -980,7 +1039,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		auto default_constant_value = binder.Evaluate(expression.get(), column.type);
 		column.SetWriteDefault(default_constant_value, updated_table.table_metadata.iceberg_version);
 
-		IntroduceNewSchema(updated_table, transaction_data, new_schema);
+		IntroduceNewSchema(context, updated_table, transaction_data, new_schema);
 		return;
 	}
 	case AlterTableType::ADD_FIELD: {
@@ -1036,7 +1095,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		last_column_id = field_id - 1;
 
 		parent.AddChild(std::move(new_iceberg_column));
-		IntroduceNewSchema(updated_table, transaction_data, new_schema);
+		IntroduceNewSchema(context, updated_table, transaction_data, new_schema);
 		return;
 	}
 	case AlterTableType::RENAME_FIELD: {
@@ -1075,8 +1134,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		}
 		column_p->name = new_name.GetIdentifierName();
 		column_p->RewriteType();
-		IntroduceNewSchema(updated_table, transaction_data, new_schema);
-		UpdatePerColumnProperties(updated_table, transaction_data, current_schema, *new_schema);
+		IntroduceNewSchema(context, updated_table, transaction_data, new_schema);
 		return;
 	}
 	case AlterTableType::REMOVE_FIELD: {
@@ -1126,8 +1184,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 			                       StringUtil::Join(IdentifiersToStrings(column_path), "."));
 		}
 		parent.RemoveChild(child->name);
-		IntroduceNewSchema(updated_table, transaction_data, new_schema);
-		UpdatePerColumnProperties(updated_table, transaction_data, current_schema, *new_schema);
+		IntroduceNewSchema(context, updated_table, transaction_data, new_schema);
 		return;
 	}
 	default: {

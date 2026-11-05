@@ -1,0 +1,37 @@
+# name: test/sql/local/iceberg_scans/scan_serialization_path.test
+# description: Path-based Iceberg scans cannot be copied, so a multi-reference CTE over one falls back to materialization
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+# The plan assertion below matches the upper-case operator name CTE_SCAN
+statement ok
+SET profiling_renderer_settings = MAP {'operator_casing': 'upper'};
+
+statement ok
+PRAGMA explain_output = 'optimized_only';
+
+# Only catalog-backed scans serialize. Copying this scan throws NotImplementedException, which CTE inlining treats as
+# "keep the materialized CTE" rather than as a query error.
+query II
+EXPLAIN WITH copied AS NOT MATERIALIZED (
+    SELECT partition_col
+    FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/partition_fixed_length_binary/default.db/partition_fixed_length_binary/metadata/00001-b4b3d6d2-cac2-4480-952e-0e4b3b88b5d7.metadata.json')
+)
+SELECT count(*)
+FROM copied a, copied b;
+----
+logical_opt	<REGEX>:.*CTE_SCAN.*
+
+query I
+WITH copied AS NOT MATERIALIZED (
+    SELECT partition_col
+    FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/partition_fixed_length_binary/default.db/partition_fixed_length_binary/metadata/00001-b4b3d6d2-cac2-4480-952e-0e4b3b88b5d7.metadata.json')
+)
+SELECT count(*)
+FROM copied a, copied b;
+----
+4
+
+statement ok
+RESET explain_output;
