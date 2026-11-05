@@ -222,8 +222,13 @@ map<idx_t, LogicalType> IcebergDataFile::GetFieldIdToTypeMapping(const IcebergSn
 
 	map<idx_t, LogicalType> partition_field_id_to_type;
 	for (auto &spec_id : partition_spec_ids) {
-		auto &partition_spec = partition_specs.at(spec_id);
-		auto &fields = partition_spec.GetFields();
+		auto partition_spec_it = partition_specs.find(spec_id);
+		if (partition_spec_it == partition_specs.end()) {
+			throw InvalidConfigurationException("Manifest refers to partition spec %d, which is not in the table's "
+			                                    "partition-specs",
+			                                    spec_id);
+		}
+		auto &fields = partition_spec_it->second.GetFields();
 
 		for (auto &field : fields) {
 			auto type = IcebergPartitionConstants::GetType(field.source_id, schema, metadata.GetSchemas());
