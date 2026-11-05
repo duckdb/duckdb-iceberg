@@ -1,5 +1,6 @@
 #include "core/metadata/schema/iceberg_column_definition.hpp"
 #include "duckdb/common/types.hpp"
+#include "duckdb/common/types/decimal.hpp"
 #include "common/iceberg_constants.hpp"
 #include "duckdb/common/value_operations/value_operations.hpp"
 #include "duckdb/parser/column_definition.hpp"
@@ -137,17 +138,34 @@ LogicalType IcebergColumnDefinition::ParsePrimitiveTypeString(const string &type
 		return LogicalType::BLOB;
 	}
 	if (StringUtil::StartsWith(type_str, "decimal")) {
-		D_ASSERT(type_str[7] == '(');
-		D_ASSERT(type_str.back() == ')');
 		auto start = type_str.find('(');
 		auto end = type_str.rfind(')');
-		auto raw_digits = type_str.substr(start + 1, end - start);
+		if (start != 7 || end != type_str.size() - 1) {
+			throw InvalidConfigurationException("Invalid decimal type \"%s\" - expected decimal(precision, scale)",
+			                                    type_str);
+		}
+		auto raw_digits = type_str.substr(start + 1, end - start - 1);
 		auto digits = StringUtil::Split(raw_digits, ',');
-		D_ASSERT(digits.size() == 2);
-
-		auto width = std::stoi(digits[0]);
-		auto scale = std::stoi(digits[1]);
-		return LogicalType::DECIMAL(width, scale);
+		if (digits.size() != 2) {
+			throw InvalidConfigurationException("Invalid decimal type \"%s\" - expected decimal(precision, scale)",
+			                                    type_str);
+		}
+		int64_t width;
+		int64_t scale;
+		try {
+			width = std::stoll(digits[0]);
+			scale = std::stoll(digits[1]);
+		} catch (std::exception &) {
+			throw InvalidConfigurationException("Invalid decimal type \"%s\" - precision and scale must be numbers",
+			                                    type_str);
+		}
+		if (width < 1 || width > Decimal::MAX_WIDTH_DECIMAL || scale < 0 || scale > width) {
+			throw InvalidConfigurationException(
+			    "Invalid decimal type \"%s\" - precision must be between 1 and %d and scale between 0 and the "
+			    "precision",
+			    type_str, Decimal::MAX_WIDTH_DECIMAL);
+		}
+		return LogicalType::DECIMAL(NumericCast<uint8_t>(width), NumericCast<uint8_t>(scale));
 	}
 	if (type_str == "variant") {
 		return LogicalType::VARIANT();
