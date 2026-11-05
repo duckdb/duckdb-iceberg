@@ -122,7 +122,6 @@ public:
 	string GetTableProperty(string property_string) const;
 	static void VerifyNotReservedProperty(const string &key, const string &operation);
 	string GetDeleteCompressionCodec() const;
-
 	//! Whether the given write mode property (write.delete.mode, write.update.mode or write.merge.mode) allows
 	//! writing merge-on-read delete files
 	bool AllowsMergeOnRead(const string &write_mode_property) const;
