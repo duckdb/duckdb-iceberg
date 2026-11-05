@@ -159,16 +159,16 @@ static Value CreateStructDefault(const Value &descriptor,
 
 //! Whether the STRUCT or any of its fields has a non-NULL default
 static bool HasNonNullDefault(const Value &descriptor) {
-  if (!GetStructDefault(descriptor).IsNull()) {
-    return true;
-  }
+	if (!GetStructDefault(descriptor).IsNull()) {
+		return true;
+	}
 
-  for (auto &field_default : StructValue::GetChildren(GetStructFieldDefaults(descriptor))) {
-    if (IsStructDefaultDescriptor(field_default) ? HasNonNullDefault(field_default) : !field_default.IsNull()) {
-      return true;
-    }
-  }
-  return false;
+	for (auto &field_default : StructValue::GetChildren(GetStructFieldDefaults(descriptor))) {
+		if (IsStructDefaultDescriptor(field_default) ? HasNonNullDefault(field_default) : !field_default.IsNull()) {
+			return true;
+		}
+	}
+	return false;
 }
 
 static Value EvaluateStructDefault(ClientContext &context, const Expression &default_expr) {

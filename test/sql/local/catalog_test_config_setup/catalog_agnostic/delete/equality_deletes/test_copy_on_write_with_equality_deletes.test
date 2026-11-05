@@ -1,0 +1,82 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/equality_deletes/test_copy_on_write_with_equality_deletes.test
+# description: Copy-on-write rewrites apply existing equality deletes without deleting newer rows with the same keys
+# group: [equality_deletes]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env EQUALITY_DELETE_WRITES_ENABLED 1
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cow_equality_deletes;
+
+statement ok
+CREATE TABLE my_datalake.default.cow_equality_deletes (id INTEGER, part VARCHAR)
+WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.cow_equality_deletes VALUES
+    (NULL, 'a'), (1, 'a'), (2, 'a'), (3, 'a');
+
+statement ok
+INSERT INTO my_datalake.default.cow_equality_deletes VALUES (4, 'b'), (5, 'b');
+
+statement ok
+SET __iceberg_unsafe_enable_equality_deletes = true;
+
+statement ok
+DELETE FROM my_datalake.default.cow_equality_deletes WHERE id IS NULL OR id IN (1, 4);
+
+query IT
+SELECT * FROM my_datalake.default.cow_equality_deletes ORDER BY id;
+----
+2	a
+3	a
+5	b
+
+query I
+SELECT count(*) > 0 FROM iceberg_metadata(my_datalake.default.cow_equality_deletes) WHERE content = 'EQUALITY_DELETES';
+----
+true
+
+statement ok
+SET __iceberg_unsafe_enable_equality_deletes = false;
+
+# These newer rows have the deleted keys, but are outside the equality deletes' sequence range.
+statement ok
+INSERT INTO my_datalake.default.cow_equality_deletes VALUES (1, 'a'), (NULL, 'a');
+
+statement ok
+ALTER TABLE my_datalake.default.cow_equality_deletes SET ('write.delete.mode' = 'copy-on-write');
+
+# Rewriting the first data file retains id 3; removing id 5 empties the second file.
+query I
+DELETE FROM my_datalake.default.cow_equality_deletes WHERE id IN (2, 5);
+----
+2
+
+query IT
+SELECT * FROM my_datalake.default.cow_equality_deletes ORDER BY id NULLS FIRST;
+----
+NULL	a
+1	a
+3	a
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.cow_equality_deletes) WHERE content = 'POSITION_DELETES';
+----
+0
+
+query I
+DELETE FROM my_datalake.default.cow_equality_deletes WHERE id IS NULL OR id = 1;
+----
+2
+
+query IT
+SELECT * FROM my_datalake.default.cow_equality_deletes;
+----
+3	a
+
+statement ok
+DROP TABLE my_datalake.default.cow_equality_deletes;

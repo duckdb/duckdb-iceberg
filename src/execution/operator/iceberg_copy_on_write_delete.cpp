@@ -211,11 +211,11 @@ SinkCombineResultType IcebergCopyOnWriteDeleteFilter::Combine(ExecutionContext &
 	for (auto &entry : local_state.rows_by_file) {
 		auto &deleted = global_state.deletes.rows_by_file[entry.first];
 		for (auto row_number : entry.second) {
-			if (!deleted.insert(row_number).second) {
-				throw InternalException("Copy-on-write DELETE matched the same row twice");
+			// DELETE ... USING can match the same target row more than once.
+			if (deleted.insert(row_number).second) {
+				global_state.deletes.deleted_count++;
 			}
 		}
-		global_state.deletes.deleted_count += entry.second.size();
 	}
 	return SinkCombineResultType::FINISHED;
 }
