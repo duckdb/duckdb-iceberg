@@ -32,22 +32,17 @@ has an empty component
 statement error
 SELECT * FROM iceberg_rewrite_data_files('a.b.c', target_file_size_bytes => 0);
 ----
-'target_file_size_bytes' must be >= 100 bytes
+'target_file_size_bytes' must be > 0 bytes
 
 statement error
 SELECT * FROM iceberg_rewrite_data_files('a.b.c', target_file_size_bytes => -1);
 ----
-'target_file_size_bytes' must be >= 100 bytes
+'target_file_size_bytes' must be > 0 bytes
 
 statement error
-SELECT * FROM iceberg_rewrite_data_files('a.b.c', target_file_size_bytes => 99);
+SELECT * FROM iceberg_rewrite_data_files('a.b.c', max_file_size_bytes => 0);
 ----
-'target_file_size_bytes' must be >= 100 bytes
-
-statement error
-SELECT * FROM iceberg_rewrite_data_files('a.b.c', target_file_size_bytes => '99B');
-----
-'target_file_size_bytes' must be >= 100 bytes
+'max_file_size_bytes' must be > 0 bytes
 
 statement error
 SELECT * FROM iceberg_rewrite_data_files('a.b.c', target_file_size_bytes => 'not-bytes');
@@ -75,14 +70,9 @@ SELECT * FROM iceberg_rewrite_data_files('a.b.c', output_spec_id => NULL);
 'output_spec_id' cannot be NULL
 
 statement error
-SELECT * FROM iceberg_rewrite_data_files('a.b.c', min_file_size_bytes => 99);
+SELECT * FROM iceberg_rewrite_data_files('a.b.c', min_file_size_bytes => -1);
 ----
-'min_file_size_bytes' must be >= 100 bytes
-
-statement error
-SELECT * FROM iceberg_rewrite_data_files('a.b.c', max_file_size_bytes => '50B');
-----
-'max_file_size_bytes' must be >= 100 bytes
+'min_file_size_bytes' must be >= 0 bytes
 
 statement error
 SELECT * FROM iceberg_rewrite_data_files(
@@ -92,6 +82,57 @@ SELECT * FROM iceberg_rewrite_data_files(
 );
 ----
 'min_file_size_bytes' (1000) must be <= 'max_file_size_bytes' (500)
+
+# Spark accepts a zero minimum when the target still sits strictly inside the band.
+statement error
+SELECT * FROM iceberg_rewrite_data_files(
+    'a.b.c',
+    target_file_size_bytes => 1000,
+    min_file_size_bytes => 0,
+    max_file_size_bytes => 2000
+);
+----
+Catalog "a" does not exist
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files(
+    'a.b.c',
+    target_file_size_bytes => 1000,
+    min_file_size_bytes => 1000,
+    max_file_size_bytes => 2000
+);
+----
+'target_file_size_bytes' (1000) must be > 'min_file_size_bytes' (1000)
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files(
+    'a.b.c',
+    target_file_size_bytes => 1000,
+    min_file_size_bytes => 100,
+    max_file_size_bytes => 1000
+);
+----
+'target_file_size_bytes' (1000) must be < 'max_file_size_bytes' (1000)
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files(
+    'a.b.c',
+    target_file_size_bytes => 50,
+    min_file_size_bytes => 100,
+    max_file_size_bytes => 200
+);
+----
+'target_file_size_bytes' (50) must be > 'min_file_size_bytes' (100)
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files(
+    'a.b.c',
+    target_file_size_bytes => 3000,
+    min_file_size_bytes => 100,
+    max_file_size_bytes => 2000
+);
+----
+'target_file_size_bytes' (3000) must be < 'max_file_size_bytes' (2000)
 
 statement error
 SELECT * FROM iceberg_rewrite_data_files(

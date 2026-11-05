@@ -46,22 +46,27 @@ call iceberg_rewrite_data_files(
 0	0	0	0	0
 
 # Files are larger than a tiny max, so they are oversized candidates.
+# Spark requires the target to sit strictly inside the band. Rotation happens before
+# the Parquet footer is written, so a row group whose flushed bytes are still under
+# the target can share an output file with the next one. All five inputs are
+# rewritten, and the tiny target keeps them from collapsing into a single file.
 query IIIII
 call iceberg_rewrite_data_files(
 	'my_datalake.default.rewrite_min_max_size',
-	min_file_size_bytes => 100,
+	target_file_size_bytes => 50,
+	min_file_size_bytes => 1,
 	max_file_size_bytes => 100,
 	min_input_files => 5
 );
 ----
-5	1	<REGEX>:[1-9][0-9]*	0	0
+5	<REGEX>:[2-5]	<REGEX>:[1-9][0-9]*	0	0
 
 query I
-select count(*)
+select count(*) between 2 and 5
 from iceberg_metadata('my_datalake.default.rewrite_min_max_size')
 where content = 'DATA' and status <> 'DELETED';
 ----
-1
+true
 
 statement ok
 drop table if exists my_datalake.default.rewrite_min_max_size;
