@@ -102,18 +102,19 @@ set variable last_manifest_list = (
 	offset 0 limit 1
 )
 
-# The last snapshot keeps only the new deletion vector; superseded delete files are removed from their manifests.
+# The last snapshot records the vector it replaced and the new vector. Tombstone-only manifests
+# from earlier snapshots in this transaction are no longer carried forward.
 query I
 select count(*) from read_avro(getvariable('last_manifest_list')) where content = 1;
 ----
-1
+2
 
 statement ok
 set variable delete_manifests = (
 	select list(manifest_path) from read_avro(getvariable('last_manifest_list')) where content = 1
 );
 
-# Per delete manifest: (DELETED entries, live entries). The remaining manifest contains the live deletion vector.
+# Per delete manifest: (DELETED entries, live entries). Only the current snapshot's tombstone remains.
 query II
 select count(*) filter (where status = 2), count(*) filter (where status != 2)
 from read_avro(getvariable('delete_manifests'), filename = true)
@@ -121,6 +122,7 @@ group by filename
 order by all;
 ----
 0	1
+1	0
 
 statement ok
 abort

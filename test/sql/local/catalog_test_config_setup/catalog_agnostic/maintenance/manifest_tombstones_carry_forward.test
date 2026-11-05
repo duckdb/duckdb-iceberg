@@ -68,7 +68,8 @@ SELECT id, category FROM my_datalake.default.manifest_tombstones_carry_forward O
 statement ok
 DROP TABLE my_datalake.default.manifest_tombstones_carry_forward;
 
-# A later snapshot in the same commit also drops the tombstone-only manifest of an earlier one.
+# An append transaction drops the rewrite's tombstones and retains both of its own snapshots.
+# Rewriting data files must be committed before further DML on the table.
 statement ok
 DROP TABLE IF EXISTS my_datalake.default.manifest_tombstones_same_commit;
 
@@ -83,16 +84,19 @@ INSERT INTO my_datalake.default.manifest_tombstones_same_commit VALUES (1, 'a'),
 statement ok
 INSERT INTO my_datalake.default.manifest_tombstones_same_commit VALUES (3, 'a');
 
-statement ok
-BEGIN;
-
 query IIIII
 CALL iceberg_rewrite_data_files('my_datalake.default.manifest_tombstones_same_commit', min_input_files => 2);
 ----
 2	1	<REGEX>:[1-9][0-9]*	0	0
 
 statement ok
+BEGIN;
+
+statement ok
 INSERT INTO my_datalake.default.manifest_tombstones_same_commit VALUES (4, 'b');
+
+statement ok
+INSERT INTO my_datalake.default.manifest_tombstones_same_commit VALUES (5, 'b');
 
 statement ok
 COMMIT;
@@ -105,6 +109,7 @@ ORDER BY ALL;
 0	1	1
 1	0	0
 1	0	0
+1	0	0
 
 query II
 SELECT id, category FROM my_datalake.default.manifest_tombstones_same_commit ORDER BY id;
@@ -113,6 +118,7 @@ SELECT id, category FROM my_datalake.default.manifest_tombstones_same_commit ORD
 2	b
 3	a
 4	b
+5	b
 
 statement ok
 DROP TABLE my_datalake.default.manifest_tombstones_same_commit;

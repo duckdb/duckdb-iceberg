@@ -90,12 +90,10 @@ int64_t IcebergCommitState::ReconstructTotalFilesSize(int32_t schema_id) {
 	return total_files_size;
 }
 
-enum class ManifestRewriteOutcome { UNCHANGED, REPLACED, DROPPED };
-
-static ManifestRewriteOutcome RewriteManifestFile(const IcebergManifestListEntry &list_entry,
-                                                  IcebergSnapshotWriter &writer, IcebergCommitState &commit_state,
-                                                  int32_t schema_id, const VersionedIcebergManifestDeletes &deletes,
-                                                  optional<IcebergManifestListEntry> &rewritten) {
+static optional<IcebergManifestListEntry> RewriteManifestFile(const IcebergManifestListEntry &list_entry,
+                                                              IcebergSnapshotWriter &writer,
+                                                              IcebergCommitState &commit_state, int32_t schema_id,
+                                                              const VersionedIcebergManifestDeletes &deletes) {
 	auto loaded_manifest = list_entry.HasManifestEntries()
 	                           ? list_entry
 	                           : IcebergManifestMerge::ScanManifestEntries(list_entry, commit_state, schema_id);
@@ -103,42 +101,24 @@ static ManifestRewriteOutcome RewriteManifestFile(const IcebergManifestListEntry
 	const auto &file = loaded_manifest.GetFile();
 
 	auto rewritten_entries = file.PrepareEntriesForRewrite(std::move(loaded_manifest.GetManifestEntries()));
-	const bool is_delete_manifest = file.content == IcebergManifestContentType::DELETE;
 	bool removed_any_entries = false;
-	if (is_delete_manifest) {
-		//! Dropping a delete file removes its manifest entry entirely. Unlike data files, it must not become a
-		//! tombstone entry in the delete manifest (Apache Iceberg rewrite / remove-dangling-deletes semantics).
-		for (idx_t i = 0; i < rewritten_entries.size();) {
-			auto &manifest_entry = rewritten_entries[i];
-			if (!deletes.IsInvalidated({manifest_entry.data_file.file_path, manifest_entry.data_file.content_offset})) {
-				i++;
-				continue;
-			}
-			writer.RemoveManifestEntry(manifest_entry);
-			rewritten_entries.erase(rewritten_entries.begin() + static_cast<int64_t>(i));
-			removed_any_entries = true;
+	for (auto &manifest_entry : rewritten_entries) {
+		if (!deletes.IsInvalidated({manifest_entry.data_file.file_path, manifest_entry.data_file.content_offset})) {
+			continue;
 		}
-	} else {
-		for (auto &manifest_entry : rewritten_entries) {
-			if (!deletes.IsInvalidated({manifest_entry.data_file.file_path, manifest_entry.data_file.content_offset})) {
-				continue;
-			}
-			writer.RemoveManifestEntry(manifest_entry);
-			manifest_entry.status = IcebergManifestEntryStatusType::DELETED;
-			//! Inherits this snapshot, which deleted the file; conflict checks in other engines rely on it
-			manifest_entry.SetSnapshotId(nullopt);
-			removed_any_entries = true;
-		}
+		writer.RemoveManifestEntry(manifest_entry);
+		//! Both data and delete files need a tombstone in the snapshot that removes them. Other engines use
+		//! these entries to discover removed files and perform incremental snapshot-expiration cleanup.
+		//! PrepareEntriesForRewrite drops older tombstones; these new ones remain until a later snapshot.
+		manifest_entry.status = IcebergManifestEntryStatusType::DELETED;
+		manifest_entry.SetSnapshotId(nullopt);
+		removed_any_entries = true;
 	}
 	if (!removed_any_entries) {
-		return ManifestRewriteOutcome::UNCHANGED;
+		return nullopt;
 	}
-	if (rewritten_entries.empty()) {
-		return ManifestRewriteOutcome::DROPPED;
-	}
-	rewritten = writer.WriteReplacementManifest(*loaded_manifest.manifest_metadata, std::move(rewritten_entries),
-	                                            file.first_row_id);
-	return ManifestRewriteOutcome::REPLACED;
+	return writer.WriteReplacementManifest(*loaded_manifest.manifest_metadata, std::move(rewritten_entries),
+	                                       file.first_row_id);
 }
 
 //! A manifest whose files were all deleted by earlier snapshots holds only tombstones. Like Apache Iceberg's
@@ -157,12 +137,8 @@ void IcebergCommitState::WriteExistingManifests(IcebergSnapshotWriter &writer, i
                                                 optional_ptr<const VersionedIcebergManifestDeletes> manifest_deletes) {
 	for (auto &manifest : manifests) {
 		if (manifest_deletes) {
-			optional<IcebergManifestListEntry> replacement;
-			auto outcome = RewriteManifestFile(manifest, writer, *this, schema_id, *manifest_deletes, replacement);
-			if (outcome == ManifestRewriteOutcome::DROPPED) {
-				continue;
-			}
-			if (outcome == ManifestRewriteOutcome::REPLACED) {
+			auto replacement = RewriteManifestFile(manifest, writer, *this, schema_id, *manifest_deletes);
+			if (replacement) {
 				writer.AddExistingManifest(std::move(*replacement));
 				continue;
 			}

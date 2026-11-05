@@ -1,5 +1,5 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/manifest_tombstones_v2_merge_on_read.test
-# description: On a V2 merge-on-read table, rewrite drops data tombstones on merge while rewrite removes fully applied position deletes
+# description: V2 rewrites record removed data and position-delete files, then prune their tombstones on later commits
 # group: [maintenance]
 
 require-env CATALOG_TEST_CONFIG_SETUP
@@ -39,7 +39,7 @@ ORDER BY ALL;
 1	1	0	0
 1	1	0	0
 
-# The rewrite deletes both data files, drops fully applied position deletes, and adds one compacted data file.
+# The rewrite records removals of both data files and both fully applied position deletes.
 statement ok
 CALL iceberg_rewrite_data_files('my_datalake.default.manifest_tombstones_v2_merge_on_read', rewrite_all => true);
 
@@ -53,8 +53,9 @@ ORDER BY ALL;
 ----
 0	0	0	2
 0	1	0	0
+1	0	0	2
 
-# The tombstone-only data manifest is dropped on the next commit; position deletes removed by rewrite stay absent.
+# Both tombstone-only manifests are dropped on the next commit.
 statement ok
 INSERT INTO my_datalake.default.manifest_tombstones_v2_merge_on_read VALUES (6, 'f');
 
