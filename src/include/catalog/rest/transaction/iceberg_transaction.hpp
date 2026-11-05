@@ -169,6 +169,8 @@ public:
 
 	unordered_set<string> looked_up_entries;
 	mutex lock;
+	//! Serialize rewrite finalization, including the initialization of transaction table state.
+	mutex rewrite_commit_lock;
 
 	unordered_map<string, SchemaPropertyUpdates> schema_property_updates;
 };

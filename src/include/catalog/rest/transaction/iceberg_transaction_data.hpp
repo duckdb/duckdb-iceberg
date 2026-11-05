@@ -32,6 +32,7 @@ public:
 	//! Whether this transaction stages a DELETE snapshot; gates the commit-retry safety check.
 	bool ContainsDelete() const;
 	bool IsFileInvalidated(const IcebergFileIdentity &file) const;
+	bool HasInvalidatedFiles() const;
 	shared_ptr<IcebergMergeDeleteCollector> GetMergeDeleteCollector(idx_t action_count);
 	void VerifyMergeDeletesComplete() const;
 
@@ -111,7 +112,9 @@ public:
 	bool has_assert_create = false;
 	//! Whether this transaction rolls main back (TableRollbackToSnapshot)
 	bool rolls_back = false;
-	mutex lock;
+	//! A rewrite cannot be combined with other changes to the table's rows.
+	bool rewrites_data_files = false;
+	mutable mutex lock;
 };
 
 } // namespace duckdb
