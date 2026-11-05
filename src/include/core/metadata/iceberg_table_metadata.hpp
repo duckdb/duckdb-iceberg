@@ -121,9 +121,8 @@ public:
 	string GetTableProperty(string property_string) const;
 	//! Whether the given write mode property is explicitly set to copy-on-write
 	bool UsesCopyOnWrite(const string &write_mode_property) const;
-	string GetDeleteCompressionCodec() const;
-
 	static void VerifyNotReservedProperty(const string &key, const string &operation);
+	string GetDeleteCompressionCodec() const;
 	//! Whether the given write mode property (write.delete.mode, write.update.mode or write.merge.mode) allows
 	//! writing merge-on-read delete files
 	bool AllowsMergeOnRead(const string &write_mode_property) const;
