@@ -1,5 +1,6 @@
 #include "planning/iceberg_planner.hpp"
 
+#include "planning/iceberg_optimizer.hpp"
 #include "iceberg_logging.hpp"
 #include "duckdb/planner/logical_operator.hpp"
 #include "duckdb/logging/logger.hpp"
@@ -21,22 +22,24 @@
 
 namespace duckdb {
 
-void IcebergPlannerRoutine::VisitOperator(LogicalOperator &op) {
+void IcebergPlannerRoutine::VisitOperator(ClientContext &context, LogicalOperator &op) {
 	if (op.type == LogicalOperatorType::LOGICAL_GET) {
 		VisitScan(op);
 	}
 	// Post-bind runs before subqueries are lowered into operator children.
 	LogicalOperatorVisitor::EnumerateExpressions(op, [&](unique_ptr<Expression> *expression) {
-		ExpressionIterator::VisitExpression<BoundSubqueryExpression>(**expression,
-		                                                             [&](const BoundSubqueryExpression &subquery) {
-			                                                             if (subquery.Subquery().plan) {
-				                                                             VisitOperator(*subquery.Subquery().plan);
-			                                                             }
-		                                                             });
+		ExpressionIterator::VisitExpression<BoundSubqueryExpression>(
+		    **expression, [&](const BoundSubqueryExpression &subquery) {
+			    if (subquery.Subquery().plan) {
+				    VisitOperator(context, *subquery.Subquery().plan);
+			    }
+		    });
 	});
 	for (auto &child : op.children) {
-		VisitOperator(*child);
+		VisitOperator(context, *child);
 	}
+	// Finalize scan restrictions before cardinality estimates can freeze the configuration.
+	IcebergOptimizer::TryEnableLateMaterialization(context, op);
 }
 
 void IcebergPlannerRoutine::VisitScan(LogicalOperator &op) {
@@ -74,14 +77,14 @@ void IcebergPlannerRoutine::VisitScan(LogicalOperator &op) {
 void IcebergPlanner::PostBind(PlannerExtensionInput &input, BoundStatement &statement) {
 	if (statement.plan) {
 		IcebergPlannerRoutine routine;
-		routine.VisitOperator(*statement.plan);
+		routine.VisitOperator(input.context, *statement.plan);
 		IcebergFixedType::RejectOutsideIceberg(input.context, *statement.plan);
 	}
 }
 
 PlannerExtension IcebergPlanner::Create() {
 	PlannerExtension ext;
-	// Apply scan safety restrictions before optimization starts without invalidating
+	// Apply scan safety restrictions and late-materialization setup without invalidating
 	// the correlation-domain metadata that DuckDB generates after binding.
 	ext.post_bind_function = IcebergPlanner::PostBind;
 	return ext;
