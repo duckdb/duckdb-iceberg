@@ -53,11 +53,6 @@ jobs:
           sudo apt update -y -qq
           sudo apt install -y -qq python3-venv tar pkg-config llvm
 
-      - name: Install CMake 3.x
-        run: |
-          sudo apt-get remove -y cmake cmake-data
-          sudo apt-get install --allow-downgrades -y -qq 'cmake=3.*' 'cmake-data=3.*'
-
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
