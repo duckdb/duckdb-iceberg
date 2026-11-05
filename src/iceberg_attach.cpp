@@ -5,6 +5,7 @@
 #include "catalog/rest/storage/authorization/oauth2.hpp"
 #include "catalog/rest/storage/authorization/sigv4.hpp"
 #include "catalog/rest/storage/authorization/none.hpp"
+#include "catalog/rest/api/url_utils.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "duckdb/common/json_document.hpp"
 #include "rest_catalog/objects/list.hpp"
@@ -31,6 +32,19 @@ static IcebergEndpointType EndpointTypeFromString(const string &input) {
 	}
 	throw InvalidConfigurationException("Unrecognized 'endpoint_type' (%s), accepted options are: %s", input,
 	                                    StringUtil::Join(options, ", "));
+}
+
+static string GlueRegionFromURI(const string &uri) {
+	auto host = StringUtil::Lower(StripScheme(uri));
+	host = host.substr(0, host.find_first_of("/?#"));
+	// Match the whole authority, not a Glue hostname appearing in a path or a
+	// subdomain of another service. Accept explicit ports and China endpoints.
+	static const std::regex pattern("^glue\\.([a-z0-9-]+)\\.amazonaws\\.com(\\.cn)?(:[0-9]+)?$");
+	std::smatch match;
+	if (!std::regex_match(host, match, pattern)) {
+		return string();
+	}
+	return match[1].str();
 }
 
 static void S3OrGlueAttachInternal(IcebergAttachOptions &input, const string &service, const string &region) {
@@ -413,7 +427,7 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 	}
 	StringUtil::RTrim(attach_options.catalog_uri, "/");
 	IcebergEndpointType endpoint_type = IcebergEndpointType::INVALID;
-	//! Then check any if the 'endpoint_type' is set, for any well known catalogs
+	//! Explicit endpoint types also support custom endpoints.
 	if (!endpoint_type_string.empty()) {
 		endpoint_type = EndpointTypeFromString(endpoint_type_string);
 		switch (endpoint_type) {
@@ -431,6 +445,21 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 		}
 		default:
 			throw InternalException("Endpoint type (%s) not implemented", endpoint_type_string);
+		}
+	} else {
+		auto glue_region = GlueRegionFromURI(attach_options.catalog_uri);
+		if (!glue_region.empty()) {
+			endpoint_type = IcebergEndpointType::AWS_GLUE;
+			SetAWSCatalogOptions(attach_options, set_by_attach_options);
+			// URL-based attaches may already specify authorization and signing
+			// options. Only supply defaults, using the URL's region.
+			if (attach_options.authorization_type == IcebergAuthorizationType::INVALID) {
+				attach_options.authorization_type = IcebergAuthorizationType::SIGV4;
+			}
+			if (attach_options.authorization_type == IcebergAuthorizationType::SIGV4) {
+				attach_options.options.emplace("sigv4_service", Value("glue"));
+				attach_options.options.emplace("sigv4_region", Value(glue_region));
+			}
 		}
 	}
 
