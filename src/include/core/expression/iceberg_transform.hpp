@@ -48,6 +48,7 @@ public:
 	                                       vector<reference<const IcebergColumnDefinition>> &source_columns);
 
 	static bool TransformFunctionSupported(const string &transform_name);
+	bool CanTransform(const LogicalType &source) const;
 	LogicalType GetSerializedType(const LogicalType &input) const;
 	LogicalType GetBoundsType(const LogicalType &input) const;
 	LogicalType GetResultType(const LogicalType &input) const;
