@@ -1,0 +1,23 @@
+# name: test/sql/local/iceberg_scans/manifest_list_large_counts.test
+# description: implausibly large counts in a manifest list do not drive allocations or the cardinality estimate
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+foreach count_case files_count_max rows_count_max
+
+query I
+SELECT count(*) FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/manifest_list_large_counts/metadata/{count_case}.metadata.json');
+----
+2
+
+query I
+SELECT count(*) FROM (
+	SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/manifest_list_large_counts/metadata/{count_case}.metadata.json')
+	EXCEPT ALL
+	SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/partition_bool/metadata/v2.metadata.json')
+);
+----
+0
+
+endloop
