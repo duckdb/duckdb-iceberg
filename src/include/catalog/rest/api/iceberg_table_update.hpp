@@ -14,6 +14,7 @@ struct IcebergTableMetadata;
 class IcebergSnapshotWriter;
 struct IcebergWrittenSnapshot;
 struct VersionedIcebergManifestDeletes;
+struct RewriteManifestsSpec;
 
 enum class IcebergTableUpdateType : uint8_t {
 	ASSIGN_UUID,
@@ -55,6 +56,9 @@ public:
 	IcebergSnapshotWriter
 	CreateSnapshotWriter(int32_t schema_id, IcebergSnapshotOperationType operation,
 	                     optional_ptr<const VersionedIcebergManifestDeletes> manifest_deletes = nullptr);
+	//! Start a REPLACE snapshot that swaps the manifests matching 'spec' for 'output_count' repacked ones.
+	IcebergSnapshotWriter CreateRewriteManifestsSnapshotWriter(int32_t schema_id, const RewriteManifestsSpec &spec,
+	                                                           idx_t output_count);
 	//! Adopt the written snapshot and its manifests together with the REST update that publishes it.
 	void AddWrittenSnapshot(IcebergWrittenSnapshot written);
 

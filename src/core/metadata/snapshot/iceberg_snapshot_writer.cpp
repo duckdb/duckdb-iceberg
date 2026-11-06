@@ -95,6 +95,11 @@ void IcebergSnapshotWriter::SetTotalFilesSize(int64_t total_files_size) {
 	snapshot.metrics.SetTotalFilesSize(total_files_size);
 }
 
+void IcebergSnapshotWriter::SetManifestRewriteCounts(idx_t created, idx_t kept, idx_t replaced) {
+	snapshot.metrics.SetManifestRewriteCounts(NumericCast<int64_t>(created), NumericCast<int64_t>(kept),
+	                                          NumericCast<int64_t>(replaced));
+}
+
 IcebergWrittenSnapshot IcebergWrittenSnapshot::Create(IcebergSnapshotWriter writer) {
 	writer.created_metadata_files.push_back(writer.snapshot.manifest_list);
 	manifest_list::WriteToFile(writer.table_metadata, writer.manifest_list, writer.avro_copy, writer.db,

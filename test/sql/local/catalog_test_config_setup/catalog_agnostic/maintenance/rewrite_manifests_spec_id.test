@@ -1,0 +1,101 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_manifests_spec_id.test
+# description: iceberg_rewrite_manifests only rewrites manifests of the selected partition spec.
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.rewrite_manifests_spec_id;
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_manifests_spec_id (a INTEGER, b VARCHAR)
+PARTITIONED BY (a)
+WITH ('format-version' = 2, 'commit.manifest-merge.enabled' = false);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_manifests_spec_id VALUES (1, 'x'), (2, 'y');
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_manifests_spec_id VALUES (1, 'y'), (3, 'x');
+
+statement ok
+ALTER TABLE my_datalake.default.rewrite_manifests_spec_id SET PARTITIONED BY (b);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_manifests_spec_id VALUES (4, 'x'), (5, 'y');
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_manifests_spec_id VALUES (6, 'x');
+
+query II
+SELECT partition_spec_id, count(*) FROM iceberg_manifests(my_datalake.default.rewrite_manifests_spec_id)
+GROUP BY ALL ORDER BY ALL;
+----
+0	2
+1	2
+
+statement ok
+SET VARIABLE current_spec_manifests = (
+    SELECT list(path ORDER BY path) FROM iceberg_manifests(my_datalake.default.rewrite_manifests_spec_id)
+    WHERE partition_spec_id = 1
+);
+
+statement error
+CALL iceberg_rewrite_manifests('my_datalake.default.rewrite_manifests_spec_id', spec_id => 7);
+----
+partition spec 7 does not exist
+
+# sort_by names fields of the spec being rewritten, not the current one.
+statement error
+CALL iceberg_rewrite_manifests('my_datalake.default.rewrite_manifests_spec_id', spec_id => 0, sort_by => ['b']);
+----
+'b' is not a partition field of partition spec 0
+
+query II
+CALL iceberg_rewrite_manifests('my_datalake.default.rewrite_manifests_spec_id', spec_id => 0);
+----
+2	1
+
+query II
+SELECT partition_spec_id, count(*) FROM iceberg_manifests(my_datalake.default.rewrite_manifests_spec_id)
+GROUP BY ALL ORDER BY ALL;
+----
+0	1
+1	2
+
+# Manifests of the other spec are carried forward untouched.
+query I
+SELECT list(path ORDER BY path) = getvariable('current_spec_manifests')
+FROM iceberg_manifests(my_datalake.default.rewrite_manifests_spec_id)
+WHERE partition_spec_id = 1;
+----
+true
+
+# The default is the current spec.
+query II
+CALL iceberg_rewrite_manifests('my_datalake.default.rewrite_manifests_spec_id');
+----
+2	1
+
+query II
+SELECT partition_spec_id, count(*) FROM iceberg_manifests(my_datalake.default.rewrite_manifests_spec_id)
+GROUP BY ALL ORDER BY ALL;
+----
+0	1
+1	1
+
+query II
+SELECT a, b FROM my_datalake.default.rewrite_manifests_spec_id ORDER BY a, b;
+----
+1	x
+1	y
+2	y
+3	x
+4	x
+5	y
+6	x
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_manifests_spec_id;

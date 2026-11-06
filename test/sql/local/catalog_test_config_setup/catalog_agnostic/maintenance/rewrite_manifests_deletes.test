@@ -1,0 +1,91 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_manifests_deletes.test
+# description: iceberg_rewrite_manifests keeps delete manifests and drops tombstones of removed data files.
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.rewrite_manifests_deletes;
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_manifests_deletes (id INTEGER, category VARCHAR)
+PARTITIONED BY (category)
+WITH ('format-version' = 2, 'commit.manifest-merge.enabled' = false);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_manifests_deletes VALUES (1, 'a'), (2, 'b');
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_manifests_deletes VALUES (3, 'a'), (4, 'b');
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_manifests_deletes VALUES (5, 'a'), (6, 'b');
+
+# Compacting both partitions leaves DELETED entries for the six original files.
+query IIIII
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_manifests_deletes', min_input_files => 2);
+----
+6	2	<REGEX>:[1-9][0-9]*	0	0
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.rewrite_manifests_deletes) WHERE status = 'DELETED';
+----
+6
+
+# A position delete adds a delete manifest.
+statement ok
+DELETE FROM my_datalake.default.rewrite_manifests_deletes WHERE id = 4;
+
+statement ok
+SET VARIABLE delete_manifests = (
+    SELECT list(path ORDER BY path) FROM iceberg_manifests(my_datalake.default.rewrite_manifests_deletes)
+    WHERE content = 1
+);
+
+query I
+SELECT len(getvariable('delete_manifests')) > 0;
+----
+true
+
+# The three original data manifests (now holding the tombstones) and the compaction's manifest.
+query I
+SELECT count(*) FROM iceberg_manifests(my_datalake.default.rewrite_manifests_deletes) WHERE content = 0;
+----
+4
+
+query II
+CALL iceberg_rewrite_manifests('my_datalake.default.rewrite_manifests_deletes');
+----
+4	1
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.rewrite_manifests_deletes) WHERE status = 'DELETED';
+----
+0
+
+query II
+SELECT count(*), sum(existing_data_files_count) FROM iceberg_manifests(my_datalake.default.rewrite_manifests_deletes)
+WHERE content = 0;
+----
+1	2
+
+# Delete manifests are carried forward untouched and still apply.
+query I
+SELECT list(path ORDER BY path) = getvariable('delete_manifests')
+FROM iceberg_manifests(my_datalake.default.rewrite_manifests_deletes) WHERE content = 1;
+----
+true
+
+query II
+SELECT id, category FROM my_datalake.default.rewrite_manifests_deletes ORDER BY id;
+----
+1	a
+2	b
+3	a
+5	a
+6	b
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_manifests_deletes;
