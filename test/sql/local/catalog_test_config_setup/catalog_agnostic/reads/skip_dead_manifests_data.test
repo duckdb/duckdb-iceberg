@@ -1,0 +1,200 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/skip_dead_manifests_data.test
+# description: Scans skip data manifests that hold only DELETED entries and still read manifests with live files
+# group: [reads]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env TIMETRAVEL_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.skip_dead_manifests_data;
+
+# Merging is disabled so that the manifests written by the rewrite stay separate.
+statement ok
+CREATE TABLE my_datalake.default.skip_dead_manifests_data (id INTEGER, category VARCHAR)
+PARTITIONED BY (category)
+WITH ('format-version' = 2, 'commit.manifest-merge.enabled' = false);
+
+statement ok
+INSERT INTO my_datalake.default.skip_dead_manifests_data VALUES (1, 'a'), (2, 'b');
+
+statement ok
+INSERT INTO my_datalake.default.skip_dead_manifests_data VALUES (3, 'a');
+
+statement ok
+SET VARIABLE before_rewrite = (
+    SELECT snapshot_id::BIGINT FROM iceberg_snapshots('my_datalake.default.skip_dead_manifests_data')
+    ORDER BY sequence_number DESC LIMIT 1
+);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Control: every manifest has live files, so nothing is skipped.
+query IT
+SELECT id, category FROM my_datalake.default.skip_dead_manifests_data WHERE id >= 1 ORDER BY id;
+----
+1	a
+2	b
+3	a
+
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message.contains('DATA manifest has no added or existing files');
+----
+0
+
+# Only the 'a' files are rewritten.
+query IIIII
+CALL iceberg_rewrite_data_files('my_datalake.default.skip_dead_manifests_data', min_input_files => 2);
+----
+2	1	<REGEX>:[1-9][0-9]*	0	0
+
+# The current snapshot lists a tombstone-only manifest, a manifest mixing a live file ('b') with a deleted file,
+# and the manifest holding the rewritten file.
+query III
+SELECT added_data_files_count, existing_data_files_count, deleted_data_files_count
+FROM iceberg_manifests(my_datalake.default.skip_dead_manifests_data)
+ORDER BY ALL;
+----
+0	0	1
+0	1	1
+1	0	0
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# A filter on a non-partition column cannot prune manifests by partition, yet the tombstone-only manifest is skipped.
+query IT
+SELECT id, category FROM my_datalake.default.skip_dead_manifests_data WHERE id >= 1 ORDER BY id;
+----
+1	a
+2	b
+3	a
+
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message.contains('DATA manifest has no added or existing files');
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE type = 'Iceberg'
+AND message.contains('data_manifest_scan_started selected_data_manifests=2 total_data_manifests=3');
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Without a filter the result is the same. The mixed manifest is read: 'b' lives in it.
+query IT
+SELECT id, category FROM my_datalake.default.skip_dead_manifests_data ORDER BY id;
+----
+1	a
+2	b
+3	a
+
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message.contains('DATA manifest has no added or existing files');
+----
+1
+
+# Statistics ignore the skipped manifest: it contributes no live rows.
+query I
+SELECT count(*) FROM my_datalake.default.skip_dead_manifests_data;
+----
+3
+
+query I
+SELECT count(*) FROM my_datalake.default.skip_dead_manifests_data WHERE category = 'b';
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Time travel reads the manifest list of the old snapshot, whose manifests all have live files.
+query IT
+SELECT id, category FROM my_datalake.default.skip_dead_manifests_data
+AT (VERSION => getvariable('before_rewrite')) ORDER BY id;
+----
+1	a
+2	b
+3	a
+
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message.contains('DATA manifest has no added or existing files');
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.skip_dead_manifests_data;
+
+# Unpartitioned: rewriting everything leaves two tombstone-only manifests next to the one with the new file.
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.skip_dead_manifests_data_all;
+
+statement ok
+CREATE TABLE my_datalake.default.skip_dead_manifests_data_all (id INTEGER, payload VARCHAR)
+WITH ('format-version' = 2, 'commit.manifest-merge.enabled' = false);
+
+statement ok
+INSERT INTO my_datalake.default.skip_dead_manifests_data_all VALUES (1, 'a'), (2, 'b');
+
+statement ok
+INSERT INTO my_datalake.default.skip_dead_manifests_data_all VALUES (3, 'c');
+
+statement ok
+CALL iceberg_rewrite_data_files('my_datalake.default.skip_dead_manifests_data_all', rewrite_all => true);
+
+query III
+SELECT added_data_files_count, existing_data_files_count, deleted_data_files_count
+FROM iceberg_manifests(my_datalake.default.skip_dead_manifests_data_all)
+ORDER BY ALL;
+----
+0	0	1
+0	0	1
+1	0	0
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query IT
+SELECT id, payload FROM my_datalake.default.skip_dead_manifests_data_all WHERE payload <> 'zzz' ORDER BY id;
+----
+1	a
+2	b
+3	c
+
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message.contains('DATA manifest has no added or existing files');
+----
+2
+
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE type = 'Iceberg'
+AND message.contains('data_manifest_scan_started selected_data_manifests=1 total_data_manifests=3');
+----
+1
+
+# A filter that matches nothing still returns the right (empty) result.
+query IT
+SELECT id, payload FROM my_datalake.default.skip_dead_manifests_data_all WHERE payload = 'zzz';
+----
+
+statement ok
+DROP TABLE my_datalake.default.skip_dead_manifests_data_all;

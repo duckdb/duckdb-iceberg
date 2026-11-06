@@ -482,6 +482,14 @@ bool IcebergFilePruner::DeleteFileMatchesDataFile(const IcebergManifest &delete_
 bool IcebergFilePruner::ManifestMatchesFilter(const IcebergManifestListEntry &entry) const {
 	auto &manifest = entry.GetManifest();
 	auto path = entry.HasFile() ? entry.GetFile().manifest_path : "<in-memory>";
+	if (!manifest.HasLiveFiles()) {
+		//! Like Apache Iceberg's ManifestGroup (data) and DeleteFileIndex (deletes), never read a manifest that
+		//! only holds DELETED entries: its files were removed by the snapshot that wrote it, or an earlier one.
+		DUCKDB_LOG(context, IcebergLogType,
+		           "Iceberg Filter Pushdown, skipped 'manifest_file': '%s', %s manifest has no added or existing files",
+		           path, IcebergManifestContentTypeToString(manifest.content));
+		return false;
+	}
 	auto spec_id = manifest.partition_spec_id;
 	auto partition_spec_it = metadata.partition_specs.find(spec_id);
 	if (partition_spec_it == metadata.partition_specs.end()) {
