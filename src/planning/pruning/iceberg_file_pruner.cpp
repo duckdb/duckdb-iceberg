@@ -77,6 +77,17 @@ ResolveStructField(const IcebergColumnDefinition &root, const ColumnIndex &colum
 	return column;
 }
 
+bool IsNaN(const Value &value) {
+	switch (value.type().id()) {
+	case LogicalTypeId::FLOAT:
+		return Value::IsNan(value.GetValue<float>());
+	case LogicalTypeId::DOUBLE:
+		return Value::IsNan(value.GetValue<double>());
+	default:
+		return false;
+	}
+}
+
 } // namespace
 
 bool IcebergFilePruner::FilePartitionMatchesFilter(const IcebergDataFile &data_file,
@@ -318,9 +329,16 @@ bool IcebergFilePruner::DeleteManifestMatchesDataFile(const IcebergManifest &del
 			return true;
 		}
 		auto partition_type = field.transform.GetSerializedType(source_column->type);
+		auto typed_partition_value = partition_value.DefaultCastAs(partition_type);
+		// The summary bounds leave NaN out, so a NaN partition is matched by contains_nan instead
+		if (IsNaN(typed_partition_value)) {
+			if (field_summary.contains_nan && !*field_summary.contains_nan) {
+				return false;
+			}
+			continue;
+		}
 		auto stats = IcebergPredicateStats::DeserializeBounds(
 		    context, field_summary.lower_bound, field_summary.upper_bound, source_column->name, partition_type);
-		auto typed_partition_value = partition_value.DefaultCastAs(partition_type);
 		if (stats.lower_bound && typed_partition_value < *stats.lower_bound) {
 			return false;
 		}
