@@ -114,6 +114,8 @@ public:
 	bool rolls_back = false;
 	//! A rewrite cannot be combined with other changes to the table's rows.
 	bool rewrites_data_files = false;
+	//! A MERGE chose its actions against the snapshot it read, so its commit can't be re-applied to a newer one.
+	bool contains_merge = false;
 	mutable mutex lock;
 };
 
