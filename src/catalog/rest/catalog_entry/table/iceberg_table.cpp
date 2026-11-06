@@ -515,16 +515,15 @@ IcebergPartitionSpec IcebergTable::BuildPartitionSpec(const vector<unique_ptr<Pa
 			throw InvalidInputException("Multi-argument transforms are not supported yet!");
 		}
 		auto source_id = source_columns[0].get().id;
-		auto column_name = source_columns[0].get().name;
 
 		IcebergPartitionSpecField field;
 		field.transform = transform;
 		field.source_id = source_id;
 		field.partition_field_id = base_partition_field_id + new_spec.fields.size();
-		// transform field names cannot be the column name. Otherwise Lakekeeper complains
-		field.SetPartitionSpecFieldName(column_name);
+		field.SetPartitionSpecFieldName(schema.GetFullColumnName(source_id));
 		new_spec.fields.push_back(std::move(field));
 	}
+	new_spec.VerifyFieldNames(schema);
 
 	return new_spec;
 }
@@ -604,6 +603,8 @@ void IcebergTable::SetPartitionedBy(IcebergTransaction &transaction,
 				field.partition_field_id = base_partition_field_id++;
 			}
 		}
+		// A recycled field brings its historical name
+		new_spec.VerifyFieldNames(schema);
 	}
 
 	// if spec definition already exists in a previous spec definition, set it to that spec id

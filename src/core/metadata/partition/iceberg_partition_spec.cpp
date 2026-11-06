@@ -1,5 +1,9 @@
 #include "core/metadata/partition/iceberg_partition_spec.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
+#include "core/metadata/schema/iceberg_table_schema.hpp"
+#include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/identifier.hpp"
+#include "duckdb/common/string_util.hpp"
 
 namespace duckdb {
 
@@ -94,19 +98,52 @@ const vector<IcebergPartitionSpecField> &IcebergPartitionSpec::GetFields() const
 }
 
 void IcebergPartitionSpecField::SetPartitionSpecFieldName(const string &column_name) {
-	string transform_raw_type = transform.RawType();
-	for (idx_t i = 0; i < transform_raw_type.size(); i++) {
-		char c = transform_raw_type[i];
-		bool valid = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
-		if (!valid) {
-			transform_raw_type[i] = '_';
+	switch (transform.Type()) {
+	case IcebergTransformType::IDENTITY:
+		name = column_name;
+		break;
+	case IcebergTransformType::BUCKET:
+		name = StringUtil::Format("%s_bucket_%d", column_name, transform.GetBucketModulo());
+		break;
+	case IcebergTransformType::TRUNCATE:
+		name = StringUtil::Format("%s_trunc_%d", column_name, transform.GetTruncateWidth());
+		break;
+	case IcebergTransformType::YEAR:
+		name = column_name + "_year";
+		break;
+	case IcebergTransformType::MONTH:
+		name = column_name + "_month";
+		break;
+	case IcebergTransformType::DAY:
+		name = column_name + "_day";
+		break;
+	case IcebergTransformType::HOUR:
+		name = column_name + "_hour";
+		break;
+	default:
+		throw NotImplementedException("No default partition field name for transform '%s'", transform.RawType());
+	}
+}
+
+void IcebergPartitionSpec::VerifyFieldNames(const IcebergTableSchema &schema) const {
+	case_insensitive_set_t names;
+	for (auto &field : fields) {
+		auto &name = field.GetPartitionSpecFieldName();
+		if (!names.insert(name).second) {
+			throw InvalidInputException("Cannot use partition name more than once: %s", name);
+		}
+		auto column = schema.GetFromPath(StringsToIdentifiers(StringUtil::Split(name, ".")), nullptr);
+		if (!column) {
+			continue;
+		}
+		if (field.transform.Type() != IcebergTransformType::IDENTITY) {
+			throw InvalidInputException("Cannot create partition from name that exists in schema: %s", name);
+		}
+		if (static_cast<uint64_t>(column->id) != field.source_id) {
+			throw InvalidInputException("Cannot create identity partition sourced from different field in schema: %s",
+			                            name);
 		}
 	}
-	// Avro names must not start with a digit
-	if (!transform_raw_type.empty() && transform_raw_type[0] >= '0' && transform_raw_type[0] <= '9') {
-		transform_raw_type = "_" + transform_raw_type;
-	}
-	name = transform_raw_type + "_" + column_name + "_" + to_string(source_id);
 }
 
 const string &IcebergPartitionSpecField::GetPartitionSpecFieldName() const {
