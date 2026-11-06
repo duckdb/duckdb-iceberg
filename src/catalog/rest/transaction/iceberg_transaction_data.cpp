@@ -162,6 +162,11 @@ bool IcebergTransactionData::SupportsAppendRetry() const {
 	if (!requirements.empty()) {
 		return false;
 	}
+	//! A MERGE that only inserts commits a plain append, but its WHEN NOT MATCHED rows were chosen against the
+	//! snapshot it read. Re-applying them on top of a concurrent commit could insert rows that now match.
+	if (contains_merge) {
+		return false;
+	}
 	if (updates.empty()) {
 		return false;
 	}
@@ -263,6 +268,7 @@ void IcebergTransactionData::AddSnapshotUpdate(unique_ptr<IcebergAddSnapshot> ad
 		throw InvalidInputException("Cannot rewrite table \"%s\": it was already changed in this transaction",
 		                            table_info.name);
 	}
+	contains_merge |= merge_action;
 	// All action sinks share this execution's query ID; a later statement gets a different ID.
 	auto query_id = transaction.active_query.load();
 	if (merge_action && merge_query_id && *merge_query_id == query_id) {
