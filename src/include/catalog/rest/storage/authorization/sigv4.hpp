@@ -23,6 +23,8 @@ public:
 	unique_ptr<HTTPResponse> Request(RequestType request_type, ClientContext &context,
 	                                 const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
 	                                 const string &data = "") override;
+	//! Sets the region and the credentials to sign with on 'aws_input', refreshing the secret if due
+	void SetSigningRegionAndCredentials(ClientContext &context, const string &stripped_host, AWSInput &aws_input);
 
 private:
 	AWSInput CreateAWSInput(ClientContext &context, const IRCEndpointBuilder &endpoint_builder);
