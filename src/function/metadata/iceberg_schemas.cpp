@@ -11,14 +11,14 @@ namespace duckdb {
 
 struct IcebergSchemaFieldEntry {
 	int32_t schema_id;
-	bool is_current;
-	int32_t field_id;
 	string name;
+	int32_t field_id;
 	//! The DuckDB type (BIGINT, DECIMAL(15,2), STRUCT(...)), as in iceberg_column_stats
 	string type;
 	bool required;
 	//! NULL when the field has no doc
 	Value doc;
+	bool is_current;
 };
 
 //! One entry per top-level field of every schema, ordered by schema id and then by field order
@@ -34,9 +34,9 @@ static vector<IcebergSchemaFieldEntry> GetSchemaFields(const IcebergTableMetadat
 		auto &schema = schema_ref.get();
 		bool is_current = schema.schema_id == current_schema_id;
 		for (auto &column : schema.columns) {
-			result.push_back(IcebergSchemaFieldEntry {schema.schema_id, is_current, column->id, column->name,
-			                                          column->type.ToString(), column->required,
-			                                          column->doc ? Value(*column->doc) : Value(LogicalType::VARCHAR)});
+			result.push_back(IcebergSchemaFieldEntry {
+			    schema.schema_id, column->name, column->id, column->type.ToString(), column->required,
+			    column->doc ? Value(*column->doc) : Value(LogicalType::VARCHAR), is_current});
 		}
 	}
 	return result;
@@ -70,14 +70,11 @@ static unique_ptr<FunctionData> IcebergSchemasBind(ClientContext &context, Table
 	names.emplace_back("schema_id");
 	return_types.emplace_back(LogicalType::INTEGER);
 
-	names.emplace_back("is_current");
-	return_types.emplace_back(LogicalType::BOOLEAN);
+	names.emplace_back("name");
+	return_types.emplace_back(LogicalType::VARCHAR);
 
 	names.emplace_back("field_id");
 	return_types.emplace_back(LogicalType::INTEGER);
-
-	names.emplace_back("name");
-	return_types.emplace_back(LogicalType::VARCHAR);
 
 	names.emplace_back("type");
 	return_types.emplace_back(LogicalType::VARCHAR);
@@ -87,6 +84,9 @@ static unique_ptr<FunctionData> IcebergSchemasBind(ClientContext &context, Table
 
 	names.emplace_back("doc");
 	return_types.emplace_back(LogicalType::VARCHAR);
+
+	names.emplace_back("is_current");
+	return_types.emplace_back(LogicalType::BOOLEAN);
 
 	return std::move(bind_data);
 }
@@ -100,12 +100,12 @@ static void IcebergSchemasFunction(ClientContext &context, TableFunctionInput &d
 
 		idx_t col = 0;
 		output.data[col++].SetValue(out, Value::INTEGER(field.schema_id));
-		output.data[col++].SetValue(out, Value::BOOLEAN(field.is_current));
-		output.data[col++].SetValue(out, Value::INTEGER(field.field_id));
 		output.data[col++].SetValue(out, Value(field.name));
+		output.data[col++].SetValue(out, Value::INTEGER(field.field_id));
 		output.data[col++].SetValue(out, Value(field.type));
 		output.data[col++].SetValue(out, Value::BOOLEAN(field.required));
 		output.data[col++].SetValue(out, field.doc);
+		output.data[col++].SetValue(out, Value::BOOLEAN(field.is_current));
 		out++;
 	}
 	output.SetChildCardinality(out);

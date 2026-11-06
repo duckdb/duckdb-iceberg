@@ -13,33 +13,33 @@ include test/sql/init_requires
 query IIIIIII
 SELECT * FROM iceberg_schemas('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg');
 ----
-0	true	1	l_orderkey	BIGINT	false	NULL
-0	true	2	l_partkey	BIGINT	false	NULL
-0	true	3	l_suppkey	BIGINT	false	NULL
-0	true	4	l_linenumber	BIGINT	false	NULL
-0	true	5	l_quantity	DECIMAL(15,2)	false	NULL
-0	true	6	l_extendedprice	DECIMAL(15,2)	false	NULL
-0	true	7	l_discount	DECIMAL(15,2)	false	NULL
-0	true	8	l_tax	DECIMAL(15,2)	false	NULL
-0	true	9	l_returnflag	VARCHAR	false	NULL
-0	true	10	l_linestatus	VARCHAR	false	NULL
-0	true	11	l_shipdate	DATE	false	NULL
-0	true	12	l_commitdate	DATE	false	NULL
-0	true	13	l_receiptdate	DATE	false	NULL
-0	true	14	l_shipinstruct	VARCHAR	false	NULL
-0	true	15	l_shipmode	VARCHAR	false	NULL
-0	true	16	l_comment	VARCHAR	false	NULL
+0	l_orderkey	1	BIGINT	false	NULL	true
+0	l_partkey	2	BIGINT	false	NULL	true
+0	l_suppkey	3	BIGINT	false	NULL	true
+0	l_linenumber	4	BIGINT	false	NULL	true
+0	l_quantity	5	DECIMAL(15,2)	false	NULL	true
+0	l_extendedprice	6	DECIMAL(15,2)	false	NULL	true
+0	l_discount	7	DECIMAL(15,2)	false	NULL	true
+0	l_tax	8	DECIMAL(15,2)	false	NULL	true
+0	l_returnflag	9	VARCHAR	false	NULL	true
+0	l_linestatus	10	VARCHAR	false	NULL	true
+0	l_shipdate	11	DATE	false	NULL	true
+0	l_commitdate	12	DATE	false	NULL	true
+0	l_receiptdate	13	DATE	false	NULL	true
+0	l_shipinstruct	14	VARCHAR	false	NULL	true
+0	l_shipmode	15	VARCHAR	false	NULL	true
+0	l_comment	16	VARCHAR	false	NULL	true
 
 # three schemas: 'b' is dropped in schema 1 and added again with a new field id in schema 2, the current one
 # (a metadata file, to pin v7, the version with these three schemas)
 query IIIIIII
 SELECT * FROM iceberg_schemas('{WORKING_DIRECTORY}/data/persistent/name_mapping/warehouse_1/mydb/t1/metadata/v7.metadata.json');
 ----
-0	false	1	a	INTEGER	true	NULL
-0	false	2	b	BIGINT	false	NULL
-1	false	1	a	INTEGER	true	NULL
-2	true	1	a	INTEGER	true	NULL
-2	true	3	b	BIGINT	false	NULL
+0	a	1	INTEGER	true	NULL	false
+0	b	2	BIGINT	false	NULL	false
+1	a	1	INTEGER	true	NULL	false
+2	a	1	INTEGER	true	NULL	true
+2	b	3	BIGINT	false	NULL	true
 
 # filtering on the current schema
 query II
@@ -55,8 +55,8 @@ WHERE is_current;
 query IIIIIII
 SELECT * FROM iceberg_schemas('{WORKING_DIRECTORY}/data/persistent/add_columns_with_defaults_in_struct/default.db/add_columns_with_defaults_in_struct/metadata/00003-21a957f9-c2ee-431a-9d18-bf257b561198.metadata.json');
 ----
-0	false	1	a	STRUCT(col1 VARCHAR)	false	NULL
-1	true	1	a	STRUCT(col1 VARCHAR, col_boolean BOOLEAN, col_integer INTEGER, col_long BIGINT, col_float FLOAT, col_double DOUBLE, col_decimal DECIMAL(16,2), col_date DATE, col_time TIME, col_timestamp TIMESTAMP, col_timestamptz TIMESTAMP WITH TIME ZONE, col_string VARCHAR, col_uuid UUID, col_fixed ICEBERG_FIXED(5), col_binary BLOB)	false	NULL
+0	a	1	STRUCT(col1 VARCHAR)	false	NULL	false
+1	a	1	STRUCT(col1 VARCHAR, col_boolean BOOLEAN, col_integer INTEGER, col_long BIGINT, col_float FLOAT, col_double DOUBLE, col_decimal DECIMAL(16,2), col_date DATE, col_time TIME, col_timestamp TIMESTAMP, col_timestamptz TIMESTAMP WITH TIME ZONE, col_string VARCHAR, col_uuid UUID, col_fixed ICEBERG_FIXED(5), col_binary BLOB)	false	NULL	true
 
 statement ok
 create table t1 as select range a from range(10);
