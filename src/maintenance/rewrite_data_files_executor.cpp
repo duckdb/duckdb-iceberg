@@ -58,10 +58,27 @@ void CleanupRewriteFiles(ClientContext &context, const IcebergTable &table_info,
 	}
 }
 
+void ValidateRewrittenRowCount(const RewritePlan &plan, const RewriteExecutionResult &result) {
+	int64_t written = 0;
+	for (auto &entry : result.new_entries) {
+		written += entry.data_file.record_count;
+	}
+	auto selected = plan.selected_record_count;
+	auto at_least = plan.max_deleted_rows ? selected - *plan.max_deleted_rows : int64_t(0);
+	if (written > selected || written < at_least) {
+		throw CatalogException("iceberg_rewrite_data_files: the rewritten files hold %lld rows, but the %llu files "
+		                       "selected hold %lld rows before deletes and at least %lld after them, so the rewrite "
+		                       "would change the table's data; nothing was committed",
+		                       written, plan.selected_candidates.size(), selected, MaxValue<int64_t>(at_least, 0));
+	}
+}
+
 void CommitRewrite(ClientContext &context, const RewritePlan &plan, RewriteExecutionResult &result) {
 	if (result.rewritten_candidates.empty()) {
 		return;
 	}
+	// the files are only replaced when the scan returned their rows: a scan that misses rows would delete them
+	ValidateRewrittenRowCount(plan, result);
 	if (!plan.table_info) {
 		throw InternalException("iceberg_rewrite_data_files: rewrite plan has no table information");
 	}
