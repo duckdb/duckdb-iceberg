@@ -82,14 +82,11 @@ static bool MatchBoundsConstantTemplated(const Value &constant, ExpressionType c
 	}
 
 	if (stats.BoundsAreNull()) {
-		// bounds are actually null, expression is not a null comparison expression
-		// those are handled in MatchBoundsExpression
-		// So we can return false since no remaining expression type will match a null value
+		// Every value is NULL and the constant is not. NULL IS DISTINCT FROM a non-NULL constant is true for every
+		// row; every other comparison is never true. IS [NOT] NULL is handled in MatchBoundsExpression.
 		D_ASSERT(comparison_type != ExpressionType::OPERATOR_IS_NOT_NULL);
 		D_ASSERT(comparison_type != ExpressionType::OPERATOR_IS_NULL);
-		D_ASSERT(comparison_type != ExpressionType::COMPARE_DISTINCT_FROM);
-		D_ASSERT(comparison_type != ExpressionType::COMPARE_NOT_DISTINCT_FROM);
-		return false;
+		return comparison_type == ExpressionType::COMPARE_DISTINCT_FROM;
 	}
 
 	if (!stats.has_not_null && comparison_type != ExpressionType::COMPARE_DISTINCT_FROM &&
