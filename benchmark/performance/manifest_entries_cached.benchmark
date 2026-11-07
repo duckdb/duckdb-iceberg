@@ -1,0 +1,78 @@
+# name: benchmark/performance/manifest_entries_cached.benchmark
+# description: read one cached manifest with 1000 data file entries that carry stats for 101 columns
+# group: [performance]
+
+name Manifest entries from the external file cache
+group performance
+subgroup manifests
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# One INSERT over 1000 partitions writes a single manifest with 1000 entries. The filter on c1 cannot prune
+# the manifest, so every entry is read, but the c1 bounds of every data file rule it out, so no data file is
+# read. The warm-up query puts the manifest in the external file cache.
+load
+SET enable_external_file_cache=true;
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    URI 'http://127.0.0.1:8181'
+);
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+DROP TABLE IF EXISTS my_datalake.default.manifest_entries_cached_benchmark;
+CREATE TABLE my_datalake.default.manifest_entries_cached_benchmark (
+    p INTEGER,
+    c1 BIGINT, c2 BIGINT, c3 BIGINT, c4 BIGINT, c5 BIGINT, c6 BIGINT, c7 BIGINT, c8 BIGINT,
+    c9 BIGINT, c10 BIGINT, c11 BIGINT, c12 BIGINT, c13 BIGINT, c14 BIGINT, c15 BIGINT, c16 BIGINT,
+    c17 BIGINT, c18 BIGINT, c19 BIGINT, c20 BIGINT, c21 BIGINT, c22 BIGINT, c23 BIGINT, c24 BIGINT,
+    c25 BIGINT, c26 BIGINT, c27 BIGINT, c28 BIGINT, c29 BIGINT, c30 BIGINT, c31 BIGINT, c32 BIGINT,
+    c33 BIGINT, c34 BIGINT, c35 BIGINT, c36 BIGINT, c37 BIGINT, c38 BIGINT, c39 BIGINT, c40 BIGINT,
+    c41 BIGINT, c42 BIGINT, c43 BIGINT, c44 BIGINT, c45 BIGINT, c46 BIGINT, c47 BIGINT, c48 BIGINT,
+    c49 BIGINT, c50 BIGINT, c51 BIGINT, c52 BIGINT, c53 BIGINT, c54 BIGINT, c55 BIGINT, c56 BIGINT,
+    c57 BIGINT, c58 BIGINT, c59 BIGINT, c60 BIGINT, c61 BIGINT, c62 BIGINT, c63 BIGINT, c64 BIGINT,
+    c65 BIGINT, c66 BIGINT, c67 BIGINT, c68 BIGINT, c69 BIGINT, c70 BIGINT, c71 BIGINT, c72 BIGINT,
+    c73 BIGINT, c74 BIGINT, c75 BIGINT, c76 BIGINT, c77 BIGINT, c78 BIGINT, c79 BIGINT, c80 BIGINT,
+    c81 BIGINT, c82 BIGINT, c83 BIGINT, c84 BIGINT, c85 BIGINT, c86 BIGINT, c87 BIGINT, c88 BIGINT,
+    c89 BIGINT, c90 BIGINT, c91 BIGINT, c92 BIGINT, c93 BIGINT, c94 BIGINT, c95 BIGINT, c96 BIGINT,
+    c97 BIGINT, c98 BIGINT, c99 BIGINT, c100 BIGINT
+) PARTITIONED BY (p);
+INSERT INTO my_datalake.default.manifest_entries_cached_benchmark
+SELECT range % 1000,
+       range + 1, range + 2, range + 3, range + 4, range + 5, range + 6, range + 7, range + 8,
+       range + 9, range + 10, range + 11, range + 12, range + 13, range + 14, range + 15, range + 16,
+       range + 17, range + 18, range + 19, range + 20, range + 21, range + 22, range + 23, range + 24,
+       range + 25, range + 26, range + 27, range + 28, range + 29, range + 30, range + 31, range + 32,
+       range + 33, range + 34, range + 35, range + 36, range + 37, range + 38, range + 39, range + 40,
+       range + 41, range + 42, range + 43, range + 44, range + 45, range + 46, range + 47, range + 48,
+       range + 49, range + 50, range + 51, range + 52, range + 53, range + 54, range + 55, range + 56,
+       range + 57, range + 58, range + 59, range + 60, range + 61, range + 62, range + 63, range + 64,
+       range + 65, range + 66, range + 67, range + 68, range + 69, range + 70, range + 71, range + 72,
+       range + 73, range + 74, range + 75, range + 76, range + 77, range + 78, range + 79, range + 80,
+       range + 81, range + 82, range + 83, range + 84, range + 85, range + 86, range + 87, range + 88,
+       range + 89, range + 90, range + 91, range + 92, range + 93, range + 94, range + 95, range + 96,
+       range + 97, range + 98, range + 99, range + 100
+FROM range(100000);
+SELECT count(*) FROM my_datalake.default.manifest_entries_cached_benchmark WHERE c1 < 0;
+
+run
+SELECT count(*)
+FROM my_datalake.default.manifest_entries_cached_benchmark
+WHERE c1 < 0;
+
+result I
+0
