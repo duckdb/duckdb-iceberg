@@ -266,7 +266,9 @@ static void IcebergColumnStatsFunction(ClientContext &context, TableFunctionInpu
 				// nan_value_count
 				output.data[col++].SetValue(out, nan_value_count);
 				// file_sequence_number
-				output.data[col++].SetValue(out, manifest_entry.GetFileSequenceNumber(table_entry.GetFile()));
+				auto file_sequence_number = manifest_entry.TryGetFileSequenceNumber(table_entry.GetFile());
+				output.data[col++].SetValue(out, file_sequence_number ? Value::BIGINT(*file_sequence_number)
+				                                                      : Value(LogicalType::BIGINT));
 				out++;
 			}
 			global_state.column_it = bind_data.source_to_column_id.begin();
