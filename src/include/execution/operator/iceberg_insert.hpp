@@ -95,6 +95,8 @@ public:
 	atomic<idx_t> insert_count;
 };
 
+class IcebergCopyOnWriteDeleteFilter;
+
 class IcebergInsert : public PhysicalOperator {
 public:
 	//! INSERT INTO
@@ -113,6 +115,9 @@ public:
 	//! When set, this insert is part of an UPDATE: points to the delete operator so Finalize
 	//! can call AddUpdateSnapshot instead of AddSnapshot.
 	optional_ptr<PhysicalOperator> update_delete_op;
+	//! When set, this insert writes the rows a copy-on-write DELETE keeps: Finalize replaces the data files the
+	//! DELETE matched with the written ones, and the operator returns the deleted row count.
+	optional_ptr<IcebergCopyOnWriteDeleteFilter> copy_on_write_delete_op;
 	//! Contribute this action's files to the active MERGE's snapshot.
 	bool merge_action = false;
 	//! When set, this insert is a CTAS whose table is created lazily by this copy operator (its child).

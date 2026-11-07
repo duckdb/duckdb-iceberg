@@ -1,0 +1,312 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/table_properties/test_copy_on_write_delete.test
+# description: DELETE on a v2 table whose write.delete.mode is copy-on-write rewrites the matched data files
+# group: [table_properties]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require core_functions
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cow_delete;
+
+statement ok
+CREATE TABLE my_datalake.default.cow_delete (id INTEGER, v VARCHAR) WITH (
+    'format-version' = '2',
+    'write.delete.mode' = 'copy-on-write'
+);
+
+# two inserts, so two data files
+
+statement ok
+INSERT INTO my_datalake.default.cow_delete VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+statement ok
+INSERT INTO my_datalake.default.cow_delete VALUES (4, 'd'), (5, 'e');
+
+query I
+DELETE FROM my_datalake.default.cow_delete WHERE id = 2;
+----
+1
+
+query II
+SELECT id, v FROM my_datalake.default.cow_delete ORDER BY id;
+----
+1	a
+3	c
+4	d
+5	e
+
+# the matched file is replaced in an overwrite snapshot, and no delete file is written
+
+query T
+SELECT operation FROM iceberg_snapshots(my_datalake.default.cow_delete) ORDER BY sequence_number DESC LIMIT 1;
+----
+overwrite
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.cow_delete) WHERE content != 'DATA';
+----
+0
+
+# the live files are the untouched second file and the rewrite of the first
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.cow_delete) WHERE status != 'DELETED';
+----
+2
+
+query I
+SELECT sum(record_count) FROM iceberg_metadata(my_datalake.default.cow_delete) WHERE status != 'DELETED';
+----
+4
+
+# the previous snapshot still reads the rows as they were
+
+statement ok
+SET VARIABLE cow_delete_previous = (
+    SELECT snapshot_id FROM iceberg_snapshots(my_datalake.default.cow_delete) ORDER BY sequence_number DESC LIMIT 1 OFFSET 1);
+
+query I
+SELECT count(*) FROM my_datalake.default.cow_delete AT (VERSION => getvariable('cow_delete_previous'));
+----
+5
+
+# a DELETE that matches nothing changes nothing
+
+query I
+DELETE FROM my_datalake.default.cow_delete WHERE id = 42;
+----
+0
+
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.cow_delete);
+----
+3
+
+# a DELETE that removes every row of a file only removes that file
+
+query I
+DELETE FROM my_datalake.default.cow_delete WHERE id IN (4, 5);
+----
+2
+
+query T
+SELECT operation FROM iceberg_snapshots(my_datalake.default.cow_delete) ORDER BY sequence_number DESC LIMIT 1;
+----
+delete
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.cow_delete) WHERE status != 'DELETED';
+----
+1
+
+query II
+SELECT id, v FROM my_datalake.default.cow_delete ORDER BY id;
+----
+1	a
+3	c
+
+# a DELETE across several files rewrites each of them in one snapshot
+
+statement ok
+INSERT INTO my_datalake.default.cow_delete VALUES (6, 'f'), (7, 'g');
+
+query I
+DELETE FROM my_datalake.default.cow_delete WHERE id IN (1, 7);
+----
+2
+
+query II
+SELECT id, v FROM my_datalake.default.cow_delete ORDER BY id;
+----
+3	c
+6	f
+
+# both matched files are replaced, and the rows they keep are written together
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.cow_delete) WHERE status != 'DELETED';
+----
+1
+
+# rows removed earlier by merge-on-read delete files stay removed when their file is rewritten
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cow_delete_mixed;
+
+statement ok
+CREATE TABLE my_datalake.default.cow_delete_mixed (id INTEGER, v VARCHAR) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.cow_delete_mixed VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd');
+
+query I
+DELETE FROM my_datalake.default.cow_delete_mixed WHERE id = 1;
+----
+1
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.cow_delete_mixed) WHERE content = 'POSITION_DELETES';
+----
+1
+
+statement ok
+ALTER TABLE my_datalake.default.cow_delete_mixed SET ('write.delete.mode' = 'copy-on-write');
+
+query I
+DELETE FROM my_datalake.default.cow_delete_mixed WHERE id = 3;
+----
+1
+
+query II
+SELECT id, v FROM my_datalake.default.cow_delete_mixed ORDER BY id;
+----
+2	b
+4	d
+
+query I
+SELECT sum(record_count) FROM iceberg_metadata(my_datalake.default.cow_delete_mixed) WHERE content = 'DATA' AND status != 'DELETED';
+----
+2
+
+# a partitioned table: only the matched partition's file is rewritten, and its rows stay in that partition
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cow_delete_partitioned;
+
+statement ok
+CREATE TABLE my_datalake.default.cow_delete_partitioned (id INTEGER, part VARCHAR) PARTITIONED BY (part) WITH (
+    'format-version' = '2',
+    'write.delete.mode' = 'copy-on-write'
+);
+
+statement ok
+INSERT INTO my_datalake.default.cow_delete_partitioned VALUES (1, 'x'), (2, 'x'), (3, 'y'), (4, 'y');
+
+query I
+DELETE FROM my_datalake.default.cow_delete_partitioned WHERE id = 1;
+----
+1
+
+query II
+SELECT id, part FROM my_datalake.default.cow_delete_partitioned ORDER BY id;
+----
+2	x
+3	y
+4	y
+
+query II
+SELECT part, count(*) FROM my_datalake.default.cow_delete_partitioned WHERE part = 'x' GROUP BY part;
+----
+x	1
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.cow_delete_partitioned) WHERE status != 'DELETED';
+----
+2
+
+# within a transaction, later statements see the rewrite, and a second DELETE rewrites the uncommitted file again
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cow_delete_transaction;
+
+statement ok
+CREATE TABLE my_datalake.default.cow_delete_transaction (id INTEGER) WITH (
+    'format-version' = '2',
+    'write.delete.mode' = 'copy-on-write'
+);
+
+statement ok
+INSERT INTO my_datalake.default.cow_delete_transaction VALUES (1), (2), (3), (4);
+
+statement ok
+BEGIN;
+
+query I
+DELETE FROM my_datalake.default.cow_delete_transaction WHERE id = 1;
+----
+1
+
+query I
+SELECT id FROM my_datalake.default.cow_delete_transaction ORDER BY id;
+----
+2
+3
+4
+
+query I
+DELETE FROM my_datalake.default.cow_delete_transaction WHERE id = 3;
+----
+1
+
+query I
+SELECT id FROM my_datalake.default.cow_delete_transaction ORDER BY id;
+----
+2
+4
+
+statement ok
+COMMIT;
+
+query I
+SELECT id FROM my_datalake.default.cow_delete_transaction ORDER BY id;
+----
+2
+4
+
+query II
+SELECT count(*), sum(record_count) FROM iceberg_metadata(my_datalake.default.cow_delete_transaction) WHERE status != 'DELETED';
+----
+1	2
+
+# a rolled back DELETE leaves the table as it was
+
+statement ok
+BEGIN;
+
+query I
+DELETE FROM my_datalake.default.cow_delete_transaction WHERE id = 2;
+----
+1
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT id FROM my_datalake.default.cow_delete_transaction ORDER BY id;
+----
+2
+4
+
+# a table column named filename does not shadow the virtual column the rewrite uses
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cow_delete_filename;
+
+statement ok
+CREATE TABLE my_datalake.default.cow_delete_filename (id INTEGER, filename VARCHAR) WITH (
+    'format-version' = '2',
+    'write.delete.mode' = 'copy-on-write'
+);
+
+statement ok
+INSERT INTO my_datalake.default.cow_delete_filename VALUES (1, 'one'), (2, 'two');
+
+query I
+DELETE FROM my_datalake.default.cow_delete_filename WHERE id = 1;
+----
+1
+
+query II
+SELECT id, filename FROM my_datalake.default.cow_delete_filename ORDER BY id;
+----
+2	two
+
+# a DELETE with RETURNING is still refused
+
+statement error
+DELETE FROM my_datalake.default.cow_delete_filename WHERE id = 2 RETURNING id;
+----
+RETURNING clause not yet supported
