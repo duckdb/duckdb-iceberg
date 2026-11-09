@@ -302,6 +302,9 @@ void IcebergTableSet::ApplyListResult(IcebergListTablesResult tables) {
 	if (tables) {
 		unordered_set<string> listed;
 		for (auto &table : *tables) {
+			if (table.name.empty()) {
+				throw InvalidConfigurationException("Iceberg catalog returned an empty table name");
+			}
 			listed.insert(table.name);
 			entries.emplace(table.name, IcebergTable::CreatePlaceholder(ic_catalog, schema, table.name));
 		}

@@ -1,0 +1,65 @@
+# name: test/sql/local/native_catalog/invalid_catalog_names.test
+# description: Invalid names from catalog listings produce configuration errors without poisoning the database
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+foreach namespaces [[]] [[""]] [["parent",""]]
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	'{"method":"GET","path":"/v1/namespaces","status":200,"body":{"namespaces":{namespaces}}}');
+----
+204
+
+statement error
+SELECT * FROM duckdb_schemas();
+----
+Invalid Configuration Error: Iceberg catalog returned an empty namespace name
+
+query I
+SELECT 42;
+----
+42
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+query I
+SELECT count(*) FROM duckdb_schemas()
+WHERE database_name = 'my_datalake' AND schema_name = 'default';
+----
+1
+
+endloop
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	'{"method":"GET","path":"/v1/namespaces/default/tables","status":200,
+	  "body":{"identifiers":[{"namespace":["default"],"name":""}]}}');
+----
+204
+
+statement error
+SELECT * FROM duckdb_tables();
+----
+Invalid Configuration Error: Iceberg catalog returned an empty table name
+
+query I
+SELECT 42;
+----
+42
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'my_datalake';
+----
+0

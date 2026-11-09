@@ -13,6 +13,7 @@
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "iceberg_options.hpp"
 #include "maintenance/maintenance_table_loader.hpp"
+#include "maintenance/rewrite_data_files_executor.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 
@@ -443,16 +444,7 @@ static void ThrowIfTableHasPendingChanges(ClientContext &context, const IcebergT
 		return;
 	}
 	auto &transaction_data = *state->GetInfo().transaction_data;
-	bool pending = !transaction_data.alters.empty();
-	for (auto &update : transaction_data.updates) {
-		pending |= update->type != IcebergTableUpdateType::UPGRADE_FORMAT_VERSION;
-	}
-	if (!pending) {
-		return;
-	}
-	throw NotImplementedException(
-	    "iceberg_rewrite_data_files: table '%s' has uncommitted changes in this transaction; commit them first",
-	    table_info.name);
+	ValidateRewriteTransaction(transaction_data);
 }
 
 RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input) {

@@ -217,13 +217,15 @@ map<idx_t, LogicalType> IcebergDataFile::GetFieldIdToTypeMapping(const IcebergSn
                                                                  const IcebergTableMetadata &metadata,
                                                                  const unordered_set<int32_t> &partition_spec_ids) {
 	D_ASSERT(!partition_spec_ids.empty());
-	auto &partition_specs = metadata.GetPartitionSpecs();
 	auto &schema = metadata.GetSchemaFromId(snapshot_info.schema_id);
 
 	map<idx_t, LogicalType> partition_field_id_to_type;
 	for (auto &spec_id : partition_spec_ids) {
-		auto &partition_spec = partition_specs.at(spec_id);
-		auto &fields = partition_spec.GetFields();
+		auto partition_spec = metadata.FindPartitionSpecById(spec_id);
+		if (!partition_spec) {
+			throw InvalidConfigurationException("Partition spec id %d not found in Iceberg metadata", spec_id);
+		}
+		auto &fields = partition_spec->GetFields();
 
 		for (auto &field : fields) {
 			auto type = IcebergPartitionConstants::GetType(field.source_id, schema, metadata.GetSchemas());

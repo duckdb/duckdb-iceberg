@@ -1,5 +1,4 @@
 #include "execution/operator/iceberg_insert.hpp"
-#include "execution/operator/iceberg_copy_on_write_delete.hpp"
 
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
 #include "duckdb/logging/logger.hpp"
@@ -124,7 +123,18 @@ static vector<idx_t> GetColumnPath(const ColumnIndex &column_index) {
 static ColumnIndex GetColumnIndexBySourceId(const IcebergTableSchema &schema, idx_t source_id) {
 	auto column_index = schema.TryGetColumnIndexByFieldId(source_id);
 	if (!column_index) {
-		throw InvalidInputException("Partition source column with id %d not found in schema", source_id);
+		throw InvalidConfigurationException("Partition/sort source column with id %d not found in schema", source_id);
+	}
+	const auto *column = schema.columns[column_index->GetPrimaryIndex()].get();
+	for (auto &child_index : column_index->GetChildIndexes()) {
+		if (column->type.id() != LogicalTypeId::STRUCT) {
+			throw InvalidConfigurationException("Partition/sort source id %d is nested inside a list or map",
+			                                    source_id);
+		}
+		column = column->GetChild(child_index.GetPrimaryIndex()).get();
+	}
+	if (column->type.IsNested()) {
+		throw InvalidConfigurationException("Partition/sort source id %d must refer to a primitive column", source_id);
 	}
 	return *column_index;
 }
@@ -353,11 +363,7 @@ SinkResultType IcebergInsert::Sink(ExecutionContext &context, DataChunk &chunk, 
 SourceResultType IcebergInsert::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
                                                 OperatorSourceInput &input) const {
 	auto &global_state = sink_state->Cast<IcebergInsertGlobalState>();
-	auto value = Value::BIGINT(global_state.insert_count);
-	if (copy_on_write_delete_op) {
-		value = Value::BIGINT(NumericCast<int64_t>(copy_on_write_delete_op->GetDeletes().deleted_count));
-	}
-	chunk.data[0].Append(value);
+	chunk.data[0].Append(Value::BIGINT(global_state.insert_count));
 	chunk.SetChildCardinality(1);
 	return SourceResultType::FINISHED;
 }
@@ -385,27 +391,7 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 		written_files = std::move(global_state.written_files);
 	}
 
-	if (copy_on_write_delete_op) {
-		// Replace each data file the DELETE matched with the rewritten files holding its kept rows
-		auto &deletes = copy_on_write_delete_op->GetDeletes();
-		if (!deletes.rows_by_file.empty()) {
-			IcebergManifestDeletes replaced_files;
-			for (auto &entry : deletes.rows_by_file) {
-				replaced_files.InvalidateFile(entry.first);
-			}
-			ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTable &tbl) {
-				auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
-				if (written_files.empty()) {
-					// Every row of the matched files was deleted: the snapshot only removes files
-					transaction_data.AddDeleteSnapshot(partitioned_manifest_entry_map_t(), std::move(replaced_files),
-					                                   merge_action);
-				} else {
-					transaction_data.AddSnapshot(IcebergSnapshotOperationType::OVERWRITE, std::move(written_files),
-					                             std::move(replaced_files), merge_action);
-				}
-			});
-		}
-	} else if (update_delete_op) {
+	if (update_delete_op) {
 		// Stage the UPDATE's deletes and replacement rows together, possibly within a shared MERGE snapshot.
 		auto &delete_global_state = update_delete_op->sink_state->Cast<IcebergDeleteGlobalState>();
 		auto delete_manifest_entries = IcebergDelete::GenerateDeleteManifestEntries(delete_global_state);

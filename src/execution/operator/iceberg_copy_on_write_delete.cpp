@@ -1,6 +1,7 @@
 #include "execution/operator/iceberg_copy_on_write_delete.hpp"
 
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
+#include "duckdb/common/numeric_utils.hpp"
 #include "duckdb/execution/column_binding_resolver.hpp"
 #include "duckdb/execution/operator/join/physical_join.hpp"
 #include "duckdb/execution/operator/scan/physical_table_scan.hpp"
@@ -18,11 +19,44 @@
 #include "duckdb/planner/table_filter_set.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
-#include "execution/operator/iceberg_insert.hpp"
+#include "execution/operator/iceberg_file_rewrite.hpp"
 
 namespace duckdb {
 
 namespace {
+
+class CopyOnWriteDeleteRewrite : public IcebergFileRewrite {
+public:
+	CopyOnWriteDeleteRewrite(PhysicalPlan &physical_plan, IcebergTable &table,
+	                         IcebergCopyOnWriteDeleteFilter &delete_filter)
+	    : IcebergFileRewrite(physical_plan, {LogicalType::BIGINT}, 1), table(table), delete_filter(delete_filter) {
+	}
+
+	unique_ptr<GlobalSinkState> GetGlobalSinkState(ClientContext &context) const override {
+		return make_uniq<IcebergFileRewriteGlobalState>(context, table);
+	}
+
+	SourceResultType GetDataInternal(ExecutionContext &context, DataChunk &chunk,
+	                                 OperatorSourceInput &input) const override {
+		chunk.data[0].Append(Value::BIGINT(NumericCast<int64_t>(delete_filter.GetDeletes().deleted_count)));
+		chunk.SetChildCardinality(1);
+		return SourceResultType::FINISHED;
+	}
+
+protected:
+	IcebergFileRewriteInput GetRewriteInput(const IcebergFileRewriteGlobalState &state) const override {
+		IcebergFileRewriteInput result(state.added_data_files ? IcebergSnapshotOperationType::OVERWRITE
+		                                                      : IcebergSnapshotOperationType::DELETE);
+		for (auto &entry : delete_filter.GetDeletes().rows_by_file) {
+			result.replaced_files.emplace_back(entry.first);
+		}
+		return result;
+	}
+
+private:
+	IcebergTable &table;
+	IcebergCopyOnWriteDeleteFilter &delete_filter;
+};
 
 class CopyOnWriteDeleteGlobalState : public GlobalSinkState {
 public:
@@ -154,14 +188,10 @@ PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanDelete(ClientContext &cont
 		}
 	}
 
-	//! The kept rows are written like an INSERT; the insert then swaps the matched files for the new ones
-	auto &schema = metadata.GetLatestSchema();
-	IcebergCopyInput copy_input(context, metadata, schema);
-	auto &copy_op = IcebergInsert::PlanCopyForInsert(context, planner, copy_input, &filter);
-	auto &insert_op = IcebergInsert::PlanInsert(context, planner, table).Cast<IcebergInsert>();
-	insert_op.copy_on_write_delete_op = filter;
-	insert_op.children.push_back(copy_op);
-	return insert_op;
+	//! Use the same replacement-file writer and snapshot staging as maintenance rewrites.
+	auto &rewrite = planner.Make<CopyOnWriteDeleteRewrite>(table.table_info, filter).Cast<CopyOnWriteDeleteRewrite>();
+	rewrite.PlanCopy(context, planner, metadata, filter);
+	return rewrite;
 }
 
 //===--------------------------------------------------------------------===//

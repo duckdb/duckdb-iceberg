@@ -31,7 +31,7 @@ struct IcebergCopyOnWriteDeletes {
 //!  - the build side (children[1]) is the DELETE's own scan, which yields the file and position of each matching row;
 //!  - the probe side (children[0]) scans the table again, emitting its columns followed by those two virtual columns,
 //!    and this operator keeps only the rows of matched files that the DELETE does not remove.
-//! The kept rows are written by the IcebergInsert above it, which replaces the matched files in one snapshot.
+//! The kept rows are written by the IcebergFileRewrite above it, which replaces the matched files in one snapshot.
 class IcebergCopyOnWriteDeleteFilter : public PhysicalOperator {
 public:
 	IcebergCopyOnWriteDeleteFilter(PhysicalPlan &physical_plan, vector<LogicalType> types, PhysicalOperator &keep_plan,
