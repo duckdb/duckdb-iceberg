@@ -504,6 +504,14 @@ optional<int64_t> IcebergTable::GetExistingSortOrderId(IcebergSortOrder &spec) {
 	return std::nullopt;
 }
 
+static void VerifyTransformSource(const ParsedExpression &key, const IcebergTransform &transform,
+                                  const IcebergColumnDefinition &source, const char *operation) {
+	if (!transform.CanTransform(source.type)) {
+		throw InvalidInputException("Cannot %s by '%s': the %s transform doesn't accept %s columns", operation,
+		                            key.ToString(), transform.RawType(), source.type.ToString());
+	}
+}
+
 IcebergPartitionSpec IcebergTable::BuildPartitionSpec(const vector<unique_ptr<ParsedExpression>> &partition_keys,
                                                       const IcebergTableSchema &schema, int32_t spec_id,
                                                       idx_t base_partition_field_id) {
@@ -515,6 +523,7 @@ IcebergPartitionSpec IcebergTable::BuildPartitionSpec(const vector<unique_ptr<Pa
 		if (source_columns.size() != 1) {
 			throw InvalidInputException("Multi-argument transforms are not supported yet!");
 		}
+		VerifyTransformSource(*key, transform, source_columns[0].get(), "partition");
 		auto source_id = source_columns[0].get().id;
 		auto column_name = source_columns[0].get().name;
 
@@ -541,6 +550,7 @@ IcebergSortOrder IcebergTable::BuildSortOrder(ClientContext &context, const vect
 		if (source_columns.size() != 1) {
 			throw InvalidInputException("Multi-argument transforms are not supported yet!");
 		}
+		VerifyTransformSource(*order.expression, transform, source_columns[0].get(), "sort");
 		auto source_id = source_columns[0].get().id;
 
 		auto direction = config.ResolveOrder(context, order.type);
