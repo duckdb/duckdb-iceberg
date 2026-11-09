@@ -66,6 +66,16 @@ where content = 'EQUALITY_DELETES' and status != 'DELETED';
 ----
 2	true
 
+# A filtered scan can encounter only a later manifest or entry. Cache storage
+# must retain the original indexes rather than the filtered candidate positions.
+query II
+select record_count, len(delete_files)
+from iceberg_scan_plan('my_datalake.default.equality_delete_bounds_cache_identity', row_filter='id >= 100')
+order by all;
+----
+2	0
+3	1
+
 foreach thread_count 1 4
 
 statement ok

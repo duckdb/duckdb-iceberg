@@ -391,7 +391,17 @@ IcebergScanPlanner::ResolveApplicableDeleteFiles(const BoundIcebergManifestEntry
 		}
 		optional_ptr<IcebergEqualityDeleteBounds> delete_bounds;
 		if (delete_entry.data_file.content == IcebergManifestEntryContentType::EQUALITY_DELETES) {
-			delete_bounds = &shared_state->equality_delete_bounds[delete_file.manifest_idx][delete_file.entry_idx];
+			auto &bounds_cache = shared_state->equality_delete_bounds;
+			if (bounds_cache.empty()) {
+				bounds_cache.resize(delete_manifests.size());
+			}
+			D_ASSERT(bounds_cache.size() == delete_manifests.size());
+			auto &manifest_bounds = bounds_cache[delete_file.manifest_idx];
+			if (manifest_bounds.empty()) {
+				manifest_bounds.resize(entries.size());
+			}
+			D_ASSERT(manifest_bounds.size() == entries.size());
+			delete_bounds = &manifest_bounds[delete_file.entry_idx];
 		}
 		if (IcebergDeletePlanner::DeleteEntryAppliesToDataFile(delete_context, delete_file.manifest_idx, delete_entry,
 		                                                       data_manifest_entry, partition_values, delete_bounds)) {
