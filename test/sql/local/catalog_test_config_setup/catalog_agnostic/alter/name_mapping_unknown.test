@@ -1,0 +1,97 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/name_mapping_unknown.test
+# description: UNKNOWN promotions add complete name mappings under existing field IDs
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+require-env UNKNOWN_SUPPORT
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.name_mapping_unknown;
+
+# Promote UNKNOWN at the root and inside each container.
+foreach path,id_path r,/0/id s.v,/1/type/fields/0/id l.element,/2/type/element-id m.value,/3/type/value-id
+
+statement ok
+CREATE TABLE my_datalake.default.name_mapping_unknown (
+	r "NULL", s STRUCT(v "NULL"), l "NULL"[], m MAP(VARCHAR, "NULL")
+) WITH ('format-version' = '3');
+
+statement ok
+BEGIN;
+
+# Catalogs can reassign IDs during CREATE TABLE. Build the imported-file mapping from the returned schema.
+statement ok
+SET VARIABLE initial_fields = (
+	SELECT json_extract(metadata::JSON, '$.schemas[0].fields')
+	FROM iceberg_load_table_response('my_datalake.default.name_mapping_unknown')
+);
+
+statement ok
+SET VARIABLE parent_field_id = json_extract(getvariable('initial_fields'), '{id_path}')::INTEGER;
+
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_unknown SET ('schema.name-mapping.default' = json_array(
+	json_object('field-id', getvariable('initial_fields')->'/0/id', 'names', ['r', 'old_r']),
+	json_object('field-id', getvariable('initial_fields')->'/1/id', 'names', ['s'], 'fields', json_array(
+		json_object('field-id', getvariable('initial_fields')->'/1/type/fields/0/id', 'names', ['v', 'old_v'])
+	)),
+	json_object('field-id', getvariable('initial_fields')->'/2/id', 'names', ['l'], 'fields', json_array(
+		json_object('field-id', getvariable('initial_fields')->'/2/type/element-id', 'names', ['element'])
+	)),
+	json_object('field-id', getvariable('initial_fields')->'/3/id', 'names', ['m'], 'fields', json_array(
+		json_object('field-id', getvariable('initial_fields')->'/3/type/key-id', 'names', ['key']),
+		json_object('field-id', getvariable('initial_fields')->'/3/type/value-id', 'names', ['value'])
+	))
+));
+
+# The eight initial fields occupy IDs 1 through 8; new descendants start at 9.
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_unknown ALTER COLUMN {path} TYPE STRUCT(n INTEGER, l INTEGER[], m MAP(VARCHAR, STRUCT(x INTEGER)));
+
+# Check all descendants, including list elements and both map children, before committing.
+query I
+SELECT json_extract(e.value, '$.fields')
+FROM iceberg_table_properties('my_datalake.default.name_mapping_unknown') p, json_tree(p.value::JSON) e
+WHERE p.key = 'schema.name-mapping.default' AND e.type = 'OBJECT'
+  AND (e.value->>'$."field-id"')::INTEGER = getvariable('parent_field_id');
+----
+[{"field-id":9,"names":["n"]},{"field-id":10,"names":["l"],"fields":[{"field-id":11,"names":["element"]}]},{"field-id":12,"names":["m"],"fields":[{"field-id":13,"names":["key"]},{"field-id":14,"names":["value"],"fields":[{"field-id":15,"names":["x"]}]}]}]
+
+# Later changes must extend the same subtree and preserve its aliases.
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_unknown RENAME COLUMN {path}.n TO n2;
+
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_unknown ADD COLUMN {path}.extra INTEGER;
+
+statement ok
+COMMIT;
+
+query I
+SELECT json_extract(e.value, '$.fields')
+FROM iceberg_table_properties('my_datalake.default.name_mapping_unknown') p, json_tree(p.value::JSON) e
+WHERE p.key = 'schema.name-mapping.default' AND e.type = 'OBJECT'
+  AND (e.value->>'$."field-id"')::INTEGER = getvariable('parent_field_id');
+----
+[{"field-id":9,"names":["n","n2"]},{"field-id":10,"names":["l"],"fields":[{"field-id":11,"names":["element"]}]},{"field-id":12,"names":["m"],"fields":[{"field-id":13,"names":["key"]},{"field-id":14,"names":["value"],"fields":[{"field-id":15,"names":["x"]}]}]},{"field-id":16,"names":["extra"]}]
+
+# Each field has exactly one entry, and unrelated historic aliases survive.
+query III
+SELECT count(*), count(DISTINCT (e.value->>'$."field-id"')::INTEGER),
+       count(*) FILTER (WHERE json_contains(e.value->'names', '"old_r"') OR json_contains(e.value->'names', '"old_v"'))
+FROM iceberg_table_properties('my_datalake.default.name_mapping_unknown') p, json_tree(p.value::JSON) e
+WHERE p.key = 'schema.name-mapping.default' AND e.type = 'OBJECT';
+----
+16	16	2
+
+statement ok
+DROP TABLE my_datalake.default.name_mapping_unknown;
+
+endloop

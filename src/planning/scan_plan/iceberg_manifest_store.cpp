@@ -16,14 +16,13 @@ namespace duckdb {
 struct IcebergManifestScanningState {
 	IcebergManifestScanningState(ClientContext &context, unique_ptr<AvroScan> scan,
 	                             vector<IcebergManifestListEntry> &list_entries)
-	    : context(context), executor(context), scan(std::move(scan)), list_entries(list_entries), in_progress_tasks(0) {
+	    : context(context), executor(context), scan(std::move(scan)), list_entries(list_entries) {
 	}
 
 	ClientContext &context;
 	TaskExecutor executor;
 	unique_ptr<AvroScan> scan;
 	vector<IcebergManifestListEntry> &list_entries;
-	atomic<idx_t> in_progress_tasks;
 };
 
 struct IcebergDeleteManifestLoadState {
@@ -40,12 +39,7 @@ namespace {
 
 class ManifestReadTask : public BaseExecutorTask {
 public:
-	ManifestReadTask(IcebergManifestScanningState &state)
-	    : BaseExecutorTask(state.executor), state(state), reader(*state.scan) {
-	}
-
-	~ManifestReadTask() override {
-		AccountFinished();
+	ManifestReadTask(IcebergManifestScanningState &state) : BaseExecutorTask(state.executor), reader(*state.scan) {
 	}
 
 	//! One manifest read per step. The wrapper loops this while draining and yields between steps.
@@ -54,12 +48,7 @@ public:
 			reader.Read();
 			return TaskExecutionResult::TASK_NOT_FINISHED;
 		}
-		AccountFinished();
 		return TaskExecutionResult::TASK_FINISHED;
-	}
-
-	void Cancel() override {
-		AccountFinished();
 	}
 
 	string TaskType() const override {
@@ -67,15 +56,7 @@ public:
 	}
 
 private:
-	void AccountFinished() {
-		if (!accounted.exchange(true)) {
-			--state.in_progress_tasks;
-		}
-	}
-
-	IcebergManifestScanningState &state;
 	manifest_file::ManifestReader reader;
-	atomic<bool> accounted {false};
 };
 
 } // namespace
@@ -238,7 +219,6 @@ void IcebergManifestStore::StartDataManifestScan(const vector<bool> &matching_ma
 		auto &executor = data_manifest_read_state->executor;
 		auto &scheduler = TaskScheduler::GetScheduler(context.context);
 		auto num_threads = MinValue<idx_t>(scheduler.NumberOfThreads(), selected_committed_manifests.size());
-		data_manifest_read_state->in_progress_tasks = num_threads;
 		for (idx_t i = 0; i < num_threads; i++) {
 			executor.ScheduleTask(make_uniq<ManifestReadTask>(*data_manifest_read_state));
 		}
@@ -317,7 +297,6 @@ void IcebergManifestStore::ReadDeleteManifests(const vector<idx_t> &manifest_ind
 			auto &executor = new_load->scan_state->executor;
 			auto &scheduler = TaskScheduler::GetScheduler(context.context);
 			auto num_threads = MinValue<idx_t>(scheduler.NumberOfThreads(), new_load->manifest_indexes.size());
-			new_load->scan_state->in_progress_tasks = num_threads;
 			for (idx_t i = 0; i < num_threads; i++) {
 				executor.ScheduleTask(make_uniq<ManifestReadTask>(*new_load->scan_state));
 			}
@@ -415,23 +394,20 @@ bool IcebergManifestStore::TryGetNextBatch(IcebergDataViewCursor &cursor) {
 		return false;
 	}
 	auto &scheduler = TaskScheduler::GetScheduler(context.context);
-	auto &scan_state = *data_manifest_read_state;
-	auto &executor = scan_state.executor;
+	auto &executor = data_manifest_read_state->executor;
 	shared_ptr<Task> task_to_execute;
-	while (scan_state.in_progress_tasks) {
-		if (executor.GetTask(task_to_execute)) {
-			auto res = task_to_execute->Execute(TaskExecutionMode::PROCESS_PARTIAL);
-			if (res == TaskExecutionResult::TASK_NOT_FINISHED) {
-				auto &token = *task_to_execute->token;
-				scheduler.ScheduleTask(token, std::move(task_to_execute));
-			}
-			if (read_state.TryReadBatch(cursor)) {
-				return true;
-			}
+	if (executor.GetTask(task_to_execute)) {
+		auto res = task_to_execute->Execute(TaskExecutionMode::PROCESS_PARTIAL);
+		if (res == TaskExecutionResult::TASK_NOT_FINISHED) {
+			auto &token = *task_to_execute->token;
+			scheduler.ScheduleTask(token, std::move(task_to_execute));
 		}
-		executor.WorkOnTasks();
-		break;
+		if (read_state.TryReadBatch(cursor)) {
+			return true;
+		}
 	}
+	//! The executor tracks completion and errors; a finished task can be destroyed after the scan state.
+	executor.WorkOnTasks();
 	return read_state.TryReadBatch(cursor);
 }
 

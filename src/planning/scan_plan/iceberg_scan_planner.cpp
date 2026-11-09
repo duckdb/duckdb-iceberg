@@ -1,6 +1,7 @@
 #include "planning/scan_plan/iceberg_scan_planner.hpp"
 
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/rest/transaction/iceberg_transaction_data.hpp"
 #include "common/iceberg_utils.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "core/metadata/partition/iceberg_partition_constants.hpp"
@@ -181,6 +182,7 @@ optional_ptr<const BoundIcebergManifestEntry>
 IcebergScanPlanner::GetDataFile(idx_t file_id, annotated_lock_guard<annotated_mutex> &guard) const {
 	InitializeView(guard);
 	StartDataManifestScan(guard);
+	auto &transaction_data = shared_state->Configuration().scan_info->transaction_data;
 	if (file_id < data_manifest_entries.size()) {
 		return data_manifest_entries[file_id];
 	}
@@ -209,6 +211,11 @@ IcebergScanPlanner::GetDataFile(idx_t file_id, annotated_lock_guard<annotated_mu
 			shared_state->data_file_partitions[data_file.file_path] = std::move(partition);
 			auto bound_entry = bound_manifest.BindEntry(manifest_entry);
 			if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
+				continue;
+			}
+			//! Replaced by an earlier statement of this transaction, e.g. a rewrite of the data files
+			if (transaction_data &&
+			    transaction_data->IsFileInvalidated({data_file.file_path, data_file.content_offset})) {
 				continue;
 			}
 			if (table_filters.HasFilters() && !IcebergFilePruner(context, GetMetadata(), GetSchema(), table_filters)
@@ -294,8 +301,14 @@ idx_t IcebergScanPlanner::GetTotalFileCount() const {
 	return file_id;
 }
 
+bool IcebergScanPlanner::HasInvalidatedFiles() const {
+	auto &transaction_data = shared_state->Configuration().scan_info->transaction_data;
+	return transaction_data && transaction_data->HasInvalidatedFiles();
+}
+
 unique_ptr<NodeStatistics> IcebergScanPlanner::GetCardinality() const {
-	if (GetMetadata().iceberg_version == 1) {
+	//! The manifest counts still include the files replaced earlier in this transaction
+	if (GetMetadata().iceberg_version == 1 || HasInvalidatedFiles()) {
 		return nullptr;
 	}
 	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
@@ -310,10 +323,15 @@ unique_ptr<NodeStatistics> IcebergScanPlanner::GetCardinality() const {
 }
 
 void IcebergScanPlanner::GetStatistics(vector<PartitionStatistics> &result) const {
-	if (GetMetadata().iceberg_version == 1) {
+	if (GetMetadata().iceberg_version == 1 || HasInvalidatedFiles()) {
 		return;
 	}
 	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
+	auto &transaction_data = shared_state->Configuration().scan_info->transaction_data;
+	// Manifest counts still include files invalidated by uncommitted rewrites.
+	if (transaction_data && !transaction_data->manifest_deletes.IsEmpty()) {
+		return;
+	}
 	InitializeView(guard);
 	auto count = IcebergScanStatistics(data_manifests, data_manifest_matches, delete_manifests, delete_manifest_matches)
 	                 .ExactRowCount();

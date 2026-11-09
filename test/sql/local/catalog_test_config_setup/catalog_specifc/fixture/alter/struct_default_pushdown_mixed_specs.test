@@ -1,0 +1,73 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_specifc/fixture/alter/struct_default_pushdown_mixed_specs.test
+# description: A nested struct added with a default after the data was written, read via struct-extract pushdown,
+#              across files with and without identity partition constants
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FIXTURE_SERVER_AVAILABLE
+
+include test/sql/init_requires
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.struct_default_mixed_specs;
+
+statement ok
+CREATE TABLE my_datalake.default.struct_default_mixed_specs (
+	id INTEGER,
+	category VARCHAR,
+	payload STRUCT(a VARCHAR)
+) WITH ('format-version' = 3);
+
+# File 1: unpartitioned spec, so ApplyPartitionConstants returns early
+statement ok
+INSERT INTO my_datalake.default.struct_default_mixed_specs VALUES (1, 'a', {'a': 'one'});
+
+statement ok
+ALTER TABLE my_datalake.default.struct_default_mixed_specs SET PARTITIONED BY (category);
+
+# File 2: identity spec, so constants = {category: 'b'}
+statement ok
+INSERT INTO my_datalake.default.struct_default_mixed_specs VALUES (2, 'b', {'a': 'two'});
+
+statement ok
+SET GLOBAL __iceberg_unsafe_struct_null_default_interp = '{}';
+
+# Neither file contains payload.extra
+statement ok
+ALTER TABLE my_datalake.default.struct_default_mixed_specs ADD COLUMN payload.extra STRUCT(
+	flag BOOLEAN,
+	w INTEGER
+) DEFAULT {'flag': true, 'w': 7};
+
+# Ground truth: no pushdown into the missing struct
+query IT
+SELECT id, payload FROM my_datalake.default.struct_default_mixed_specs ORDER BY id;
+----
+1	{'a': one, 'extra': {'flag': true, 'w': 7}}
+2	{'a': two, 'extra': {'flag': true, 'w': 7}}
+
+query IT
+SELECT id, payload.extra FROM my_datalake.default.struct_default_mixed_specs ORDER BY id;
+----
+1	{'flag': true, 'w': 7}
+2	{'flag': true, 'w': 7}
+
+# Pushdown through the missing struct: file 1 takes the early return, file 2 the GetSchemaDefault + ProjectValue branch
+query II
+SELECT id, payload.extra.w FROM my_datalake.default.struct_default_mixed_specs ORDER BY id;
+----
+1	7
+2	7
+
+query I
+SELECT payload.extra.flag FROM my_datalake.default.struct_default_mixed_specs ORDER BY id;
+----
+true
+true
+
+statement ok
+DROP TABLE my_datalake.default.struct_default_mixed_specs;

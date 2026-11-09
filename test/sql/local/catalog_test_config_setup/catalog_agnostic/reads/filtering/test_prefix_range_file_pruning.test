@@ -1,0 +1,86 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_prefix_range_file_pruning.test
+# description: Prune data files against the exact membership of a pushed-down prefix-range join filter
+# group: [filtering]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SCAN_PLANNING_MODE client
+
+include test/sql/init_requires
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_prf_file_pruning;
+
+statement ok
+CREATE TABLE my_datalake.default.test_prf_file_pruning (k int, v int);
+
+statement ok
+insert into my_datalake.default.test_prf_file_pruning select range, range from range(0, 100);
+
+statement ok
+insert into my_datalake.default.test_prf_file_pruning select range, range from range(1000, 1100);
+
+statement ok
+insert into my_datalake.default.test_prf_file_pruning select range, range from range(2000, 2100);
+
+statement ok
+insert into my_datalake.default.test_prf_file_pruning select NULL, range from range(3000, 3100);
+
+statement ok
+create table scattered_keys as select unnest([50, 2050]) as k;
+
+statement ok
+create table contiguous_keys as select range as k from range(1000, 1100);
+
+# Disable the dynamic IN filter so the prefix-range filter is the only exact runtime filter
+statement ok
+set dynamic_or_filter_threshold=0;
+
+statement ok
+CALL enable_logging('Iceberg');
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.test_prf_file_pruning t join scattered_keys s using (k);
+----
+2
+
+query I
+select count(distinct message) from duckdb_logs()
+where type = 'Iceberg' and message like '%skipped ''data_file''%';
+----
+2
+
+query I
+select count(distinct message) from duckdb_logs()
+where type = 'Iceberg' and message like '%skipped ''data_file''%' and message like '%bounds [1000, 1099]%';
+----
+1
+
+query I
+select count(distinct message) from duckdb_logs()
+where type = 'Iceberg' and message like '%skipped ''data_file''%' and message like '%bounds [N/A, N/A]%';
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.test_prf_file_pruning t join contiguous_keys c using (k);
+----
+100
+
+query I
+select count(distinct message) from duckdb_logs()
+where type = 'Iceberg' and message like '%skipped ''data_file''%';
+----
+3
+
+statement ok
+drop table if exists my_datalake.default.test_prf_file_pruning;

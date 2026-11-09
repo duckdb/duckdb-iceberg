@@ -1,0 +1,230 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_grouped_deletion_vectors.test
+# description: Parallel delete tasks pack vectors across partitions into Puffin files with independent manifest ranges
+# group: [delete]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+require json
+
+foreach threads 1 4
+
+statement ok
+SET threads = {threads};
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.grouped_dvs;
+
+statement ok
+CREATE TABLE my_datalake.default.grouped_dvs (p INT, id INT)
+PARTITIONED BY (p) WITH ('format-version' = 3);
+
+# One data file per partition. Small vectors should share a file without an arbitrary vector-count cap.
+statement ok
+INSERT INTO my_datalake.default.grouped_dvs SELECT i % 130, i FROM range(1300) t(i);
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.grouped_dvs) WHERE content = 'DATA';
+----
+130
+
+query I
+DELETE FROM my_datalake.default.grouped_dvs WHERE id < 130;
+----
+130
+
+# Manifest entries count vectors, while distinct paths count physical Puffin files.
+query III
+SELECT count(*), count(DISTINCT file_path), sum(record_count)
+FROM iceberg_metadata(my_datalake.default.grouped_dvs) WHERE content = 'POSITION_DELETES';
+----
+130	1	130
+
+query III
+SELECT count(*), min(id), sum(id) FROM my_datalake.default.grouped_dvs;
+----
+1170	130	835965
+
+# Keep catalog-vended credentials alive for all direct manifest and Puffin reads.
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE grouped_manifests = (
+    SELECT list(DISTINCT manifest_path) FROM iceberg_metadata(my_datalake.default.grouped_dvs)
+    WHERE content = 'POSITION_DELETES'
+);
+
+statement ok
+CREATE TEMP TABLE grouped_dv_entries AS
+SELECT unnest(data_file) FROM read_avro(getvariable('grouped_manifests')) WHERE status != 2;
+
+statement ok
+SET VARIABLE grouped_puffin_paths = (SELECT list(DISTINCT file_path) FROM grouped_dv_entries);
+
+statement ok
+CREATE TEMP TABLE grouped_puffin_files AS
+WITH files AS (
+    SELECT filename, size, content,
+           ((position('7b22626c6f627322' IN lower(hex(content))) + 1) // 2)::BIGINT AS js_start
+    FROM read_blob(getvariable('grouped_puffin_paths'))
+)
+SELECT *, decode(content[js_start : size - 12])::JSON AS footer FROM files;
+
+query III
+SELECT count(*),
+       bool_and(content[1:4]::VARCHAR = 'PFA1' AND content[size-3:size]::VARCHAR = 'PFA1'
+                AND content[js_start-4:js_start-1]::VARCHAR = 'PFA1'),
+       sum(json_array_length(footer, '$.blobs'))
+FROM grouped_puffin_files;
+----
+1	true	130
+
+# Each footer blob agrees with its manifest entry, including the full shared file size.
+statement ok
+CREATE TEMP TABLE grouped_footer_blobs AS
+SELECT filename, size, content, js_start,
+       json_extract_string(b.value, '$.type') AS blob_type,
+       json_extract(b.value, '$.offset')::BIGINT AS off,
+       json_extract(b.value, '$.length')::BIGINT AS len,
+       json_extract(b.value, '$."snapshot-id"')::BIGINT AS snapshot_id,
+       json_extract(b.value, '$."sequence-number"')::BIGINT AS sequence_number,
+       json_extract_string(b.value, '$.properties."referenced-data-file"') AS referenced_file,
+       json_extract_string(b.value, '$.properties.cardinality')::BIGINT AS cardinality
+FROM grouped_puffin_files, LATERAL json_each(footer, '$.blobs') b;
+
+query III
+SELECT count(*), count(DISTINCT (e.file_path, e.content_offset)),
+       bool_and(b.blob_type = 'deletion-vector-v1' AND b.snapshot_id = -1 AND b.sequence_number = -1
+                AND b.len = e.content_size_in_bytes AND b.cardinality = e.record_count
+                AND b.size = e.file_size_in_bytes
+                AND upper(hex(b.content[b.off+5:b.off+8])) = 'D1D33964')
+FROM grouped_dv_entries e JOIN grouped_footer_blobs b
+ON e.file_path = b.filename AND e.content_offset = b.off AND e.referenced_data_file = b.referenced_file;
+----
+130	130	true
+
+# Blobs occupy consecutive ranges from the header to the footer, without gaps or overlap.
+query II
+WITH ranges AS (
+    SELECT *, lag(off + len, 1, 4) OVER (PARTITION BY filename ORDER BY off) AS previous_end
+    FROM grouped_footer_blobs
+)
+SELECT bool_and(off = previous_end), count(*) FILTER (WHERE off > 4) FROM ranges;
+----
+true	129
+
+query I
+SELECT bool_and(blob_end = footer_start) FROM (
+    SELECT filename, max(off + len) AS blob_end, min(js_start - 5) AS footer_start
+    FROM grouped_footer_blobs GROUP BY filename
+);
+----
+true
+
+statement ok
+COMMIT;
+
+# Replacing one vector must leave all sibling blobs at the old path live.
+query I
+DELETE FROM my_datalake.default.grouped_dvs WHERE id = 130;
+----
+1
+
+query III
+SELECT count(*), count(DISTINCT file_path), sum(record_count)
+FROM iceberg_metadata(my_datalake.default.grouped_dvs)
+WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+130	2	131
+
+query III
+SELECT count(*), min(id), sum(id) FROM my_datalake.default.grouped_dvs;
+----
+1169	131	835835
+
+# Replacing multiple vectors in a transaction must keep both old and new shared-file ranges distinct.
+statement ok
+BEGIN;
+
+query I
+DELETE FROM my_datalake.default.grouped_dvs WHERE id IN (131, 132);
+----
+2
+
+query II
+SELECT count(*), min(id) FROM my_datalake.default.grouped_dvs;
+----
+1167	133
+
+query I
+DELETE FROM my_datalake.default.grouped_dvs WHERE id = 261;
+----
+1
+
+query I
+SELECT count(*) FROM my_datalake.default.grouped_dvs WHERE id IN (1, 2, 131, 132, 261);
+----
+0
+
+statement ok
+ROLLBACK;
+
+query III
+SELECT count(*), min(id), sum(id) FROM my_datalake.default.grouped_dvs;
+----
+1169	131	835835
+
+statement ok
+DROP TABLE grouped_dv_entries;
+
+statement ok
+DROP TABLE grouped_footer_blobs;
+
+statement ok
+DROP TABLE grouped_puffin_files;
+
+statement ok
+DROP TABLE my_datalake.default.grouped_dvs;
+
+endloop
+
+statement ok
+RESET threads;
+
+# A shared Puffin file can also span partition specs; each vector keeps its data file's spec.
+statement ok
+CREATE TABLE my_datalake.default.grouped_dv_specs (p INT, id INT) WITH ('format-version' = 3);
+
+statement ok
+INSERT INTO my_datalake.default.grouped_dv_specs VALUES (0, 1), (0, 2);
+
+statement ok
+ALTER TABLE my_datalake.default.grouped_dv_specs SET PARTITIONED BY (p);
+
+statement ok
+INSERT INTO my_datalake.default.grouped_dv_specs VALUES (1, 3), (1, 4), (2, 5), (2, 6);
+
+query I
+DELETE FROM my_datalake.default.grouped_dv_specs WHERE id % 2 = 0;
+----
+3
+
+query III
+SELECT count(*), count(DISTINCT file_path), count(DISTINCT manifest_path)
+FROM iceberg_metadata(my_datalake.default.grouped_dv_specs) WHERE content = 'POSITION_DELETES';
+----
+3	1	2
+
+query I
+SELECT id FROM my_datalake.default.grouped_dv_specs ORDER BY id;
+----
+1
+3
+5
+
+statement ok
+DROP TABLE my_datalake.default.grouped_dv_specs;

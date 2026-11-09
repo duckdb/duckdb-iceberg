@@ -97,6 +97,7 @@ public:
 	static unique_ptr<MultiFileReader> CreateInstance(const BoundTableFunction &table);
 	static OpenFileInfo FileInfo(const IcebergDataFileDescriptor &file);
 	static vector<PartitionStatistics> IcebergGetPartitionStats(ClientContext &context, GetPartitionStatsInput &input);
+	static bool IcebergSupportsPushdownExtract(const FunctionData &bind_data, const LogicalIndex &col_idx);
 
 public:
 	shared_ptr<MultiFileList> CreateFileList(ClientContext &context, const vector<string> &paths,

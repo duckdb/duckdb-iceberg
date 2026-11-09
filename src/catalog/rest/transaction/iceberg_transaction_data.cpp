@@ -130,7 +130,13 @@ bool IcebergTransactionData::ContainsDelete() const {
 }
 
 bool IcebergTransactionData::IsFileInvalidated(const IcebergFileIdentity &file) const {
+	lock_guard<mutex> guard(lock);
 	return manifest_deletes.IsInvalidated(file);
+}
+
+bool IcebergTransactionData::HasInvalidatedFiles() const {
+	lock_guard<mutex> guard(lock);
+	return !manifest_deletes.IsEmpty();
 }
 
 shared_ptr<IcebergMergeDeleteCollector> IcebergTransactionData::GetMergeDeleteCollector(idx_t action_count) {
@@ -154,6 +160,11 @@ void IcebergTransactionData::VerifyMergeDeletesComplete() const {
 
 bool IcebergTransactionData::SupportsAppendRetry() const {
 	if (!requirements.empty()) {
+		return false;
+	}
+	//! A MERGE that only inserts commits a plain append, but its WHEN NOT MATCHED rows were chosen against the
+	//! snapshot it read. Re-applying them on top of a concurrent commit could insert rows that now match.
+	if (contains_merge) {
 		return false;
 	}
 	if (updates.empty()) {
@@ -218,7 +229,10 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 
 	auto manifest_metadata = IcebergManifestMetadata::FromTableMetadata(table_metadata, manifest_content_type);
 	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info, operation);
-	add_snapshot->AddPendingManifest(IcebergPendingManifest(manifest_metadata, std::move(data_files)));
+	//! A REPLACE may only remove fully deleted input files, without adding any data files.
+	if (!data_files.empty()) {
+		add_snapshot->AddPendingManifest(IcebergPendingManifest(manifest_metadata, std::move(data_files)));
+	}
 	// make sure we are still inserting into the current schema
 	if (table_metadata.current_snapshot_id) {
 		TableAddAssertCurrentSchemaId();
@@ -240,6 +254,21 @@ void IcebergTransactionData::AddPendingDeleteManifests(IcebergAddSnapshot &add_s
 
 void IcebergTransactionData::AddSnapshotUpdate(unique_ptr<IcebergAddSnapshot> add_snapshot,
                                                IcebergManifestDeletes &&altered_manifests, bool merge_action) {
+	if (rolls_back) {
+		throw InvalidInputException("Cannot change table \"%s\" after rolling it back in the same transaction",
+		                            table_info.name);
+	}
+	if (rewrites_data_files) {
+		throw InvalidInputException("Cannot change table \"%s\" after rewriting its data files in the same transaction",
+		                            table_info.name);
+	}
+	const bool is_rewrite = add_snapshot->GetOperation() == IcebergSnapshotOperationType::REPLACE;
+	//! Multiple operators can be planned before any of them stages its snapshot.
+	if (is_rewrite && !alters.empty()) {
+		throw InvalidInputException("Cannot rewrite table \"%s\": it was already changed in this transaction",
+		                            table_info.name);
+	}
+	contains_merge |= merge_action;
 	// All action sinks share this execution's query ID; a later statement gets a different ID.
 	auto query_id = transaction.active_query.load();
 	if (merge_action && merge_query_id && *merge_query_id == query_id) {
@@ -265,6 +294,7 @@ void IcebergTransactionData::AddSnapshotUpdate(unique_ptr<IcebergAddSnapshot> ad
 	}
 	alters.push_back(*add_snapshot);
 	updates.push_back(std::move(add_snapshot));
+	rewrites_data_files = is_rewrite;
 }
 
 void IcebergTransactionData::AddDeleteSnapshot(partitioned_manifest_entry_map_t &&delete_files,
@@ -410,6 +440,11 @@ static bool IsAncestorOfCurrentSnapshot(const IcebergTableMetadata &metadata, in
 }
 
 void IcebergTransactionData::TableRollbackToSnapshot(int64_t snapshot_id) {
+	//! The commit points main at the last snapshot the transaction adds, which would undo the rollback
+	if (!alters.empty() || rolls_back) {
+		throw InvalidInputException("Cannot roll back table \"%s\": it was already changed in this transaction",
+		                            table_info.name);
+	}
 	auto &metadata = table_info.table_metadata;
 	auto target = metadata.FindSnapshotByIdInternal(snapshot_id);
 	if (!target) {
@@ -429,6 +464,7 @@ void IcebergTransactionData::TableRollbackToSnapshot(int64_t snapshot_id) {
 	// Optimistic concurrency: require main still points at the snapshot we observed.
 	requirements.push_back(make_uniq<AssertRefSnapshotId>(current_snapshot_id));
 	updates.push_back(make_uniq<SetSnapshotRef>(snapshot_id));
+	rolls_back = true;
 
 	// Iceberg intentionally does not roll current-schema-id back with the snapshot;
 	// schema evolution stays forward-only. See https://github.com/apache/iceberg/issues/5591

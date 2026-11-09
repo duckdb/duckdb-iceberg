@@ -1,0 +1,85 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_after_pending_changes.test
+# description: iceberg_rewrite_data_files is refused when the transaction already changed the table; a rewrite first, after a format-version upgrade, or as its own statement still works
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.rewrite_pending;
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_pending (id INTEGER, v INTEGER) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_pending VALUES (1, 0), (2, 0);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_pending VALUES (3, 0), (4, 0);
+
+# Two rewrites in one transaction: the second would rewrite the same files again and double every row.
+statement ok
+BEGIN;
+
+statement ok
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_pending', rewrite_all = true);
+
+statement error
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_pending', rewrite_all = true);
+----
+has uncommitted changes in this transaction
+
+statement ok
+ROLLBACK;
+
+# A rewrite after DML on the table in the same transaction is refused the same way.
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_pending VALUES (5, 0);
+
+statement error
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_pending', rewrite_all = true);
+----
+has uncommitted changes in this transaction
+
+statement ok
+ROLLBACK;
+
+# A pending schema change would not reach the files the rewrite writes: refused too. The one change a
+# rewrite follows is a format-version upgrade (rewrite_manifest_inheritance_upgrade.test).
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.rewrite_pending ADD COLUMN w INTEGER;
+
+statement error
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_pending', rewrite_all = true);
+----
+has uncommitted changes in this transaction
+
+statement ok
+ROLLBACK;
+
+# Nothing of the above was committed.
+query II
+SELECT count(*), sum(v) FROM my_datalake.default.rewrite_pending;
+----
+4	0
+
+# As its own statement the rewrite works.
+query I
+SELECT rewritten_data_files_count FROM iceberg_rewrite_data_files('my_datalake.default.rewrite_pending', rewrite_all = true);
+----
+2
+
+query II
+SELECT count(*), sum(v) FROM my_datalake.default.rewrite_pending;
+----
+4	0
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_pending;

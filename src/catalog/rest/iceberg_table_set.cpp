@@ -21,6 +21,7 @@
 #include "common/iceberg_constants.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/iceberg_request_executor.hpp"
+#include "catalog/rest/iceberg_table_prefetch.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/storage/authorization/sigv4.hpp"
@@ -41,6 +42,15 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTable &table) {
 		return true;
 	}
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
+	auto &transaction = IcebergTransaction::Get(context, catalog);
+	auto prefetch = transaction.TryGetTablePrefetch();
+	if (prefetch) {
+		IcebergLoadTableResult prefetched;
+		unique_ptr<LoadTableCachePublication> prefetched_publication;
+		if (prefetch->TryTakeResult(table.GetTableKey(), prefetched, prefetched_publication)) {
+			return ApplyLoadResult(context, table, std::move(prefetched), *prefetched_publication);
+		}
+	}
 	auto publication = ic_catalog.table_request_cache.BeginLoad(table.GetTableKey());
 	return ApplyLoadResult(context, table, IRCAPI::GetTable(context, ic_catalog, schema, table.name), *publication);
 }
@@ -408,9 +418,10 @@ IcebergTable &IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCat
 		bootstrap_metadata.location = location;
 	}
 	for (auto &option : info.options) {
-		if (option.first == "format-version" || option.first == "location") {
+		if (StringUtil::CIEquals(option.first, "format-version") || StringUtil::CIEquals(option.first, "location")) {
 			continue;
 		}
+		IcebergTableMetadata::VerifyNotReservedProperty(option.first, "CREATE TABLE ... WITH");
 		auto option_val =
 		    ParseTableProperty(property_binder, context, *option.second, option.first, LogicalType::VARCHAR)
 		        .GetValue<string>();

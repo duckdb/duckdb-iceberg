@@ -15,6 +15,7 @@ namespace duckdb {
 void AccountSelectedCandidates(const RewritePlan &plan, RewriteExecutionResult &result) {
 	result.rewritten_data_files = static_cast<int64_t>(plan.selected_candidates.size());
 	result.rewritten_bytes = 0;
+	result.removed_delete_files = static_cast<int64_t>(plan.delete_files_to_remove.size());
 	result.rewritten_candidates.clear();
 	result.rewritten_candidates.reserve(plan.selected_candidates.size());
 	for (auto &candidate : plan.selected_candidates) {
@@ -58,7 +59,7 @@ void CleanupRewriteFiles(ClientContext &context, const IcebergTable &table_info,
 }
 
 void CommitRewrite(ClientContext &context, const RewritePlan &plan, RewriteExecutionResult &result) {
-	if (result.new_entries.empty()) {
+	if (result.rewritten_candidates.empty()) {
 		return;
 	}
 	if (!plan.table_info) {
@@ -72,7 +73,13 @@ void CommitRewrite(ClientContext &context, const RewritePlan &plan, RewriteExecu
 	for (auto &cand : result.rewritten_candidates) {
 		deletes.InvalidateFile(cand.file_path);
 	}
+	//! Same invalidation path drops delete-manifest entries. Position delete files have no content offset.
+	for (auto &delete_path : plan.delete_files_to_remove) {
+		deletes.InvalidateFile(delete_path);
+	}
 
+	//! Rewrites in one statement may finalize concurrently, including initializing the transaction's table state.
+	lock_guard<mutex> guard(iceberg_transaction.rewrite_commit_lock);
 	ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTable &tbl) {
 		ValidateRewriteSnapshot(plan, tbl, "transaction commit");
 		auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);

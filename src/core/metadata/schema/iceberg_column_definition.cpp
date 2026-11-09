@@ -1,11 +1,12 @@
 #include "core/metadata/schema/iceberg_column_definition.hpp"
 #include "duckdb/common/types.hpp"
+#include "duckdb/common/types/decimal.hpp"
 #include "common/iceberg_constants.hpp"
 #include "duckdb/common/value_operations/value_operations.hpp"
 #include "duckdb/parser/column_definition.hpp"
 #include "duckdb/common/multi_file/multi_file_data.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
-#include "duckdb/function/scalar/generic_functions.hpp"
+#include "duckdb/function/scalar/struct_functions.hpp"
 #include "common/iceberg_default.hpp"
 #include "common/iceberg_fixed_type.hpp"
 #include "common/iceberg_geography_type.hpp"
@@ -137,17 +138,34 @@ LogicalType IcebergColumnDefinition::ParsePrimitiveTypeString(const string &type
 		return LogicalType::BLOB;
 	}
 	if (StringUtil::StartsWith(type_str, "decimal")) {
-		D_ASSERT(type_str[7] == '(');
-		D_ASSERT(type_str.back() == ')');
 		auto start = type_str.find('(');
 		auto end = type_str.rfind(')');
-		auto raw_digits = type_str.substr(start + 1, end - start);
+		if (start != 7 || end != type_str.size() - 1) {
+			throw InvalidConfigurationException("Invalid decimal type \"%s\" - expected decimal(precision, scale)",
+			                                    type_str);
+		}
+		auto raw_digits = type_str.substr(start + 1, end - start - 1);
 		auto digits = StringUtil::Split(raw_digits, ',');
-		D_ASSERT(digits.size() == 2);
-
-		auto width = std::stoi(digits[0]);
-		auto scale = std::stoi(digits[1]);
-		return LogicalType::DECIMAL(width, scale);
+		if (digits.size() != 2) {
+			throw InvalidConfigurationException("Invalid decimal type \"%s\" - expected decimal(precision, scale)",
+			                                    type_str);
+		}
+		int64_t width;
+		int64_t scale;
+		try {
+			width = std::stoll(digits[0]);
+			scale = std::stoll(digits[1]);
+		} catch (std::exception &) {
+			throw InvalidConfigurationException("Invalid decimal type \"%s\" - precision and scale must be numbers",
+			                                    type_str);
+		}
+		if (width < 1 || width > Decimal::MAX_WIDTH_DECIMAL || scale < 0 || scale > width) {
+			throw InvalidConfigurationException(
+			    "Invalid decimal type \"%s\" - precision must be between 1 and %d and scale between 0 and the "
+			    "precision",
+			    type_str, Decimal::MAX_WIDTH_DECIMAL);
+		}
+		return LogicalType::DECIMAL(NumericCast<uint8_t>(width), NumericCast<uint8_t>(scale));
 	}
 	if (type_str == "variant") {
 		return LogicalType::VARIANT();
@@ -372,24 +390,12 @@ ColumnDefinition IcebergColumnDefinition::GetColumnDefinition() const {
 		// Geography fields can't be written, and a default expression would name the geography type, which isn't a
 		// registered DuckDB type, so binding any INSERT or UPDATE would fail before the write is refused
 	} else if (type.id() == LogicalTypeId::STRUCT) {
-		// DuckDB's default projection hook receives the bound default expression, but not the Iceberg column
-		// metadata from which it originated. Carry the recursive field defaults through that existing interface in
-		// a real `constant_or_null` expression:
-		//
-		//   constant_or_null(<whole-STRUCT default>, <non-NULL recursive descriptor>)
-		//
-		// The second argument is deliberately non-NULL, so ordinary evaluation of the expression returns the first
-		// argument unchanged. Consequently an omitted/DEFAULT whole STRUCT still observes `write_default`: normally
-		// typed NULL, or a materialized STRUCT under the test-only compatibility setting.
-		//
-		// The expression is parsed here, where no ClientContext is available. DuckDB binds the registered scalar
-		// function later. The Iceberg projection resolver recognizes that bound function through
-		// ConstantOrNull::IsConstantOrNull and extracts the second argument only when it needs to remap a supplied
-		// non-NULL STRUCT. This envelope is internal and is not serialized into Iceberg metadata.
+		// struct_extract(<descriptor>, 'struct_default') evaluates to the STRUCT's own default, and also carries
+		// its fields' defaults for the projection resolver
 		vector<unique_ptr<ParsedExpression>> arguments;
-		arguments.push_back(ConstantExpression::FromValue(write_default));
 		arguments.push_back(ConstantExpression::FromValue(GetWriteDefaultDescriptor()));
-		res.SetDefaultValue(make_uniq<FunctionExpression>(Identifier(ConstantOrNullFun::Name), std::move(arguments)));
+		arguments.push_back(ConstantExpression::FromValue(Value("struct_default")));
+		res.SetDefaultValue(make_uniq<FunctionExpression>(Identifier(StructExtractFun::Name), std::move(arguments)));
 	} else if (!write_default.IsNull()) {
 		if (type.IsNested()) {
 			throw NotImplementedException("DEFAULT values for nested types are not supported yet");

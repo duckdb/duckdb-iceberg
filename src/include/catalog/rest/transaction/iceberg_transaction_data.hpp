@@ -32,6 +32,7 @@ public:
 	//! Whether this transaction stages a DELETE snapshot; gates the commit-retry safety check.
 	bool ContainsDelete() const;
 	bool IsFileInvalidated(const IcebergFileIdentity &file) const;
+	bool HasInvalidatedFiles() const;
 	shared_ptr<IcebergMergeDeleteCollector> GetMergeDeleteCollector(idx_t action_count);
 	void VerifyMergeDeletesComplete() const;
 
@@ -109,7 +110,13 @@ public:
 	bool assert_schema_id = false;
 	//! Whether this transaction explicitly requires the table to be newly created.
 	bool has_assert_create = false;
-	mutex lock;
+	//! Whether this transaction rolls main back (TableRollbackToSnapshot)
+	bool rolls_back = false;
+	//! A rewrite cannot be combined with other changes to the table's rows.
+	bool rewrites_data_files = false;
+	//! A MERGE chose its actions against the snapshot it read, so its commit can't be re-applied to a newer one.
+	bool contains_merge = false;
+	mutable mutex lock;
 };
 
 } // namespace duckdb

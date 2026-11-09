@@ -365,13 +365,13 @@ int32_t IcebergTableMetadata::GetLastPartitionFieldId() const {
 
 //! ----------- Parse the Metadata JSON -----------
 
-rest_api_objects::TableMetadata IcebergTableMetadata::Parse(const string &path, FileSystem &fs,
+rest_api_objects::TableMetadata IcebergTableMetadata::Parse(const OpenFileInfo &file, FileSystem &fs,
                                                             const string &metadata_compression_codec) {
 	string json_content;
-	if (metadata_compression_codec == "gzip" || StringUtil::EndsWith(path, "gz.metadata.json")) {
-		json_content = IcebergUtils::GzFileToString(path, fs);
+	if (metadata_compression_codec == "gzip" || StringUtil::EndsWith(file.path, "gz.metadata.json")) {
+		json_content = IcebergUtils::GzFileToString(file, fs);
 	} else {
-		json_content = IcebergUtils::FileToString(path, fs);
+		json_content = IcebergUtils::FileToString(file, fs);
 	}
 	auto doc = JSONDocument::Parse(json_content.c_str(), json_content.size());
 	return rest_api_objects::TableMetadata::FromJSON(doc->GetRoot());
@@ -453,12 +453,8 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 			res.partition_specs.emplace(*spec.spec_id, IcebergPartitionSpec::ParseFromJson(spec, res.iceberg_version));
 		}
 	} else if (res.iceberg_version == 1 && table_metadata.partition_spec) {
-		rest_api_objects::PartitionSpec spec;
-		spec.spec_id = 0;
-		for (auto &field : *table_metadata.partition_spec) {
-			spec.fields.emplace_back(field.Copy());
-		}
-		res.partition_specs.emplace(0, IcebergPartitionSpec::ParseFromJson(spec, res.iceberg_version));
+		res.partition_specs.emplace(
+		    0, IcebergPartitionSpec::FromFields(*table_metadata.partition_spec, 0, res.iceberg_version));
 	}
 	if (table_metadata.sort_orders) {
 		for (auto &sort_order : *table_metadata.sort_orders) {
@@ -502,14 +498,9 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 
 	if (table_metadata.properties) {
 		auto &properties = *table_metadata.properties;
-		auto name_mapping = properties.find("schema.name-mapping.default");
+		auto name_mapping = properties.find(IcebergFieldMapping::PROPERTY);
 		if (name_mapping != properties.end()) {
-			auto doc = JSONDocument::Parse(name_mapping->second.c_str(), name_mapping->second.size());
-			auto root = doc->GetRoot();
-			idx_t mapping_index = 0;
-			res.mappings.emplace_back();
-			mapping_index++;
-			IcebergFieldMapping::ParseFieldMappings(root, res.mappings, mapping_index, 0);
+			res.mappings = IcebergFieldMapping::Parse(name_mapping->second);
 		}
 
 		// parse all table properties
@@ -560,11 +551,49 @@ IcebergTableMetadata IcebergTableMetadata::Copy() const {
 	res.table_properties = table_properties;
 	res.metadata_log = metadata_log;
 	res.current_schema_id = current_schema_id;
+	res.file_secret = file_secret;
+	res.file_secret_value = file_secret_value;
 	return res;
+}
+
+void IcebergTableMetadata::SetFileSecret(string name) {
+	file_secret = std::move(name);
+	file_secret_value = file_secret.empty() ? Value() : Value(file_secret);
+}
+
+void IcebergTableMetadata::ApplyFileSecret(OpenFileInfo &file) const {
+	if (file_secret.empty()) {
+		return;
+	}
+	if (!file.extended_info) {
+		file.extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
+	}
+	file.extended_info->options[ExtendedOpenFileInfo::SECRET_OPTION] = file_secret_value;
 }
 
 const case_insensitive_map_t<string> &IcebergTableMetadata::GetTableProperties() const {
 	return table_properties;
+}
+
+//! Iceberg derives these from table state; stored as plain properties they are wrong or misleading for other engines
+static const case_insensitive_set_t RESERVED_TABLE_PROPERTIES = {
+    "format-version",           "uuid",
+    "snapshot-count",           "current-snapshot-id",
+    "current-snapshot-summary", "current-snapshot-timestamp-ms",
+    "current-schema",           "default-partition-spec",
+    "default-sort-order"};
+
+void IcebergTableMetadata::VerifyNotReservedProperty(const string &key, const string &operation) {
+	if (RESERVED_TABLE_PROPERTIES.find(key) == RESERVED_TABLE_PROPERTIES.end()) {
+		return;
+	}
+	if (StringUtil::CIEquals(key, "format-version")) {
+		throw InvalidInputException("Cannot change 'format-version' with %s, use ALTER TABLE ... SET "
+		                            "('format-version' = ...) to upgrade the table",
+		                            operation);
+	}
+	throw InvalidInputException("'%s' is a reserved Iceberg table property and can't be changed with %s", key,
+	                            operation);
 }
 
 const string &IcebergTableMetadata::GetLocation() const {
@@ -596,6 +625,15 @@ string IcebergTableMetadata::GetTableProperty(string property_string) const {
 		return prop->second;
 	}
 	return "";
+}
+
+string IcebergTableMetadata::GetDeleteCompressionCodec() const {
+	// The delete file codec defaults to the data file codec
+	auto codec = GetTableProperty(WRITE_DELETE_PARQUET_COMPRESSION_CODEC);
+	if (codec.empty()) {
+		codec = GetTableProperty(WRITE_PARQUET_COMPRESSION_CODEC);
+	}
+	return codec;
 }
 
 bool IcebergTableMetadata::AllowsMergeOnRead(const string &write_mode_property) const {
