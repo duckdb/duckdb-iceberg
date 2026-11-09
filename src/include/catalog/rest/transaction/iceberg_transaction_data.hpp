@@ -116,6 +116,8 @@ public:
 	bool rolls_back = false;
 	//! Set explicitly by maintenance; its committed-table plan cannot be combined with later row changes.
 	bool has_maintenance_rewrite = false;
+	//! A MERGE chose its actions against the snapshot it read, so its commit can't be re-applied to a newer one.
+	bool contains_merge = false;
 	mutable mutex lock;
 };
 
