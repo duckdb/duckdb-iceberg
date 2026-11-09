@@ -7,6 +7,8 @@
 #include "duckdb/parser/expression/operator_expression.hpp"
 
 #include "utf8proc_wrapper.hpp"
+#include "common/iceberg_fixed_type.hpp"
+#include "common/iceberg_geography_type.hpp"
 #include "core/expression/iceberg_hash.hpp"
 #include "core/metadata/schema/iceberg_table_schema.hpp"
 #include "core/metadata/schema/iceberg_column_definition.hpp"
@@ -161,6 +163,75 @@ IcebergTransform::IcebergTransform(const string &transform) : raw_transform(tran
 		type = IcebergTransformType::VOID;
 	} else {
 		throw NotImplementedException("Unrecognized transform ('%s')", transform);
+	}
+}
+
+//! The source types each transform accepts, as listed in the spec's partition transforms table
+bool IcebergTransform::CanTransform(const LogicalType &source) const {
+	switch (type) {
+	case IcebergTransformType::IDENTITY:
+		return !source.IsNested() && source.id() != LogicalTypeId::GEOMETRY &&
+		       !IcebergGeographyType::IsGeography(source);
+	case IcebergTransformType::BUCKET:
+		switch (source.id()) {
+		case LogicalTypeId::INTEGER:
+		case LogicalTypeId::BIGINT:
+		case LogicalTypeId::DECIMAL:
+		case LogicalTypeId::DATE:
+		case LogicalTypeId::TIME:
+		case LogicalTypeId::TIMESTAMP:
+		case LogicalTypeId::TIMESTAMP_TZ:
+		case LogicalTypeId::TIMESTAMP_NS:
+		case LogicalTypeId::TIMESTAMP_TZ_NS:
+		case LogicalTypeId::VARCHAR:
+		case LogicalTypeId::UUID:
+			return true;
+		case LogicalTypeId::BLOB:
+			// binary and fixed
+			return !IcebergGeographyType::IsGeography(source);
+		default:
+			return false;
+		}
+	case IcebergTransformType::TRUNCATE:
+		switch (source.id()) {
+		case LogicalTypeId::INTEGER:
+		case LogicalTypeId::BIGINT:
+		case LogicalTypeId::DECIMAL:
+		case LogicalTypeId::VARCHAR:
+			return true;
+		case LogicalTypeId::BLOB:
+			// binary only
+			return !IcebergFixedType::IsFixed(source) && !IcebergGeographyType::IsGeography(source);
+		default:
+			return false;
+		}
+	case IcebergTransformType::YEAR:
+	case IcebergTransformType::MONTH:
+	case IcebergTransformType::DAY:
+		switch (source.id()) {
+		case LogicalTypeId::DATE:
+		case LogicalTypeId::TIMESTAMP:
+		case LogicalTypeId::TIMESTAMP_TZ:
+		case LogicalTypeId::TIMESTAMP_NS:
+		case LogicalTypeId::TIMESTAMP_TZ_NS:
+			return true;
+		default:
+			return false;
+		}
+	case IcebergTransformType::HOUR:
+		switch (source.id()) {
+		case LogicalTypeId::TIMESTAMP:
+		case LogicalTypeId::TIMESTAMP_TZ:
+		case LogicalTypeId::TIMESTAMP_NS:
+		case LogicalTypeId::TIMESTAMP_TZ_NS:
+			return true;
+		default:
+			return false;
+		}
+	case IcebergTransformType::VOID:
+		return true;
+	default:
+		return false;
 	}
 }
 
