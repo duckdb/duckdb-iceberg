@@ -97,10 +97,24 @@ shared_ptr<IcebergDeletionVectorData> IcebergDeletionVectorData::FromBlob(const 
 	vector_size -= sizeof(int64_t);
 	D_ASSERT(blob_start < blob_end);
 
+	//! Every bitmap takes at least its key, so the declared count is bounded by the remaining bytes (the checksum
+	//! trails the bitmaps)
+	auto remaining_bytes = NumericCast<idx_t>(blob_end - blob_start);
+	if (remaining_bytes < sizeof(uint32_t) ||
+	    (amount_of_bitmaps < 0 ||
+	     NumericCast<idx_t>(amount_of_bitmaps) > (remaining_bytes - sizeof(uint32_t)) / sizeof(int32_t))) {
+		throw InvalidInputException("Invalid bitmap count (%d) in deletion vector of %d bytes, the DeletionVector is "
+		                            "corrupted",
+		                            amount_of_bitmaps, blob_length);
+	}
+
 	auto result_p = make_shared_ptr<IcebergDeletionVectorData>(file);
 	auto &result = *result_p;
 	result.bitmaps.reserve(amount_of_bitmaps);
 	for (int64_t i = 0; i < amount_of_bitmaps; i++) {
+		if (NumericCast<idx_t>(blob_end - blob_start) < sizeof(int32_t) + sizeof(uint32_t)) {
+			throw InvalidInputException("Deletion vector is truncated, the DeletionVector is corrupted");
+		}
 		auto key = Load<int32_t>(blob_start);
 		blob_start += sizeof(int32_t);
 		vector_size -= sizeof(int32_t);

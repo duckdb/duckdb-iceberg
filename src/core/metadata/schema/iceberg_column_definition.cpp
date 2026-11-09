@@ -1,6 +1,7 @@
 #include "core/metadata/schema/iceberg_column_definition.hpp"
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/operator/cast_operators.hpp"
+#include "duckdb/common/types/decimal.hpp"
 #include "common/iceberg_constants.hpp"
 #include "duckdb/common/value_operations/value_operations.hpp"
 #include "duckdb/parser/column_definition.hpp"
@@ -164,17 +165,28 @@ LogicalType IcebergColumnDefinition::ParsePrimitiveTypeString(const string &type
 	}
 	if (StringUtil::StartsWith(type_str, "decimal")) {
 		if (!StringUtil::StartsWith(type_str, "decimal(") || type_str.size() < 10 || type_str.back() != ')') {
-			throw InvalidConfigurationException("Invalid decimal type: %s", type_str);
+			throw InvalidConfigurationException("Invalid decimal type \"%s\" - expected decimal(precision, scale)",
+			                                    type_str);
 		}
 		auto digits = StringUtil::Split(type_str.substr(8, type_str.size() - 9), ',');
-		int32_t width;
-		int32_t scale;
-		if (digits.size() != 2 || !TryCast::Operation<string_t, int32_t>(string_t(digits[0]), width, true) ||
-		    !TryCast::Operation<string_t, int32_t>(string_t(digits[1]), scale, true) || width < 1 ||
-		    width > DecimalType::MaxWidth() || scale < 0 || scale > width) {
-			throw InvalidConfigurationException("Invalid decimal type: %s", type_str);
+		if (digits.size() != 2) {
+			throw InvalidConfigurationException("Invalid decimal type \"%s\" - expected decimal(precision, scale)",
+			                                    type_str);
 		}
-		return LogicalType::DECIMAL(width, scale);
+		int64_t width;
+		int64_t scale;
+		if (!TryCast::Operation<string_t, int64_t>(string_t(digits[0]), width, true) ||
+		    !TryCast::Operation<string_t, int64_t>(string_t(digits[1]), scale, true)) {
+			throw InvalidConfigurationException("Invalid decimal type \"%s\" - precision and scale must be numbers",
+			                                    type_str);
+		}
+		if (width < 1 || width > Decimal::MAX_WIDTH_DECIMAL || scale < 0 || scale > width) {
+			throw InvalidConfigurationException(
+			    "Invalid decimal type \"%s\" - precision must be between 1 and %d and scale between 0 and the "
+			    "precision",
+			    type_str, Decimal::MAX_WIDTH_DECIMAL);
+		}
+		return LogicalType::DECIMAL(NumericCast<uint8_t>(width), NumericCast<uint8_t>(scale));
 	}
 	if (type_str == "variant") {
 		return LogicalType::VARIANT();

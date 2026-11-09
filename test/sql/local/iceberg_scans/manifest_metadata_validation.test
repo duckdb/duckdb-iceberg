@@ -163,7 +163,7 @@ COPY (
 statement error
 SELECT * FROM iceberg_scan('{TEST_DIR}/missing_spec.metadata.json');
 ----
-Invalid Configuration Error: Partition spec id 999 not found in Iceberg metadata
+Invalid Configuration Error: Manifest refers to partition spec 999, which is not in the table's partition-specs
 
 query I
 SELECT 42;
