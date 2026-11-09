@@ -45,6 +45,9 @@ public:
 
 protected:
 	IcebergFileRewriteInput GetRewriteInput(const IcebergFileRewriteGlobalState &state) const override {
+		//! Replacement rows come from this scan, so retain OVERWRITE's non-retryable policy.
+		//! Without replacement files, DELETE only invalidates stable paths. Its manifest identities
+		//! are rebuilt for each commit attempt, including those of files inserted in this transaction.
 		IcebergFileRewriteInput result(state.added_data_files ? IcebergSnapshotOperationType::OVERWRITE
 		                                                      : IcebergSnapshotOperationType::DELETE);
 		for (auto &entry : delete_filter.GetDeletes().rows_by_file) {
@@ -144,6 +147,7 @@ PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanDelete(ClientContext &cont
 	auto &metadata = table.table_info.table_metadata;
 	if (metadata.iceberg_version >= 3) {
 		//! A V3 rewrite has to carry each kept row's _row_id and _last_updated_sequence_number into the new files
+		//! Pending rows may not have their final lineage yet, so carrying scan-time values is not sufficient.
 		throw NotImplementedException("Copy-on-write DELETE on Iceberg V%d tables", metadata.iceberg_version);
 	}
 
