@@ -420,26 +420,43 @@ optional<sequence_number_t> IcebergManifestEntry::ExplicitFileSequenceNumber() c
 	return file_sequence_number;
 }
 
-sequence_number_t IcebergManifestEntry::GetSequenceNumber(const IcebergManifest &manifest_file) const {
-	if (!sequence_number) {
-		if (status != IcebergManifestEntryStatusType::ADDED) {
-			throw InvalidConfigurationException(
-			    "'manifest_entry.sequence_number' is only allowed to be NULL for ADDED entries");
-		}
+static optional<sequence_number_t> InheritSequenceNumber(const optional<sequence_number_t> &explicit_value,
+                                                         IcebergManifestEntryStatusType status,
+                                                         const IcebergManifest &manifest_file) {
+	if (explicit_value) {
+		return explicit_value;
+	}
+	// Only ADDED entries inherit the manifest's sequence number when theirs is NULL
+	if (status == IcebergManifestEntryStatusType::ADDED) {
 		return manifest_file.sequence_number;
 	}
-	return *sequence_number;
+	return nullopt;
+}
+
+optional<sequence_number_t> IcebergManifestEntry::TryGetSequenceNumber(const IcebergManifest &manifest_file) const {
+	return InheritSequenceNumber(sequence_number, status, manifest_file);
+}
+
+optional<sequence_number_t> IcebergManifestEntry::TryGetFileSequenceNumber(const IcebergManifest &manifest_file) const {
+	return InheritSequenceNumber(file_sequence_number, status, manifest_file);
+}
+
+sequence_number_t IcebergManifestEntry::GetSequenceNumber(const IcebergManifest &manifest_file) const {
+	auto result = TryGetSequenceNumber(manifest_file);
+	if (!result) {
+		throw InvalidConfigurationException(
+		    "'manifest_entry.sequence_number' is only allowed to be NULL for ADDED entries");
+	}
+	return *result;
 }
 
 sequence_number_t IcebergManifestEntry::GetFileSequenceNumber(const IcebergManifest &manifest_file) const {
-	if (!file_sequence_number) {
-		if (status != IcebergManifestEntryStatusType::ADDED) {
-			throw InvalidConfigurationException(
-			    "'manifest_entry.file_sequence_number' is only allowed to be NULL for ADDED entries");
-		}
-		return manifest_file.sequence_number;
+	auto result = TryGetFileSequenceNumber(manifest_file);
+	if (!result) {
+		throw InvalidConfigurationException(
+		    "'manifest_entry.file_sequence_number' is only allowed to be NULL for ADDED entries");
 	}
-	return *file_sequence_number;
+	return *result;
 }
 
 void IcebergManifestEntry::SetSnapshotId(optional<int64_t> value) {
