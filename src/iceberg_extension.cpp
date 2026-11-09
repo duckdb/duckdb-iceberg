@@ -52,6 +52,15 @@ static void SetMetadataLogClockSkew(ClientContext &context, SetScope scope, Valu
 	}
 }
 
+static void SetMaxReservedManifestEntries(ClientContext &context, SetScope scope, Value &parameter) {
+	if (parameter.IsNull() || parameter.GetValue<uint64_t>() == 0 ||
+	    parameter.GetValue<uint64_t>() > MAX_MAX_RESERVED_MANIFEST_ENTRIES) {
+		throw InvalidConfigurationException("'%s' must be between 1 and %llu (the maximum), got %s",
+		                                    MAX_RESERVED_MANIFEST_ENTRIES_CONFIG_VARIABLE,
+		                                    MAX_MAX_RESERVED_MANIFEST_ENTRIES, parameter.ToString());
+	}
+}
+
 static void SetUnsafeStructNullDefaultInterpretation(ClientContext &context, SetScope scope, Value &parameter) {
 	auto &value = IcebergDefault::InterpretStructNullAsEmpty();
 	if (parameter.IsNull()) {
@@ -130,6 +139,11 @@ static void LoadInternal(ExtensionLoader &loader) {
 	    "far after transaction start is considered visible. Set to 0 for strict timestamp comparisons.",
 	    LogicalType::BIGINT, Value::BIGINT(DEFAULT_METADATA_LOG_CLOCK_SKEW_MS), SetMetadataLogClockSkew,
 	    SetScope::GLOBAL);
+	config.AddExtensionOption(
+	    MAX_RESERVED_MANIFEST_ENTRIES_CONFIG_VARIABLE,
+	    "The maximum number of manifest entries the manifest-list file counts may reserve up front for a single "
+	    "manifest. Scanning a manifest that declares more entries fails; the setting can be raised up to 100000000.",
+	    LogicalType::UBIGINT, Value::UBIGINT(DEFAULT_MAX_RESERVED_MANIFEST_ENTRIES), SetMaxReservedManifestEntries);
 	config.AddExtensionOption("iceberg_use_server_side_scan_planning",
 	                          "Whether or not to use server-side scanning planning (if available)",
 	                          LogicalType::BOOLEAN, Value::BOOLEAN(false), nullptr, SetScope::GLOBAL);

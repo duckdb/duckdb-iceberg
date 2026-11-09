@@ -21,3 +21,29 @@ SELECT count(*) FROM (
 0
 
 endloop
+
+statement error
+SET iceberg_max_reserved_manifest_entries = 100000001;
+----
+<REGEX>:.*'iceberg_max_reserved_manifest_entries' must be between 1 and 100000000 \(the maximum\), got 100000001.*
+
+statement error
+SET iceberg_max_reserved_manifest_entries = 0;
+----
+<REGEX>:.*'iceberg_max_reserved_manifest_entries' must be between 1 and 100000000 \(the maximum\), got 0.*
+
+statement ok
+SET iceberg_max_reserved_manifest_entries = 1;
+
+statement error
+SELECT count(*) FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/partition_bool/metadata/v2.metadata.json');
+----
+<REGEX>:.*declares 2 entries in the manifest list, which exceeds the current limit of 1 entries reserved per manifest\. Raise the limit with SET iceberg_max_reserved_manifest_entries \(the maximum is 100000000\).*
+
+statement ok
+SET iceberg_max_reserved_manifest_entries = 2;
+
+query I
+SELECT count(*) FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/partition_bool/metadata/v2.metadata.json');
+----
+2
