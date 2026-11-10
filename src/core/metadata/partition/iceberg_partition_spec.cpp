@@ -92,7 +92,7 @@ IcebergPartitionSpec IcebergPartitionSpec::FromFields(const vector<rest_api_obje
 bool IcebergPartitionSpec::IsPartitioned() const {
 	//! A partition spec is considered partitioned if it has at least one field that doesn't have a 'void' transform
 	for (const auto &field : fields) {
-		if (field.transform != IcebergTransformType::VOID) {
+		if (field.transform != IcebergTransformType::VOID_TRANSFORM) {
 			return true;
 		}
 	}
