@@ -68,6 +68,15 @@ directly, so optimizer fallback cannot hide a failed round trip:
 The CI build step also runs these serialization tests before packaging the SQL
 test runner.
 
+The LoadTable cache API tests deterministically interleave request construction,
+publication, and eviction, and check the credential-refresh fallback:
+
+```sh
+./build/reldebug/test/unittest_iceberg_cache
+```
+
+The CI build step runs these tests alongside the other API executables.
+
 ## SQL test interfaces
 
 Load the test extension before using its SQL helpers. The native test config
