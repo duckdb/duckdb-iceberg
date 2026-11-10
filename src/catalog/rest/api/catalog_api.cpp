@@ -170,8 +170,13 @@ bool IRCAPI::VerifyTableExistence(ClientContext &context, IcebergCatalog &catalo
 	return VerifyResponse(context, catalog, url_builder, execute_head);
 }
 
-IcebergLoadTableRequest::IcebergLoadTableRequest(vector<string> namespace_items, string table_name)
+IcebergLoadTableRequest::IcebergLoadTableRequest(vector<string> namespace_items, string table_name,
+                                                 optional_ptr<const LoadTableCachePublication> publication)
     : namespace_items(std::move(namespace_items)), table_name(std::move(table_name)) {
+	if (publication) {
+		cached_result = publication->cached_result;
+		etag = publication->etag;
+	}
 }
 
 IcebergLoadTableResult IcebergLoadTableRequest::Execute(ClientContext &context, IcebergCatalog &catalog) const {
@@ -186,9 +191,24 @@ IcebergLoadTableResult IcebergLoadTableRequest::Execute(ClientContext &context, 
 	if (catalog.attach_options.access_mode == IRCAccessDelegationMode::VENDED_CREDENTIALS) {
 		headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
 	}
+	if (cached_result && !etag.empty()) {
+		headers.Insert("If-None-Match", etag);
+	}
 	auto result = catalog.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers);
 	IcebergLoadTableResult ret;
 	ret.status_ = result->status;
+	if (result->status == HTTPStatusCode::NotModified_304) {
+		if (!cached_result || etag.empty()) {
+			throw HTTPException(*result, "LoadTable returned HTTP 304 without a cached response to revalidate");
+		}
+		ret.result_ = cached_result;
+		ret.etag = result->headers.HasHeader("ETag") ? result->headers.GetHeaderValue("ETag") : etag;
+		DUCKDB_LOG(
+		    context, IcebergLogType, "Iceberg table '%s' is unchanged (HTTP 304); reusing cached metadata",
+		    IcebergLogType::Redact(context, StringUtil::Format("%s.%s.%s", catalog.GetName().GetIdentifierName(),
+		                                                       StringUtil::Join(namespace_items, "."), table_name)));
+		return ret;
+	}
 	if (result->status != HTTPStatusCode::OK_200) {
 		unique_ptr<JSONDocument> out_doc;
 		auto error_obj = ICUtils::GetErrorMessage(result->body, out_doc);
@@ -200,7 +220,11 @@ IcebergLoadTableResult IcebergLoadTableRequest::Execute(ClientContext &context, 
 	}
 	auto doc = ICUtils::APIResultToDoc(result->body);
 	auto metadata_root = doc->GetRoot();
-	ret.result_ = make_uniq<const rest_api_objects::LoadTableResult>(ICUtils::ParseLoadTableResult(metadata_root));
+	ret.result_ =
+	    make_shared_ptr<const rest_api_objects::LoadTableResult>(ICUtils::ParseLoadTableResult(metadata_root));
+	if (result->headers.HasHeader("ETag")) {
+		ret.etag = result->headers.GetHeaderValue("ETag");
+	}
 	return ret;
 }
 
@@ -223,8 +247,9 @@ static unique_ptr<HTTPResponse> LoadCredentials(ClientContext &context, IcebergC
 }
 
 IcebergLoadTableResult IRCAPI::GetTable(ClientContext &context, IcebergCatalog &catalog,
-                                        const IcebergSchemaEntry &schema, const string &table_name) {
-	return IcebergLoadTableRequest(schema.namespace_items, table_name).Execute(context, catalog);
+                                        const IcebergSchemaEntry &schema, const string &table_name,
+                                        optional_ptr<const LoadTableCachePublication> publication) {
+	return IcebergLoadTableRequest(schema.namespace_items, table_name, publication).Execute(context, catalog);
 }
 
 APIResult<IRCAPICredentials> IRCAPI::GetTableCredentials(ClientContext &context, IcebergCatalog &catalog,
@@ -233,6 +258,7 @@ APIResult<IRCAPICredentials> IRCAPI::GetTableCredentials(ClientContext &context,
 	ret.status_ = HTTPStatusCode::OK_200;
 	if (catalog.supported_urls.find("GET /v1/{prefix}/namespaces/{namespace}/tables/{table}/credentials") ==
 	    catalog.supported_urls.end()) {
+		// Credential refresh needs a full response even if the table metadata has not changed.
 		auto table_result = GetTable(context, catalog, schema, table_name);
 		if (table_result.error_) {
 			ret.status_ = table_result.status_;

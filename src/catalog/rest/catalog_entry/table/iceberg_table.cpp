@@ -850,7 +850,7 @@ bool IcebergTable::HasTransactionUpdates() const {
 
 void IcebergTable::RefreshFromCatalog(ClientContext &context) {
 	auto publication = catalog.table_request_cache.BeginLoad(GetTableKey());
-	ApplyRefreshResult(context, IRCAPI::GetTable(context, catalog, schema, name), *publication);
+	ApplyRefreshResult(context, IRCAPI::GetTable(context, catalog, schema, name, publication.get()), *publication);
 }
 
 void IcebergTable::ApplyRefreshResult(ClientContext &context, IcebergLoadTableResult get_table_result,
@@ -865,7 +865,7 @@ void IcebergTable::ApplyRefreshResult(ClientContext &context, IcebergLoadTableRe
 	dummy_entry.reset();
 	InitializeFromCatalogResponse(context, load_table_result);
 	initialization_source = nullptr;
-	if (publication.TryPublish(std::move(get_table_result.result_))) {
+	if (publication.TryPublish(std::move(get_table_result.result_), std::move(get_table_result.etag))) {
 		initialization_source = load_table_result;
 	}
 }

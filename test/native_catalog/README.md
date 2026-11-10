@@ -110,8 +110,9 @@ not during binding or EXPLAIN.
 
 Client protocol tests can install an exact response with
 `POST /__test/response`, supplying a JSON object with `method`, `path`, `status`,
-and `body`. The path includes the query string. The response replaces that route
-until overwritten or cleared with `DELETE /__test/response`, which clears all
+and `body`, plus an optional `headers` object. The path includes the query string.
+The response replaces that route until overwritten or cleared with
+`DELETE /__test/response`, which clears all
 scripted responses. This permits config and auth tests without external servers;
 the normal catalog model handles all other routes.
 

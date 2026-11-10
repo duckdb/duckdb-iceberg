@@ -242,7 +242,8 @@ void IcebergTablePrefetch::ScheduleTables(ClientContext &context, IcebergCatalog
 		auto &prefetch = transaction.GetTablePrefetch(context);
 		PendingLoad load;
 		load.publication = catalog.table_request_cache.BeginLoad(table_key);
-		load.result = prefetch.executor.Schedule(IcebergLoadTableRequest(schema.namespace_items, table_name));
+		load.result = prefetch.executor.Schedule(
+		    IcebergLoadTableRequest(schema.namespace_items, table_name, load.publication.get()));
 		prefetch.pending.emplace(std::move(table_key), std::move(load));
 	}
 }
