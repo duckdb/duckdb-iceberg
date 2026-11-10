@@ -13,7 +13,10 @@ struct IcebergSchemaFieldEntry {
 	int32_t schema_id;
 	string name;
 	int32_t field_id;
-	//! The DuckDB type (BIGINT, DECIMAL(15,2), STRUCT(...)), as in iceberg_column_stats
+	//! The DuckDB type the field is read as (BIGINT, DECIMAL(15,2), STRUCT(...)), as in iceberg_column_stats.
+	//! This is intentionally not the Iceberg type name (long, decimal(15, 2), struct<...>): the DuckDB type keeps
+	//! the full nested type, and matches what DESCRIBE shows. Iceberg types without a DuckDB equivalent use the
+	//! extension's own types, e.g. fixed[5] is shown as ICEBERG_FIXED(5).
 	string type;
 	bool required;
 	//! NULL when the field has no doc
