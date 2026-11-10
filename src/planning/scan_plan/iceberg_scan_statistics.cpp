@@ -22,7 +22,21 @@ optional<idx_t> IcebergScanStatistics::CountDataRows() const {
 		if (!counts || !counts->added_rows_count || !counts->existing_rows_count) {
 			return nullopt;
 		}
-		count += *counts->added_rows_count + *counts->existing_rows_count;
+		//! The counts come from the manifest list: if they are implausible the cardinality is unknown
+		static constexpr idx_t MAX_ROW_COUNT = NumericLimits<int64_t>::Maximum();
+		auto added_rows = *counts->added_rows_count;
+		auto existing_rows = *counts->existing_rows_count;
+		if (added_rows > MAX_ROW_COUNT || existing_rows > MAX_ROW_COUNT || count > MAX_ROW_COUNT) {
+			return nullopt;
+		}
+		count += added_rows;
+		if (count > MAX_ROW_COUNT) {
+			return nullopt;
+		}
+		count += existing_rows;
+		if (count > MAX_ROW_COUNT) {
+			return nullopt;
+		}
 	}
 	return count;
 }

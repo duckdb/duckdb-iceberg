@@ -1,0 +1,49 @@
+# name: test/sql/local/iceberg_scans/manifest_list_large_counts.test
+# description: implausibly large counts in a manifest list do not drive allocations or the cardinality estimate
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+foreach count_case files_count_max rows_count_max
+
+query I
+SELECT count(*) FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/manifest_list_large_counts/metadata/{count_case}.metadata.json');
+----
+2
+
+query I
+SELECT count(*) FROM (
+	SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/manifest_list_large_counts/metadata/{count_case}.metadata.json')
+	EXCEPT ALL
+	SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/partition_bool/metadata/v2.metadata.json')
+);
+----
+0
+
+endloop
+
+statement error
+SET iceberg_max_reserved_manifest_entries = 100000001;
+----
+<REGEX>:.*'iceberg_max_reserved_manifest_entries' must be between 1 and 100000000 \(the maximum\), got 100000001.*
+
+statement error
+SET iceberg_max_reserved_manifest_entries = 0;
+----
+<REGEX>:.*'iceberg_max_reserved_manifest_entries' must be between 1 and 100000000 \(the maximum\), got 0.*
+
+statement ok
+SET iceberg_max_reserved_manifest_entries = 1;
+
+statement error
+SELECT count(*) FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/partition_bool/metadata/v2.metadata.json');
+----
+<REGEX>:.*declares 2 entries in the manifest list, which exceeds the current limit of 1 entries reserved per manifest\. Raise the limit with SET iceberg_max_reserved_manifest_entries \(the maximum is 100000000\).*
+
+statement ok
+SET iceberg_max_reserved_manifest_entries = 2;
+
+query I
+SELECT count(*) FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/partition_bool/metadata/v2.metadata.json');
+----
+2
