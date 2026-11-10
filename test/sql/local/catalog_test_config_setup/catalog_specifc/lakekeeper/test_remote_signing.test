@@ -1,0 +1,97 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_specifc/lakekeeper/test_remote_signing.test
+# group: [lakekeeper]
+
+require httpfs
+
+require avro
+
+require parquet
+
+require iceberg
+
+require-env CATALOG_TEST_CONFIG_SETUP lakekeeper
+
+statement ok
+CALL enable_logging('HTTP');
+
+# 'demo_remote_signing' is created with sts-enabled = false, so the catalog can only delegate
+# access through remote request signing. No S3 credentials exist in this process.
+statement ok
+attach 'demo_remote_signing' as remote_signing_catalog (
+	type ICEBERG,
+	URI 'http://localhost:8181/catalog',
+	SECRET 'my_secret',
+	ACCESS_DELEGATION_MODE 'remote_signing'
+);
+
+query III
+select * from remote_signing_catalog.remote_signing.remote_signing_table order by id;
+----
+1	a-string	2.2
+2	another-string	3.3
+3	a-third-string	4.4
+
+query II
+select count(*), sum(id) from remote_signing_catalog.remote_signing.remote_signing_table;
+----
+3	6
+
+# The metadata of the table lives on the same storage and is read through the signer as well
+query I
+select count(*) > 0 from iceberg_metadata(remote_signing_catalog.remote_signing.remote_signing_table);
+----
+true
+
+# httpfs asked the catalog to sign the storage requests
+query I
+select count(*) > 0 from duckdb_logs_parsed('HTTP') where request.type = 'POST' and request.url like '%/sign';
+----
+true
+
+# Writes are signed too, including the PUT of every new data and metadata file
+statement ok
+insert into remote_signing_catalog.remote_signing.remote_signing_table values (4, 'a-fourth-string', 5.5);
+
+query II
+select count(*), sum(id) from remote_signing_catalog.remote_signing.remote_signing_table;
+----
+4	10
+
+statement ok
+delete from remote_signing_catalog.remote_signing.remote_signing_table where id = 4;
+
+query II
+select count(*), sum(id) from remote_signing_catalog.remote_signing.remote_signing_table;
+----
+3	6
+
+# Catalogs advertise remote signing whenever the storage supports it, so an attach that did not ask for it must not
+# end up using the signer
+statement ok
+attach 'demo_remote_signing' as unsigned_catalog (
+	type ICEBERG,
+	URI 'http://localhost:8181/catalog',
+	SECRET 'my_secret'
+);
+
+statement ok
+call truncate_duckdb_logs();
+
+statement ok
+begin;
+
+statement ok
+select * from unsigned_catalog.remote_signing.remote_signing_table;
+
+query I
+select count(*) from duckdb_secrets() where type = 's3' and secret_string like '%signer_url%';
+----
+0
+
+statement ok
+commit;
+
+query I
+select count(*) from duckdb_logs_parsed('HTTP') where request.type = 'POST' and request.url like '%/sign';
+----
+0

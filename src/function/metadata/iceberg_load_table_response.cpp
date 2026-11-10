@@ -53,9 +53,7 @@ static unique_ptr<HTTPResponse> MakeRequest(ClientContext &context, const Iceber
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent(ic_table_entry.name.GetIdentifierName()));
 
 	HTTPHeaders headers(*context.db);
-	if (ic_catalog.attach_options.access_mode == IRCAccessDelegationMode::VENDED_CREDENTIALS) {
-		headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
-	}
+	ICUtils::AddAccessDelegationHeader(headers, ic_catalog.attach_options.access_mode);
 	unique_ptr<HTTPResponse> response =
 	    ic_catalog.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers);
 	if (!response->Success()) {

@@ -30,6 +30,7 @@
 #include "catalog/rest/storage/authorization/none.hpp"
 #include "catalog/rest/storage/authorization/sigv4_utils.hpp"
 #include "catalog/rest/storage/iceberg_table_secret_provider.hpp"
+#include "catalog/rest/storage/iceberg_remote_signing.hpp"
 #include "core/expression/iceberg_transform.hpp"
 #include "common/iceberg_utils.hpp"
 #include "iceberg_options.hpp"
@@ -254,10 +255,10 @@ IRCAPITableCredentials IcebergTable::GetVendedCredentials(ClientContext &context
 	return GetVendedCredentials(context, storage_credentials);
 }
 
-IRCAPITableCredentials
-IcebergTable::GetVendedCredentials(ClientContext &context,
-                                   const vector<rest_api_objects::StorageCredential> &storage_credentials,
-                                   optional_ptr<const case_insensitive_map_t<string>> config_override) const {
+IRCAPITableCredentials IcebergTable::GetVendedCredentials(
+    ClientContext &context, const vector<rest_api_objects::StorageCredential> &storage_credentials,
+    optional_ptr<const case_insensitive_map_t<string>> config_override,
+    optional_ptr<const rest_api_objects::RemoteSigningConfig> remote_signing_override) const {
 	IRCAPITableCredentials result;
 	auto schema_component = IRCPathComponent::NamespaceComponent(schema.namespace_items, catalog.namespace_separator);
 	auto secret_base_name = UUID::ToString(UUID::GenerateRandomUUID());
@@ -299,7 +300,17 @@ IcebergTable::GetVendedCredentials(ClientContext &context,
 	case_insensitive_map_t<Value> config_options;
 	//! TODO: apply the 'defaults' retrieved from the /v1/config endpoint
 	config_options.insert(user_defaults.begin(), user_defaults.end());
-	ParseConfigOptions(config_override ? *config_override : config, config_options, context, storage_type);
+	auto &table_config = config_override ? *config_override : config;
+	ParseConfigOptions(table_config, config_options, context, storage_type);
+
+	//! Catalogs report remote signing as enabled whenever the storage supports it, not only when it was asked for,
+	//! so it is only used when the attach opted in: an attach with its own credentials keeps using them.
+	const bool remote_signing_mode =
+	    catalog.attach_options.access_mode == IRCAccessDelegationMode::REMOTE_SIGNING && storage_type == "s3";
+	optional_ptr<const rest_api_objects::RemoteSigningConfig> signing_config = remote_signing_override;
+	if (!signing_config && remote_signing_config) {
+		signing_config = *remote_signing_config;
+	}
 
 	for (idx_t index = 0; index < storage_credentials.size(); index++) {
 		auto &credential = storage_credentials[index];
@@ -368,6 +379,13 @@ IcebergTable::GetVendedCredentials(ClientContext &context,
 		if (storage_type == "s3") {
 			AddUserKMSKeyId(context, table_location, create_secret_input.options);
 		}
+		//! A storage credential's own config takes precedence over the table's
+		auto &signing_flag_config =
+		    credential.config.count(IcebergRemoteSigning::ENABLED_KEY) ? credential.config : table_config;
+		if (remote_signing_mode && IcebergRemoteSigning::IsEnabled(signing_flag_config)) {
+			IcebergRemoteSigning::AddSecretOptions(context, catalog, schema.namespace_items, name, log_table_name,
+			                                       table_config, signing_config, create_secret_input.options);
+		}
 		//! TODO: apply the 'overrides' retrieved from the /v1/config endpoint
 		DUCKDB_LOG_DEBUG(context,
 		                 "Iceberg table '%s': credential %llu with prefix '%s' prepared as secret '%s' with "
@@ -401,6 +419,10 @@ IcebergTable::GetVendedCredentials(ClientContext &context,
 			config.provider = IcebergTableSecretProvider::Provider();
 			config.options["refresh_info"] = IcebergTableSecretProvider::MakeRefreshInfo(
 			    catalog.GetName().GetIdentifierName(), schema.name.GetIdentifierName(), name);
+		}
+		if (remote_signing_mode && IcebergRemoteSigning::IsEnabled(table_config)) {
+			IcebergRemoteSigning::AddSecretOptions(context, catalog, schema.namespace_items, name, log_table_name,
+			                                       table_config, signing_config, config.options);
 		}
 	} else if (result.storage_credentials.empty()) {
 		DUCKDB_LOG_DEBUG(context, "Iceberg table '%s': no usable vended credentials or config options available",
@@ -696,11 +718,24 @@ static void AddHTTPSecretsToOptions(SecretEntry &http_secret_entry, case_insensi
 	                            : http_kv_secret.TryGetValue("verify_ssl").DefaultCastAs(LogicalType::BOOLEAN);
 }
 
+static bool DelegatesStorageAccess(IRCAccessDelegationMode access_mode) {
+	return access_mode == IRCAccessDelegationMode::VENDED_CREDENTIALS ||
+	       access_mode == IRCAccessDelegationMode::REMOTE_SIGNING;
+}
+
 void IcebergTable::LoadCredentials(ClientContext &context) const {
 	VerifyReadEncryptionSupported();
-	if (catalog.attach_options.access_mode != IRCAccessDelegationMode::VENDED_CREDENTIALS) {
+	if (!DelegatesStorageAccess(catalog.attach_options.access_mode)) {
 		// assume secret already exists
 		return;
+	}
+	if (catalog.attach_options.access_mode == IRCAccessDelegationMode::REMOTE_SIGNING && storage_credentials.empty() &&
+	    !IcebergRemoteSigning::IsEnabled(config) && DetectStorageType(table_metadata.GetLocation()) == "s3") {
+		throw InvalidConfigurationException(
+		    "'%s' is attached with ACCESS_DELEGATION_MODE 'remote_signing', but the catalog returned neither remote "
+		    "signing information nor credentials for table '%s'. Remote signing has to be enabled for the storage the "
+		    "table lives in.",
+		    catalog.GetName().GetIdentifierName(), name);
 	}
 	LoadCredentials(context, GetVendedCredentials(context));
 }
@@ -709,7 +744,7 @@ void IcebergTable::LoadCredentials(ClientContext &context, IRCAPITableCredential
 	auto &secret_manager = SecretManager::Get(context);
 
 	auto &transaction = IcebergTransaction::Get(context, catalog);
-	if (catalog.attach_options.access_mode != IRCAccessDelegationMode::VENDED_CREDENTIALS) {
+	if (!DelegatesStorageAccess(catalog.attach_options.access_mode)) {
 		// assume secret already exists
 		return;
 	}
@@ -808,7 +843,8 @@ void IcebergTable::LoadCredentials(ClientContext &context, IRCAPITableCredential
 	bool has_azure_creds = info.options.find("account_name") != info.options.end() ||
 	                       info.options.find("connection_string") != info.options.end();
 	bool has_gcs_creds = info.options.find("bearer_token") != info.options.end();
-	if (!has_s3_creds && !has_azure_creds && !has_gcs_creds) {
+	bool has_remote_signer = info.options.find("signer_url") != info.options.end();
+	if (!has_s3_creds && !has_azure_creds && !has_gcs_creds && !has_remote_signer) {
 		DUCKDB_LOG_INFO(context, "Failed to create valid secret from Vended Credentials for table '%s'",
 		                log_table_name);
 	}
@@ -873,6 +909,9 @@ void IcebergTable::ApplyRefreshResult(ClientContext &context, IcebergLoadTableRe
 IcebergTable IcebergTable::Copy() const {
 	auto clone = IcebergTable(catalog, schema, name, table_metadata.Copy());
 	clone.config = config;
+	if (remote_signing_config) {
+		clone.remote_signing_config = remote_signing_config->Copy();
+	}
 	clone.initialization_source = initialization_source;
 	for (auto &credential : storage_credentials) {
 		clone.storage_credentials.push_back(credential.Copy());
@@ -1027,6 +1066,10 @@ void IcebergTable::SetLoadTableResult(const rest_api_objects::LoadTableResult &l
 		config = *val;
 	}
 	storage_credentials.clear();
+	remote_signing_config.reset();
+	if (load_table_result.remote_signing_config) {
+		remote_signing_config = load_table_result.remote_signing_config->Copy();
+	}
 
 	if (auto &credentials = load_table_result.storage_credentials) {
 		for (auto &credential : *credentials) {

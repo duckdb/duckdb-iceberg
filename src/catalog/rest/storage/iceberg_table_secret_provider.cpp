@@ -68,7 +68,7 @@ static Value RefreshInfoToStruct(const Value &refresh_info) {
 
 static unique_ptr<BaseSecret> BuildVendedSecret(CreateSecretInput &input) {
 	auto secret = make_uniq<KeyValueSecret>(input.scope, input.type, input.provider, input.name);
-	secret->redact_keys = {"secret", "session_token", "bearer_token", "http_proxy_password"};
+	secret->redact_keys = {"secret", "session_token", "bearer_token", "http_proxy_password", "signer_headers"};
 
 	if (input.type == "r2") {
 		auto account_id_entry = input.options.find("account_id");
@@ -191,7 +191,12 @@ static CreateSecretInput ReVendVendedCredentials(ClientContext &context, CreateS
 	if (response.config) {
 		config_override = *response.config;
 	}
-	auto credentials = table_info.GetVendedCredentials(context, response.storage_credentials, config_override);
+	optional_ptr<const rest_api_objects::RemoteSigningConfig> remote_signing_override;
+	if (response.remote_signing_config) {
+		remote_signing_override = *response.remote_signing_config;
+	}
+	auto credentials = table_info.GetVendedCredentials(context, response.storage_credentials, config_override,
+	                                                   remote_signing_override);
 	auto log_table_name =
 	    IcebergLogType::Redact(context, StringUtil::Format("%s.%s.%s", catalog_name, schema_name, table_name));
 
@@ -298,6 +303,9 @@ void IcebergTableSecretProvider::Register(ExtensionLoader &loader) {
 		function.named_parameters["http_proxy_username"] = LogicalType::VARCHAR;
 		function.named_parameters["http_proxy_password"] = LogicalType::VARCHAR;
 		function.named_parameters["extra_http_headers"] = LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR);
+		function.named_parameters["signer_url"] = LogicalType::VARCHAR;
+		function.named_parameters["signer_headers"] = LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR);
+		function.named_parameters["signer_properties"] = LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR);
 
 		loader.RegisterFunction(function);
 	}

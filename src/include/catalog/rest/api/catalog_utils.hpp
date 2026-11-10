@@ -5,6 +5,7 @@
 #include "duckdb/common/json_document.hpp"
 
 #include "catalog/rest/api/catalog_api.hpp"
+#include "iceberg_attach.hpp"
 
 namespace duckdb {
 class IcebergSchemaEntry;
@@ -18,6 +19,8 @@ public:
 	static rest_api_objects::LoadTableResult ParseLoadTableResult(JSONValue root);
 	//! Log the body of a REST POST, honouring 'iceberg_logging_post_body_truncate_limit'.
 	static void LogPostBody(ClientContext &context, const IRCEndpointBuilder &url_builder, const string &body);
+	//! Tell the catalog which form of storage access delegation this attach expects
+	static void AddAccessDelegationHeader(HTTPHeaders &headers, IRCAccessDelegationMode access_mode);
 };
 
 } // namespace duckdb

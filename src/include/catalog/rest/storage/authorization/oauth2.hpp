@@ -67,6 +67,8 @@ public:
 	unique_ptr<HTTPResponse> Request(RequestType request_type, ClientContext &context,
 	                                 const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
 	                                 const string &data = "") override DUCKDB_EXCLUDES(token_mutex);
+	void AddRemoteSignerHeaders(ClientContext &context, case_insensitive_map_t<string> &headers) override
+	    DUCKDB_EXCLUDES(token_mutex);
 	static string GetToken(ClientContext &context, const OAuth2Credentials &credentials, const string &uri,
 	                       const string &scope);
 	static void SetCatalogSecretParameters(CreateSecretFunction &function);
