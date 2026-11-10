@@ -68,8 +68,6 @@ public:
 	    ClientContext &context, const vector<rest_api_objects::StorageCredential> &storage_credentials,
 	    optional_ptr<const case_insensitive_map_t<string>> config_override = nullptr,
 	    optional_ptr<const rest_api_objects::RemoteSigningConfig> remote_signing_override = nullptr) const;
-	//! The endpoint httpfs sends this table's storage requests to for signing
-	string GetRemoteSignerURL(const case_insensitive_map_t<string> &table_config, bool has_remote_signing_config) const;
 	const string &BaseFilePath() const;
 	bool IsRenamed() const;
 
@@ -115,9 +113,6 @@ private:
 	void ApplyRefreshResult(ClientContext &context, IcebergLoadTableResult result,
 	                        LoadTableCachePublication &publication);
 	void SetLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result);
-	void AddRemoteSigningOptions(ClientContext &context, const case_insensitive_map_t<string> &table_config,
-	                             optional_ptr<const rest_api_objects::RemoteSigningConfig> signing_config,
-	                             case_insensitive_map_t<Value> &options) const;
 
 	//! Unchanged by rename, used to check for a rename
 	const string original_name;

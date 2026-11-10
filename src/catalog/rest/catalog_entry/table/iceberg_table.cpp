@@ -1,7 +1,6 @@
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 
 #include "duckdb/common/case_insensitive_map.hpp"
-#include "duckdb/common/map.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
@@ -31,6 +30,7 @@
 #include "catalog/rest/storage/authorization/none.hpp"
 #include "catalog/rest/storage/authorization/sigv4_utils.hpp"
 #include "catalog/rest/storage/iceberg_table_secret_provider.hpp"
+#include "catalog/rest/storage/iceberg_remote_signing.hpp"
 #include "core/expression/iceberg_transform.hpp"
 #include "common/iceberg_utils.hpp"
 #include "iceberg_options.hpp"
@@ -185,104 +185,6 @@ static void ParseConfigOptions(const case_insensitive_map_t<string> &config, cas
 	endpoint_it->second = endpoint;
 }
 
-static bool IsRemoteSigningEnabled(const case_insensitive_map_t<string> &config) {
-	auto entry = config.find("s3.remote-signing-enabled");
-	return entry != config.end() && StringUtil::CIEquals(entry->second, "true");
-}
-
-static string GetConfigValue(const case_insensitive_map_t<string> &config, const vector<string> &keys) {
-	for (auto &key : keys) {
-		auto entry = config.find(key);
-		if (entry != config.end() && !entry->second.empty()) {
-			return entry->second;
-		}
-	}
-	return string();
-}
-
-//! Mirrors Iceberg's RESTUtil.resolveEndpoint: an absolute endpoint replaces the uri instead of extending it
-static string ResolveSignerURL(const string &uri, const string &endpoint) {
-	auto lower_endpoint = StringUtil::Lower(endpoint);
-	if (StringUtil::StartsWith(lower_endpoint, "http://") || StringUtil::StartsWith(lower_endpoint, "https://")) {
-		return endpoint;
-	}
-	auto base = uri;
-	StringUtil::RTrim(base, "/");
-	idx_t path_start = 0;
-	while (path_start < endpoint.size() && endpoint[path_start] == '/') {
-		path_start++;
-	}
-	return AddHttpHostIfMissing(base + "/" + endpoint.substr(path_start));
-}
-
-static Value StringMapToValue(const case_insensitive_map_t<string> &input) {
-	//! Sorted, so the secret does not change between loads of the same table
-	map<string, string> sorted(input.begin(), input.end());
-	vector<Value> keys;
-	vector<Value> values;
-	for (auto &entry : sorted) {
-		keys.emplace_back(entry.first);
-		values.emplace_back(entry.second);
-	}
-	return Value::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR, std::move(keys), std::move(values));
-}
-
-string IcebergTable::GetRemoteSignerURL(const case_insensitive_map_t<string> &table_config,
-                                        bool has_remote_signing_config) const {
-	//! The deprecated properties are only consulted when the catalog does not send a 'remote-signing-config'
-	if (!has_remote_signing_config) {
-		auto signer_uri = GetConfigValue(table_config, {"signer.uri", "s3.signer.uri"});
-		auto signer_endpoint = GetConfigValue(table_config, {"signer.endpoint", "s3.signer.endpoint"});
-		if (!signer_uri.empty() || !signer_endpoint.empty()) {
-			//! Catalogs that set these predate the table scoped endpoint and expect the former default
-			return ResolveSignerURL(signer_uri.empty() ? catalog.base_uri : signer_uri,
-			                        signer_endpoint.empty() ? "v1/aws/s3/sign" : signer_endpoint);
-		}
-	}
-	auto url_builder = catalog.GetBaseUrl();
-	url_builder.AddPrefixComponents(catalog.prefix);
-	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("namespaces"));
-	url_builder.AddPathComponent(
-	    IRCPathComponent::NamespaceComponent(schema.namespace_items, catalog.namespace_separator));
-	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("tables"));
-	url_builder.AddPathComponent(IRCPathComponent::RegularComponent(name));
-	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("sign"));
-	return AddHttpHostIfMissing(url_builder.GetURLEncoded());
-}
-
-void IcebergTable::AddRemoteSigningOptions(ClientContext &context, const case_insensitive_map_t<string> &table_config,
-                                           optional_ptr<const rest_api_objects::RemoteSigningConfig> signing_config,
-                                           case_insensitive_map_t<Value> &options) const {
-	//! The signer signs requests instead of local credentials, httpfs does not accept a secret with both
-	for (auto key : {"key_id", "secret", "session_token", "expires_at"}) {
-		options.erase(key);
-	}
-	case_insensitive_map_t<string> headers;
-	if (signing_config && signing_config->headers) {
-		for (auto &entry : signing_config->headers->additional_properties) {
-			headers[entry.first] = StringUtil::Join(entry.second, ", ");
-		}
-	}
-	//! httpfs calls the signer for us, so it has to be handed the catalog's credentials. A secret refresh after the
-	//! signer rejects them reloads the table, which puts the current ones in place.
-	catalog.auth_handler->AddRemoteSignerHeaders(context, headers);
-	auto signer_url = GetRemoteSignerURL(table_config, signing_config != nullptr);
-	vector<string> header_names;
-	for (auto &entry : headers) {
-		header_names.push_back(entry.first);
-	}
-	std::sort(header_names.begin(), header_names.end());
-	DUCKDB_LOG_DEBUG(
-	    context, "Iceberg table '%s': storage requests are signed by '%s', sending headers [%s]",
-	    IcebergLogType::Redact(context, StringUtil::Format("%s.%s.%s", catalog.GetName(), schema.name, name)),
-	    signer_url, StringUtil::Join(header_names, ", "));
-	options["signer_url"] = std::move(signer_url);
-	options["signer_headers"] = StringMapToValue(headers);
-	if (signing_config && signing_config->properties) {
-		options["signer_properties"] = StringMapToValue(*signing_config->properties);
-	}
-}
-
 IRCAPITableCredentials IcebergTable::GetVendedCredentials(ClientContext &context) const {
 	return GetVendedCredentials(context, storage_credentials);
 }
@@ -410,9 +312,10 @@ IRCAPITableCredentials IcebergTable::GetVendedCredentials(
 		ParseConfigOptions(credential.config, create_secret_input.options, context, storage_type);
 		//! A storage credential's own config takes precedence over the table's
 		auto &signing_flag_config =
-		    credential.config.count("s3.remote-signing-enabled") ? credential.config : table_config;
-		if (remote_signing_mode && IsRemoteSigningEnabled(signing_flag_config)) {
-			AddRemoteSigningOptions(context, table_config, signing_config, create_secret_input.options);
+		    credential.config.count(IcebergRemoteSigning::ENABLED_KEY) ? credential.config : table_config;
+		if (remote_signing_mode && IcebergRemoteSigning::IsEnabled(signing_flag_config)) {
+			IcebergRemoteSigning::AddSecretOptions(context, catalog, schema.namespace_items, name, log_table_name,
+			                                       table_config, signing_config, create_secret_input.options);
 		}
 		//! TODO: apply the 'overrides' retrieved from the /v1/config endpoint
 		DUCKDB_LOG_DEBUG(context,
@@ -445,8 +348,9 @@ IRCAPITableCredentials IcebergTable::GetVendedCredentials(
 			config.options["refresh_info"] = IcebergTableSecretProvider::MakeRefreshInfo(
 			    catalog.GetName().GetIdentifierName(), schema.name.GetIdentifierName(), name);
 		}
-		if (remote_signing_mode && IsRemoteSigningEnabled(table_config)) {
-			AddRemoteSigningOptions(context, table_config, signing_config, config.options);
+		if (remote_signing_mode && IcebergRemoteSigning::IsEnabled(table_config)) {
+			IcebergRemoteSigning::AddSecretOptions(context, catalog, schema.namespace_items, name, log_table_name,
+			                                       table_config, signing_config, config.options);
 		}
 	} else if (result.storage_credentials.empty()) {
 		DUCKDB_LOG_DEBUG(context, "Iceberg table '%s': no usable vended credentials or config options available",
@@ -743,7 +647,7 @@ void IcebergTable::LoadCredentials(ClientContext &context) const {
 		return;
 	}
 	if (catalog.attach_options.access_mode == IRCAccessDelegationMode::REMOTE_SIGNING && storage_credentials.empty() &&
-	    !IsRemoteSigningEnabled(config) && DetectStorageType(table_metadata.GetLocation()) == "s3") {
+	    !IcebergRemoteSigning::IsEnabled(config) && DetectStorageType(table_metadata.GetLocation()) == "s3") {
 		throw InvalidConfigurationException(
 		    "'%s' is attached with ACCESS_DELEGATION_MODE 'remote_signing', but the catalog returned neither remote "
 		    "signing information nor credentials for table '%s'. Remote signing has to be enabled for the storage the "
