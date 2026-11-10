@@ -167,6 +167,10 @@ void IcebergSchemaSet::LoadEntriesInternal(ClientContext &context) {
 
 void IcebergSchemaSet::ApplyListResult(IcebergListSchemasResult schemas) {
 	for (auto &schema : schemas) {
+		if (schema.items.empty() ||
+		    std::any_of(schema.items.begin(), schema.items.end(), [](const string &item) { return item.empty(); })) {
+			throw InvalidConfigurationException("Iceberg catalog returned an empty namespace name");
+		}
 		CreateSchemaInfo info;
 		info.SetQualifiedName(QualifiedName(info.GetQualifiedName().Catalog(), Identifier(GetSchemaName(schema.items)),
 		                                    info.GetQualifiedName().Name()));

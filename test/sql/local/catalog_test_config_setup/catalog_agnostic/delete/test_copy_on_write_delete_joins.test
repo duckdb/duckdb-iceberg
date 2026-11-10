@@ -1,0 +1,103 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_copy_on_write_delete_joins.test
+# description: Copy-on-write DELETE counts each target row once when joins produce duplicate matches
+# group: [delete]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require core_functions
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cow_delete_joins;
+
+statement ok
+CREATE TABLE my_datalake.default.cow_delete_joins (id INTEGER, payload VARCHAR) WITH (
+    'format-version' = '2',
+    'write.delete.mode' = 'copy-on-write'
+);
+
+statement ok
+INSERT INTO my_datalake.default.cow_delete_joins VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+statement ok
+INSERT INTO my_datalake.default.cow_delete_joins VALUES (4, 'd'), (5, 'e'), (6, 'f');
+
+# Several source rows can match a target row, including across different data files.
+query I
+DELETE FROM my_datalake.default.cow_delete_joins AS target
+USING (VALUES (2), (2), (4), (4), (4), (8), (NULL)) AS source(id)
+WHERE target.id = source.id;
+----
+2
+
+query IT
+SELECT * FROM my_datalake.default.cow_delete_joins ORDER BY id;
+----
+1	a
+3	c
+5	e
+6	f
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.cow_delete_joins) WHERE content != 'DATA';
+----
+0
+
+# Non-equality joins can repeat the same target too.
+query I
+DELETE FROM my_datalake.default.cow_delete_joins AS target
+USING (VALUES (1), (2)) AS source(id)
+WHERE target.id < source.id + 2;
+----
+2
+
+query IT
+SELECT * FROM my_datalake.default.cow_delete_joins ORDER BY id;
+----
+5	e
+6	f
+
+# A correlated subquery must use the matched row's original file position.
+query I
+DELETE FROM my_datalake.default.cow_delete_joins AS target
+WHERE EXISTS (SELECT 1 FROM (VALUES (5), (5), (NULL)) AS source(id) WHERE source.id = target.id);
+----
+1
+
+# An empty join produces no rewrite or snapshot.
+statement ok
+SET VARIABLE cow_join_snapshot_count = (SELECT count(*) FROM iceberg_snapshots(my_datalake.default.cow_delete_joins));
+
+query I
+DELETE FROM my_datalake.default.cow_delete_joins AS target
+USING (SELECT 6 AS id WHERE false) AS source
+WHERE source.id = target.id;
+----
+0
+
+query I
+SELECT count(*) = getvariable('cow_join_snapshot_count') FROM iceberg_snapshots(my_datalake.default.cow_delete_joins);
+----
+true
+
+query IT
+SELECT * FROM my_datalake.default.cow_delete_joins;
+----
+6	f
+
+# A self-join uses separate scans of the same transaction-visible table.
+query I
+DELETE FROM my_datalake.default.cow_delete_joins AS target
+USING my_datalake.default.cow_delete_joins AS source
+WHERE target.id = source.id;
+----
+1
+
+query I
+SELECT count(*) FROM my_datalake.default.cow_delete_joins;
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.cow_delete_joins;

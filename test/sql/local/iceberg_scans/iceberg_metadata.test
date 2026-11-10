@@ -33,6 +33,26 @@ SELECT * FROM ICEBERG_METADATA('{WORKING_DIRECTORY}/data/persistent/iceberg/line
 lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m1.avro	2	DATA	ADDED	DATA	lineitem_iceberg/data/00000-5-dad9988f-2a3b-464c-adb6-6034de93da19-00001.parquet	PARQUET	51793	2	2
 lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m0.avro	2	DATA	DELETED	DATA	lineitem_iceberg/data/00000-1-66fee7c2-c97c-4af9-963d-930afd99ace4-00001.parquet	PARQUET	60175	1	1
 
+# Written by Spark 3.3.1 / Iceberg 1.0.0: the DELETED entry has NULL sequence numbers, which may only be
+# inherited for ADDED entries. Report them as NULL instead of failing.
+query IIIIIIIIII
+SELECT * FROM ICEBERG_METADATA('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg_null_deleted_entry_seq', ALLOW_MOVED_PATHS=TRUE);
+----
+lineitem_iceberg/metadata/10eaca8a-1e1c-421e-ad6d-b232e5ee23d3-m1.avro	2	DATA	ADDED	DATA	lineitem_iceberg/data/00041-414-f3c73457-bbd6-4b92-9c15-17b241171b16-00001.parquet	PARQUET	51793	2	2
+lineitem_iceberg/metadata/10eaca8a-1e1c-421e-ad6d-b232e5ee23d3-m0.avro	2	DATA	DELETED	DATA	lineitem_iceberg/data/00000-411-0792dcfe-4e25-4ca3-8ada-175286069a47-00001.parquet	PARQUET	60175	NULL	NULL
+
+query III
+SELECT status, count(*), count(file_sequence_number) FROM ICEBERG_COLUMN_STATS('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg_null_deleted_entry_seq', ALLOW_MOVED_PATHS=TRUE) GROUP BY ALL ORDER BY ALL;
+----
+ADDED	16	16
+DELETED	16	0
+
+# The scan skips the DELETED entry, so it never needed its sequence number
+query I
+SELECT count(*) FROM ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg_null_deleted_entry_seq', ALLOW_MOVED_PATHS=TRUE) WHERE l_quantity > 0;
+----
+51793
+
 statement error
 SELECT * FROM ICEBERG_METADATA('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg_gz', ALLOW_MOVED_PATHS=TRUE);
 ----

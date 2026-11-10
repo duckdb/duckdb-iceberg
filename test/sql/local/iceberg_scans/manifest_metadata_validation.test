@@ -1,0 +1,171 @@
+# name: test/sql/local/iceberg_scans/manifest_metadata_validation.test
+# description: Corrupt manifest fields and decimal bounds cannot reach internal casts or assertions
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+COPY (SELECT 1 AS id, -1::DECIMAL(4,0) AS d4, -1::DECIMAL(9,0) AS d9,
+	-1::DECIMAL(18,0) AS d18, -1::DECIMAL(38,0) AS d38)
+TO '{TEST_DIR}/manifest_validation' (FORMAT ICEBERG);
+
+statement ok
+COPY (SELECT 2 AS id, -1::DECIMAL(4,0) AS d4, -1::DECIMAL(9,0) AS d9,
+	-1::DECIMAL(18,0) AS d18, -1::DECIMAL(38,0) AS d38)
+TO '{TEST_DIR}/manifest_second.parquet' (FORMAT PARQUET, FIELD_IDS {id: 1, d4: 2, d9: 3, d18: 4, d38: 5});
+
+statement ok
+SET VARIABLE manifest_metadata = (
+	SELECT content::JSON FROM read_text('{TEST_DIR}/manifest_validation/metadata/*.metadata.json')
+);
+
+statement ok
+CREATE TABLE manifest_data_files AS
+SELECT 1 AS id, file_path FROM iceberg_metadata('{TEST_DIR}/manifest_validation')
+UNION ALL SELECT 2, '{TEST_DIR}/manifest_second.parquet';
+
+statement ok
+CREATE MACRO decimal_bound(kind, size) AS
+	CASE kind WHEN 'oversized_bounds' THEN unhex(repeat('00', size))
+		WHEN 'empty_bounds' THEN unhex('') ELSE unhex('FF') END;
+
+statement ok
+CREATE MACRO manifest_rows(kind) AS TABLE
+SELECT
+	CASE kind WHEN 'invalid_status' THEN 256 WHEN 'negative_status' THEN -1 ELSE 1 END::INTEGER AS status,
+	(getvariable('manifest_metadata')->'snapshots'->0->>'snapshot-id')::BIGINT AS snapshot_id,
+	1::BIGINT AS sequence_number, 1::BIGINT AS file_sequence_number,
+	{
+		content: CASE kind WHEN 'invalid_content' THEN 256 WHEN 'negative_content' THEN -1 ELSE 0 END::INTEGER,
+		file_path: CASE kind WHEN 'empty_path' THEN '' ELSE file_path END,
+		file_format: 'PARQUET',
+		partition: {__duckdb_empty_struct_marker: NULL::INTEGER},
+		record_count: CASE kind WHEN 'negative_records' THEN -1 ELSE 1 END::BIGINT,
+		file_size_in_bytes: CASE kind WHEN 'negative_size' THEN -1 ELSE 1000 END::BIGINT,
+		null_value_counts: MAP {1: CASE kind WHEN 'negative_nulls' THEN -1 ELSE 0 END::BIGINT},
+		lower_bounds: MAP {
+			1: CASE id WHEN 1 THEN unhex('01000000') ELSE unhex('02000000') END,
+			2: decimal_bound(kind, 3), 3: decimal_bound(kind, 5),
+			4: decimal_bound(kind, 9), 5: decimal_bound(kind, 17)
+		},
+		upper_bounds: MAP {
+			1: CASE id WHEN 1 THEN unhex('01000000') ELSE unhex('02000000') END,
+			2: decimal_bound(kind, 3), 3: decimal_bound(kind, 5),
+			4: decimal_bound(kind, 9), 5: decimal_bound(kind, 17)
+		}
+	} AS data_file
+FROM manifest_data_files;
+
+statement ok
+SET VARIABLE manifest_field_ids = {
+	status: 0, snapshot_id: 1, sequence_number: 3, file_sequence_number: 4,
+	data_file: {__duckdb_field_id: 2, content: 134, file_path: 100, file_format: 101,
+		partition: {__duckdb_field_id: 102},
+		record_count: 103, file_size_in_bytes: 104,
+		null_value_counts: {__duckdb_field_id: 110, key: 121, value: 122},
+		lower_bounds: {__duckdb_field_id: 125, key: 126, value: 127},
+		upper_bounds: {__duckdb_field_id: 128, key: 129, value: 130}}
+};
+
+statement ok
+COPY (
+	SELECT '{TEST_DIR}/validation_manifest.avro' AS manifest_path,
+		1000::BIGINT AS manifest_length, 0::INTEGER AS partition_spec_id,
+		0::INTEGER AS content, 1::BIGINT AS sequence_number, 1::BIGINT AS min_sequence_number,
+		(getvariable('manifest_metadata')->'snapshots'->0->>'snapshot-id')::BIGINT AS added_snapshot_id
+) TO '{TEST_DIR}/validation_list.avro' (
+	FORMAT AVRO,
+	FIELD_IDS {manifest_path: 500, manifest_length: 501, partition_spec_id: 502,
+		content: 517, sequence_number: 515, min_sequence_number: 516, added_snapshot_id: 503}
+);
+
+statement ok
+COPY (
+	SELECT json_merge_patch(getvariable('manifest_metadata'),
+		json_object('snapshots', [json_merge_patch(getvariable('manifest_metadata')->'snapshots'->0,
+			json_object('manifest-list', '{TEST_DIR}/validation_list.avro'))]))
+) TO '{TEST_DIR}/validation.metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+# Negative record counts used to reach NumericCast<idx_t> in scan ordering.
+# Status and content must be checked before conversion to their uint8_t enums.
+foreach kind negative_records negative_size negative_nulls empty_path invalid_status negative_status invalid_content negative_content
+
+statement ok
+COPY (SELECT * FROM manifest_rows('{kind}')) TO '{TEST_DIR}/validation_manifest.avro' (
+	FORMAT AVRO,
+	METADATA {'schema-id': '0', 'partition-spec-id': '0', 'format-version': '2', 'content': 'data'},
+	FIELD_IDS getvariable('manifest_field_ids')
+);
+
+statement error
+SELECT * FROM iceberg_scan('{TEST_DIR}/validation.metadata.json') ORDER BY id LIMIT 1;
+----
+Invalid Configuration Error:
+
+query I
+SELECT 42;
+----
+42
+
+endloop
+
+# Invalid optional bounds are omitted, as for other unreadable statistics.
+# Empty/oversized decimal blobs must not assert or silently become a false bound.
+statement ok
+CALL enable_logging('Iceberg');
+
+foreach kind oversized_bounds empty_bounds valid_bounds
+
+statement ok
+COPY (SELECT * FROM manifest_rows('{kind}')) TO '{TEST_DIR}/validation_manifest.avro' (
+	FORMAT AVRO,
+	METADATA {'schema-id': '0', 'partition-spec-id': '0', 'format-version': '2', 'content': 'data'},
+	FIELD_IDS getvariable('manifest_field_ids')
+);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(id ORDER BY id) FROM iceberg_scan('{TEST_DIR}/validation.metadata.json')
+WHERE d4 = -1 AND d9 = -1 AND d18 = -1 AND d38 = -1;
+----
+[1, 2]
+
+query I
+SELECT (count(*) > 0) = ('{kind}' <> 'valid_bounds')
+FROM duckdb_logs() WHERE type = 'Iceberg' AND message LIKE 'Omitting invalid%';
+----
+true
+
+endloop
+
+# The spec ID in a manifest list is also an external reference.
+statement ok
+COPY (
+	SELECT * REPLACE (999::INTEGER AS partition_spec_id)
+	FROM read_avro('{TEST_DIR}/validation_list.avro')
+) TO '{TEST_DIR}/missing_spec_list.avro' (
+	FORMAT AVRO,
+	FIELD_IDS {manifest_path: 500, manifest_length: 501, partition_spec_id: 502,
+		content: 517, sequence_number: 515, min_sequence_number: 516, added_snapshot_id: 503}
+);
+
+statement ok
+COPY (
+	SELECT json_merge_patch(getvariable('manifest_metadata'),
+		json_object('snapshots', [json_merge_patch(getvariable('manifest_metadata')->'snapshots'->0,
+			json_object('manifest-list', '{TEST_DIR}/missing_spec_list.avro'))]))
+) TO '{TEST_DIR}/missing_spec.metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+statement error
+SELECT * FROM iceberg_scan('{TEST_DIR}/missing_spec.metadata.json');
+----
+Invalid Configuration Error: Manifest refers to partition spec 999, which is not in the table's partition-specs
+
+query I
+SELECT 42;
+----
+42

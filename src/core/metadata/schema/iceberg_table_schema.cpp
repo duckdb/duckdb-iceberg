@@ -28,14 +28,21 @@ static Value GetFieldIdValue(const IcebergColumnDefinition &column) {
 
 shared_ptr<IcebergTableSchema> IcebergTableSchema::ParseSchema(const rest_api_objects::Schema &schema) {
 	auto res = make_shared_ptr<IcebergTableSchema>();
-	D_ASSERT(schema.object_1.schema_id);
+	if (!schema.object_1.schema_id || *schema.object_1.schema_id < 0) {
+		throw InvalidConfigurationException("Iceberg schema must have a non-negative 'schema-id'");
+	}
 	res->schema_id = *schema.object_1.schema_id;
+	if (schema.struct_type.fields.empty()) {
+		throw InvalidConfigurationException("Iceberg schema %d contains no fields", res->schema_id);
+	}
 	for (auto &field : schema.struct_type.fields) {
 		res->columns.push_back(IcebergColumnDefinition::ParseStructField(*field));
 	}
 	if (auto &identifier_field_ids = schema.object_1.identifier_field_ids) {
 		res->identifier_field_ids = *identifier_field_ids;
 	}
+	// Reject duplicate IDs before any reader or writer can build an ambiguous field mapping.
+	res->GetSourceIdMap();
 	return res;
 }
 
@@ -67,7 +74,9 @@ void IcebergTableSchema::PopulateSourceIdMap(unordered_map<uint64_t, ColumnIndex
 		}
 
 		PopulateSourceIdMap(source_to_column_id, column->GetChildren(), new_index);
-		source_to_column_id.emplace(static_cast<uint64_t>(column->id), std::move(new_index));
+		if (!source_to_column_id.emplace(static_cast<uint64_t>(column->id), std::move(new_index)).second) {
+			throw InvalidConfigurationException("Duplicate field id %d in Iceberg schema", column->id);
+		}
 	}
 }
 

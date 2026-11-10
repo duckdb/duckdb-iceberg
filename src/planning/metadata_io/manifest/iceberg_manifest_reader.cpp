@@ -41,6 +41,14 @@ static T ReadRequiredField(const char *name, const ENTRY &entry) {
 	return entry.GetValueUnsafe();
 }
 
+static int64_t ReadNonNegativeField(const char *name, const Int64Entries::ValueEntry &entry) {
+	auto value = ReadRequiredField<int64_t>(name, entry);
+	if (value < 0) {
+		throw InvalidConfigurationException("data_file field '%s' cannot be negative", name);
+	}
+	return value;
+}
+
 template <class T, class ENTRY>
 static optional<T> ReadOptionalField(const ENTRY &entry) {
 	if (entry.IsValid()) {
@@ -56,14 +64,18 @@ static unordered_map<int32_t, Value> GetBounds(const IntStringMapEntries::ValueE
 	}
 
 	for (const auto bounds_entry : entry.GetChildValues()) {
+		if (!bounds_entry.IsValid()) {
+			throw InvalidConfigurationException("Bounds map contains a NULL entry");
+		}
 		auto key_entry = bounds_entry.template GetChildValue<0>();
 		auto value_entry = bounds_entry.template GetChildValue<1>();
+		auto key = ReadRequiredField<int32_t>("bounds.key", key_entry);
 		auto value = Value(LogicalType::BLOB);
 		if (value_entry.IsValid()) {
 			auto &str = value_entry.GetValueUnsafe();
 			value = Value::BLOB(const_data_ptr_cast(str.GetData()), str.GetSize());
 		}
-		parsed_bounds[key_entry.GetValueUnsafe()] = value;
+		parsed_bounds[key] = value;
 	}
 	return parsed_bounds;
 }
@@ -75,13 +87,20 @@ static unordered_map<int32_t, int64_t> GetCounts(const char *name, const IntIntM
 	}
 
 	for (const auto count_entry : entry.GetChildValues()) {
+		if (!count_entry.IsValid()) {
+			throw InvalidConfigurationException("'%s' map contains a NULL entry", name);
+		}
 		auto key_entry = count_entry.template GetChildValue<0>();
 		auto value_entry = count_entry.template GetChildValue<1>();
-		auto key = key_entry.GetValueUnsafe();
+		auto key = ReadRequiredField<int32_t>("counts.key", key_entry);
 		if (!value_entry.IsValid()) {
 			throw InvalidConfigurationException("'%s' map's value for key '%d' is NULL", name, key);
 		}
-		parsed_counts[key] = value_entry.GetValueUnsafe();
+		auto count = value_entry.GetValueUnsafe();
+		if (count < 0) {
+			throw InvalidConfigurationException("'%s' map's value for key '%d' cannot be negative", name, key);
+		}
+		parsed_counts[key] = count;
 	}
 	return parsed_counts;
 }
@@ -230,13 +249,20 @@ void ManifestReader::ReadChunk(DataChunk &chunk, const map<idx_t, LogicalType> &
 	for (idx_t i = 0; i < count; i++) {
 		IcebergManifestEntry entry;
 
-		entry.status = (IcebergManifestEntryStatusType)ReadRequiredField<int32_t>("status", status_entries[i]);
+		auto status_value = ReadRequiredField<int32_t>("status", status_entries[i]);
+		if (status_value < 0 || status_value > 2) {
+			throw InvalidConfigurationException("Invalid manifest entry status: %d", status_value);
+		}
+		entry.status = static_cast<IcebergManifestEntryStatusType>(status_value);
 
 		auto &data_file = entry.data_file;
 		data_file.file_path = ReadRequiredField<string_t>("file_path", file_path_entries[i]).GetString();
+		if (data_file.file_path.empty()) {
+			throw InvalidConfigurationException("data_file field 'file_path' cannot be empty");
+		}
 		data_file.file_format = ReadRequiredField<string_t>("file_format", file_format_entries[i]).GetString();
-		data_file.record_count = ReadRequiredField<int64_t>("record_count", record_count_entries[i]);
-		data_file.file_size_in_bytes = ReadRequiredField<int64_t>("file_size_in_bytes", file_size_in_bytes_entries[i]);
+		data_file.record_count = ReadNonNegativeField("record_count", record_count_entries[i]);
+		data_file.file_size_in_bytes = ReadNonNegativeField("file_size_in_bytes", file_size_in_bytes_entries[i]);
 
 		data_file.lower_bounds = GetBounds(lower_bounds_entries[i]);
 		data_file.upper_bounds = GetBounds(upper_bounds_entries[i]);
@@ -257,8 +283,11 @@ void ManifestReader::ReadChunk(DataChunk &chunk, const map<idx_t, LogicalType> &
 		if (manifest_format_version >= 2) {
 			D_ASSERT(content_entries);
 			D_ASSERT(referenced_data_file_entries);
-			data_file.content =
-			    (IcebergManifestEntryContentType)ReadRequiredField<int32_t>("content", (*content_entries)[i]);
+			auto content_value = ReadRequiredField<int32_t>("content", (*content_entries)[i]);
+			if (content_value < 0 || content_value > 2) {
+				throw InvalidConfigurationException("Invalid data file content: %d", content_value);
+			}
+			data_file.content = static_cast<IcebergManifestEntryContentType>(content_value);
 			data_file.equality_ids = GetEqualityIds(equality_ids_entries[i]);
 
 			entry.SetSequenceNumber(ReadOptionalField<int64_t>(sequence_number_entries[i]));

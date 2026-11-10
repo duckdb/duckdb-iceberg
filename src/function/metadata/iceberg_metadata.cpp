@@ -172,8 +172,19 @@ static void IcebergMetaDataFunction(ClientContext &context, TableFunctionInput &
 			AddString(output.data[6], out, string_t(data_file.file_format));
 			//! record_count
 			FlatVector::GetDataMutable<int64_t>(output.data[7])[out] = data_file.record_count;
-			FlatVector::GetDataMutable<int64_t>(output.data[8])[out] = manifest_entry.GetSequenceNumber(manifest);
-			FlatVector::GetDataMutable<int64_t>(output.data[9])[out] = manifest_entry.GetFileSequenceNumber(manifest);
+			//! data_sequence_number / file_sequence_number: NULL when an EXISTING/DELETED entry has none
+			auto data_sequence_number = manifest_entry.TryGetSequenceNumber(manifest);
+			if (data_sequence_number) {
+				FlatVector::GetDataMutable<int64_t>(output.data[8])[out] = *data_sequence_number;
+			} else {
+				FlatVector::SetNull(output.data[8], out, true);
+			}
+			auto file_sequence_number = manifest_entry.TryGetFileSequenceNumber(manifest);
+			if (file_sequence_number) {
+				FlatVector::GetDataMutable<int64_t>(output.data[9])[out] = *file_sequence_number;
+			} else {
+				FlatVector::SetNull(output.data[9], out, true);
+			}
 			out++;
 		}
 		global_state.current_manifest_entry_idx = 0;

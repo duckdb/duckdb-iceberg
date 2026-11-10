@@ -1,0 +1,298 @@
+# name: test/sql/local/iceberg_scans/metadata_validation.test
+# description: Malformed metadata is rejected as configuration errors without invalidating the database
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+SET VARIABLE base_metadata = '{
+	"format-version": 2, "table-uuid": "11111111-1111-1111-1111-111111111111",
+	"location": "{TEST_DIR}", "last-updated-ms": 0, "last-column-id": 1,
+	"last-sequence-number": 0, "current-schema-id": 0,
+	"schemas": [{"schema-id": 0, "type": "struct",
+		"fields": [{"id": 1, "name": "i", "type": "int", "required": false}]}],
+	"partition-specs": [{"spec-id": 0, "fields": []}], "default-spec-id": 0,
+	"sort-orders": [{"order-id": 0, "fields": []}], "default-sort-order-id": 0,
+	"snapshots": []
+}'::JSON;
+
+statement ok
+CREATE MACRO metadata_with_field(field) AS json_merge_patch(getvariable('base_metadata'),
+	json_object('schemas', [json_object('schema-id', 0, 'type', 'struct', 'fields', [field::JSON])]));
+
+statement ok
+CREATE MACRO metadata_field(field_type) AS
+	json_object('id', 1, 'name', 'i', 'type', field_type, 'required', false);
+
+# Validate before indexing decimal arguments or constructing a DuckDB DECIMAL.
+foreach type decimal decimal() decimal(1) decimal(1,0,0) decimal[10,2] decimal(10,2 decimal(10,2)junk decimal(10,2junk) decimal(0,0) decimal(39,0) decimal(-1,0) decimal(10,-1) decimal(2,3) decimal(256,0) decimal(10,256) decimal(999999999999999999999,0)
+
+statement ok
+COPY (SELECT metadata_with_field(metadata_field('{type}')))
+TO '{TEST_DIR}/invalid_metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+statement error
+SELECT * FROM iceberg_scan('{TEST_DIR}/invalid_metadata.json');
+----
+Invalid Configuration Error: Invalid decimal type
+
+query I
+SELECT 42;
+----
+42
+
+endloop
+
+# Valid boundary values and conventional whitespace remain supported.
+foreach type decimal(1,0) decimal(4,4) decimal(9,0) decimal(18,18) decimal(38,0) decimal(38,38)
+
+statement ok
+COPY (SELECT metadata_with_field(metadata_field('{type}')))
+TO '{TEST_DIR}/valid_metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+query I
+SELECT count(*) FROM iceberg_scan('{TEST_DIR}/valid_metadata.json');
+----
+0
+
+endloop
+
+statement ok
+COPY (SELECT metadata_with_field(metadata_field('decimal(10, 2)')))
+TO '{TEST_DIR}/valid_metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+query I
+SELECT count(*) FROM iceberg_scan('{TEST_DIR}/valid_metadata.json');
+----
+0
+
+# The transform parser is shared by partition specs and sort orders.
+foreach transform bucket bucket[] bucket[0] bucket[-1] bucket[1.5] bucket[1junk] bucket[1]junk bucket[2147483648] truncate truncate[] truncate[0] truncate[-1] truncate[1junk] truncate[999999999999999999999]
+
+foreach kind partition sort
+
+statement ok
+COPY (
+	SELECT json_merge_patch(getvariable('base_metadata'),
+		CASE '{kind}'
+			WHEN 'partition' THEN json_object('partition-specs', [json_object('spec-id', 0, 'fields',
+				[json_object('source-id', 1, 'field-id', 1000, 'name', 'p', 'transform', '{transform}')])])
+			ELSE json_object('sort-orders', [json_object('order-id', 0, 'fields',
+				[json_object('source-id', 1, 'transform', '{transform}', 'direction', 'asc', 'null-order', 'nulls-first')])])
+		END)
+) TO '{TEST_DIR}/invalid_metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+statement error
+SELECT * FROM iceberg_scan('{TEST_DIR}/invalid_metadata.json');
+----
+Invalid Configuration Error: Invalid Iceberg transform
+
+query I
+SELECT 42;
+----
+42
+
+endloop
+
+endloop
+
+# JSON defaults have to match the declared type before accessing their optional payload.
+foreach default initial-default write-default
+
+foreach type boolean int long float double
+
+statement ok
+COPY (SELECT metadata_with_field(json_merge_patch(metadata_field('{type}'), '{"{default}": "wrong"}')))
+TO '{TEST_DIR}/invalid_metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+statement error
+SELECT * FROM iceberg_scan('{TEST_DIR}/invalid_metadata.json');
+----
+Invalid Configuration Error: Invalid JSON default value
+
+query I
+SELECT 42;
+----
+42
+
+endloop
+
+foreach type string uuid date time timestamp timestamptz timestamp_ns timestamptz_ns decimal(10,2) fixed[2] binary
+
+statement ok
+COPY (SELECT metadata_with_field(json_merge_patch(metadata_field('{type}'), '{"{default}": true}')))
+TO '{TEST_DIR}/invalid_metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+statement error
+SELECT * FROM iceberg_scan('{TEST_DIR}/invalid_metadata.json');
+----
+Invalid Configuration Error: Invalid JSON default value
+
+query I
+SELECT 42;
+----
+42
+
+endloop
+
+statement ok
+COPY (SELECT metadata_with_field(json_merge_patch(metadata_field('date'), '{"{default}": "not-a-date"}')))
+TO '{TEST_DIR}/invalid_metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+statement error
+SELECT * FROM iceberg_scan('{TEST_DIR}/invalid_metadata.json');
+----
+Invalid Configuration Error: Invalid default value for DATE
+
+statement ok
+COPY (SELECT metadata_with_field(json_merge_patch(metadata_field('binary'), '{"{default}": "zz"}')))
+TO '{TEST_DIR}/invalid_metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+statement error
+SELECT * FROM iceberg_scan('{TEST_DIR}/invalid_metadata.json');
+----
+Invalid Configuration Error: Invalid hexadecimal default
+
+query I
+SELECT 42;
+----
+42
+
+endloop
+
+# Defaults and references must not become invalid optional indexes or unchecked map lookups.
+foreach property current-schema-id default-spec-id default-sort-order-id
+
+statement ok
+COPY (SELECT json_merge_patch(getvariable('base_metadata'), json_object('{property}', 999)))
+TO '{TEST_DIR}/invalid_metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+statement error
+SELECT * FROM iceberg_scan('{TEST_DIR}/invalid_metadata.json');
+----
+Invalid Configuration Error:
+
+query I
+SELECT 42;
+----
+42
+
+endloop
+
+foreach property last-column-id last-partition-id last-sequence-number default-sort-order-id
+
+statement ok
+COPY (SELECT json_merge_patch(getvariable('base_metadata'), json_object('{property}', -1)))
+TO '{TEST_DIR}/invalid_metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+statement error
+SELECT * FROM iceberg_scan('{TEST_DIR}/invalid_metadata.json');
+----
+Invalid Configuration Error: Iceberg metadata has a negative
+
+query I
+SELECT 42;
+----
+42
+
+endloop
+
+statement ok
+CREATE TABLE invalid_metadata_patches (patch JSON);
+
+statement ok
+INSERT INTO invalid_metadata_patches VALUES
+	('{"schemas":[{"schema-id":-1,"type":"struct","fields":[]}],"current-schema-id":-1}'),
+	('{"schemas":[{"schema-id":0,"type":"struct","fields":[]}]}'),
+	('{"schemas":[{"schema-id":0,"type":"struct","fields":[{"id":-1,"name":"i","required":false,"type":"int"}]}]}'),
+	('{"schemas":[{"schema-id":0,"type":"struct","fields":[{"id":1,"name":"s","required":false,"type":{"type":"struct","fields":[{"id":1,"name":"i","required":false,"type":"int"}]}}]}]}'),
+	('{"partition-specs":[{"spec-id":-1,"fields":[]}],"default-spec-id":-1}'),
+	('{"partition-specs":[{"spec-id":0,"fields":[{"source-id":-1,"field-id":1000,"name":"p","transform":"identity"}]}]}'),
+	('{"partition-specs":[{"spec-id":0,"fields":[{"source-id":1,"field-id":-1,"name":"p","transform":"identity"}]}]}'),
+	('{"partition-specs":[{"spec-id":0,"fields":[{"source-id":1,"field-id":1000,"name":"p","transform":"identity"},{"source-id":1,"field-id":1000,"name":"q","transform":"bucket[2]"}]}]}'),
+	('{"sort-orders":[{"order-id":-1,"fields":[]}]}'),
+	('{"sort-orders":[{"order-id":0,"fields":[{"source-id":-1,"transform":"identity","direction":"asc","null-order":"nulls-first"}]}]}'),
+	('{"snapshots":[{"snapshot-id":1,"timestamp-ms":0,"manifest-list":"unused.avro","summary":{"operation":"append"}}]}'),
+	('{"snapshots":[{"snapshot-id":1,"sequence-number":-1,"timestamp-ms":0,"manifest-list":"unused.avro","summary":{"operation":"append"}}]}'),
+	('{"snapshots":[{"snapshot-id":1,"schema-id":-1,"sequence-number":1,"timestamp-ms":0,"manifest-list":"unused.avro","summary":{"operation":"append"}}]}');
+
+loop i 0 13
+
+statement ok
+COPY (SELECT json_merge_patch(getvariable('base_metadata'), patch)
+	FROM invalid_metadata_patches WHERE rowid = {i})
+TO '{TEST_DIR}/invalid_metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+statement error
+SELECT * FROM iceberg_scan('{TEST_DIR}/invalid_metadata.json');
+----
+Invalid Configuration Error:
+
+query I
+SELECT 42;
+----
+42
+
+endloop
+
+# Name mappings must be validated before accessing untyped JSON values. A
+# non-string name with a nonzero JSON length previously caused a process crash.
+statement ok
+CREATE TABLE invalid_name_mappings AS
+SELECT row_number() OVER () - 1 AS i, mapping
+FROM unnest([
+	'{',
+	'{}',
+	'[null]',
+	'[{"field-id":1}]',
+	'[{"field-id":1,"names":false}]',
+	'[{"field-id":1,"names":[123]}]',
+	'[{"field-id":1,"names":[null]}]',
+	'[{"field-id":1,"names":[true]}]',
+	'[{"field-id":1,"names":[["i"]]}]',
+	'[{"field-id":1,"names":[{"i":1}]}]',
+	'[{"field-id":"bad","names":["i"]}]',
+	'[{"field-id":true,"names":["i"]}]',
+	'[{"field-id":1.5,"names":["i"]}]',
+	'[{"field-id":4294967297,"names":["i"]}]',
+	'[{"field-id":-2147483649,"names":["i"]}]',
+	'[{"field-id":1,"names":["i"],"fields":{}}]',
+	'[{"field-id":1,"names":["i"],"fields":[{"field-id":2,"names":[123]}]}]'
+]) AS t(mapping);
+
+loop i 0 17
+
+statement ok
+COPY (
+	SELECT json_merge_patch(getvariable('base_metadata'),
+		json_object('properties', json_object('schema.name-mapping.default', mapping)))
+	FROM invalid_name_mappings WHERE i = {i}
+) TO '{TEST_DIR}/invalid_metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+statement error
+SELECT * FROM iceberg_scan('{TEST_DIR}/invalid_metadata.json');
+----
+Invalid Configuration Error: Invalid Iceberg name mapping
+
+query I
+SELECT 42;
+----
+42
+
+endloop
+
+# Imported-only fields may omit field-id, and empty names and nullable optional
+# fields are valid even though these mappings do not name a column in this file.
+statement ok
+COPY (
+	SELECT json_merge_patch(getvariable('base_metadata'), json_object('properties',
+		json_object('schema.name-mapping.default',
+			'[{"field-id":1,"names":["i"]},{"names":["imported"]},{"field-id":null,"names":["unmapped"],"fields":null},{"field-id":20,"names":[]}]')))
+) TO '{TEST_DIR}/valid_metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+query I
+SELECT count(*) FROM iceberg_scan('{TEST_DIR}/valid_metadata.json');
+----
+0
