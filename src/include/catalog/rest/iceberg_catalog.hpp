@@ -144,6 +144,10 @@ public:
 	}
 	optional<Identifier> GetDefaultSchema() const override;
 	ErrorData SupportsCreateTable(BoundCreateTableInfo &info) override;
+	//! Applies IDENTIFIER_CASE to a namespace or table name
+	string FoldIdentifier(const string &name) const;
+	//! Applies IDENTIFIER_CASE to the schema and name parts, keeping the catalog alias as written
+	QualifiedName FoldName(const QualifiedName &name) const;
 
 public:
 	void Initialize(bool load_builtin) override;
@@ -163,6 +167,8 @@ public:
 	                             optional_ptr<PhysicalOperator> plan) override;
 	PhysicalOperator &PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner, LogicalCreateTable &op,
 	                                    PhysicalOperator &plan) override;
+	//! Plans a copy-on-write DELETE itself; any other DELETE plans its child and continues below
+	PhysicalOperator &PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op) override;
 	PhysicalOperator &PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
 	                             PhysicalOperator &plan) override;
 	//! Shared delete-planning body both PlanDelete and MERGE build on; only PlanDelete additionally opts the
@@ -203,8 +209,10 @@ public:
 	IcebergAttachOptions attach_options;
 	//! Optionally (user-)provided default schema to use
 	optional<Identifier> default_schema;
+	case_insensitive_map_t<string> catalog_properties;
 
 private:
+	IcebergEndpointType endpoint_type = IcebergEndpointType::INVALID;
 	//! Original client selector, used for ATTACH OR REPLACE comparisons.
 	const string attach_path;
 	//! warehouse

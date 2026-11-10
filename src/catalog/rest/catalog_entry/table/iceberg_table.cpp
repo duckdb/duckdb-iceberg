@@ -34,6 +34,7 @@
 #include "core/expression/iceberg_transform.hpp"
 #include "common/iceberg_utils.hpp"
 #include "iceberg_options.hpp"
+#include "catalog/rest/iceberg_file_credentials.hpp"
 
 #include <climits>
 
@@ -41,6 +42,51 @@ namespace duckdb {
 
 const string &IcebergTable::BaseFilePath() const {
 	return table_metadata.location;
+}
+
+void IcebergTable::VerifyReadEncryptionSupported() const {
+	for (auto &sse_type : GetS3EncryptionTypes()) {
+		if (StringUtil::CIEquals(sse_type, "custom")) {
+			throw NotImplementedException("Cannot read Iceberg table '%s': the catalog requests S3 server-side "
+			                              "encryption with 's3.sse.type'='%s'",
+			                              name, sse_type);
+		}
+	}
+}
+
+void IcebergTable::VerifyWriteEncryptionSupported() const {
+	for (auto &sse_type : GetS3EncryptionTypes()) {
+		if (!StringUtil::CIEquals(sse_type, "none")) {
+			throw NotImplementedException("Cannot write to Iceberg table '%s': the catalog requests S3 server-side "
+			                              "encryption with 's3.sse.type'='%s'",
+			                              name, sse_type);
+		}
+	}
+}
+
+vector<string> IcebergTable::GetS3EncryptionTypes() const {
+	vector<string> sse_types;
+	if (DetectStorageType(table_metadata.GetLocation()) != "s3") {
+		return sse_types;
+	}
+	// table config overrides the catalog config, and each storage credential overrides both.
+	static const string SSE_TYPE = "s3.sse.type";
+	auto it = config.find(SSE_TYPE);
+	if (it != config.end()) {
+		sse_types.push_back(it->second);
+	} else {
+		auto catalog_it = catalog.catalog_properties.find(SSE_TYPE);
+		if (catalog_it != catalog.catalog_properties.end()) {
+			sse_types.push_back(catalog_it->second);
+		}
+	}
+	for (auto &credential : storage_credentials) {
+		auto credential_it = credential.config.find(SSE_TYPE);
+		if (credential_it != credential.config.end()) {
+			sse_types.push_back(credential_it->second);
+		}
+	}
+	return sse_types;
 }
 
 static void ParseGCSConfigOptions(const case_insensitive_map_t<string> &config,
@@ -160,7 +206,7 @@ static void ParseConfigOptions(const case_insensitive_map_t<string> &config, cas
 			                            it->second);
 		}
 
-		options["use_ssl"] = Value(!path_style);
+		// path-style access only changes where the bucket name goes in the URL; the endpoint's scheme decides ssl.
 		if (path_style) {
 			options["url_style"] = "path";
 		}
@@ -173,6 +219,8 @@ static void ParseConfigOptions(const case_insensitive_map_t<string> &config, cas
 	auto endpoint = endpoint_it->second.ToString();
 	if (StringUtil::StartsWith(endpoint, "http://")) {
 		endpoint = endpoint.substr(7, string::npos);
+		// an endpoint with http:// doesn't use ssl.
+		options["use_ssl"] = Value(false);
 	}
 	if (StringUtil::StartsWith(endpoint, "https://")) {
 		endpoint = endpoint.substr(8, string::npos);
@@ -183,6 +231,24 @@ static void ParseConfigOptions(const case_insensitive_map_t<string> &config, cas
 		endpoint = endpoint.substr(0, endpoint.size() - 1);
 	}
 	endpoint_it->second = endpoint;
+}
+
+//! A vended secret is scoped to the table, so DuckDB uses it for the table's files instead of the user's own S3 secret.
+//! Copy the KMS key from the user's secret for this location, unless the vended options already set one.
+static void AddUserKMSKeyId(ClientContext &context, const string &location, case_insensitive_map_t<Value> &options) {
+	if (options.find("kms_key_id") != options.end()) {
+		return;
+	}
+	auto transaction = CatalogTransaction::GetSystemCatalogTransaction(context);
+	auto secret_match = SecretManager::Get(context).LookupSecret(transaction, location, "s3");
+	if (!secret_match.HasMatch()) {
+		return;
+	}
+	auto &kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_match.secret_entry->secret);
+	auto kms_key_id = kv_secret.TryGetValue("kms_key_id");
+	if (!kms_key_id.IsNull()) {
+		options["kms_key_id"] = kms_key_id;
+	}
 }
 
 IRCAPITableCredentials IcebergTable::GetVendedCredentials(ClientContext &context) const {
@@ -310,6 +376,9 @@ IRCAPITableCredentials IcebergTable::GetVendedCredentials(
 		}
 
 		ParseConfigOptions(credential.config, create_secret_input.options, context, storage_type);
+		if (storage_type == "s3") {
+			AddUserKMSKeyId(context, table_location, create_secret_input.options);
+		}
 		//! A storage credential's own config takes precedence over the table's
 		auto &signing_flag_config =
 		    credential.config.count(IcebergRemoteSigning::ENABLED_KEY) ? credential.config : table_config;
@@ -340,6 +409,9 @@ IRCAPITableCredentials IcebergTable::GetVendedCredentials(
 
 		//! TODO: apply the 'overrides' retrieved from the /v1/config endpoint
 		config.options = config_options;
+		if (storage_type == "s3") {
+			AddUserKMSKeyId(context, table_location, config.options);
+		}
 		config.name = Identifier(secret_base_name);
 		config.type = Identifier(storage_type);
 		config.provider = "config";
@@ -454,6 +526,14 @@ optional<int64_t> IcebergTable::GetExistingSortOrderId(IcebergSortOrder &spec) {
 	return std::nullopt;
 }
 
+static void VerifyTransformSource(const ParsedExpression &key, const IcebergTransform &transform,
+                                  const IcebergColumnDefinition &source, const char *operation) {
+	if (!transform.CanTransform(source.type)) {
+		throw InvalidInputException("Cannot %s by '%s': the %s transform doesn't accept %s columns", operation,
+		                            key.ToString(), transform.RawType(), source.type.ToString());
+	}
+}
+
 IcebergPartitionSpec IcebergTable::BuildPartitionSpec(const vector<unique_ptr<ParsedExpression>> &partition_keys,
                                                       const IcebergTableSchema &schema, int32_t spec_id,
                                                       idx_t base_partition_field_id) {
@@ -465,6 +545,7 @@ IcebergPartitionSpec IcebergTable::BuildPartitionSpec(const vector<unique_ptr<Pa
 		if (source_columns.size() != 1) {
 			throw InvalidInputException("Multi-argument transforms are not supported yet!");
 		}
+		VerifyTransformSource(*key, transform, source_columns[0].get(), "partition");
 		auto source_id = source_columns[0].get().id;
 		auto column_name = source_columns[0].get().name;
 
@@ -491,6 +572,7 @@ IcebergSortOrder IcebergTable::BuildSortOrder(ClientContext &context, const vect
 		if (source_columns.size() != 1) {
 			throw InvalidInputException("Multi-argument transforms are not supported yet!");
 		}
+		VerifyTransformSource(*order.expression, transform, source_columns[0].get(), "sort");
 		auto source_id = source_columns[0].get().id;
 
 		auto direction = config.ResolveOrder(context, order.type);
@@ -642,6 +724,7 @@ static bool DelegatesStorageAccess(IRCAccessDelegationMode access_mode) {
 }
 
 void IcebergTable::LoadCredentials(ClientContext &context) const {
+	VerifyReadEncryptionSupported();
 	if (!DelegatesStorageAccess(catalog.attach_options.access_mode)) {
 		// assume secret already exists
 		return;
@@ -857,8 +940,9 @@ IcebergTableMetadata IcebergTable::CreateMetadataFromLog(ClientContext &context,
 	}
 
 	auto fs = make_shared_ptr<CachingFileSystemWrapper>(FileSystem::GetFileSystem(context), *context.db);
-	auto &path = log[log_item_index.GetIndex()].metadata_file;
-	auto parsed_metadata = IcebergTableMetadata::Parse(path, *fs, "");
+	auto metadata_file =
+	    IcebergFileCredentialsCallback::GetFileInfo(context, *this, log[log_item_index.GetIndex()].metadata_file);
+	auto parsed_metadata = IcebergTableMetadata::Parse(metadata_file, *fs, "");
 
 	return IcebergTableMetadata::FromTableMetadata(parsed_metadata);
 }
@@ -959,8 +1043,9 @@ void IcebergTable::InitializeFromCatalogResponse(ClientContext &context,
 		try {
 			auto &fs = FileSystem::GetFileSystem(context);
 			auto caching_fs = make_shared_ptr<CachingFileSystemWrapper>(fs, *context.db);
+			auto metadata_file = IcebergFileCredentialsCallback::GetFileInfo(context, *this, metadata_location);
 			file_metadata = make_uniq<const rest_api_objects::TableMetadata>(
-			    IcebergTableMetadata::Parse(metadata_location, *caching_fs, "none"));
+			    IcebergTableMetadata::Parse(metadata_file, *caching_fs, "none"));
 		} catch (std::exception &ex) {
 			DUCKDB_LOG(context, IcebergLogType,
 			           "Could not load table metadata from metadata-location '%s': %s - falling back to the "

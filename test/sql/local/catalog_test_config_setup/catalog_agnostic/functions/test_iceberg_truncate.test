@@ -217,3 +217,30 @@ statement error
 SELECT iceberg_truncate(0, '\x01\x02'::BLOB);
 ----
 <REGEX>:.*width must be a positive integer.*
+
+# A non-constant width is checked per row
+
+statement error
+SELECT iceberg_truncate(w, 1::INTEGER) FROM (VALUES (0)) t(w);
+----
+<REGEX>:.*width must be a positive integer, got 0.*
+
+statement error
+SELECT iceberg_truncate(w, 1::BIGINT) FROM (VALUES (0)) t(w);
+----
+<REGEX>:.*width must be a positive integer, got 0.*
+
+statement error
+SELECT iceberg_truncate(w, 'iceberg') FROM (VALUES (-1)) t(w);
+----
+<REGEX>:.*width must be a positive integer, got -1.*
+
+statement error
+SELECT iceberg_truncate(w, '\x01\x02'::BLOB) FROM (VALUES (-1)) t(w);
+----
+<REGEX>:.*width must be a positive integer, got -1.*
+
+statement error
+SELECT iceberg_truncate(w, 14.20::DECIMAL(9,2)) FROM (VALUES (0)) t(w);
+----
+<REGEX>:.*width must be a positive integer, got 0.*

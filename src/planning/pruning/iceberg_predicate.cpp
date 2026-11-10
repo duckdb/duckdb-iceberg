@@ -1,5 +1,6 @@
 #include "planning/pruning/iceberg_predicate.hpp"
 
+#include "duckdb/common/optional.hpp"
 #include "duckdb/common/types/variant_iterator.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
@@ -14,8 +15,10 @@
 #include "duckdb/planner/filter/in_filter.hpp"
 #include "duckdb/planner/filter/optional_filter.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/logical_operator_visitor.hpp"
 #include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/storage/statistics/base_statistics.hpp"
 #include "duckdb/storage/statistics/geometry_stats.hpp"
 
 namespace duckdb {
@@ -72,29 +75,30 @@ static bool NaNMayMatch(const Value &constant, ExpressionType comparison_type, c
 template <class TRANSFORM>
 static bool MatchBoundsConstantTemplated(const Value &constant, ExpressionType comparison_type,
                                          const IcebergPredicateStats &stats, const IcebergTransform &transform) {
+	if (constant.IsNull()) {
+		switch (comparison_type) {
+		case ExpressionType::COMPARE_DISTINCT_FROM:
+			return stats.has_not_null && !stats.BoundsAreNull();
+		case ExpressionType::COMPARE_NOT_DISTINCT_FROM:
+			return stats.has_null;
+		default:
+			//! Ordinary comparisons with NULL are never true.
+			return false;
+		}
+	}
+
 	auto constant_value = TRANSFORM::ApplyTransform(constant, transform);
 	if (constant_value.IsNull()) {
 		//! Comparison with NULL is never true here
 		return false;
 	}
 
-	if (stats.BoundsAreNull()) {
-		// bounds are actually null, expression is not a null comparison expression
-		// those are handled in MatchBoundsExpression
-		// So we can return false since no remaining expression type will match a null value
+	if (stats.BoundsAreNull() || !stats.has_not_null) {
+		// Explicit NULL partition bounds or null counts prove every value NULL.
+		// Only IS DISTINCT FROM can match a non-NULL constant.
 		D_ASSERT(comparison_type != ExpressionType::OPERATOR_IS_NOT_NULL);
 		D_ASSERT(comparison_type != ExpressionType::OPERATOR_IS_NULL);
-		D_ASSERT(comparison_type != ExpressionType::COMPARE_DISTINCT_FROM);
-		D_ASSERT(comparison_type != ExpressionType::COMPARE_NOT_DISTINCT_FROM);
-		return false;
-	}
-
-	if (!stats.has_not_null && comparison_type != ExpressionType::COMPARE_DISTINCT_FROM &&
-	    comparison_type != ExpressionType::COMPARE_NOT_DISTINCT_FROM) {
-		// has_not_null is false when every row of this column is NULL. Ordinary comparisons
-		// against a constant cannot match NULL so the file can be pruned. IS [NOT] DISTINCT FROM
-		// must consider NULL so cannot be pruned.
-		return false;
+		return comparison_type == ExpressionType::COMPARE_DISTINCT_FROM;
 	}
 
 	if (!stats.upper_bound || !stats.lower_bound) {
@@ -283,6 +287,23 @@ static bool IsVariantReference(const Expression &expr) {
 	return IsDirectReference(current_expr);
 }
 
+static optional<LogicalType> FindFilteredColumnType(const Expression &expr) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_REF) {
+		auto &ref = expr.Cast<BoundReferenceExpression>();
+		if (ref.Index() == 0) {
+			return ref.GetReturnType();
+		}
+		return nullopt;
+	}
+	optional<LogicalType> result;
+	ExpressionIterator::EnumerateChildren(expr, [&result](const Expression &child) {
+		if (!result) {
+			result = FindFilteredColumnType(child);
+		}
+	});
+	return result;
+}
+
 static bool MatchBoundsExpression(ClientContext &context, const unique_ptr<Expression> &expr_p,
                                   const IcebergPredicateStats &stats, const IcebergTransform &transform) {
 	auto &expr = *expr_p;
@@ -397,7 +418,33 @@ static bool MatchBoundsExpression(ClientContext &context, const unique_ptr<Expre
 			//! child filter wasn't populated (yet?) for some reason, just be conservative
 			return true;
 		}
-		return true;
+		if (transform.Type() != IcebergTransformType::IDENTITY) {
+			return true;
+		}
+		shared_ptr<BaseStatistics> column_stats;
+		if (!stats.has_not_null || stats.BoundsAreNull()) {
+			//! Counts or an explicit NULL identity partition prove every value NULL without usable bounds.
+			auto column_type = FindFilteredColumnType(expr);
+			if (!column_type) {
+				return true;
+			}
+			auto all_null_stats = BaseStatistics::CreateEmpty(*column_type);
+			if (stats.has_null) {
+				all_null_stats.SetHasNull();
+			}
+			column_stats = make_shared_ptr<BaseStatistics>(std::move(all_null_stats));
+		} else {
+			if (stats.HasMissingOrNullBounds()) {
+				return true;
+			}
+			column_stats = stats.BuildColumnStats(stats.lower_bound->type());
+		}
+		if (!column_stats) {
+			return true;
+		}
+		auto result = ExpressionFilter::CheckExpressionStatistics(&context, expr, *column_stats);
+		return result != FilterPropagateResult::FILTER_ALWAYS_FALSE &&
+		       result != FilterPropagateResult::FILTER_FALSE_OR_NULL;
 	}
 	default:
 		//! Conservative approach: we don't know what this is, just say it doesn't filter anything

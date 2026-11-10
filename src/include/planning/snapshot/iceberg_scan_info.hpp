@@ -38,6 +38,10 @@ public:
 	const IcebergTableMetadata &metadata;
 	optional_ptr<IcebergTransactionData> transaction_data;
 
+	//! Catalog scan serialization is an immediate plan copy, scoped to the binding statement.
+	hugeint_t serialization_transaction_id;
+	optional_idx serialization_query_id;
+
 	IcebergSnapshotScanInfo snapshot_info;
 	const IcebergTableSchema &schema;
 };

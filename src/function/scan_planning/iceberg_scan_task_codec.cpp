@@ -53,7 +53,7 @@ IcebergDeleteFile IcebergScanTaskCodec::ReadDeleteFile(const Value &descriptor) 
 	auto &values = StructValue::GetChildren(descriptor);
 	for (idx_t i = 0; i < 6; i++) {
 		if (values[i].IsNull()) {
-			throw InvalidInputException("iceberg_scan_tasks delete descriptor '%s' cannot be NULL",
+			throw InvalidInputException("iceberg_scan_tasks delete descriptor %s cannot be NULL",
 			                            StructType::GetChildName(descriptor.type(), i));
 		}
 	}
@@ -110,7 +110,7 @@ IcebergScanTaskCodec::BindInput(const LogicalType &task_type, vector<LogicalType
 	case_insensitive_map_t<idx_t> indexes;
 	for (idx_t i = 0; i < fields.size(); i++) {
 		if (!indexes.emplace(fields[i].first.GetIdentifierName(), i).second) {
-			throw BinderException("iceberg_scan_tasks input contains duplicate column '%s'", fields[i].first);
+			throw BinderException("iceberg_scan_tasks input contains duplicate column %s", fields[i].first);
 		}
 	}
 	auto expected = Columns(LogicalType::STRUCT({}), LogicalType::STRUCT({}));
@@ -195,13 +195,23 @@ IcebergFileScanTask IcebergScanTaskCodec::ReadTask(const Value &input, const Inp
 
 	auto constants = ReadValue(input, bind, PARTITION_CONSTANTS);
 	auto &values = StructValue::GetChildren(constants);
+	unordered_set<int32_t> identity_sources;
+	for (auto &field : metadata.partition_specs.at(result.partition_spec_id).fields) {
+		if (field.transform == IcebergTransformType::IDENTITY) {
+			identity_sources.insert(field.source_id);
+		}
+	}
 	for (idx_t i = 0; i < values.size(); i++) {
 		auto type = IcebergPartitionConstants::GetType(bind.partition_ids[i], schema, metadata.GetSchemas());
 		if (!type || *type != values[i].type()) {
 			throw InvalidInputException("iceberg_scan_tasks partition constant %d does not match the table schemas",
 			                            bind.partition_ids[i]);
 		}
-		result.partition_constants.emplace(bind.partition_ids[i], values[i]);
+		// The plan's type includes identity sources from every spec. NULL placeholders for other
+		// specs are not partition values and must not replace this file's schema defaults.
+		if (identity_sources.count(bind.partition_ids[i])) {
+			result.partition_constants.emplace(bind.partition_ids[i], values[i]);
+		}
 	}
 	auto deletes = ReadValue(input, bind, DELETE_FILES);
 	for (auto &descriptor : ListValue::GetChildren(deletes)) {

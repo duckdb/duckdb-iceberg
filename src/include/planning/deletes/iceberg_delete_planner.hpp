@@ -10,6 +10,7 @@ class IcebergScanPlanProvider;
 struct IcebergTableMetadata;
 class IcebergTableSchema;
 struct IcebergFilePruner;
+struct IcebergEqualityDeleteBounds;
 struct IcebergOptions;
 
 struct IcebergDeletePlanningContext {
@@ -34,7 +35,8 @@ struct IcebergDeletePlanner {
 	static bool DeleteEntryAppliesToDataFile(const IcebergDeletePlanningContext &context, idx_t delete_manifest_idx,
 	                                         const IcebergManifestEntry &delete_manifest_entry,
 	                                         const BoundIcebergManifestEntry &data_manifest_entry,
-	                                         const partition_value_map_t &data_partition_values);
+	                                         const partition_value_map_t &data_partition_values,
+	                                         optional_ptr<IcebergEqualityDeleteBounds> delete_bounds);
 };
 
 } // namespace duckdb

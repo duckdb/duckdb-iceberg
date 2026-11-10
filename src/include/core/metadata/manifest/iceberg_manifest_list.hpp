@@ -5,6 +5,7 @@
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/types/value.hpp"
+#include "duckdb/common/insertion_order_preserving_map.hpp"
 #include "duckdb/function/copy_function.hpp"
 #include "duckdb/execution/execution_context.hpp"
 #include "duckdb/parallel/thread_context.hpp"
@@ -80,6 +81,12 @@ public:
 	static IcebergManifestMetadata FromTableMetadata(const IcebergTableMetadata &table_metadata,
 	                                                 IcebergManifestContentType content,
 	                                                 optional<int32_t> partition_spec_id = nullopt);
+	//! The metadata of a manifest file, read from its Avro key-value metadata. 'path' names the manifest in errors.
+	//! 'manifest_list_spec_id' is the partition spec id the manifest list records for the manifest: a v1 manifest
+	//! without 'partition-spec-id' is read with the table's spec whose fields match its own 'partition-spec'.
+	static IcebergManifestMetadata FromAvroMetadata(const InsertionOrderPreservingMap<Value> &metadata,
+	                                                const string &path, const IcebergTableMetadata &table_metadata,
+	                                                int32_t manifest_list_spec_id);
 
 public:
 	const int32_t schema_id;
@@ -131,7 +138,8 @@ struct IcebergManifestFile : public IcebergManifest {
 	}
 
 	//! Resolve inherited identities against this file before moving entries into a replacement.
-	//! ADDED entries become EXISTING; explicit identities and previously DELETED entries are preserved.
+	//! ADDED entries become EXISTING and explicit identities are preserved. Previously DELETED entries are
+	//! dropped: a tombstone belongs only to the snapshot that deleted the file (Apache Iceberg semantics).
 	vector<IcebergManifestEntry> PrepareEntriesForRewrite(vector<IcebergManifestEntry> entries) const;
 
 	string manifest_path;

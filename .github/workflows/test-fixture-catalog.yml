@@ -71,11 +71,6 @@ jobs:
           sudo apt update -y -qq
           sudo apt install -y -qq python3-venv tar pkg-config llvm
 
-      - name: Install CMake 3.x
-        run: |
-          sudo apt-get remove -y cmake cmake-data
-          sudo apt-get install --allow-downgrades -y -qq 'cmake=3.*' 'cmake-data=3.*'
-
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
@@ -136,7 +131,7 @@ jobs:
 
           for i in {1..30}; do
             if curl -fsS --proxy "${VENDED_CREDENTIAL_REFRESH_PROXY}" http://127.0.0.1:8181/v1/config > /dev/null; then
-              ${{ inputs.build-path }}/test/unittest --order lex "$PWD/test/sql/local/catalog_custom_setup/fixture/vended_credentials_refresh*"
+              ${{ inputs.build-path }}/test/unittest --order lex "$PWD/test/sql/local/catalog_custom_setup/fixture/vended_credentials_*"
               exit 0
             fi
             sleep 1

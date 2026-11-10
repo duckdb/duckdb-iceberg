@@ -52,9 +52,6 @@ endif()
 build_loadable_extension(${TARGET_NAME} ${PARAMETERS} ${ALL_OBJECT_FILES})
 target_link_libraries(${TARGET_NAME}_loadable_extension duckdb_mbedtls)
 
-# AWS request signing uses mbedTLS symbols that DuckDB does not export.
-target_link_libraries(${TARGET_NAME}_loadable_extension duckdb_mbedtls)
-
 # Link Roaring library
 target_link_libraries(
   ${EXTENSION_NAME} PUBLIC roaring::roaring roaring::roaring-headers
@@ -67,3 +64,14 @@ install(
   EXPORT "${DUCKDB_EXPORT_SET}"
   LIBRARY DESTINATION "${INSTALL_LIB_DIR}"
   ARCHIVE DESTINATION "${INSTALL_LIB_DIR}")
+
+# The IcebergFileCredentialsCallback the file credentials tests under
+# test/sql/local/native_catalog load with 'require iceberg_test_credentials'.
+# Test-only, so linked into unittest alone; it must share a binary with this
+# extension, so its own CMakeLists.txt links it only when the extension is
+# linked.
+if(BUILD_UNITTESTS
+   AND NOT CLANG_TIDY
+   AND DUCKDB_EXTENSION_ICEBERG_SHOULD_BUILD)
+  add_subdirectory(test/extension/iceberg_test_credentials)
+endif()

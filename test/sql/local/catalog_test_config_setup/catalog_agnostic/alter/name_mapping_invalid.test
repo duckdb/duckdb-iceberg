@@ -1,0 +1,99 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/name_mapping_invalid.test
+# description: Invalid mappings are left unchanged when evolving a schema
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.name_mapping_invalid;
+
+statement ok
+CREATE TABLE my_datalake.default.name_mapping_invalid (a INTEGER) WITH (
+	'schema.name-mapping.default' = '[{"field-id":1,"names":["a"]}]'
+);
+
+statement ok
+CREATE TEMP TABLE invalid_name_mappings AS
+SELECT row_number() OVER () - 1 AS i, mapping
+FROM unnest([
+	'{',
+	'{}',
+	'[null]',
+	'[{"field-id":1}]',
+	'[{"field-id":1,"names":false}]',
+	'[{"field-id":1,"names":[123]}]',
+	'[{"field-id":1,"names":[null]}]',
+	'[{"field-id":1,"names":[true]}]',
+	'[{"field-id":1,"names":[["a"]]}]',
+	'[{"field-id":1,"names":[{"a":1}]}]',
+	'[{"field-id":"bad","names":["a"]}]',
+	'[{"field-id":true,"names":["a"]}]',
+	'[{"field-id":1.5,"names":["a"]}]',
+	'[{"field-id":4294967297,"names":["a"]}]',
+	'[{"field-id":-2147483649,"names":["a"]}]',
+	'[{"field-id":1,"names":["a"],"fields":{}}]',
+	'[{"field-id":1,"names":["a"],"fields":[{"field-id":2,"names":[123]}]}]'
+]) AS t(mapping);
+
+loop i 0 17
+
+statement ok
+SET VARIABLE invalid_mapping = (SELECT mapping FROM invalid_name_mappings WHERE i = {i});
+
+# Install invalid metadata only in this transaction so subsequent catalog loads see the valid original.
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_invalid SET ('schema.name-mapping.default' = getvariable('invalid_mapping'));
+
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_invalid RENAME COLUMN a TO a2;
+
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_invalid ADD COLUMN b INTEGER;
+
+query I
+SELECT value = getvariable('invalid_mapping')
+FROM iceberg_table_properties('my_datalake.default.name_mapping_invalid')
+WHERE key = 'schema.name-mapping.default';
+----
+true
+
+query I
+SELECT column_name FROM (DESCRIBE my_datalake.default.name_mapping_invalid);
+----
+a2
+b
+
+statement ok
+ROLLBACK;
+
+endloop
+
+query I
+SELECT value FROM iceberg_table_properties('my_datalake.default.name_mapping_invalid')
+WHERE key = 'schema.name-mapping.default';
+----
+[{"field-id":1,"names":["a"]}]
+
+# Imported-only fields can omit field-id, and fields absent from imported files can have no names.
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_invalid SET ('schema.name-mapping.default' =
+	'[{"field-id":1,"names":["a"]},{"names":["imported"]},{"field-id":null,"names":["unmapped"],"fields":null},{"field-id":20,"names":[]}]');
+
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_invalid RENAME COLUMN a TO a2;
+
+query I
+SELECT value FROM iceberg_table_properties('my_datalake.default.name_mapping_invalid')
+WHERE key = 'schema.name-mapping.default';
+----
+[{"field-id":1,"names":["a","a2"]},{"names":["imported"]},{"names":["unmapped"]},{"field-id":20,"names":[]}]
+
+statement ok
+DROP TABLE my_datalake.default.name_mapping_invalid;

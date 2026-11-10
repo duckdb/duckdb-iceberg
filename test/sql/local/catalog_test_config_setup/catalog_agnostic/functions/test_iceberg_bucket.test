@@ -313,3 +313,20 @@ statement error
 SELECT iceberg_bucket(0, 1000);
 ----
 <REGEX>:.*modulo must be a positive integer.*
+
+# A non-constant num_buckets is checked per row
+
+statement error
+SELECT iceberg_bucket(n, 1000) FROM (VALUES (0)) t(n);
+----
+<REGEX>:.*modulo must be a positive integer, got 0.*
+
+statement error
+SELECT iceberg_bucket(n, 'iceberg') FROM (VALUES (-4)) t(n);
+----
+<REGEX>:.*modulo must be a positive integer, got -4.*
+
+statement error
+SELECT iceberg_bucket(n, 14.20::DECIMAL(9,2)) FROM (VALUES (0)) t(n);
+----
+<REGEX>:.*modulo must be a positive integer, got 0.*

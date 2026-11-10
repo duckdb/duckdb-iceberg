@@ -2,6 +2,7 @@
 
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/optional.hpp"
+#include "duckdb/common/serializer/buffered_file_writer.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
@@ -36,6 +37,35 @@ public:
 };
 
 using IcebergPuffinFileFooterResult = std::variant<IcebergPuffinFileFooter, string>;
+
+//! Tracks the exact size of an uncompressed Puffin file, including its JSON footer.
+class IcebergPuffinFileLayout {
+public:
+	IcebergPuffinFileLayout();
+	//! Account for a blob and return the resulting file size.
+	idx_t AddBlob(idx_t size, IcebergPuffinBlobMetadata metadata);
+
+private:
+	idx_t data_size;
+	idx_t footer_size;
+	idx_t blob_count = 0;
+};
+
+//! Streams blobs to one Puffin file and records their individual byte ranges in its footer.
+class IcebergPuffinWriter {
+public:
+	IcebergPuffinWriter(FileSystem &fs, const string &path);
+	idx_t WriteBlob(const vector<data_t> &blob, IcebergPuffinBlobMetadata metadata);
+	//! Write the footer, close the file, and return the shared file size.
+	idx_t Finish();
+	const string &GetPath() const {
+		return writer.path;
+	}
+
+private:
+	BufferedFileWriter writer;
+	vector<IcebergPuffinBlobMetadata> blobs;
+};
 
 class IcebergPuffinReader {
 public:

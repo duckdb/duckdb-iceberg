@@ -21,6 +21,7 @@
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/type_visitor.hpp"
+#include "duckdb/common/vector_operations/unary_executor.hpp"
 
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
@@ -39,7 +40,9 @@
 #include "catalog/rest/api/iceberg_type.hpp"
 #include "catalog/rest/api/iceberg_create_table_request.hpp"
 #include "common/iceberg_utils.hpp"
+#include "common/iceberg_math.hpp"
 #include "common/iceberg_fixed_type.hpp"
+#include "common/iceberg_geography_type.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_update.hpp"
 #include "iceberg_logging.hpp"
 #include "iceberg_options.hpp"
@@ -120,7 +123,18 @@ static vector<idx_t> GetColumnPath(const ColumnIndex &column_index) {
 static ColumnIndex GetColumnIndexBySourceId(const IcebergTableSchema &schema, idx_t source_id) {
 	auto column_index = schema.TryGetColumnIndexByFieldId(source_id);
 	if (!column_index) {
-		throw InvalidInputException("Partition source column with id %d not found in schema", source_id);
+		throw InvalidConfigurationException("Partition/sort source column with id %d not found in schema", source_id);
+	}
+	const auto *column = schema.columns[column_index->GetPrimaryIndex()].get();
+	for (auto &child_index : column_index->GetChildIndexes()) {
+		if (column->type.id() != LogicalTypeId::STRUCT) {
+			throw InvalidConfigurationException("Partition/sort source id %d is nested inside a list or map",
+			                                    source_id);
+		}
+		column = column->GetChild(child_index.GetPrimaryIndex()).get();
+	}
+	if (column->type.IsNested()) {
+		throw InvalidConfigurationException("Partition/sort source id %d must refer to a primitive column", source_id);
 	}
 	return *column_index;
 }
@@ -349,8 +363,7 @@ SinkResultType IcebergInsert::Sink(ExecutionContext &context, DataChunk &chunk, 
 SourceResultType IcebergInsert::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
                                                 OperatorSourceInput &input) const {
 	auto &global_state = sink_state->Cast<IcebergInsertGlobalState>();
-	auto value = Value::BIGINT(global_state.insert_count);
-	chunk.data[0].Append(value);
+	chunk.data[0].Append(Value::BIGINT(global_state.insert_count));
 	chunk.SetChildCardinality(1);
 	return SourceResultType::FINISHED;
 }
@@ -392,7 +405,7 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 		}
 		if (delete_global_state.merge_deletes) {
 			// Replacement files are now staged; even an empty UPDATE must complete its collector participant.
-			update_delete_op->Cast<IcebergDelete>().FinalizeMergeDeletes(context, delete_global_state);
+			update_delete_op->Cast<IcebergDelete>().ScheduleDeletes(pipeline, event, delete_global_state, true);
 		}
 	} else {
 		// Stage an INSERT statement or a MERGE insert action; the latter may join an overwrite snapshot.
@@ -466,6 +479,17 @@ static unique_ptr<Expression> BindTransformFunction(ClientContext &context, cons
 	return function;
 }
 
+//! Convert TIMESTAMP_NS to TIMESTAMP by rounding down
+static bool CastTimestampNsToTimestampFloor(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+	UnaryExecutor::Execute<timestamp_ns_t, timestamp_t>(source, result, count, [](timestamp_ns_t input) {
+		if (!input.IsFinite()) {
+			return timestamp_t(input.value);
+		}
+		return timestamp_t(IcebergNanosToMicrosFloor(input.value));
+	});
+	return true;
+}
+
 //! Iceberg partition/sort transforms for year/month/day/hour are defined as:
 //! - years: date_diff('year', DATE '1970-01-01', source_column)
 //! - months: date_diff('month', DATE '1970-01-01', source_column)
@@ -491,6 +515,10 @@ static unique_ptr<Expression> GetDateDiffFunction(ClientContext &context, const 
 		target_type = LogicalType::TIMESTAMP_NS;
 	}
 	source = BoundCastExpression::AddDefaultCastToType(std::move(source), target_type);
+	if (target_type.id() == LogicalTypeId::TIMESTAMP_NS) {
+		source = BoundCastExpression::Create(std::move(source), LogicalType::TIMESTAMP,
+		                                     BoundCastInfo(CastTimestampNsToTimestampFloor));
+	}
 	children.push_back(std::move(source));
 	return BindTransformFunction(context, "date_diff", std::move(children));
 }
@@ -657,6 +685,11 @@ static bool NeedsProjection(const IcebergWriteLayout &layout, const IcebergCopyI
 static IcebergWriteLayout BuildWriteLayout(ClientContext &context, const IcebergCopyInput &copy_input) {
 	IcebergWriteLayout layout;
 	auto &schema = copy_input.schema;
+	for (auto &column : schema.columns) {
+		if (IcebergGeographyType::ContainsGeography(column->type)) {
+			throw NotImplementedException("Writing to Iceberg tables with geography columns is not supported");
+		}
+	}
 
 	// Physical columns, in schema order. The child plan produces every schema column, so the source
 	// index is the schema index even when earlier columns are omitted.
@@ -765,6 +798,8 @@ static const idx_t ICEBERG_TABLE_PROPERTY_MAPPING_SIZE =
 } // namespace
 
 IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, const IcebergCopyInput &copy_input) {
+	copy_input.table_metadata.VerifyDataFileFormat();
+
 	auto info = make_uniq<CopyInfo>();
 	info->file_path = copy_input.data_path;
 
@@ -1080,6 +1115,7 @@ PhysicalOperator &IcebergCatalog::PlanInsert(ClientContext &context, PhysicalPla
 		plan = planner.ResolveDefaultsProjection(op, *plan);
 	}
 	auto &table_entry = op.table.Cast<IcebergTableSchemaVersion>();
+	table_entry.table_info.VerifyWriteEncryptionSupported();
 	table_entry.PrepareIcebergScanFromEntry(context);
 
 	auto &irc_transaction = IcebergTransaction::Get(context, *this);

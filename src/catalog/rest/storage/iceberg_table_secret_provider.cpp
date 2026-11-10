@@ -224,7 +224,7 @@ static CreateSecretInput ReVendVendedCredentials(ClientContext &context, CreateS
 		                 "(%llu usable credentials)",
 		                 log_table_name, IcebergLogType::Redact(context, input.name.GetIdentifierName()),
 		                 IcebergLogType::Redact(context, input.scope), credentials.storage_credentials.size());
-		throw InvalidConfigurationException("Could not refresh Iceberg vended credentials for table '%s': no "
+		throw InvalidConfigurationException("Could not refresh Iceberg vended credentials for table %s: no "
 		                                    "matching "
 		                                    "credential was re-vended",
 		                                    table_name);

@@ -21,6 +21,7 @@
 #include "common/iceberg_constants.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/iceberg_request_executor.hpp"
+#include "catalog/rest/iceberg_table_prefetch.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/storage/authorization/sigv4.hpp"
@@ -41,6 +42,15 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTable &table) {
 		return true;
 	}
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
+	auto &transaction = IcebergTransaction::Get(context, catalog);
+	auto prefetch = transaction.TryGetTablePrefetch();
+	if (prefetch) {
+		IcebergLoadTableResult prefetched;
+		unique_ptr<LoadTableCachePublication> prefetched_publication;
+		if (prefetch->TryTakeResult(table.GetTableKey(), prefetched, prefetched_publication)) {
+			return ApplyLoadResult(context, table, std::move(prefetched), *prefetched_publication);
+		}
+	}
 	auto publication = ic_catalog.table_request_cache.BeginLoad(table.GetTableKey());
 	return ApplyLoadResult(context, table, IRCAPI::GetTable(context, ic_catalog, schema, table.name), *publication);
 }
@@ -180,6 +190,7 @@ CatalogEntry &IcebergTableSet::GetScanEntry(IcebergTable &table_info) const {
 		// Surface resolved columns, including comments, instead of a listing placeholder.
 		auto resolved = table_info.GetLatestSchema();
 		if (resolved) {
+			D_ASSERT(&resolved->Cast<IcebergTableSchemaVersion>().table_info == &table_info);
 			return *resolved;
 		}
 	}
@@ -301,6 +312,9 @@ void IcebergTableSet::ApplyListResult(IcebergListTablesResult tables) {
 	if (tables) {
 		unordered_set<string> listed;
 		for (auto &table : *tables) {
+			if (table.name.empty()) {
+				throw InvalidConfigurationException("Iceberg catalog returned an empty table name");
+			}
 			listed.insert(table.name);
 			entries.emplace(table.name, IcebergTable::CreatePlaceholder(ic_catalog, schema, table.name));
 		}
@@ -338,14 +352,12 @@ static Value ParseTableProperty(TableFunctionBinder &binder, ClientContext &cont
 
 shared_ptr<IcebergTable> IcebergTableSet::CreateEntryInternal(const string &name, IcebergTable &&table,
                                                               shared_ptr<IcebergTable> &old_entry) {
-	auto it = entries.find(name);
-	if (it != entries.end()) {
-		old_entry = std::move(it->second);
-		it->second = make_shared_ptr<IcebergTable>(std::move(table));
-	} else {
-		it = entries.emplace(name, make_shared_ptr<IcebergTable>(std::move(table))).first;
-	}
-	return it->second;
+	auto &entry = entries[name];
+	old_entry = std::move(entry);
+	entry = make_shared_ptr<IcebergTable>(std::move(table));
+	// The moved schema versions still point at the moved-from table, which the committing transaction frees.
+	entry->InitSchemaVersions();
+	return entry;
 }
 
 IcebergTable &IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCatalog &catalog,
@@ -409,9 +421,10 @@ IcebergTable &IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCat
 		bootstrap_metadata.location = location;
 	}
 	for (auto &option : info.options) {
-		if (option.first == "format-version" || option.first == "location") {
+		if (StringUtil::CIEquals(option.first, "format-version") || StringUtil::CIEquals(option.first, "location")) {
 			continue;
 		}
+		IcebergTableMetadata::VerifyNotReservedProperty(option.first, "CREATE TABLE ... WITH");
 		auto option_val =
 		    ParseTableProperty(property_binder, context, *option.second, option.first, LogicalType::VARCHAR)
 		        .GetValue<string>();

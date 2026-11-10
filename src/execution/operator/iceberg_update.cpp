@@ -201,7 +201,8 @@ OperatorFinalResultType IcebergUpdate::OperatorFinalize(Pipeline &pipeline, Even
 	auto &iceberg_delete = delete_op.Cast<IcebergDelete>();
 	auto &delete_global_state = delete_op.sink_state->Cast<IcebergDeleteGlobalState>();
 	if (!delete_global_state.merge_deletes) {
-		iceberg_delete.FlushDeletes(context, delete_global_state);
+		// The insert pipeline consumes these results after the COPY pipeline's events have finished.
+		iceberg_delete.ScheduleDeletes(pipeline, event, delete_global_state, false);
 	}
 	return OperatorFinalResultType::FINISHED;
 }
@@ -226,6 +227,7 @@ PhysicalOperator &IcebergCatalog::PlanUpdate(ClientContext &context, PhysicalPla
 	}
 
 	auto &table_entry = op.table.Cast<IcebergTableSchemaVersion>();
+	table_entry.table_info.VerifyWriteEncryptionSupported();
 	table_entry.PrepareIcebergScanFromEntry(context);
 
 	auto &irc_transaction = IcebergTransaction::Get(context, *this);

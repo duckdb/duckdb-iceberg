@@ -1,0 +1,100 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/maintenance_unqualified_names.test
+# description: iceberg_rewrite_data_files and iceberg_rollback_to_snapshot resolve 'table' and 'schema.table' through the search path, as a query does
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env TIMETRAVEL_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+drop table if exists my_datalake.default.unqualified_names;
+
+statement ok
+create table my_datalake.default.unqualified_names (id INTEGER);
+
+statement ok
+insert into my_datalake.default.unqualified_names values (1);
+
+statement ok
+set variable first_snapshot = (
+	select snapshot_id from iceberg_snapshots('my_datalake.default.unqualified_names') order by sequence_number limit 1
+);
+
+statement ok
+insert into my_datalake.default.unqualified_names values (2);
+
+statement ok
+use my_datalake.default;
+
+query II
+select rewritten_data_files_count, added_data_files_count from iceberg_rewrite_data_files('default.unqualified_names', rewrite_all := true);
+----
+2	1
+
+query II
+select rewritten_data_files_count, added_data_files_count from iceberg_rewrite_data_files('unqualified_names', rewrite_all := true);
+----
+1	1
+
+statement ok
+select * from iceberg_rollback_to_snapshot('unqualified_names', getvariable('first_snapshot'));
+
+query I
+select sum(id) from my_datalake.default.unqualified_names;
+----
+1
+
+statement ok
+select * from iceberg_rollback_to_snapshot('default.unqualified_names', getvariable('first_snapshot'));
+
+# the other functions that take a table name resolve it the same way
+query I
+select count(*) > 0 from iceberg_table_properties('unqualified_names');
+----
+true
+
+query I
+select count(*) from iceberg_load_table_response('unqualified_names');
+----
+1
+
+query I
+select count(*) > 0 from iceberg_snapshots('unqualified_names');
+----
+true
+
+query I
+select count(*) > 0 from iceberg_snapshots('default.unqualified_names');
+----
+true
+
+query I
+select count(*) > 0 from iceberg_metadata('unqualified_names');
+----
+true
+
+statement ok
+select * from iceberg_schema_properties('default');
+
+statement error
+select * from iceberg_rollback_to_snapshot('missing_table', getvariable('first_snapshot'));
+----
+<REGEX>:.*missing_table.*does not exist.*
+
+statement error
+select * from iceberg_rollback_to_snapshot('default.missing_table', getvariable('first_snapshot'));
+----
+<REGEX>:.*missing_table.*does not exist.*
+
+statement error
+select * from iceberg_rewrite_data_files('default.missing_table');
+----
+<REGEX>:.*missing_table.*does not exist.*
+
+statement ok
+use memory;
+
+statement ok
+drop table if exists my_datalake.default.unqualified_names;

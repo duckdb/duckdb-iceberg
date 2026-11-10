@@ -62,7 +62,7 @@ WITH (
     'property2'='value2'
 );
 ----
-<REGEX>:.*Unsupported format version.*
+<REGEX>:.*The highest supported iceberg version is 3.*
 
 statement ok
 drop table if exists my_datalake.test_create_schema.test_create_table_with_properties;

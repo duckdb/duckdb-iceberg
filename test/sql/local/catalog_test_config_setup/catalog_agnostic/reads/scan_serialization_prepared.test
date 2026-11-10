@@ -1,0 +1,135 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/scan_serialization_prepared.test
+# description: Prepared copied Iceberg scans rebind at execution and retain transaction visibility
+# group: [reads]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require core_functions
+
+statement ok
+CREATE TABLE my_datalake.default.scan_serialization_prepared (id INTEGER, payload INTEGER);
+
+statement ok
+INSERT INTO my_datalake.default.scan_serialization_prepared VALUES (1, 100);
+
+statement ok
+PREPARE copied_all AS
+WITH copied AS NOT MATERIALIZED (
+    SELECT id, payload FROM my_datalake.default.scan_serialization_prepared
+)
+SELECT a.id, b.payload FROM copied a JOIN copied b USING (id) ORDER BY a.id;
+
+statement ok
+PREPARE copied_parameter AS
+WITH copied AS NOT MATERIALIZED (
+    SELECT id, payload FROM my_datalake.default.scan_serialization_prepared WHERE id >= $1
+)
+SELECT a.id, b.payload FROM copied a JOIN copied b USING (id) ORDER BY a.id;
+
+query II
+EXECUTE copied_all;
+----
+1	100
+
+# A different connection commits after PREPARE. Both prepared forms must see it.
+statement ok writer
+INSERT INTO my_datalake.default.scan_serialization_prepared VALUES (2, 200);
+
+query II
+EXECUTE copied_all;
+----
+1	100
+2	200
+
+query II
+EXECUTE copied_parameter(2);
+----
+2	200
+
+# Rebinding within an explicit transaction must preserve its already-resolved table state.
+statement ok
+BEGIN;
+
+query II
+EXECUTE copied_all;
+----
+1	100
+2	200
+
+statement ok writer
+INSERT INTO my_datalake.default.scan_serialization_prepared VALUES (3, 300);
+
+query II
+EXECUTE copied_all;
+----
+1	100
+2	200
+
+statement ok
+COMMIT;
+
+query II
+EXECUTE copied_all;
+----
+1	100
+2	200
+3	300
+
+# Transaction-local deletes and inserts must be visible to both copies, then disappear on rollback.
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM my_datalake.default.scan_serialization_prepared WHERE id = 2;
+
+statement ok
+INSERT INTO my_datalake.default.scan_serialization_prepared VALUES (4, 400);
+
+query II
+EXECUTE copied_all;
+----
+1	100
+3	300
+4	400
+
+query II
+EXECUTE copied_parameter(3);
+----
+3	300
+4	400
+
+statement ok
+ROLLBACK;
+
+query II
+EXECUTE copied_all;
+----
+1	100
+2	200
+3	300
+
+# Reusing the identifier must rebind to the new table, not execute a serialized scan of the old UUID.
+statement ok writer
+DROP TABLE my_datalake.default.scan_serialization_prepared;
+
+statement ok writer
+CREATE TABLE my_datalake.default.scan_serialization_prepared (id INTEGER, payload INTEGER);
+
+statement ok writer
+INSERT INTO my_datalake.default.scan_serialization_prepared VALUES (9, 900);
+
+query II
+EXECUTE copied_all;
+----
+9	900
+
+statement ok
+DEALLOCATE copied_all;
+
+statement ok
+DEALLOCATE copied_parameter;
+
+statement ok
+DROP TABLE my_datalake.default.scan_serialization_prepared;

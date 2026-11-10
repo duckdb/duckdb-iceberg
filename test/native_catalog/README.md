@@ -5,7 +5,9 @@ The native catalog implements the Python mock's REST contract in the separate
 Iceberg still constructs requests, serializes commits, parses responses, logs
 HTTP requests, and runs normal retry logic.
 Requests to `http://iceberg-mock.invalid` never open a socket. Once enabled,
-other HTTP origins are rejected.
+other HTTP origins are rejected unless explicitly registered with the optional
+`origins` list in `iceberg_test_catalog_init`. Registered origins use the same
+in-process catalog, allowing tests to exercise hostname-based catalog detection.
 HTTP filesystem sessions are rejected before HTTPFS consumes transport parameters;
 warehouse reads and writes use local files.
 
@@ -56,6 +58,16 @@ cmake --build build/reldebug --target unittest_iceberg_native
 ./build/reldebug/test/unittest_iceberg_native
 ```
 
+The separate scan serialization API executable links Iceberg and exercises its callbacks
+directly, so optimizer fallback cannot hide a failed round trip:
+
+```sh
+./build/reldebug/test/unittest_iceberg_serialization
+```
+
+The CI build step also runs these serialization tests before packaging the SQL
+test runner.
+
 ## SQL test interfaces
 
 Load the test extension before using its SQL helpers. The native test config
@@ -80,9 +92,9 @@ FROM iceberg_test_catalog_request('GET', '/v1/config', NULL);
 ```
 
 Initialization loads HTTPFS before installing the native provider. Repeating it
-with the same root is a no-op; supplying another root is an error. The root must
-be a local directory. Each database creates a unique child directory containing
-its warehouse and a bounded-payload `requests.jsonl` journal. Metadata files
+with the same root can register additional origins; supplying another root is an
+error. The root must be a local directory. Each database creates a unique child
+directory containing its warehouse and a bounded-payload `requests.jsonl` journal. Metadata files
 remain complete and immutable. The test runner owns cleanup.
 
 All connections in one `DatabaseInstance` share catalog state, even after the

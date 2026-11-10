@@ -69,6 +69,10 @@ public:
 	    optional_ptr<const case_insensitive_map_t<string>> config_override = nullptr,
 	    optional_ptr<const rest_api_objects::RemoteSigningConfig> remote_signing_override = nullptr) const;
 	const string &BaseFilePath() const;
+	//! Verify if the catalog asks for unsupported read side encryption
+	void VerifyReadEncryptionSupported() const;
+	//! Verify if the catalog asks for unsupported write side encryption
+	void VerifyWriteEncryptionSupported() const;
 	bool IsRenamed() const;
 
 	IcebergTransactionData &GetOrCreateTransactionData(IcebergTransaction &transaction);
@@ -113,6 +117,7 @@ private:
 	void ApplyRefreshResult(ClientContext &context, IcebergLoadTableResult result,
 	                        LoadTableCachePublication &publication);
 	void SetLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result);
+	vector<string> GetS3EncryptionTypes() const;
 
 	//! Unchanged by rename, used to check for a rename
 	const string original_name;
