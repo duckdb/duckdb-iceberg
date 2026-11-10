@@ -1,4 +1,5 @@
 #include "catalog/rest/transaction/iceberg_transaction_manager.hpp"
+#include "catalog/rest/transaction/iceberg_written_files.hpp"
 #include "duckdb/main/attached_database.hpp"
 
 namespace duckdb {
@@ -18,10 +19,18 @@ Transaction &IcebergTransactionManager::StartTransaction(ClientContext &context)
 
 ErrorData IcebergTransactionManager::CommitTransaction(ClientContext &context, Transaction &transaction) {
 	auto &ic_transaction = transaction.Cast<IcebergTransaction>();
+	auto written_files = IcebergWrittenFilesState::TryGet(context);
 	try {
 		ic_transaction.Commit();
 	} catch (std::exception &ex) {
+		// core does not roll back a transaction whose commit failed
+		if (written_files) {
+			written_files->RollbackTransaction(transaction);
+		}
 		return ErrorData(ex);
+	}
+	if (written_files) {
+		written_files->CommitTransaction(transaction);
 	}
 	lock_guard<mutex> l(transaction_lock);
 	transactions.erase(transaction);
@@ -31,6 +40,12 @@ ErrorData IcebergTransactionManager::CommitTransaction(ClientContext &context, T
 void IcebergTransactionManager::RollbackTransaction(Transaction &transaction) {
 	auto &ic_transaction = transaction.Cast<IcebergTransaction>();
 	ic_transaction.Rollback();
+	auto context = ic_transaction.context.lock();
+	if (context) {
+		if (auto written_files = IcebergWrittenFilesState::TryGet(*context)) {
+			written_files->RollbackTransaction(transaction);
+		}
+	}
 	lock_guard<mutex> l(transaction_lock);
 	transactions.erase(transaction);
 }
