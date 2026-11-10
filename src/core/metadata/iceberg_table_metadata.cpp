@@ -611,12 +611,12 @@ string IcebergTableMetadata::GetTableProperty(string property_string) const {
 }
 
 string IcebergTableMetadata::GetDeleteCompressionCodec() const {
-  // The delete file codec defaults to the data file codec
-  auto codec = GetTableProperty(WRITE_DELETE_PARQUET_COMPRESSION_CODEC);
-  if (codec.empty()) {
-    codec = GetTableProperty(WRITE_PARQUET_COMPRESSION_CODEC);
-  }
-  return codec;
+	// The delete file codec defaults to the data file codec
+	auto codec = GetTableProperty(WRITE_DELETE_PARQUET_COMPRESSION_CODEC);
+	if (codec.empty()) {
+		codec = GetTableProperty(WRITE_PARQUET_COMPRESSION_CODEC);
+	}
+	return codec;
 }
 
 bool IcebergTableMetadata::AllowsMergeOnRead(const string &write_mode_property) const {

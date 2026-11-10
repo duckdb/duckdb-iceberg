@@ -1,7 +1,8 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_specifc/fixture/alter/struct_default_pushdown_mixed_specs.test
 # description: A nested struct added with a default after the data was written, read via struct-extract pushdown,
-#              across files with and without identity partition constants
 # group: [alter]
+
+#              across files with and without identity partition constants
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
