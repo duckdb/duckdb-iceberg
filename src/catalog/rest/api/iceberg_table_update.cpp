@@ -54,7 +54,7 @@ static unique_ptr<IcebergTableMetadata> CreateFormatMetadata(const IcebergTable 
 
 IcebergCommitState::IcebergCommitState(const IcebergTable &table_info, ClientContext &context)
     : format_metadata(CreateFormatMetadata(table_info)), table_info(table_info), context(context),
-      next_sequence_number(GetTableMetadata().last_sequence_number + 1),
+      last_sequence_number(GetTableMetadata().last_sequence_number),
       row_ids(GetTableMetadata().iceberg_version >= 3 ? GetTableMetadata().next_row_id.value_or(0) : 0) {
 }
 
@@ -140,7 +140,8 @@ IcebergCommitState::CreateSnapshotWriter(int32_t schema_id, IcebergSnapshotOpera
                                          optional_ptr<const VersionedIcebergManifestDeletes> manifest_deletes) {
 	auto &metadata = GetTableMetadata();
 	auto parent = GetLatestSnapshot();
-	IcebergSnapshotWriter writer(context, metadata, schema_id, operation, next_sequence_number++, row_ids,
+	last_sequence_number = IcebergSnapshot::NextSequenceNumber(last_sequence_number);
+	IcebergSnapshotWriter writer(context, metadata, schema_id, operation, last_sequence_number, row_ids,
 	                             created_metadata_files, parent);
 	//! Repack the base manifests once per commit attempt, with this snapshot's identity.
 	if (!written_snapshot) {

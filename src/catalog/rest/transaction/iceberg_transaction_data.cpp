@@ -203,7 +203,7 @@ void IcebergTransactionData::CacheExistingManifestList(lock_guard<mutex> &guard,
 		return;
 	}
 	base_snapshot_id = LoadExistingManifestList(context, metadata, existing_manifest_list);
-	scan_sequence_number = metadata.last_sequence_number + 1;
+	scan_sequence_number = IcebergSnapshot::NextSequenceNumber(metadata.last_sequence_number);
 }
 
 void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
@@ -219,6 +219,7 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 	switch (operation) {
 	case IcebergSnapshotOperationType::APPEND:
 	case IcebergSnapshotOperationType::REPLACE:
+	case IcebergSnapshotOperationType::OVERWRITE:
 		//! This helper currently writes DATA manifest entries; REPLACE itself is not limited to data files.
 		manifest_content_type = IcebergManifestContentType::DATA;
 		break;
@@ -252,22 +253,20 @@ void IcebergTransactionData::AddPendingDeleteManifests(IcebergAddSnapshot &add_s
 	}
 }
 
-void IcebergTransactionData::AddSnapshotUpdate(unique_ptr<IcebergAddSnapshot> add_snapshot,
-                                               IcebergManifestDeletes &&altered_manifests, bool merge_action) {
+void IcebergTransactionData::VerifyCanAddSnapshot() const {
 	if (rolls_back) {
 		throw InvalidInputException("Cannot change table \"%s\" after rolling it back in the same transaction",
 		                            table_info.name);
 	}
-	if (rewrites_data_files) {
+	if (has_maintenance_rewrite) {
 		throw InvalidInputException("Cannot change table \"%s\" after rewriting its data files in the same transaction",
 		                            table_info.name);
 	}
-	const bool is_rewrite = add_snapshot->GetOperation() == IcebergSnapshotOperationType::REPLACE;
-	//! Multiple operators can be planned before any of them stages its snapshot.
-	if (is_rewrite && !alters.empty()) {
-		throw InvalidInputException("Cannot rewrite table \"%s\": it was already changed in this transaction",
-		                            table_info.name);
-	}
+}
+
+void IcebergTransactionData::AddSnapshotUpdate(unique_ptr<IcebergAddSnapshot> add_snapshot,
+                                               IcebergManifestDeletes &&altered_manifests, bool merge_action) {
+	VerifyCanAddSnapshot();
 	contains_merge |= merge_action;
 	// All action sinks share this execution's query ID; a later statement gets a different ID.
 	auto query_id = transaction.active_query.load();
@@ -294,7 +293,6 @@ void IcebergTransactionData::AddSnapshotUpdate(unique_ptr<IcebergAddSnapshot> ad
 	}
 	alters.push_back(*add_snapshot);
 	updates.push_back(std::move(add_snapshot));
-	rewrites_data_files = is_rewrite;
 }
 
 void IcebergTransactionData::AddDeleteSnapshot(partitioned_manifest_entry_map_t &&delete_files,

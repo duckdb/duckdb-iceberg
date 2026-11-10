@@ -123,7 +123,18 @@ static vector<idx_t> GetColumnPath(const ColumnIndex &column_index) {
 static ColumnIndex GetColumnIndexBySourceId(const IcebergTableSchema &schema, idx_t source_id) {
 	auto column_index = schema.TryGetColumnIndexByFieldId(source_id);
 	if (!column_index) {
-		throw InvalidInputException("Partition source column with id %d not found in schema", source_id);
+		throw InvalidConfigurationException("Partition/sort source column with id %d not found in schema", source_id);
+	}
+	const auto *column = schema.columns[column_index->GetPrimaryIndex()].get();
+	for (auto &child_index : column_index->GetChildIndexes()) {
+		if (column->type.id() != LogicalTypeId::STRUCT) {
+			throw InvalidConfigurationException("Partition/sort source id %d is nested inside a list or map",
+			                                    source_id);
+		}
+		column = column->GetChild(child_index.GetPrimaryIndex()).get();
+	}
+	if (column->type.IsNested()) {
+		throw InvalidConfigurationException("Partition/sort source id %d must refer to a primitive column", source_id);
 	}
 	return *column_index;
 }
@@ -352,8 +363,7 @@ SinkResultType IcebergInsert::Sink(ExecutionContext &context, DataChunk &chunk, 
 SourceResultType IcebergInsert::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
                                                 OperatorSourceInput &input) const {
 	auto &global_state = sink_state->Cast<IcebergInsertGlobalState>();
-	auto value = Value::BIGINT(global_state.insert_count);
-	chunk.data[0].Append(value);
+	chunk.data[0].Append(Value::BIGINT(global_state.insert_count));
 	chunk.SetChildCardinality(1);
 	return SourceResultType::FINISHED;
 }

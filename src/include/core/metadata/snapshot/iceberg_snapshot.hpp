@@ -17,6 +17,7 @@ public:
 	IcebergSnapshot(optional<int32_t> schema_id, int64_t snapshot_id) : schema_id(schema_id), snapshot_id(snapshot_id) {
 	}
 	static int64_t NewSnapshotId();
+	static int64_t NextSequenceNumber(int64_t last_sequence_number);
 	static IcebergSnapshot ParseSnapshot(const rest_api_objects::Snapshot &snapshot, IcebergTableMetadata &metadata);
 	rest_api_objects::Snapshot ToRESTObject(const IcebergTableMetadata &table_metadata) const;
 

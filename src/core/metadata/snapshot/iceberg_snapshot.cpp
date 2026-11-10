@@ -20,6 +20,14 @@ int64_t IcebergSnapshot::NewSnapshotId() {
 	return random_number;
 }
 
+int64_t IcebergSnapshot::NextSequenceNumber(int64_t last_sequence_number) {
+	int64_t next;
+	if (last_sequence_number < 0 || !TryAddOperator::Operation(last_sequence_number, int64_t(1), next)) {
+		throw InvalidConfigurationException("Iceberg sequence number exceeds the nonnegative BIGINT range");
+	}
+	return next;
+}
+
 static string OperationTypeToString(IcebergSnapshotOperationType type) {
 	switch (type) {
 	case IcebergSnapshotOperationType::APPEND:
@@ -77,8 +85,15 @@ IcebergSnapshot IcebergSnapshot::ParseSnapshot(const rest_api_objects::Snapshot 
 		//! SPEC: Snapshot field sequence-number must default to 0
 		ret.sequence_number = 0;
 	} else if (metadata.iceberg_version >= 2) {
-		D_ASSERT(snapshot.sequence_number);
+		if (!snapshot.sequence_number || *snapshot.sequence_number < 0) {
+			throw InvalidConfigurationException("Snapshot %d must have a non-negative 'sequence-number'",
+			                                    snapshot.snapshot_id);
+		}
 		ret.sequence_number = *snapshot.sequence_number;
+	}
+	if (snapshot.schema_id && *snapshot.schema_id < 0) {
+		throw InvalidConfigurationException("Snapshot %d has an invalid 'schema-id': %d", snapshot.snapshot_id,
+		                                    *snapshot.schema_id);
 	}
 
 	ret.timestamp_ms = timestamp_ms_t(snapshot.timestamp_ms);

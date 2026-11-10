@@ -9,12 +9,19 @@ IcebergPartitionSpecField IcebergPartitionSpecField::ParseFromJson(const rest_ap
 
 	result.name = field.name;
 	result.transform = field.transform.value;
+	if (field.source_id <= 0) {
+		throw InvalidConfigurationException("Invalid source id %d for partition field '%s'", field.source_id,
+		                                    field.name);
+	}
 	result.source_id = field.source_id;
 	if (assigned_field_id.IsValid()) {
 		result.partition_field_id = assigned_field_id.GetIndex();
 	} else {
 		if (!field.field_id) {
 			throw InvalidConfigurationException("Partition field '%s' is missing 'field-id'", field.name);
+		}
+		if (*field.field_id <= 0) {
+			throw InvalidConfigurationException("Invalid partition field id %d for '%s'", *field.field_id, field.name);
 		}
 		result.partition_field_id = *field.field_id;
 	}
@@ -43,7 +50,9 @@ bool IcebergPartitionSpec::Equals(const IcebergPartitionSpec &other, bool compar
 
 IcebergPartitionSpec IcebergPartitionSpec::ParseFromJson(const rest_api_objects::PartitionSpec &partition_spec,
                                                          int32_t iceberg_version) {
-	D_ASSERT(partition_spec.spec_id);
+	if (!partition_spec.spec_id || *partition_spec.spec_id < 0) {
+		throw InvalidConfigurationException("Iceberg partition spec must have a non-negative 'spec-id'");
+	}
 	return FromFields(partition_spec.fields, *partition_spec.spec_id, iceberg_version);
 }
 
@@ -64,12 +73,18 @@ IcebergPartitionSpec IcebergPartitionSpec::FromFields(const vector<rest_api_obje
 		    "Cannot parse partition spec %d with missing field IDs: %d missing of %d fields", result.spec_id,
 		    missing_field_ids, fields.size());
 	}
+	unordered_set<idx_t> field_ids;
 	for (idx_t i = 0; i < fields.size(); i++) {
 		optional_idx assigned_field_id;
 		if (assign_field_ids) {
 			assigned_field_id = 1000 + i;
 		}
-		result.fields.push_back(IcebergPartitionSpecField::ParseFromJson(fields[i], assigned_field_id));
+		auto field = IcebergPartitionSpecField::ParseFromJson(fields[i], assigned_field_id);
+		if (!field_ids.insert(field.partition_field_id).second) {
+			throw InvalidConfigurationException("Duplicate partition field id %d in spec %d", field.partition_field_id,
+			                                    spec_id);
+		}
+		result.fields.push_back(std::move(field));
 	}
 	return result;
 }

@@ -92,13 +92,17 @@ const IcebergTableSchema &IcebergTableMetadata::GetSchemaFromId(int32_t schema_i
 
 optional_ptr<const IcebergPartitionSpec> IcebergTableMetadata::FindPartitionSpecById(int32_t spec_id) const {
 	auto it = partition_specs.find(spec_id);
-	D_ASSERT(it != partition_specs.end());
+	if (it == partition_specs.end()) {
+		return nullptr;
+	}
 	return it->second;
 }
 
 optional_ptr<const IcebergSortOrder> IcebergTableMetadata::FindSortOrderById(int32_t sort_id) const {
 	auto it = sort_specs.find(sort_id);
-	D_ASSERT(it != sort_specs.end());
+	if (it == sort_specs.end()) {
+		return nullptr;
+	}
 	return it->second;
 }
 
@@ -128,7 +132,9 @@ bool IcebergTableMetadata::HasPartitionSpec() const {
 
 const IcebergPartitionSpec &IcebergTableMetadata::GetLatestPartitionSpec() const {
 	auto res = FindPartitionSpecById(default_spec_id);
-	D_ASSERT(res);
+	if (!res) {
+		throw InvalidConfigurationException("Partition spec id %d not found in Iceberg metadata", default_spec_id);
+	}
 	return *res;
 }
 
@@ -137,10 +143,14 @@ bool IcebergTableMetadata::HasSortOrder() const {
 }
 
 const IcebergSortOrder &IcebergTableMetadata::GetLatestSortOrder() const {
-	D_ASSERT(HasSortOrder());
+	if (!HasSortOrder()) {
+		throw InvalidConfigurationException("Iceberg metadata has no default sort order");
+	}
 	auto sort_order_id = default_sort_order_id.GetIndex();
 	auto res = FindSortOrderById(sort_order_id);
-	D_ASSERT(res);
+	if (!res) {
+		throw InvalidConfigurationException("Sort order id %d not found in Iceberg metadata", sort_order_id);
+	}
 	return *res;
 }
 
@@ -312,6 +322,9 @@ bool IcebergTableMetadata::HasLastColumnId() const {
 }
 
 idx_t IcebergTableMetadata::GetLastColumnId() const {
+	if (!HasLastColumnId()) {
+		throw InvalidConfigurationException("Iceberg metadata is missing 'last-column-id'");
+	}
 	return last_column_id.GetIndex();
 }
 
@@ -359,7 +372,9 @@ bool IcebergTableMetadata::HasLastPartitionId() const {
 }
 
 int32_t IcebergTableMetadata::GetLastPartitionFieldId() const {
-	D_ASSERT(HasLastPartitionId());
+	if (!HasLastPartitionId()) {
+		throw InvalidConfigurationException("Iceberg metadata is missing 'last-partition-id'");
+	}
 	return static_cast<int32_t>(last_partition_field_id.GetIndex());
 }
 
@@ -479,6 +494,9 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 	}
 
 	if (table_metadata.last_sequence_number) {
+		if (*table_metadata.last_sequence_number < 0) {
+			throw InvalidConfigurationException("Iceberg metadata has a negative 'last-sequence-number'");
+		}
 		res.last_sequence_number = *table_metadata.last_sequence_number;
 	} else {
 		//! SPEC: Table metadata field last-sequence-number must default to 0
@@ -493,6 +511,9 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 		throw InvalidConfigurationException("'default-spec-id' field is missing from the metadata.json file");
 	}
 	if (table_metadata.default_sort_order_id) {
+		if (*table_metadata.default_sort_order_id < 0) {
+			throw InvalidConfigurationException("Iceberg metadata has a negative 'default-sort-order-id'");
+		}
 		res.default_sort_order_id = *table_metadata.default_sort_order_id;
 	}
 
@@ -510,10 +531,16 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 	}
 
 	if (table_metadata.last_column_id) {
+		if (*table_metadata.last_column_id < 0) {
+			throw InvalidConfigurationException("Iceberg metadata has a negative 'last-column-id'");
+		}
 		res.last_column_id = *table_metadata.last_column_id;
 	}
 
 	if (table_metadata.last_partition_id) {
+		if (*table_metadata.last_partition_id < 0) {
+			throw InvalidConfigurationException("Iceberg metadata has a negative 'last-partition-id'");
+		}
 		res.last_partition_field_id = *table_metadata.last_partition_id;
 	}
 
@@ -521,6 +548,12 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 		for (auto &item : table_metadata.metadata_log->value) {
 			res.metadata_log.emplace_back(item.metadata_file, timestamp_ms_t(item.timestamp_ms));
 		}
+	}
+	// Validate default references before a scan or writer can consume the metadata.
+	res.GetLatestSchema();
+	res.GetLatestPartitionSpec();
+	if (res.HasSortOrder()) {
+		res.GetLatestSortOrder();
 	}
 	return res;
 }
@@ -625,6 +658,10 @@ string IcebergTableMetadata::GetTableProperty(string property_string) const {
 		return prop->second;
 	}
 	return "";
+}
+
+bool IcebergTableMetadata::UsesCopyOnWrite(const string &write_mode_property) const {
+	return StringUtil::CIEquals(GetTableProperty(write_mode_property), "copy-on-write");
 }
 
 string IcebergTableMetadata::GetDeleteCompressionCodec() const {
