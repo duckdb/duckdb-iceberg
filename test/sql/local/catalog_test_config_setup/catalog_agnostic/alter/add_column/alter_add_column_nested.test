@@ -1,0 +1,151 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/add_column/alter_add_column_nested.test
+# description: ALTER TABLE ADD COLUMN adds STRUCT, LIST, MAP and VARIANT columns
+# group: [add_column]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+require-env VARIANT_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.add_column_nested;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.add_column_variant;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.add_column_variant_v2;
+
+# ---------- STRUCT, LIST and MAP ----------
+
+statement ok
+CREATE TABLE my_datalake.default.add_column_nested (id INTEGER);
+
+statement ok
+INSERT INTO my_datalake.default.add_column_nested VALUES (1);
+
+statement ok
+ALTER TABLE my_datalake.default.add_column_nested ADD COLUMN s STRUCT(a INTEGER, b STRUCT(c VARCHAR));
+
+statement ok
+ALTER TABLE my_datalake.default.add_column_nested ADD COLUMN l INTEGER[];
+
+statement ok
+ALTER TABLE my_datalake.default.add_column_nested ADD COLUMN m MAP(VARCHAR, INTEGER);
+
+statement ok
+ALTER TABLE my_datalake.default.add_column_nested ADD COLUMN ls STRUCT(x INTEGER)[];
+
+query TT
+SELECT column_name, column_type FROM (DESCRIBE my_datalake.default.add_column_nested) ORDER BY ALL;
+----
+id	INTEGER
+l	INTEGER[]
+ls	STRUCT(x INTEGER)[]
+m	MAP(VARCHAR, INTEGER)
+s	STRUCT(a INTEGER, b STRUCT(c VARCHAR))
+
+# rows written before the columns were added read them as NULL
+statement ok
+INSERT INTO my_datalake.default.add_column_nested VALUES (2, {'a': 5, 'b': {'c': 'hi'}}, [1, 2], MAP {'k': 7}, [{'x': 9}]);
+
+query IIIII
+SELECT * FROM my_datalake.default.add_column_nested ORDER BY id;
+----
+1	NULL	NULL	NULL	NULL
+2	{'a': 5, 'b': {'c': hi}}	[1, 2]	{k=7}	[{'x': 9}]
+
+query I
+SELECT id FROM my_datalake.default.add_column_nested WHERE s IS NULL;
+----
+1
+
+query I
+SELECT id FROM my_datalake.default.add_column_nested WHERE l[1] = 1;
+----
+2
+
+query I
+SELECT id FROM my_datalake.default.add_column_nested WHERE m['k'] = 7;
+----
+2
+
+# field ids of the nested children are taken into account for later columns
+statement ok
+ALTER TABLE my_datalake.default.add_column_nested ADD COLUMN after_nested INTEGER;
+
+statement ok
+INSERT INTO my_datalake.default.add_column_nested VALUES (3, {'a': 6, 'b': {'c': 'yo'}}, NULL, NULL, NULL, 42);
+
+query III
+SELECT id, s, after_nested FROM my_datalake.default.add_column_nested ORDER BY id;
+----
+1	NULL	NULL
+2	{'a': 5, 'b': {'c': hi}}	NULL
+3	{'a': 6, 'b': {'c': yo}}	42
+
+statement ok
+ALTER TABLE my_datalake.default.add_column_nested ADD COLUMN IF NOT EXISTS s STRUCT(a INTEGER);
+
+# ---------- VARIANT ----------
+
+statement ok
+CREATE TABLE my_datalake.default.add_column_variant (id INTEGER) WITH ('format-version' = '3');
+
+statement ok
+INSERT INTO my_datalake.default.add_column_variant VALUES (1);
+
+statement ok
+ALTER TABLE my_datalake.default.add_column_variant ADD COLUMN v VARIANT;
+
+query TT
+SELECT column_name, column_type FROM (DESCRIBE my_datalake.default.add_column_variant) ORDER BY ALL;
+----
+id	INTEGER
+v	VARIANT
+
+# rows written before the column was added read it as NULL
+statement ok
+INSERT INTO my_datalake.default.add_column_variant VALUES (2, {'a': 1, 'b': [1, 2]}::VARIANT), (3, 'x'::VARIANT);
+
+query IT
+SELECT id, v::VARCHAR FROM my_datalake.default.add_column_variant ORDER BY id;
+----
+1	NULL
+2	{'a': 1, 'b': [1, 2]}
+3	x
+
+query I
+SELECT id FROM my_datalake.default.add_column_variant WHERE v.a IS NOT NULL;
+----
+2
+
+statement ok
+ALTER TABLE my_datalake.default.add_column_variant ADD COLUMN IF NOT EXISTS v VARIANT;
+
+# a VARIANT column can only default to NULL
+statement error
+ALTER TABLE my_datalake.default.add_column_variant ADD COLUMN w VARIANT DEFAULT 1::VARIANT;
+----
+<REGEX>:.*Non-null DEFAULT values are not accepted for columns of type variant.*
+
+# VARIANT needs format-version 3
+statement ok
+CREATE TABLE my_datalake.default.add_column_variant_v2 (id INTEGER) WITH ('format-version' = '2');
+
+statement error
+ALTER TABLE my_datalake.default.add_column_variant_v2 ADD COLUMN v VARIANT;
+----
+<REGEX>:.*Column 'v' of type VARIANT requires Iceberg format-version 3, the table uses 2.*
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.add_column_nested;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.add_column_variant;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.add_column_variant_v2;
