@@ -173,7 +173,11 @@ void IcebergCommitState::AddWrittenSnapshot(IcebergWrittenSnapshot written) {
 	table_update.add_snapshot_update = rest_api_objects::AddSnapshotUpdate();
 	auto &update = *table_update.add_snapshot_update;
 	update.base_update.action = "add-snapshot";
-	update.snapshot = written.snapshot.ToRESTObject(GetTableMetadata());
+	auto &metadata = GetTableMetadata();
+	if (metadata.iceberg_version >= 3 && !written.snapshot.first_row_id) {
+		throw InvalidConfigurationException("first-row-id required for V3 tables!");
+	}
+	update.snapshot = written.snapshot.ToRESTObject();
 	table_change.updates.push_back(std::move(table_update));
 
 	manifests = std::move(written.manifests);

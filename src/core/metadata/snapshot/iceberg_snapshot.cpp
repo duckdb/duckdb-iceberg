@@ -4,7 +4,6 @@
 #include "duckdb/common/operator/add.hpp"
 #include "duckdb/common/operator/subtract.hpp"
 
-#include "core/metadata/iceberg_table_metadata.hpp"
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "common/iceberg_utils.hpp"
@@ -43,7 +42,7 @@ static string OperationTypeToString(IcebergSnapshotOperationType type) {
 	}
 }
 
-rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject(const IcebergTableMetadata &table_metadata) const {
+rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject() const {
 	rest_api_objects::Snapshot res;
 
 	res.snapshot_id = snapshot_id;
@@ -70,8 +69,6 @@ rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject(const IcebergTableMetad
 
 	if (first_row_id) {
 		res.first_row_id = *first_row_id;
-	} else if (table_metadata.iceberg_version >= 3) {
-		throw InvalidConfigurationException("first-row-id required for V3 tables!");
 	}
 
 	return res;

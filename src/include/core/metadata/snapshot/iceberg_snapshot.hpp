@@ -19,7 +19,7 @@ public:
 	static int64_t NewSnapshotId();
 	static int64_t NextSequenceNumber(int64_t last_sequence_number);
 	static IcebergSnapshot ParseSnapshot(const rest_api_objects::Snapshot &snapshot, IcebergTableMetadata &metadata);
-	rest_api_objects::Snapshot ToRESTObject(const IcebergTableMetadata &table_metadata) const;
+	rest_api_objects::Snapshot ToRESTObject() const;
 
 public:
 	//! Throws if the snapshot doesn't record its schema-id
