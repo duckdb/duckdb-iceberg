@@ -11,31 +11,44 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
   cancel-in-progress: true
 
-jobs:
-  duckdb-stable-build:
-    name: Build extension binaries
-    # Keep the shared workflows and their checkouts aligned with the CI-tools submodule.
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@5a015b297d67d68952df00457dd4c37c0fc80ba3
-    with:
-      extension_name: iceberg
-      ci_tools_version: 5a015b297d67d68952df00457dd4c37c0fc80ba3
-      vcpkg_commit: cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3
-      exclude_archs: 'windows_amd64_mingw'
-      extra_toolchains: 'python3'
-      # Service-backed catalog tests run in BuildIceberg.yml's dedicated Linux jobs.
-      # Keep distribution testing on the standard extension-ci-tools entry points.
-      # Slow tests run in the fixture catalog workflows.
-      test_config: '{"test_env_variables": {"T": "\"test/*\" \"exclude:*.test_slow\""}}'
+permissions:
+  actions: read
+  contents: read
+  packages: read
 
-  duckdb-stable-deploy:
-    name: Deploy extension binaries
-    needs: duckdb-stable-build
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_deploy.yml@5a015b297d67d68952df00457dd4c37c0fc80ba3
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ${{ github.repository_owner == 'duckdb' && 'namespace-profile-linux-slim' || 'ubuntu-slim' }}
+    outputs:
+      runners: ${{ steps.runners.outputs.runners }}
+    steps:
+      - name: Detect runners
+        id: runners
+        uses: duckdb/duckdb-ci/detect-runners@main
+
+  build:
+    name: Build extension
+    needs: prepare
+    uses: duckdb/extension-ci-tools/.github/workflows/build.yml@main
+    with:
+      groups: |
+        main:
+          config: extension_config.cmake
+          toolchain: main
+          extra_toolchains: python3
+      runners: ${{ needs.prepare.outputs.runners }}
+      exclude_archs: 'windows_amd64_mingw'
+
+  deploy:
+    name: Deploy extension
+    needs: build
+    uses: duckdb/extension-ci-tools/.github/workflows/deploy.yml@main
     secrets: inherit
     with:
-      extension_name: iceberg
-      ci_tools_version: 5a015b297d67d68952df00457dd4c37c0fc80ba3
-      exclude_archs: 'windows_amd64_mingw'
+      duckdb_version: ${{ needs.build.outputs.duckdb_version }}
+      duckdb_commit: ${{ needs.build.outputs.duckdb_commit }}
+      deploy_extensions: iceberg
       deploy_latest: ${{ startsWith(github.ref, 'refs/heads/v') || github.ref == 'refs/heads/main' }}
       deploy_versioned: ${{ startsWith(github.ref, 'refs/heads/v') || github.ref == 'refs/heads/main' }}
 
