@@ -7,6 +7,8 @@ predicate reuse, a delete index, or parsed metadata/manifest caches.
 
 The [delete candidate index results](delete-candidate-index-2026-11-11.md)
 record step 3's candidate counts, cold/repeated timings, and validation.
+The [native partition grouping follow-up](partition-delete-index-2026-11-11.md)
+compares the composite-key map with `GroupedAggregateHashTable`.
 
 ## Local baseline runner
 
@@ -34,6 +36,27 @@ Select a named case with `--case narrow_padded_in`, a workload with
 `--workload delete|manifest|snapshots`, and modes with `--modes staleness etag`.
 Each selected case is independently initialized. `--case` filters measurement,
 not data generation. `--build build/release` selects another built CLI.
+
+For unreferenced partitioned deletes, use the separate runner below. It requires
+`fastavro` from `scripts/requirements.txt` in addition to the CLI. It generates
+8/64/512 composite partitions, four data and delete files per partition, and
+NULL partition values. Before publishing its private fixtures, it removes the
+optional `referenced_data_file` field values and updates manifest lengths while
+preserving Avro schemas and metadata. This forces candidate lookup through the
+partition index. Every query checks its result and a separate query checks index
+builds, candidate visits, and predicate evaluations.
+
+```sh
+python3 scripts/metadata_performance/partition_delete_index.py \
+  --output .catalogs/partition-before
+# Rebuild the changed implementation, then reuse exactly the same files.
+python3 scripts/metadata_performance/partition_delete_index.py \
+  --source .catalogs/partition-before --output .catalogs/partition-after
+```
+
+The partition runner always measures one/eight threads and cold/warm modes
+serially, with five samples by default. It saves cases, environment, samples,
+profiles and diagnostic logs, and prints wall-time medians.
 
 | Mode | Database/connection/attachment | File-byte cache | LoadTable response |
 |---|---|---|---|

@@ -9,7 +9,9 @@ namespace duckdb {
 //! provider associations and transaction invalidations belong to the scan.
 class IcebergDeleteCandidateIndex {
 public:
-	IcebergDeleteCandidateIndex(vector<IcebergManifestEntry> entries, const IcebergPartitionSpec &spec);
+	IcebergDeleteCandidateIndex(ClientContext &context, vector<IcebergManifestEntry> entries,
+	                            const IcebergPartitionSpec &spec);
+	~IcebergDeleteCandidateIndex();
 
 	//! At most three borrowed buckets: original referenced path, partition and fallback.
 	//! Keep the index alive while using these references.
@@ -20,12 +22,7 @@ public:
 	}
 
 private:
-	struct PartitionHash {
-		hash_t operator()(const vector<Value> &key) const;
-	};
-	struct PartitionEqual {
-		bool operator()(const vector<Value> &left, const vector<Value> &right) const;
-	};
+	struct PartitionIndex;
 	bool TryPartitionKey(const partition_value_map_t &values, vector<Value> &key) const;
 
 	vector<IcebergManifestEntry> entries;
@@ -33,7 +30,9 @@ private:
 	vector<uint64_t> partition_fields;
 	vector<LogicalType> partition_types;
 	unordered_map<string, vector<idx_t>> by_referenced_path;
-	unordered_map<vector<Value>, vector<idx_t>, PartitionHash, PartitionEqual> by_partition;
+	//! Frozen DuckDB groups own typed keys and stable rows for the per-group entry lists.
+	//! Its buffer-managed storage must be released before the database is destroyed.
+	unique_ptr<PartitionIndex> by_partition;
 	//! Also used for an unrepresentable lookup key. Never omit a potential match.
 	vector<idx_t> unreferenced;
 	vector<idx_t> fallback;

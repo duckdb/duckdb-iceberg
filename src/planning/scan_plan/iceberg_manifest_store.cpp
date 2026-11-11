@@ -353,8 +353,8 @@ void IcebergManifestStore::ReadDeleteManifests(const vector<idx_t> &manifest_ind
 			vector<shared_ptr<const IcebergDeleteCandidateIndex>> indexes;
 			for (auto &manifest : new_load->manifests) {
 				auto &spec = context.metadata.partition_specs.at(manifest.GetManifest().partition_spec_id);
-				indexes.push_back(
-				    make_shared_ptr<IcebergDeleteCandidateIndex>(std::move(manifest.GetManifestEntries()), spec));
+				indexes.push_back(make_shared_ptr<IcebergDeleteCandidateIndex>(
+				    context.context, std::move(manifest.GetManifestEntries()), spec));
 			}
 			{
 				annotated_lock_guard<annotated_mutex> guard(lock);

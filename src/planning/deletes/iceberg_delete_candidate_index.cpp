@@ -1,35 +1,54 @@
 #include "planning/deletes/iceberg_delete_candidate_index.hpp"
 
-#include "duckdb/common/types/hash.hpp"
+#include "duckdb/common/numeric_utils.hpp"
+#include "duckdb/execution/aggregate_hashtable.hpp"
 #include "planning/pruning/iceberg_file_pruner.hpp"
 
 namespace duckdb {
 
-hash_t IcebergDeleteCandidateIndex::PartitionHash::operator()(const vector<Value> &key) const {
-	hash_t result = 0;
-	for (auto &value : key) {
-		// Value::Hash normalizes signed zero and NaN, and hashes all NULLs alike.
-		result = CombineHash(result, value.Hash());
+struct IcebergDeleteCandidateIndex::PartitionIndex {
+	PartitionIndex(ClientContext &context, const vector<LogicalType> &types, idx_t entry_count)
+	    : table(context, BufferAllocator::Get(context), types, {}, vector<AggregateObject>(),
+	            NextPowerOfTwo(MaxValue<idx_t>(2, MinValue<idx_t>(STANDARD_VECTOR_SIZE, entry_count) * 2))) {
 	}
-	return result;
-}
 
-bool IcebergDeleteCandidateIndex::PartitionEqual::operator()(const vector<Value> &left,
-                                                             const vector<Value> &right) const {
-	if (left.size() != right.size()) {
-		return false;
-	}
-	for (idx_t i = 0; i < left.size(); i++) {
-		if (!Value::NotDistinctFrom(left[i], right[i])) {
-			return false;
+	void Add(DataChunk &groups, const vector<idx_t> &entry_indexes) {
+		Vector addresses(LogicalType::POINTER);
+		table.FindOrCreateGroups(groups, addresses);
+		auto rows = addresses.Values<data_ptr_t>();
+		for (idx_t i = 0; i < entry_indexes.size(); i++) {
+			entries_by_group[rows[i].GetValue()].push_back(entry_indexes[i]);
 		}
 	}
-	return true;
-}
 
-static bool CanHashPartitionType(const LogicalType &type) {
-	// Only hash like-typed scalar values. NotDistinctFrom can coerce unlike
-	// types, whose hashes need not agree; those use the conservative path.
+	optional_ptr<const vector<idx_t>> Lookup(const vector<Value> &key, const vector<LogicalType> &types) const {
+		DataChunk groups;
+		groups.InitializeEmpty(types);
+		for (idx_t i = 0; i < key.size(); i++) {
+			groups.data[i].Reference(key[i], count_t(1));
+		}
+		groups.CheckCardinality(1);
+		// LookupGroups never mutates the table. Every concurrent caller owns its scratch.
+		AggregateHTLookupState state;
+		SelectionVector found(1);
+		if (!table.LookupGroups(groups, state, found)) {
+			return nullptr;
+		}
+		auto address = state.addresses.Values<data_ptr_t>()[0].GetValue();
+		return entries_by_group.at(address);
+	}
+
+	// Group rows stay pinned and stable across table growth. This map associates
+	// their addresses with entry lists; all partition hashing/equality is DuckDB's.
+	GroupedAggregateHashTable table;
+	unordered_map<data_ptr_t, vector<idx_t>> entries_by_group;
+};
+
+IcebergDeleteCandidateIndex::~IcebergDeleteCandidateIndex() = default;
+
+static bool CanGroupPartitionType(const LogicalType &type) {
+	// Preserve the conservative type contract: comparing unlike values can
+	// coerce them, while native groups require one exact logical type per column.
 	switch (type.id()) {
 	case LogicalTypeId::BOOLEAN:
 	case LogicalTypeId::INTEGER:
@@ -51,7 +70,7 @@ static bool CanHashPartitionType(const LogicalType &type) {
 	}
 }
 
-IcebergDeleteCandidateIndex::IcebergDeleteCandidateIndex(vector<IcebergManifestEntry> entries_p,
+IcebergDeleteCandidateIndex::IcebergDeleteCandidateIndex(ClientContext &context, vector<IcebergManifestEntry> entries_p,
                                                          const IcebergPartitionSpec &spec)
     : entries(std::move(entries_p)), spec_id(spec.spec_id) {
 	if (!spec.IsUnpartitioned()) {
@@ -82,12 +101,40 @@ IcebergDeleteCandidateIndex::IcebergDeleteCandidateIndex(vector<IcebergManifestE
 				partition_types[i] = value->second.get().type();
 			}
 		}
+	}
+	if (partition_fields.empty()) {
+		return;
+	}
+
+	// Fix the type of every column before inserting any keys, including keys
+	// whose first entries were NULL. Unsupported or inconsistent entries stay local.
+	DataChunk groups;
+	vector<idx_t> entry_indexes;
+	for (auto entry_idx : unreferenced) {
+		auto values = IcebergFilePruner::PartitionValueMap(entries[entry_idx].data_file);
 		vector<Value> key;
 		if (TryPartitionKey(values, key)) {
-			by_partition[std::move(key)].push_back(entry_idx);
+			if (!by_partition) {
+				by_partition = make_uniq<PartitionIndex>(context, partition_types, unreferenced.size());
+				groups.Initialize(context, partition_types);
+			}
+			for (idx_t i = 0; i < key.size(); i++) {
+				groups.data[i].Append(key[i]);
+			}
+			entry_indexes.push_back(entry_idx);
+			if (entry_indexes.size() == STANDARD_VECTOR_SIZE) {
+				groups.CheckCardinality(entry_indexes.size());
+				by_partition->Add(groups, entry_indexes);
+				groups.Reset();
+				entry_indexes.clear();
+			}
 		} else {
 			fallback.push_back(entry_idx);
 		}
+	}
+	if (!entry_indexes.empty()) {
+		groups.CheckCardinality(entry_indexes.size());
+		by_partition->Add(groups, entry_indexes);
 	}
 }
 
@@ -97,11 +144,14 @@ bool IcebergDeleteCandidateIndex::TryPartitionKey(const partition_value_map_t &v
 		if (value == values.end()) {
 			return false;
 		}
-		auto &v = value->second.get();
-		if (!v.IsNull() && (v.type() != partition_types[i] || !CanHashPartitionType(v.type()))) {
+		if (partition_types[i].id() != LogicalTypeId::SQLNULL && !CanGroupPartitionType(partition_types[i])) {
 			return false;
 		}
-		key.push_back(v);
+		auto &v = value->second.get();
+		if (!v.IsNull() && (v.type() != partition_types[i] || !CanGroupPartitionType(v.type()))) {
+			return false;
+		}
+		key.push_back(v.IsNull() ? Value(partition_types[i]) : v);
 	}
 	return true;
 }
@@ -124,9 +174,9 @@ IcebergDeleteCandidateIndex::Lookup(const string &original_data_path, int32_t da
 		if (!TryPartitionKey(partition_values, key)) {
 			result.push_back(unreferenced);
 		} else {
-			auto partition = by_partition.find(key);
-			if (partition != by_partition.end()) {
-				result.push_back(partition->second);
+			auto partition = by_partition ? by_partition->Lookup(key, partition_types) : nullptr;
+			if (partition) {
+				result.push_back(*partition);
 			}
 			if (!fallback.empty()) {
 				result.push_back(fallback);

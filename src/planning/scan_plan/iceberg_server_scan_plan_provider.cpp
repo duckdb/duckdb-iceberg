@@ -24,7 +24,7 @@ void ServerSideScanPlanProvider::ReadDeleteManifests(const vector<idx_t> &manife
 			auto &spec = metadata.partition_specs.at(manifest.GetManifest().partition_spec_id);
 			// Preserve the input if construction throws. Server plans are already materialized.
 			delete_indexes[manifest_idx] =
-			    make_shared_ptr<IcebergDeleteCandidateIndex>(manifest.GetManifestEntries(), spec);
+			    make_shared_ptr<IcebergDeleteCandidateIndex>(context, manifest.GetManifestEntries(), spec);
 			builds++;
 		}
 	}

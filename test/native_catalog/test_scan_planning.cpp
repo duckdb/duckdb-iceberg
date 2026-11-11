@@ -285,6 +285,9 @@ IcebergPartitionSpec PartitionSpec() {
 
 TEST_CASE("Iceberg delete candidate buckets preserve paths partitions and conservative fallbacks",
           "[iceberg_planning]") {
+	DuckDB database(nullptr);
+	Connection connection(database);
+	auto &context = *connection.context;
 	auto spec = PartitionSpec();
 	vector<IcebergManifestEntry> entries;
 	entries.push_back(DeleteEntry(0, Value::DOUBLE(1), "original.parquet"));
@@ -301,7 +304,7 @@ TEST_CASE("Iceberg delete candidate buckets preserve paths partitions and conser
 	entries.back().data_file.partition_info.clear();
 	entries.push_back(DeleteEntry(10, Value::INTEGER(1))); // unlike numeric types can compare equal
 	entries[3].data_file.content = IcebergManifestEntryContentType::EQUALITY_DELETES;
-	IcebergDeleteCandidateIndex index(std::move(entries), spec);
+	IcebergDeleteCandidateIndex index(context, std::move(entries), spec);
 	auto data = DeleteEntry(0, Value::DOUBLE(1)).data_file;
 	data.file_path = "original.parquet";
 	REQUIRE(Candidates(index, data, 17) == vector<idx_t> {0, 1, 3, 9, 10});
@@ -322,12 +325,12 @@ TEST_CASE("Iceberg delete candidate buckets preserve paths partitions and conser
 	data.partition_info.clear();
 	REQUIRE(Candidates(index, data, 17) == vector<idx_t> {3, 4, 5, 6, 7, 9, 10});
 
-	IcebergDeleteCandidateIndex global({DeleteEntry(0, Value::INTEGER(1)), DeleteEntry(1, Value::INTEGER(2))},
+	IcebergDeleteCandidateIndex global(context, {DeleteEntry(0, Value::INTEGER(1)), DeleteEntry(1, Value::INTEGER(2))},
 	                                   IcebergPartitionSpec(0));
 	REQUIRE(Candidates(global, data, 18) == vector<idx_t> {0, 1});
 	// A spec consisting entirely of void transforms is also global.
 	spec.fields[0].transform = IcebergTransform("void");
-	IcebergDeleteCandidateIndex void_spec({DeleteEntry(0, Value())}, spec);
+	IcebergDeleteCandidateIndex void_spec(context, {DeleteEntry(0, Value())}, spec);
 	REQUIRE(Candidates(void_spec, data, 18) == vector<idx_t> {0});
 
 	spec = PartitionSpec();
@@ -338,11 +341,68 @@ TEST_CASE("Iceberg delete candidate buckets preserve paths partitions and conser
 	first.data_file.partition_info.push_back({1001, Value("a")});
 	auto second = DeleteEntry(1, Value::DOUBLE(1));
 	second.data_file.partition_info.insert(second.data_file.partition_info.begin(), {1001, Value("b")});
-	IcebergDeleteCandidateIndex composite({first, second}, spec);
+	IcebergDeleteCandidateIndex composite(context, {first, second}, spec);
 	data.partition_info = {{1001, Value("b")}, {1000, Value::DOUBLE(1)}, {9999, Value(42)}};
 	REQUIRE(Candidates(composite, data, 17) == vector<idx_t> {1});
 	data.partition_info[0].value = Value("c");
 	REQUIRE(Candidates(composite, data, 17).empty());
+
+	// Even NULL entries in unsupported logical types must stay conservative.
+	spec = PartitionSpec();
+	auto list = Value::LIST(LogicalType::INTEGER, {Value(1)});
+	IcebergDeleteCandidateIndex unsupported(context, {DeleteEntry(0, Value(list.type())), DeleteEntry(1, list)}, spec);
+	data.partition_info = {{1000, Value(list.type())}};
+	REQUIRE(Candidates(unsupported, data, 17) == vector<idx_t> {0, 1});
+}
+
+TEST_CASE("Iceberg partition groups retain duplicate entries across growth and concurrent lookups",
+          "[iceberg_planning]") {
+	DuckDB database(nullptr);
+	Connection connection(database);
+	auto spec = PartitionSpec();
+	for (uint64_t field_id : {1001, 1002}) {
+		auto field = spec.fields[0];
+		field.partition_field_id = field_id;
+		spec.fields.push_back(field);
+	}
+	// More groups than one vector and the initial hash capacity; duplicate keys
+	// are inserted again after growth. The last column stays SQLNULL throughout.
+	constexpr idx_t group_count = 5000;
+	auto entry_for = [](idx_t id) {
+		auto entry = DeleteEntry(id, id % 11 ? Value::BIGINT(id) : Value());
+		entry.data_file.partition_info.push_back({1001, Value(string(80, 'x') + std::to_string(id))});
+		entry.data_file.partition_info.push_back({1002, Value()});
+		return entry;
+	};
+	vector<IcebergManifestEntry> entries;
+	for (idx_t pass = 0; pass < 2; pass++) {
+		for (idx_t i = 0; i < group_count; i++) {
+			auto entry = entry_for(i);
+			entry.data_file.content_offset = static_cast<int64_t>((pass * group_count + i) * 100);
+			entries.push_back(std::move(entry));
+		}
+	}
+	IcebergDeleteCandidateIndex index(*connection.context, std::move(entries), spec);
+	std::promise<void> start;
+	auto ready = start.get_future().share();
+	vector<std::future<bool>> workers;
+	for (idx_t worker = 0; worker < 8; worker++) {
+		workers.push_back(std::async(std::launch::async, [&, worker] {
+			ready.wait();
+			for (idx_t i = worker; i < group_count; i += 8) {
+				auto data = entry_for(i).data_file;
+				if (Candidates(index, data, spec.spec_id) != vector<idx_t> {i, group_count + i}) {
+					return false;
+				}
+			}
+			return Candidates(index, entry_for(group_count).data_file, spec.spec_id).empty();
+		}));
+	}
+	start.set_value();
+	for (auto &worker : workers) {
+		REQUIRE(worker.get());
+	}
+	REQUIRE(index.Entries()[0].data_file.content_offset != index.Entries()[group_count].data_file.content_offset);
 }
 
 TEST_CASE("Iceberg indexed candidates agree with exhaustive delete applicability", "[iceberg_planning]") {
@@ -373,7 +433,8 @@ TEST_CASE("Iceberg indexed candidates agree with exhaustive delete applicability
 				entries.push_back(std::move(entry));
 			}
 		}
-		IcebergDeleteCandidateIndex index(std::move(entries), metadata.partition_specs.at(delete_spec_id));
+		IcebergDeleteCandidateIndex index(*test.connection.context, std::move(entries),
+		                                  metadata.partition_specs.at(delete_spec_id));
 		for (auto data_spec_id : {0, 17, 18}) {
 			for (auto &value : values) {
 				auto data_entry = DeleteEntry(0, value);
