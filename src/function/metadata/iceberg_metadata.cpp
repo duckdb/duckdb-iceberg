@@ -102,6 +102,15 @@ static unique_ptr<FunctionData> IcebergMetaDataBind(ClientContext &context, Tabl
 	auto input_string = input.inputs[0].ToString();
 	auto resolved_metadata = IcebergUtils::ResolveTableMetadata(context, input_string, options);
 
+	auto expected_table_uuid = input.named_parameters.find("expected_table_uuid");
+	if (expected_table_uuid != input.named_parameters.end()) {
+		auto expected = expected_table_uuid->second.ToString();
+		auto &table_uuid = resolved_metadata.metadata.table_uuid;
+		if (!StringUtil::CIEquals(expected, table_uuid)) {
+			throw InvalidInputException("Table UUID mismatch: expected '%s', found '%s'", expected, table_uuid);
+		}
+	}
+
 	auto snapshot_to_scan = resolved_metadata.metadata.GetSnapshot(*options.snapshot_lookup);
 
 	if (snapshot_to_scan.snapshot) {
@@ -204,7 +213,8 @@ TableFunctionSet IcebergFunctions::GetIcebergMetadataFunction() {
 		    .Add("version", LogicalType::ANY)
 		    .Add("version_name_format", LogicalType::VARCHAR)
 		    .Add("snapshot_from_timestamp", LogicalType::ANY)
-		    .Add("snapshot_from_id", LogicalType::UBIGINT);
+		    .Add("snapshot_from_id", LogicalType::UBIGINT)
+		    .Add("expected_table_uuid", LogicalType::VARCHAR);
 	});
 	function_set.AddFunction(fun);
 
