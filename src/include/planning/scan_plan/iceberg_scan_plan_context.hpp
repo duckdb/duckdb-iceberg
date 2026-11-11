@@ -5,11 +5,6 @@
 
 namespace duckdb {
 
-struct IcebergDeleteFileReference {
-	idx_t manifest_idx;
-	idx_t entry_idx;
-};
-
 struct IcebergScanPlanContext {
 	ClientContext &context;
 	FileSystem &fs;

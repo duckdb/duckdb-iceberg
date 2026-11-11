@@ -16,6 +16,8 @@ struct IcebergEqualityDeleteBounds {
 		Value upper_bound;
 	};
 
+	//! Only lazy initialization takes this lock. Columns are immutable afterwards.
+	mutex lock;
 	bool initialized = false;
 	vector<ColumnBounds> columns;
 };
