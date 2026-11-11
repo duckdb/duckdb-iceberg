@@ -532,6 +532,11 @@ void IcebergMultiFileReader::ApplyColumnDefaults(const unordered_map<int32_t, Va
 		}
 		if (!index->IsPushdownExtract()) {
 			if (!value) {
+				if (missing.get() != &column) {
+					//! FIXME: remove once DuckDB fills a missing field with the scan type (duckdb#27704)
+					// Fields of a pushed-down struct default to NULL, so this field is NULL in every row
+					reader_data.constant_map.Add(MultiFileGlobalIndex(i), Value(id.GetScanType()));
+				}
 				continue;
 			}
 			if (missing.get() == &column) {
@@ -548,6 +553,11 @@ void IcebergMultiFileReader::ApplyColumnDefaults(const unordered_map<int32_t, Va
 		}
 		auto projected = ProjectValue(*value, *index);
 		if (projected) {
+			// A cast pushed into the extraction changes the type the scan expects
+			auto &scan_type = id.GetScanType();
+			if (projected->type() != scan_type) {
+				projected = projected->DefaultCastAs(scan_type);
+			}
 			reader_data.constant_map.Add(MultiFileGlobalIndex(i), std::move(*projected));
 		} else {
 			missing->default_expression = ConstantExpression::FromValue(*value);
