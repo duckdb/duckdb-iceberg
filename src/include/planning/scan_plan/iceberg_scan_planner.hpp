@@ -95,6 +95,11 @@ private:
 	mutable vector<BoundIcebergManifestListEntry> data_manifests DUCKDB_GUARDED_BY(shared_state->lock);
 	mutable vector<bool> data_manifest_matches DUCKDB_GUARDED_BY(shared_state->lock);
 	mutable IcebergScanOrder scan_order DUCKDB_GUARDED_BY(shared_state->lock);
+	//! Lifetime totals for this filtered planner view, emitted once on destruction.
+	//! Updated under the existing planning lock; no per-entry logging or atomics.
+	mutable idx_t scan_tasks DUCKDB_GUARDED_BY(shared_state->lock) = 0;
+	mutable idx_t delete_candidate_visits DUCKDB_GUARDED_BY(shared_state->lock) = 0;
+	mutable idx_t delete_predicate_evaluations DUCKDB_GUARDED_BY(shared_state->lock) = 0;
 };
 
 } // namespace duckdb

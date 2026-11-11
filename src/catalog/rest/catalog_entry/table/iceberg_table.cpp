@@ -982,10 +982,14 @@ IcebergTransactionData &IcebergTable::GetOrCreateTransactionData(IcebergTransact
 }
 
 void IcebergTable::InitializeFromLoadTableResult(
-    const rest_api_objects::LoadTableResult &load_table_result,
+    ClientContext &context, const rest_api_objects::LoadTableResult &load_table_result,
     optional_ptr<const rest_api_objects::TableMetadata> metadata_override) {
 	table_metadata =
 	    IcebergTableMetadata::FromTableMetadata(metadata_override ? *metadata_override : load_table_result.metadata);
+	DUCKDB_LOG(context, IcebergLogType,
+	           "Iceberg metadata phase=table_metadata_conversion scope=catalog_initialization "
+	           "table_metadata_conversions=1 snapshots_converted=%llu",
+	           table_metadata.snapshots.size());
 	SetLoadTableResult(load_table_result);
 	D_ASSERT(!table_metadata.GetSchemas().IsEmpty());
 	InitSchemaVersions();
@@ -1014,11 +1018,11 @@ void IcebergTable::InitializeFromCatalogResponse(ClientContext &context,
 			           metadata_location, ex.what());
 		}
 		if (file_metadata) {
-			InitializeFromLoadTableResult(load_table_result, file_metadata.get());
+			InitializeFromLoadTableResult(context, load_table_result, file_metadata.get());
 			return;
 		}
 	}
-	InitializeFromLoadTableResult(load_table_result);
+	InitializeFromLoadTableResult(context, load_table_result);
 }
 
 void IcebergTable::SetLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result) {

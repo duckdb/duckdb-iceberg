@@ -88,7 +88,8 @@ public:
 	void InitSchemaVersions();
 
 	bool HasTransactionUpdates() const;
-	void InitializeFromLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result,
+	void InitializeFromLoadTableResult(ClientContext &context,
+	                                   const rest_api_objects::LoadTableResult &load_table_result,
 	                                   optional_ptr<const rest_api_objects::TableMetadata> metadata_override = nullptr);
 	//! Initialize from a LoadTableResult, preferring the authoritative metadata file referenced by
 	//! 'metadata-location' over the metadata embedded in the catalog response.

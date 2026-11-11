@@ -1,0 +1,65 @@
+# name: test/sql/local/native_catalog/metadata_diagnostics.test
+# description: Metadata work counters aggregate across workers with defined lifetimes
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+statement ok
+SET iceberg_use_server_side_scan_planning=false;
+
+statement ok
+CREATE TABLE my_datalake.default.metadata_diagnostics (id INTEGER)
+WITH ('format-version'='3', 'commit.manifest-merge.enabled'='false');
+
+statement ok
+INSERT INTO my_datalake.default.metadata_diagnostics SELECT range FROM range(10);
+
+statement ok
+INSERT INTO my_datalake.default.metadata_diagnostics SELECT range FROM range(10,20);
+
+statement ok
+DELETE FROM my_datalake.default.metadata_diagnostics WHERE id=0;
+
+statement ok
+CALL enable_logging('Iceberg', storage='memory');
+
+foreach threads 1 8
+
+statement ok
+SET threads={threads};
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT sum(id) FROM my_datalake.default.metadata_diagnostics WHERE id>=0;
+----
+190
+
+# Two opened files each visit the sole live delete entry. Statistics-only views
+# do not emit a delete_planning event; only the view that created scan tasks does.
+query I
+SELECT message FROM duckdb_logs() WHERE type='Iceberg' AND message LIKE '%phase=delete_planning%';
+----
+Iceberg metadata phase=delete_planning scope=planner_view scan_tasks=2 delete_candidate_visits=2 delete_predicate_evaluations=2
+
+# Data and delete manifests have separate Avro scans. Count actual conversions,
+# including entries that might later be pruned, without counting per file logs.
+query II
+SELECT sum(regexp_extract(message, 'manifest_parses=(\d+)', 1)::BIGINT),
+       sum(regexp_extract(message, 'manifest_entries_converted=(\d+)', 1)::BIGINT)
+FROM duckdb_logs() WHERE type='Iceberg' AND message LIKE '%phase=manifest_parse%';
+----
+3	3
+
+query I
+SELECT message FROM duckdb_logs() WHERE type='Iceberg' AND message LIKE '%phase=table_metadata_conversion%';
+----
+Iceberg metadata phase=table_metadata_conversion scope=catalog_initialization table_metadata_conversions=1 snapshots_converted=3
+
+endloop
+
+statement ok
+DROP TABLE my_datalake.default.metadata_diagnostics;
