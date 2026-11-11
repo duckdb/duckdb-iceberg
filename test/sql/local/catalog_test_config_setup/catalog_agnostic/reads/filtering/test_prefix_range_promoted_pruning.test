@@ -40,6 +40,27 @@ FROM my_datalake.default.prf_promoted t JOIN (SELECT unnest([-50, -5, 10, 1005]:
 ----
 [-50, -5, 10, 1005]
 
+# A cast in the join expression must use BIGINT column statistics first, then
+# derive the cast's bounds. The old file has an overflowing lower bound but
+# contains both matching keys, so TRY_CAST must keep it.
+statement ok
+CREATE TEMP TABLE prf_promoted_cast_keys AS SELECT unnest([0, 50]::UTINYINT[]) AS k;
+
+query I
+SELECT list(t.k ORDER BY t.k)
+FROM my_datalake.default.prf_promoted t
+JOIN prf_promoted_cast_keys s ON TRY_CAST(t.k AS UTINYINT) = s.k;
+----
+[0, 50]
+
+# A throwing cast must still report values outside UTINYINT's range.
+statement error
+SELECT list(t.k ORDER BY t.k)
+FROM my_datalake.default.prf_promoted t
+JOIN prf_promoted_cast_keys s ON CAST(t.k AS UTINYINT) = s.k;
+----
+out of range
+
 # The older file is still pruned when none of its values match
 statement ok
 CALL truncate_duckdb_logs();
