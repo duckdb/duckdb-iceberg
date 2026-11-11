@@ -68,6 +68,24 @@ directly, so optimizer fallback cannot hide a failed round trip:
 The CI build step also runs these serialization tests before packaging the SQL
 test runner.
 
+The LoadTable cache API tests deterministically interleave request construction,
+publication, and eviction, and check the credential-refresh fallback. They also
+cover expired Azure SAS credentials and S3 credential refresh after an HTTP 304,
+without contacting cloud storage:
+
+```sh
+./build/reldebug/test/unittest_iceberg_cache
+```
+
+The CI build step runs these tests alongside the other API executables.
+
+Run the ETag SQL tests with the native mock config:
+
+```sh
+./build/reldebug/test/unittest --test-config test/configs/mock_native.json \
+  'test/sql/local/native_catalog/load_table_etag*'
+```
+
 ## SQL test interfaces
 
 Load the test extension before using its SQL helpers. The native test config
@@ -110,8 +128,9 @@ not during binding or EXPLAIN.
 
 Client protocol tests can install an exact response with
 `POST /__test/response`, supplying a JSON object with `method`, `path`, `status`,
-and `body`. The path includes the query string. The response replaces that route
-until overwritten or cleared with `DELETE /__test/response`, which clears all
+and `body`, plus an optional `headers` object. The path includes the query string.
+The response replaces that route until overwritten or cleared with
+`DELETE /__test/response`, which clears all
 scripted responses. This permits config and auth tests without external servers;
 the normal catalog model handles all other routes.
 

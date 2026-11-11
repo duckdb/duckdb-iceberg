@@ -1,0 +1,106 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/iceberg_catalog_etag.test
+# description: Revalidate unchanged table metadata using catalog-provided ETags
+# group: [catalog_agnostic]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env ETAG_SUPPORT
+
+include test/sql/init_requires
+
+require core_functions
+
+include test/sql/local/catalog_test_config_setup/catalog_agnostic/setup/etag_table.test_setup
+
+# This checks LoadTable logs, so both client and server scan planning are valid.
+query I
+SELECT id FROM my_datalake.default.etag_revalidation;
+----
+42
+
+query III
+SELECT response.status, request.headers['If-None-Match'] IS NULL, etag IS NOT NULL AND etag <> ''
+FROM etag_load_requests;
+----
+OK_200	true	true
+
+statement ok
+SET VARIABLE original_etag = (SELECT etag FROM etag_load_requests);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+loop i 0 2
+
+query I
+SELECT id FROM my_datalake.default.etag_revalidation;
+----
+42
+
+endloop
+
+query II
+SELECT response.status, request.headers['If-None-Match'] = getvariable('original_etag')
+FROM etag_load_requests;
+----
+NotModified_304	true
+NotModified_304	true
+
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE type = 'Iceberg'
+	AND message = 'Iceberg table ''my_datalake.default.etag_revalidation'' is unchanged (HTTP 304); reusing cached metadata';
+----
+2
+
+# A commit changes the metadata. Load the new data and its new ETag.
+statement ok
+INSERT INTO my_datalake.default.etag_revalidation VALUES (43);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT id FROM my_datalake.default.etag_revalidation ORDER BY id;
+----
+42
+43
+
+query II
+SELECT response.status, etag IS NOT NULL AND etag <> '' AND etag <> getvariable('original_etag')
+FROM etag_load_requests;
+----
+OK_200	true
+
+query I
+SELECT count(*) FROM duckdb_logs() WHERE type = 'Iceberg' AND message LIKE '%is unchanged%';
+----
+0
+
+statement ok
+SET VARIABLE updated_etag = (SELECT etag FROM etag_load_requests);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT id FROM my_datalake.default.etag_revalidation ORDER BY id;
+----
+42
+43
+
+query II
+SELECT response.status, request.headers['If-None-Match'] = getvariable('updated_etag')
+FROM etag_load_requests;
+----
+NotModified_304	true
+
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE type = 'Iceberg'
+	AND message = 'Iceberg table ''my_datalake.default.etag_revalidation'' is unchanged (HTTP 304); reusing cached metadata';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.etag_revalidation;
