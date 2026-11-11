@@ -2,6 +2,7 @@
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/numeric_utils.hpp"
+#include "duckdb/common/operator/add.hpp"
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/value.hpp"
@@ -444,7 +445,12 @@ void BoundRewrittenRows(ClientContext &context, RewritePlan &plan, const Iceberg
 	plan.selected_record_count = 0;
 	plan.max_deleted_rows = 0;
 	for (auto &candidate : plan.selected_candidates) {
-		plan.selected_record_count += candidate.record_count;
+		int64_t total;
+		if (!TryAddOperator::Operation(plan.selected_record_count, candidate.record_count, total)) {
+			throw InvalidConfigurationException(
+			    "iceberg_rewrite_data_files: selected data-file record counts exceed the supported BIGINT range");
+		}
+		plan.selected_record_count = total;
 	}
 	if (plan.selected_candidates.empty()) {
 		return;
@@ -493,7 +499,9 @@ void BoundRewrittenRows(ClientContext &context, RewritePlan &plan, const Iceberg
 			auto key = delete_file.file_path + "@" +
 			           (delete_file.content_offset ? std::to_string(*delete_file.content_offset) : string());
 			if (counted.insert(key).second) {
-				*plan.max_deleted_rows += delete_file.record_count;
+				// More deletes cannot lower the bound below zero, even when their counts overlap or overflow.
+				*plan.max_deleted_rows +=
+				    MinValue(delete_file.record_count, plan.selected_record_count - *plan.max_deleted_rows);
 			}
 		}
 	}
