@@ -54,8 +54,8 @@ jobs:
 
   code-quality-check:
     name: Code Quality Check
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@969bc76276acec1c0a3922ff500d2ec3a1a3b037 # v2.0-cyanoptera 2026-10-01 pin
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@ae971e03c1840a1c6c2d81b91d1ec851f297f720 # v2.0-cyanoptera 2026-11-06 pin
     with:
       extension_name: iceberg
-      ci_tools_version: 5a015b297d67d68952df00457dd4c37c0fc80ba3
+      ci_tools_version: ae971e03c1840a1c6c2d81b91d1ec851f297f720 # v2.0-cyanoptera 2026-11-06 pin
       format_checks: 'format'

@@ -218,7 +218,7 @@ static Value GetWrittenFieldIdValue(const IcebergColumnDefinition &column) {
 //! computed partition value instead.
 static bool CanWriteIdentityPartitionsDirectly(const IcebergPartitionSpec &spec, const IcebergTableSchema &schema) {
 	for (auto &field : spec.fields) {
-		if (field.transform.Type() == IcebergTransformType::VOID) {
+		if (field.transform.Type() == IcebergTransformType::VOID_TRANSFORM) {
 			continue;
 		}
 		if (field.transform.Type() != IcebergTransformType::IDENTITY) {
@@ -560,7 +560,7 @@ static unique_ptr<Expression> GetTransformExpression(ClientContext &context, con
 		return GetBucketExpression(context, copy_input, source_id, transform);
 	case IcebergTransformType::TRUNCATE:
 		return GetTruncateExpression(context, copy_input, source_id, transform);
-	case IcebergTransformType::VOID:
+	case IcebergTransformType::VOID_TRANSFORM:
 		throw InvalidInputException("VOID partition transform should not be used for %s", usage);
 	default:
 		throw NotImplementedException("Unsupported %s transform type", usage);
@@ -740,7 +740,7 @@ static IcebergWriteLayout BuildWriteLayout(ClientContext &context, const Iceberg
 	if (CanWriteIdentityPartitionsDirectly(spec, schema)) {
 		// All transforms are identity: partition on the written columns themselves.
 		for (auto &field : spec.fields) {
-			if (field.transform.Type() == IcebergTransformType::VOID) {
+			if (field.transform.Type() == IcebergTransformType::VOID_TRANSFORM) {
 				continue;
 			}
 			auto schema_idx = GetColumnIndexBySourceId(schema, field.source_id).GetPrimaryIndex();
@@ -752,7 +752,7 @@ static IcebergWriteLayout BuildWriteLayout(ClientContext &context, const Iceberg
 	// Otherwise every field, identity included, becomes a computed column at the end of the chunk: the copy
 	// operator routes rows by it and strips it before writing.
 	for (auto &field : spec.fields) {
-		if (field.transform.Type() == IcebergTransformType::VOID) {
+		if (field.transform.Type() == IcebergTransformType::VOID_TRANSFORM) {
 			continue;
 		}
 		IcebergWriteColumn write_column;

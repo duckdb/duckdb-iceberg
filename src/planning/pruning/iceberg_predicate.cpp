@@ -145,7 +145,7 @@ static bool MatchBoundsConstant(const Value &constant, ExpressionType comparison
 		return MatchBoundsConstantTemplated<DayTransform>(constant, comparison_type, stats, transform);
 	case IcebergTransformType::HOUR:
 		return MatchBoundsConstantTemplated<HourTransform>(constant, comparison_type, stats, transform);
-	case IcebergTransformType::VOID:
+	case IcebergTransformType::VOID_TRANSFORM:
 		return true;
 	default:
 		throw InvalidConfigurationException("Transform '%s' not implemented", transform.RawType());
