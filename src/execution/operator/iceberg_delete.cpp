@@ -529,6 +529,11 @@ void IcebergDelete::ScheduleDeletes(Pipeline &pipeline, Event &event, IcebergDel
 		// An empty UPDATE may have no source scan after optimization.
 		return;
 	}
+	if (copy_on_write_merge_rows) {
+		//! A copy-on-write MERGE drops these rows in the rewrite that runs after it, instead of writing delete files
+		copy_on_write_merge_rows->Add(std::move(pending_deletes));
+		return;
+	}
 	if (!multi_file_list) {
 		throw InternalException("IcebergDelete multi_file_list is NULL");
 	}
