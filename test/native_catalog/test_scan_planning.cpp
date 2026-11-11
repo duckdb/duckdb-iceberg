@@ -203,6 +203,65 @@ TEST_CASE("Iceberg partition filter caches invalidate missing paths when filters
 	Query(connection, "COMMIT");
 }
 
+TEST_CASE("Iceberg concurrent nested filter lookups retain extracted and missing paths", "[iceberg_planning]") {
+	DuckDB database(nullptr);
+	Connection connection(database);
+	Query(connection, "BEGIN");
+	auto &context = *connection.context;
+	auto schema =
+	    LogicalType::STRUCT({{"s", LogicalType::STRUCT({{"x", LogicalType::INTEGER}, {"y", LogicalType::INTEGER}})}});
+	IcebergTableFilters filters;
+	filters.PushFilter(ColumnIndex(0),
+	                   make_uniq<ExpressionFilter>(IcebergRowFilter::Bind(context, "s.x=2 AND s.y IS NULL", schema)));
+	auto parent = filters.TryGetFilterByColumnIndex(ColumnIndex(0));
+	REQUIRE(parent);
+	auto original = parent->Copy();
+	ColumnIndex x(0);
+	x.AddChildIndex(ColumnIndex(0));
+	ColumnIndex y(0);
+	y.AddChildIndex(ColumnIndex(1));
+	std::promise<void> start;
+	auto ready = start.get_future().share();
+	vector<std::future<pair<const ExpressionFilter *, const ExpressionFilter *>>> workers;
+	for (idx_t worker = 0; worker < 8; worker++) {
+		workers.push_back(std::async(std::launch::async, [&, worker] {
+			ready.wait();
+			auto x_filter = filters.GetFilterForColumnIndex(x);
+			auto y_filter = filters.GetFilterForColumnIndex(y);
+			for (idx_t i = 0; i < 64; i++) {
+				ColumnIndex missing(0);
+				missing.AddChildIndex(ColumnIndex(2 + worker * 64 + i));
+				if (filters.GetFilterForColumnIndex(missing) ||
+				    filters.GetFilterForColumnIndex(x).get() != x_filter.get() ||
+				    filters.GetFilterForColumnIndex(y).get() != y_filter.get()) {
+					throw InternalException("Nested filter cache changed during concurrent lookups");
+				}
+			}
+			return make_pair(x_filter.get(), y_filter.get());
+		}));
+	}
+	start.set_value();
+	// Join every reader before asserting, including when one reader failed.
+	vector<pair<const ExpressionFilter *, const ExpressionFilter *>> results;
+	for (auto &worker : workers) {
+		results.push_back(worker.get());
+	}
+	auto x_filter = filters.GetFilterForColumnIndex(x);
+	auto y_filter = filters.GetFilterForColumnIndex(y);
+	REQUIRE(x_filter);
+	REQUIRE(y_filter);
+	for (auto &result : results) {
+		REQUIRE(result.first == x_filter.get());
+		REQUIRE(result.second == y_filter.get());
+	}
+	REQUIRE(x_filter->EvaluateWithConstant(context, Value(2)));
+	REQUIRE_FALSE(x_filter->EvaluateWithConstant(context, Value(3)));
+	REQUIRE(y_filter->EvaluateWithConstant(context, Value(LogicalType::INTEGER)));
+	REQUIRE_FALSE(y_filter->EvaluateWithConstant(context, Value(2)));
+	REQUIRE(parent->Equals(*original));
+	Query(connection, "COMMIT");
+}
+
 TEST_CASE("Iceberg filtered views recompute delete predicates on a shared provider", "[iceberg_planning]") {
 	PlanningTest test;
 	// Equality writes are optional in production builds.
@@ -403,6 +462,62 @@ TEST_CASE("Iceberg partition groups retain duplicate entries across growth and c
 		REQUIRE(worker.get());
 	}
 	REQUIRE(index.Entries()[0].data_file.content_offset != index.Entries()[group_count].data_file.content_offset);
+}
+
+TEST_CASE("Iceberg partition groups preserve typed equality and boundary values", "[iceberg_planning]") {
+	DuckDB database(nullptr);
+	Connection connection(database);
+	vector<vector<Value>> cases {
+	    {Value::BOOLEAN(false), Value::BOOLEAN(true)},
+	    {Value::INTEGER(NumericLimits<int32_t>::Minimum()), Value::INTEGER(NumericLimits<int32_t>::Maximum())},
+	    {Value::BIGINT(NumericLimits<int64_t>::Minimum()), Value::BIGINT(NumericLimits<int64_t>::Maximum())},
+	    {Value::FLOAT(-0.0f), Value::FLOAT(0.0f), Value::FLOAT(std::numeric_limits<float>::quiet_NaN()),
+	     Value::FLOAT(-std::numeric_limits<float>::quiet_NaN()), Value::FLOAT(std::numeric_limits<float>::infinity()),
+	     Value::FLOAT(-std::numeric_limits<float>::infinity())},
+	    {Value::DOUBLE(-0.0), Value::DOUBLE(0.0), Value::DOUBLE(std::numeric_limits<double>::quiet_NaN()),
+	     Value::DOUBLE(-std::numeric_limits<double>::quiet_NaN()),
+	     Value::DOUBLE(std::numeric_limits<double>::infinity()),
+	     Value::DOUBLE(-std::numeric_limits<double>::infinity())},
+	    {Value::DATE(1969, 12, 31), Value::DATE(1970, 1, 1)},
+	    {Value::TIME(0, 0, 0, 0), Value::TIME(23, 59, 59, 999999)},
+	    {Value::TIMESTAMP(timestamp_t(-1)), Value::TIMESTAMP(timestamp_t(1))},
+	    {Value::TIMESTAMPTZ(timestamp_tz_t(-1)), Value::TIMESTAMPTZ(timestamp_tz_t(1))},
+	    {Value::TIMESTAMPNS(timestamp_ns_t(-1)), Value::TIMESTAMPNS(timestamp_ns_t(1))},
+	    {Value(""), Value(string(80, 'x')), Value(string(79, 'x') + "y")},
+	    {Value::BLOB_RAW(string("a\0b", 3)), Value::BLOB_RAW(string("a\0c", 3)), Value::BLOB_RAW(string())},
+	    {Value::UUID("00000000-0000-0000-0000-000000000000"), Value::UUID("ffffffff-ffff-ffff-ffff-ffffffffffff")}};
+	// Exercise every physical decimal width, including values beyond int64.
+	for (auto width : {4, 9, 18, 38}) {
+		auto type = LogicalType::DECIMAL(width, 2);
+		auto literal = string(width - 2, '9') + ".99";
+		cases.push_back({Value(literal).DefaultCastAs(type), Value("-" + literal).DefaultCastAs(type)});
+	}
+	for (auto &values : cases) {
+		INFO(values[0].type().ToString());
+		// Discover the type after an initially untyped NULL; retain duplicate keys.
+		vector<IcebergManifestEntry> entries {DeleteEntry(0, Value())};
+		for (auto &value : values) {
+			entries.push_back(DeleteEntry(entries.size(), value));
+			entries.push_back(DeleteEntry(entries.size(), value));
+		}
+		entries.push_back(DeleteEntry(entries.size(), values[0]));
+		entries.back().status = IcebergManifestEntryStatusType::DELETED;
+		IcebergDeleteCandidateIndex index(*connection.context, std::move(entries), PartitionSpec());
+		values.push_back(Value(values[0].type()));
+		for (auto &value : values) {
+			auto data = DeleteEntry(0, value).data_file;
+			vector<idx_t> expected;
+			for (idx_t i = 0; i < index.Entries().size(); i++) {
+				auto &entry = index.Entries()[i];
+				if (entry.status != IcebergManifestEntryStatusType::DELETED &&
+				    Value::NotDistinctFrom(entry.data_file.partition_info[0].value, value)) {
+					expected.push_back(i);
+				}
+			}
+			REQUIRE_FALSE(expected.empty());
+			REQUIRE(Candidates(index, data, 17) == expected);
+		}
+	}
 }
 
 TEST_CASE("Iceberg indexed candidates agree with exhaustive delete applicability", "[iceberg_planning]") {
