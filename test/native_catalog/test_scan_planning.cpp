@@ -144,6 +144,45 @@ TEST_CASE("Iceberg partition filters borrow originals and own extracted paths", 
 	Query(connection, "COMMIT");
 }
 
+TEST_CASE("Iceberg partition filter caches invalidate missing paths when filters are added", "[iceberg_planning]") {
+	DuckDB database(nullptr);
+	Connection connection(database);
+	Query(connection, "BEGIN");
+	auto &context = *connection.context;
+	auto nested = LogicalType::STRUCT({{"x", LogicalType::INTEGER}, {"y", LogicalType::INTEGER}});
+	auto schema = LogicalType::STRUCT({{"id", LogicalType::INTEGER}, {"s", nested}});
+	ColumnIndex x(1);
+	x.AddChildIndex(ColumnIndex(0));
+	ColumnIndex y(1);
+	y.AddChildIndex(ColumnIndex(1));
+
+	IcebergTableFilters filters;
+	REQUIRE_FALSE(filters.GetFilterForColumnIndex(x));
+	REQUIRE_FALSE(filters.GetFilterForColumnIndex(y));
+	filters.PushFilter(ColumnIndex(1),
+	                   make_uniq<ExpressionFilter>(IcebergRowFilter::Bind(context, "s.x=2 AND s.y IS NULL", schema)));
+	auto x_filter = filters.GetFilterForColumnIndex(x);
+	auto y_filter = filters.GetFilterForColumnIndex(y);
+	REQUIRE(x_filter);
+	REQUIRE(y_filter);
+	REQUIRE(x_filter->EvaluateWithConstant(context, Value::INTEGER(2)));
+	REQUIRE_FALSE(x_filter->EvaluateWithConstant(context, Value::INTEGER(3)));
+	REQUIRE(y_filter->EvaluateWithConstant(context, Value(LogicalType::INTEGER)));
+	REQUIRE_FALSE(y_filter->EvaluateWithConstant(context, Value::INTEGER(2)));
+
+	// Adding another column invalidates owned paths without changing their predicates.
+	auto x_copy = x_filter->Copy();
+	auto y_copy = y_filter->Copy();
+	filters.PushFilter(ColumnIndex(0), make_uniq<ExpressionFilter>(IcebergRowFilter::Bind(context, "id=7", schema)));
+	x_filter = filters.GetFilterForColumnIndex(x);
+	y_filter = filters.GetFilterForColumnIndex(y);
+	REQUIRE(x_filter);
+	REQUIRE(y_filter);
+	REQUIRE(x_filter->Equals(*x_copy));
+	REQUIRE(y_filter->Equals(*y_copy));
+	Query(connection, "COMMIT");
+}
+
 TEST_CASE("Iceberg filtered views recompute delete predicates on a shared provider", "[iceberg_planning]") {
 	PlanningTest test;
 	// Equality writes are optional in production builds.
@@ -151,6 +190,7 @@ TEST_CASE("Iceberg filtered views recompute delete predicates on a shared provid
 	                                     "WHERE name='__iceberg_unsafe_enable_equality_deletes'");
 	REQUIRE_FALSE(setting->HasError());
 	if (!setting->RowCount()) {
+		WARN("Shared-provider delete coverage requires ICEBERG_ENABLE_EQUALITY_DELETE_WRITES=1");
 		return;
 	}
 	Query(test.connection, "SET __iceberg_unsafe_enable_equality_deletes=true");
