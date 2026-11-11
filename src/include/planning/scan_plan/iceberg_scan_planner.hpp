@@ -89,6 +89,9 @@ private:
 	mutable bool view_initialized DUCKDB_GUARDED_BY(shared_state->lock) = false;
 	mutable vector<BoundIcebergManifestListEntry> delete_manifests DUCKDB_GUARDED_BY(shared_state->lock);
 	mutable vector<bool> delete_manifest_matches DUCKDB_GUARDED_BY(shared_state->lock);
+	//! Lazy per-view predicate answers keyed by stable manifest and entry indexes.
+	//! Absence means uncomputed; both true and false are cached after successful evaluation.
+	mutable unordered_map<idx_t, unordered_map<idx_t, bool>> delete_entry_matches DUCKDB_GUARDED_BY(shared_state->lock);
 	mutable atomic<bool> has_matching_delete_manifests {true};
 	mutable IcebergDataViewCursor data_view_cursor DUCKDB_GUARDED_BY(shared_state->lock);
 	mutable vector<BoundIcebergManifestEntry> data_manifest_entries DUCKDB_GUARDED_BY(shared_state->lock);

@@ -166,30 +166,34 @@ bool IcebergTableFilters::FiltersEqual(const ExpressionFilter &left, const Expre
 	return left_copy->Equals(*right_copy);
 }
 
-unique_ptr<ExpressionFilter> IcebergTableFilters::GetFilterForColumnIndex(const ColumnIndex &column_index) const {
+optional_ptr<const ExpressionFilter>
+IcebergTableFilters::GetFilterForColumnIndex(const ColumnIndex &column_index) const {
+	if (column_index.HasPrimaryIndex() && !column_index.HasChildren()) {
+		return TryGetFilterByColumnIndex(column_index);
+	}
+	auto cached = partition_filters.find(column_index);
+	if (cached != partition_filters.end()) {
+		return cached->second.get();
+	}
+
 	vector<idx_t> path;
-	if (!TryGetColumnPath(column_index, path)) {
-		return nullptr;
+	unique_ptr<ExpressionFilter> result;
+	if (TryGetColumnPath(column_index, path)) {
+		auto filter = TryGetFilterByColumnIndex(column_index);
+		if (!filter) {
+			// Struct filters can be registered on the top-level column. Only extract the part targeting this path.
+			filter = TryGetFilterByColumnIndex(ColumnIndex(column_index.GetPrimaryIndex()));
+		}
+		if (filter) {
+			auto child_expr = ExtractFilterExpressionForPath(*filter->expr, path);
+			if (child_expr) {
+				result = make_uniq<ExpressionFilter>(std::move(child_expr));
+			}
+		}
 	}
-	auto filter = TryGetFilterByColumnIndex(column_index);
-	if (!filter && column_index.HasChildren()) {
-		// Filters on struct fields can be registered for the top-level column. The path extraction below ensures
-		// that we only return the part of the parent filter that targets the requested field.
-		filter = TryGetFilterByColumnIndex(ColumnIndex(column_index.GetPrimaryIndex()));
-	}
-	if (!filter) {
-		return nullptr;
-	}
-
-	if (path.empty()) {
-		return filter->Copy();
-	}
-
-	auto child_expr = ExtractFilterExpressionForPath(*filter->expr, path);
-	if (!child_expr) {
-		return nullptr;
-	}
-	return make_uniq<ExpressionFilter>(std::move(child_expr));
+	// Publish only after extraction succeeds; a null result also avoids repeating an unsupported path.
+	auto inserted = partition_filters.emplace(column_index, std::move(result));
+	return inserted.first->second.get();
 }
 
 } // namespace duckdb

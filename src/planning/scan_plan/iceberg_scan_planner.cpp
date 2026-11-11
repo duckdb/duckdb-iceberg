@@ -386,11 +386,6 @@ IcebergScanPlanner::ResolveApplicableDeleteFiles(const BoundIcebergManifestEntry
 	auto partition_values = IcebergFilePruner::PartitionValueMap(data_manifest_entry.entry.data_file);
 	auto delete_files = provider->GetDeleteFiles(manifest_indexes);
 	delete_candidate_visits += delete_files.size();
-	//! These candidates belong to matching manifests. Without filters the helper returns
-	//! immediately, so count only calls that actually evaluate the delete-entry predicate.
-	if (table_filters.HasFilters()) {
-		delete_predicate_evaluations += delete_files.size();
-	}
 	for (auto delete_file : delete_files) {
 		if (delete_file.manifest_idx >= delete_manifests.size()) {
 			throw InternalException("Delete manifest index %llu is out of bounds for %llu manifests",
@@ -402,8 +397,22 @@ IcebergScanPlanner::ResolveApplicableDeleteFiles(const BoundIcebergManifestEntry
 			                        delete_file.entry_idx, delete_file.manifest_idx);
 		}
 		auto &delete_entry = entries[delete_file.entry_idx];
-		if (!IcebergDeletePlanner::DeleteEntryMatchesFilters(delete_context, delete_file.manifest_idx, delete_entry)) {
+		if (!IcebergDeletePlanner::DeleteEntryMatchesDataFileReference(delete_context, delete_entry,
+		                                                               data_manifest_entry)) {
 			continue;
+		}
+		if (table_filters.HasFilters()) {
+			auto &manifest_matches = delete_entry_matches[delete_file.manifest_idx];
+			auto cached = manifest_matches.find(delete_file.entry_idx);
+			if (cached == manifest_matches.end()) {
+				delete_predicate_evaluations++;
+				auto matches = IcebergDeletePlanner::DeleteEntryMatchesFilters(delete_context, delete_file.manifest_idx,
+				                                                               delete_entry);
+				cached = manifest_matches.emplace(delete_file.entry_idx, matches).first;
+			}
+			if (!cached->second) {
+				continue;
+			}
 		}
 		optional_ptr<IcebergEqualityDeleteBounds> delete_bounds;
 		if (delete_entry.data_file.content == IcebergManifestEntryContentType::EQUALITY_DELETES) {

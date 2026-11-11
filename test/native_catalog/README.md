@@ -79,6 +79,13 @@ without contacting cloud storage:
 
 The CI build step runs these tests alongside the other API executables.
 
+The planning API tests check borrowed and extracted filter lifetimes and filtered
+views sharing a provider. The delete-view case requires equality-delete writes:
+
+```sh
+./build/reldebug/test/unittest_iceberg_planning
+```
+
 Run the ETag SQL tests with the native mock config:
 
 ```sh
