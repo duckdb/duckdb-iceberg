@@ -1,35 +1,11 @@
 #include "maintenance/rewrite_data_files_executor.hpp"
 
 #include "duckdb/common/exception.hpp"
-#include "duckdb/logging/logger.hpp"
-#include "iceberg_logging.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
-#include "catalog/rest/iceberg_catalog.hpp"
-#include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_data.hpp"
-#include "catalog/rest/transaction/iceberg_transaction_metadata.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
 
 namespace duckdb {
-
-void AccountSelectedCandidates(const RewritePlan &plan, RewriteExecutionResult &result) {
-	result.rewritten_data_files = static_cast<int64_t>(plan.selected_candidates.size());
-	result.rewritten_bytes = 0;
-	result.removed_delete_files = static_cast<int64_t>(plan.delete_files_to_remove.size());
-	result.rewritten_candidates.clear();
-	result.rewritten_candidates.reserve(plan.selected_candidates.size());
-	for (auto &candidate : plan.selected_candidates) {
-		result.rewritten_bytes += candidate.file_size_in_bytes;
-		result.rewritten_candidates.push_back(candidate);
-	}
-}
-
-void PinRewriteSequenceNumbers(vector<IcebergManifestEntry> &entries, int64_t starting_sequence_number) {
-	for (auto &entry : entries) {
-		//! Preserve equality-delete applicability after compaction.
-		entry.SetSequenceNumber(starting_sequence_number);
-	}
-}
 
 void ValidateRewriteSnapshot(const RewritePlan &plan, const IcebergTable &table_info, const string &phase) {
 	auto snapshot = table_info.table_metadata.GetLatestSnapshot();
@@ -47,20 +23,22 @@ void ValidateRewriteSnapshot(const RewritePlan &plan, const IcebergTable &table_
 	}
 }
 
-void CleanupRewriteFiles(ClientContext &context, const IcebergTable &table_info, const vector<string> &produced_paths) {
-	auto &fs = FileSystem::GetFileSystem(context);
-	for (auto &path : produced_paths) {
-		try {
-			fs.TryRemoveFile(path);
-		} catch (...) {
-			DUCKDB_LOG_DEBUG(context, "Failed to clean up rewrite output file '%s'", path);
-		}
+void ValidateRewriteTransaction(const IcebergTransactionData &transaction_data) {
+	bool pending = !transaction_data.alters.empty();
+	for (auto &update : transaction_data.updates) {
+		//! A format upgrade is the one change maintenance already follows.
+		pending |= update->type != IcebergTableUpdateType::UPGRADE_FORMAT_VERSION;
+	}
+	if (pending) {
+		throw NotImplementedException(
+		    "iceberg_rewrite_data_files: table '%s' has uncommitted changes in this transaction; commit them first",
+		    transaction_data.table_info.name);
 	}
 }
 
-void ValidateRewrittenRowCount(const RewritePlan &plan, const RewriteExecutionResult &result) {
+void ValidateRewrittenRowCount(const RewritePlan &plan, const vector<IcebergManifestEntry> &new_entries) {
 	int64_t written = 0;
-	for (auto &entry : result.new_entries) {
+	for (auto &entry : new_entries) {
 		written += entry.data_file.record_count;
 	}
 	auto selected = plan.selected_record_count;
@@ -71,38 +49,6 @@ void ValidateRewrittenRowCount(const RewritePlan &plan, const RewriteExecutionRe
 		                       "would change the table's data; nothing was committed",
 		                       written, plan.selected_candidates.size(), selected, MaxValue<int64_t>(at_least, 0));
 	}
-}
-
-void CommitRewrite(ClientContext &context, const RewritePlan &plan, RewriteExecutionResult &result) {
-	if (result.rewritten_candidates.empty()) {
-		return;
-	}
-	// the files are only replaced when the scan returned their rows: a scan that misses rows would delete them
-	ValidateRewrittenRowCount(plan, result);
-	if (!plan.table_info) {
-		throw InternalException("iceberg_rewrite_data_files: rewrite plan has no table information");
-	}
-	auto &table_info = *plan.table_info;
-	ValidateRewriteSnapshot(plan, table_info, "commit");
-
-	auto &iceberg_transaction = IcebergTransaction::Get(context, table_info.catalog);
-	IcebergManifestDeletes deletes;
-	for (auto &cand : result.rewritten_candidates) {
-		deletes.InvalidateFile(cand.file_path);
-	}
-	//! Same invalidation path drops delete-manifest entries. Position delete files have no content offset.
-	for (auto &delete_path : plan.delete_files_to_remove) {
-		deletes.InvalidateFile(delete_path);
-	}
-
-	//! Rewrites in one statement may finalize concurrently, including initializing the transaction's table state.
-	lock_guard<mutex> guard(iceberg_transaction.rewrite_commit_lock);
-	ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTable &tbl) {
-		ValidateRewriteSnapshot(plan, tbl, "transaction commit");
-		auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
-		transaction_data.AddSnapshot(IcebergSnapshotOperationType::REPLACE, std::move(result.new_entries),
-		                             std::move(deletes));
-	});
 }
 
 } // namespace duckdb

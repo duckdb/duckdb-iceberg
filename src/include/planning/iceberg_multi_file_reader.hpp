@@ -158,11 +158,10 @@ private:
 	                        MultiFileReaderData &reader_data, ClientContext &context);
 	//! 'scan_columns' is this file's copy of the table columns (see InitializeTaskReader), so setting a default on
 	//! a nested field only affects this file
-	static void ApplyPartitionConstants(const unordered_map<int32_t, Value> &constants,
-	                                    MultiFileReaderData &reader_data,
-	                                    vector<MultiFileColumnDefinition> &scan_columns,
-	                                    const vector<ColumnIndex> &scan_column_ids,
-	                                    const IcebergTableMetadataSchemas &schemas);
+	static void ApplyColumnDefaults(const unordered_map<int32_t, Value> &constants, MultiFileReaderData &reader_data,
+	                                vector<MultiFileColumnDefinition> &scan_columns,
+	                                const vector<ColumnIndex> &scan_column_ids,
+	                                const IcebergTableMetadataSchemas &schemas);
 
 public:
 	shared_ptr<TableFunctionInfo> function_info;

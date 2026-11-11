@@ -13,6 +13,7 @@
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "iceberg_options.hpp"
 #include "maintenance/maintenance_table_loader.hpp"
+#include "maintenance/rewrite_data_files_executor.hpp"
 #include "planning/pruning/iceberg_file_pruner.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
@@ -471,9 +472,11 @@ void BoundRewrittenRows(ClientContext &context, RewritePlan &plan, const Iceberg
 				continue;
 			}
 			bool applies = false;
+			IcebergEqualityDeleteBounds delete_bounds;
 			for (auto &data : selected) {
 				auto &data_manifest = *live_data.at(data.first->data_file.file_path).first;
-				if (pruner.DeleteFileMatchesDataFile(manifest, entry, data_manifest, *data.first, data.second)) {
+				if (pruner.DeleteFileMatchesDataFile(manifest, entry, data_manifest, *data.first, data.second,
+				                                     &delete_bounds)) {
 					applies = true;
 					break;
 				}
@@ -510,16 +513,7 @@ static void ThrowIfTableHasPendingChanges(ClientContext &context, const IcebergT
 		return;
 	}
 	auto &transaction_data = *state->GetInfo().transaction_data;
-	bool pending = !transaction_data.alters.empty();
-	for (auto &update : transaction_data.updates) {
-		pending |= update->type != IcebergTableUpdateType::UPGRADE_FORMAT_VERSION;
-	}
-	if (!pending) {
-		return;
-	}
-	throw NotImplementedException(
-	    "iceberg_rewrite_data_files: table '%s' has uncommitted changes in this transaction; commit them first",
-	    table_info.name);
+	ValidateRewriteTransaction(transaction_data);
 }
 
 RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input) {

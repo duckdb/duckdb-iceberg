@@ -1,0 +1,112 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_copy_on_write_delete_partition_evolution.test
+# description: Copy-on-write deletes preserve earlier position deletes and rewrite historical partitions using the current spec
+# group: [delete]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require core_functions
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cow_delete_partition_evolution;
+
+statement ok
+CREATE TABLE my_datalake.default.cow_delete_partition_evolution (id INTEGER, ts TIMESTAMP)
+PARTITIONED BY (day(ts)) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.cow_delete_partition_evolution VALUES
+    (1, '2024-01-01 09:00:00'), (2, '2024-01-01 10:00:00'), (3, '2024-01-01 11:00:00');
+
+statement ok
+INSERT INTO my_datalake.default.cow_delete_partition_evolution VALUES
+    (4, '2024-01-02 09:00:00'), (5, '2024-01-02 10:00:00');
+
+statement ok
+INSERT INTO my_datalake.default.cow_delete_partition_evolution VALUES (6, NULL), (7, NULL);
+
+statement ok
+DELETE FROM my_datalake.default.cow_delete_partition_evolution WHERE id IN (3, 5);
+
+statement ok
+CREATE TEMP TABLE cow_untouched_files AS
+SELECT DISTINCT filename FROM my_datalake.default.cow_delete_partition_evolution WHERE id = 4;
+
+statement ok
+ALTER TABLE my_datalake.default.cow_delete_partition_evolution SET PARTITIONED BY (hour(ts));
+
+statement ok
+ALTER TABLE my_datalake.default.cow_delete_partition_evolution SET ('write.delete.mode' = 'copy-on-write');
+
+# Rewrite both a historical day partition and the NULL partition.
+query I
+DELETE FROM my_datalake.default.cow_delete_partition_evolution WHERE id IN (1, 6);
+----
+2
+
+query IT
+SELECT * FROM my_datalake.default.cow_delete_partition_evolution ORDER BY id;
+----
+2	2024-01-01 10:00:00
+4	2024-01-02 09:00:00
+7	NULL
+
+# The other day's file must remain unchanged, with its old position delete still applied.
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.cow_delete_partition_evolution)
+WHERE content = 'DATA' AND status != 'DELETED'
+  AND file_path IN (SELECT filename FROM cow_untouched_files);
+----
+1
+
+query II
+SELECT manifests.partition_spec_id, count(*)
+FROM iceberg_metadata(my_datalake.default.cow_delete_partition_evolution) files
+JOIN iceberg_manifests(my_datalake.default.cow_delete_partition_evolution) manifests
+  ON files.manifest_path = manifests.path
+WHERE files.content = 'DATA' AND files.status != 'DELETED'
+GROUP BY manifests.partition_spec_id ORDER BY manifests.partition_spec_id;
+----
+0	1
+1	2
+
+query I
+SELECT id FROM my_datalake.default.cow_delete_partition_evolution
+WHERE ts >= '2024-01-01 10:00:00' AND ts < '2024-01-01 11:00:00';
+----
+2
+
+query I
+DELETE FROM my_datalake.default.cow_delete_partition_evolution WHERE ts IS NULL;
+----
+1
+
+query T
+SELECT operation FROM iceberg_snapshots(my_datalake.default.cow_delete_partition_evolution)
+ORDER BY sequence_number DESC LIMIT 1;
+----
+delete
+
+# The last visible row can also empty a file that already had position deletes.
+query I
+DELETE FROM my_datalake.default.cow_delete_partition_evolution WHERE id = 4;
+----
+1
+
+query IT
+SELECT * FROM my_datalake.default.cow_delete_partition_evolution;
+----
+2	2024-01-01 10:00:00
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.cow_delete_partition_evolution)
+WHERE content = 'DATA' AND status != 'DELETED';
+----
+1
+
+statement ok
+DROP TABLE cow_untouched_files;
+
+statement ok
+DROP TABLE my_datalake.default.cow_delete_partition_evolution;

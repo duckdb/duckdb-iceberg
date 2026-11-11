@@ -166,7 +166,11 @@ IcebergFieldMapping::Update(const string &mapping_json, const unordered_map<int3
 }
 
 vector<IcebergFieldMapping> IcebergFieldMapping::Parse(const string &mapping_json) {
-	auto doc = JSONDocument::Parse(mapping_json.c_str(), mapping_json.size());
+	JSONParseError error;
+	auto doc = JSONDocument::TryParse(mapping_json.c_str(), mapping_json.size(), error);
+	if (!doc || !IsValidMapping(doc->GetRoot())) {
+		throw InvalidConfigurationException("Invalid Iceberg name mapping in '%s'", PROPERTY);
+	}
 	vector<IcebergFieldMapping> mappings;
 	mappings.emplace_back();
 	idx_t mapping_index = 1;
@@ -176,19 +180,15 @@ vector<IcebergFieldMapping> IcebergFieldMapping::Parse(const string &mapping_jso
 
 void IcebergFieldMapping::ParseFieldMappings(JSONValue obj, vector<IcebergFieldMapping> &mappings, idx_t &mapping_index,
                                              idx_t parent_mapping_index) {
-	case_insensitive_map_t<IcebergFieldMapping> result;
 	obj.IterateArray([&](JSONValue val) {
 		auto names = val.GetMember("names");
-		auto field_id = val.GetMember("field-id");
+		auto field_id = GetFieldId(val);
 		auto fields = val.GetMember("fields");
 
 		//! Create a new mapping entry
 		mappings.emplace_back();
 		auto &mapping = mappings.back();
 
-		if (!names.IsValid()) {
-			throw InvalidInputException("Corrupt metadata.json file, field-mapping is missing names!");
-		}
 		auto current_mapping_index = mapping_index;
 
 		auto &name_to_mapping_index = mappings[parent_mapping_index].field_mapping_indexes;
@@ -196,13 +196,11 @@ void IcebergFieldMapping::ParseFieldMappings(JSONValue obj, vector<IcebergFieldM
 		names.IterateArray([&](JSONValue name) { name_to_mapping_index[name.GetString()] = current_mapping_index; });
 		mapping_index++;
 
-		if (field_id.IsValid()) {
-			mapping.field_id = field_id.GetType() == JSONValueType::SIGNED_INTEGER
-			                       ? static_cast<int32_t>(field_id.GetSignedInteger())
-			                       : static_cast<int32_t>(field_id.GetUnsignedInteger());
+		if (field_id) {
+			mapping.field_id = *field_id;
 		}
 		//! Create mappings for the the nested fields
-		if (fields.IsValid()) {
+		if (fields.IsValid() && !fields.IsNull()) {
 			ParseFieldMappings(fields, mappings, mapping_index, current_mapping_index);
 		}
 	});

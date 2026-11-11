@@ -57,6 +57,7 @@
 			"reason": "The mock uses a local warehouse, so HTTP file-read assertions do not apply",
 			"paths": [
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_no_head_request_for_deletes.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/equality_deletes/test_do_not_read_equality_deletes.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_delete_manifest_filter_pushdown.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/partitioned_reads_v3/test_partitioned_reads_v3.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/partitioning/test_partitioning_pushdown_bucket.test",

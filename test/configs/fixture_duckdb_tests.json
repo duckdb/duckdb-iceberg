@@ -2106,6 +2106,13 @@
         "test/sql/catalog/nested_schema/nested_view_function_attached.test",
         "test/sql/catalog/nested_schema/nested_view_function_catalog.test",
         "test/sql/catalog/system_functions/system_catalog_entry_pushdown.test",
+        "test/sql/secrets/persistent_secret_name_collision.test",
+        "test/sql/secrets/persistent_secret_name_path_traversal.test",
+        "test/sql/secrets/secrets_without_external_access.test",
+        "test/sql/storage/bc/null_rows_v1_5_or_filter.test",
+        "test/sql/storage/ctas_limit0_insert.test",
+        "test/sql/storage/temp_directory/offload_small_transient_segments.test",
+        "test/sql/storage/temp_directory/offload_small_transient_segments_no_optimistic_write.test",
         "test/sql/optimizer/consistent_within_query_optimizations.test"
       ]
     }

@@ -488,14 +488,11 @@ static optional<Value> ProjectValue(Value value, const ColumnIndex &index) {
 	return value;
 }
 
-void IcebergMultiFileReader::ApplyPartitionConstants(const unordered_map<int32_t, Value> &constants,
-                                                     MultiFileReaderData &reader_data,
-                                                     vector<MultiFileColumnDefinition> &scan_columns,
-                                                     const vector<ColumnIndex> &scan_column_ids,
-                                                     const IcebergTableMetadataSchemas &schemas) {
-	if (constants.empty()) {
-		return;
-	}
+void IcebergMultiFileReader::ApplyColumnDefaults(const unordered_map<int32_t, Value> &constants,
+                                                 MultiFileReaderData &reader_data,
+                                                 vector<MultiFileColumnDefinition> &scan_columns,
+                                                 const vector<ColumnIndex> &scan_column_ids,
+                                                 const IcebergTableMetadataSchemas &schemas) {
 	unordered_set<int32_t> local_ids;
 	CollectFieldIds(reader_data.reader->columns, local_ids);
 	unordered_set<idx_t> visited;
@@ -517,12 +514,15 @@ void IcebergMultiFileReader::ApplyPartitionConstants(const unordered_map<int32_t
 			missing = missing->children[index->GetPrimaryIndex()];
 		}
 		if (!missing) {
-			if (visited.insert(id.GetPrimaryIndex()).second) {
+			if (!constants.empty() && visited.insert(id.GetPrimaryIndex()).second) {
 				ApplyNestedPartitionDefaults(constants, schemas, local_ids, column);
 			}
 			continue;
 		}
-		auto value = GetPartitionDefault(constants, schemas, *missing);
+		optional<Value> value;
+		if (!constants.empty()) {
+			value = GetPartitionDefault(constants, schemas, *missing);
+		}
 		if (!index->IsPushdownExtract()) {
 			if (!value) {
 				continue;
@@ -601,7 +601,7 @@ ReaderInitializeType IcebergMultiFileReader::InitializeTaskReader(
 	}
 	//! After the field mapping, so files without field ids are matched too
 	AddPresenceFields(local_columns, scan_columns, scan_column_ids, schemas);
-	ApplyPartitionConstants(partition_constants, reader_data, scan_columns, scan_column_ids, schemas);
+	ApplyColumnDefaults(partition_constants, reader_data, scan_columns, scan_column_ids, schemas);
 
 	vector<bool> accelerated_files;
 	Value fast_filter_setting;

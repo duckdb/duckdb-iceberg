@@ -33,6 +33,7 @@
 #include "core/expression/iceberg_transform.hpp"
 #include "common/iceberg_utils.hpp"
 #include "iceberg_options.hpp"
+#include "catalog/rest/iceberg_file_credentials.hpp"
 
 #include <climits>
 
@@ -503,6 +504,14 @@ optional<int64_t> IcebergTable::GetExistingSortOrderId(IcebergSortOrder &spec) {
 	return std::nullopt;
 }
 
+static void VerifyTransformSource(const ParsedExpression &key, const IcebergTransform &transform,
+                                  const IcebergColumnDefinition &source, const char *operation) {
+	if (!transform.CanTransform(source.type)) {
+		throw InvalidInputException("Cannot %s by '%s': the %s transform doesn't accept %s columns", operation,
+		                            key.ToString(), transform.RawType(), source.type.ToString());
+	}
+}
+
 IcebergPartitionSpec IcebergTable::BuildPartitionSpec(const vector<unique_ptr<ParsedExpression>> &partition_keys,
                                                       const IcebergTableSchema &schema, int32_t spec_id,
                                                       idx_t base_partition_field_id) {
@@ -514,6 +523,7 @@ IcebergPartitionSpec IcebergTable::BuildPartitionSpec(const vector<unique_ptr<Pa
 		if (source_columns.size() != 1) {
 			throw InvalidInputException("Multi-argument transforms are not supported yet!");
 		}
+		VerifyTransformSource(*key, transform, source_columns[0].get(), "partition");
 		auto source_id = source_columns[0].get().id;
 		auto column_name = source_columns[0].get().name;
 
@@ -540,6 +550,7 @@ IcebergSortOrder IcebergTable::BuildSortOrder(ClientContext &context, const vect
 		if (source_columns.size() != 1) {
 			throw InvalidInputException("Multi-argument transforms are not supported yet!");
 		}
+		VerifyTransformSource(*order.expression, transform, source_columns[0].get(), "sort");
 		auto source_id = source_columns[0].get().id;
 
 		auto direction = config.ResolveOrder(context, order.type);
@@ -839,7 +850,7 @@ bool IcebergTable::HasTransactionUpdates() const {
 
 void IcebergTable::RefreshFromCatalog(ClientContext &context) {
 	auto publication = catalog.table_request_cache.BeginLoad(GetTableKey());
-	ApplyRefreshResult(context, IRCAPI::GetTable(context, catalog, schema, name), *publication);
+	ApplyRefreshResult(context, IRCAPI::GetTable(context, catalog, schema, name, publication.get()), *publication);
 }
 
 void IcebergTable::ApplyRefreshResult(ClientContext &context, IcebergLoadTableResult get_table_result,
@@ -854,7 +865,7 @@ void IcebergTable::ApplyRefreshResult(ClientContext &context, IcebergLoadTableRe
 	dummy_entry.reset();
 	InitializeFromCatalogResponse(context, load_table_result);
 	initialization_source = nullptr;
-	if (publication.TryPublish(std::move(get_table_result.result_))) {
+	if (publication.TryPublish(std::move(get_table_result.result_), std::move(get_table_result.etag))) {
 		initialization_source = load_table_result;
 	}
 }
@@ -890,8 +901,9 @@ IcebergTableMetadata IcebergTable::CreateMetadataFromLog(ClientContext &context,
 	}
 
 	auto fs = make_shared_ptr<CachingFileSystemWrapper>(FileSystem::GetFileSystem(context), *context.db);
-	auto &path = log[log_item_index.GetIndex()].metadata_file;
-	auto parsed_metadata = IcebergTableMetadata::Parse(path, *fs, "");
+	auto metadata_file =
+	    IcebergFileCredentialsCallback::GetFileInfo(context, *this, log[log_item_index.GetIndex()].metadata_file);
+	auto parsed_metadata = IcebergTableMetadata::Parse(metadata_file, *fs, "");
 
 	return IcebergTableMetadata::FromTableMetadata(parsed_metadata);
 }
@@ -992,8 +1004,9 @@ void IcebergTable::InitializeFromCatalogResponse(ClientContext &context,
 		try {
 			auto &fs = FileSystem::GetFileSystem(context);
 			auto caching_fs = make_shared_ptr<CachingFileSystemWrapper>(fs, *context.db);
+			auto metadata_file = IcebergFileCredentialsCallback::GetFileInfo(context, *this, metadata_location);
 			file_metadata = make_uniq<const rest_api_objects::TableMetadata>(
-			    IcebergTableMetadata::Parse(metadata_location, *caching_fs, "none"));
+			    IcebergTableMetadata::Parse(metadata_file, *caching_fs, "none"));
 		} catch (std::exception &ex) {
 			DUCKDB_LOG(context, IcebergLogType,
 			           "Could not load table metadata from metadata-location '%s': %s - falling back to the "

@@ -1,0 +1,94 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/partitioning/test_partition_sort_transform_types.test
+# description: Partition and sort transforms only accept the source types the spec lists for them
+# group: [partitioning]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.transform_types;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.transform_types_valid;
+
+# CREATE TABLE refuses a transform on a type it doesn't accept
+statement error
+CREATE TABLE my_datalake.default.transform_types (b BOOLEAN) PARTITIONED BY (bucket(4, b));
+----
+<REGEX>:.*Cannot partition by 'bucket\(4, b\)': the bucket\[4\] transform doesn't accept BOOLEAN columns.*
+
+statement error
+CREATE TABLE my_datalake.default.transform_types (d DATE) SORTED BY (truncate(4, d));
+----
+<REGEX>:.*Cannot sort by '"truncate"\(4, d\)': the truncate\[4\] transform doesn't accept DATE columns.*
+
+statement ok
+CREATE TABLE my_datalake.default.transform_types (
+	b BOOLEAN, f FLOAT, x DOUBLE, i INTEGER, d DATE, ts TIMESTAMP, s VARCHAR, fx ICEBERG_FIXED(4)
+);
+
+# ALTER refuses the same and keeps the table unpartitioned and unsorted
+statement error
+ALTER TABLE my_datalake.default.transform_types SET PARTITIONED BY (bucket(4, x));
+----
+<REGEX>:.*Cannot partition by 'bucket\(4, x\)': the bucket\[4\] transform doesn't accept DOUBLE columns.*
+
+statement error
+ALTER TABLE my_datalake.default.transform_types SET PARTITIONED BY (i, bucket(4, f));
+----
+<REGEX>:.*Cannot partition by 'bucket\(4, f\)': the bucket\[4\] transform doesn't accept FLOAT columns.*
+
+statement error
+ALTER TABLE my_datalake.default.transform_types SET PARTITIONED BY (truncate(2, fx));
+----
+<REGEX>:.*Cannot partition by '"truncate"\(2, fx\)': the truncate\[2\] transform doesn't accept ICEBERG_FIXED\(4\) columns.*
+
+statement error
+ALTER TABLE my_datalake.default.transform_types SET PARTITIONED BY (day(i));
+----
+<REGEX>:.*Cannot partition by '"?day"?\(i\)': the day transform doesn't accept INTEGER columns.*
+
+statement error
+ALTER TABLE my_datalake.default.transform_types SET PARTITIONED BY (hour(d));
+----
+<REGEX>:.*Cannot partition by '"?hour"?\(d\)': the hour transform doesn't accept DATE columns.*
+
+statement error
+ALTER TABLE my_datalake.default.transform_types SET SORTED BY (year(s));
+----
+<REGEX>:.*Cannot sort by '"?year"?\(s\)': the year transform doesn't accept VARCHAR columns.*
+
+statement error
+ALTER TABLE my_datalake.default.transform_types SET SORTED BY (ts, month(b));
+----
+<REGEX>:.*Cannot sort by '"?month"?\(b\)': the month transform doesn't accept BOOLEAN columns.*
+
+statement ok
+INSERT INTO my_datalake.default.transform_types (i, d, ts, s) VALUES (1, DATE '2024-01-02', TIMESTAMP '2024-01-02 03:00:00', 'abc');
+
+# the types each transform accepts still work
+statement ok
+ALTER TABLE my_datalake.default.transform_types SET PARTITIONED BY (i, bucket(4, d), truncate(2, s), day(ts));
+
+statement ok
+ALTER TABLE my_datalake.default.transform_types SET SORTED BY (hour(ts), year(d), x);
+
+statement ok
+INSERT INTO my_datalake.default.transform_types (i, d, ts, s) VALUES (2, DATE '2025-03-04', TIMESTAMP '2025-03-04 05:00:00', 'xyz');
+
+query IITT
+SELECT i, d, ts, s FROM my_datalake.default.transform_types ORDER BY i;
+----
+1	2024-01-02	2024-01-02 03:00:00	abc
+2	2025-03-04	2025-03-04 05:00:00	xyz
+
+statement ok
+CREATE TABLE my_datalake.default.transform_types_valid (b BOOLEAN, bin BLOB, fx ICEBERG_FIXED(4), t TIME, u UUID)
+PARTITIONED BY (b, truncate(2, bin), bucket(4, fx), bucket(4, t), bucket(4, u));
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.transform_types;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.transform_types_valid;

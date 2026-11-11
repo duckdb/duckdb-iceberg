@@ -1,0 +1,130 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/manifest_tombstones_history.test
+# description: Pruning and merging tombstones preserve historical manifests, snapshot totals and surviving file identities
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env TIMETRAVEL_SUPPORT
+
+require-env METADATA_FILE_READ_SUPPORT
+
+include test/sql/init_requires
+
+require json
+
+foreach merge false true
+
+statement ok
+CREATE TABLE my_datalake.default.tombstone_history (id INTEGER, p VARCHAR)
+PARTITIONED BY (p)
+WITH ('format-version' = 2, 'commit.manifest-merge.enabled' = {merge},
+      'commit.manifest.min-count-to-merge' = 2);
+
+statement ok
+INSERT INTO my_datalake.default.tombstone_history VALUES (1, 'a'), (2, 'b');
+
+statement ok
+INSERT INTO my_datalake.default.tombstone_history VALUES (3, 'a');
+
+statement ok
+SET VARIABLE before_rewrite = (
+	SELECT snapshot_id FROM iceberg_snapshots(my_datalake.default.tombstone_history)
+	WHERE sequence_number = 2
+);
+
+statement ok
+CREATE OR REPLACE TEMP TABLE untouched_identity AS
+SELECT file_path, data_sequence_number, file_sequence_number
+FROM iceberg_metadata(my_datalake.default.tombstone_history)
+WHERE replace(file_path, chr(92), '/') LIKE '%/p=b/%';
+
+query IIIII
+CALL iceberg_rewrite_data_files('my_datalake.default.tombstone_history', min_input_files => 2);
+----
+2	1	<REGEX>:[1-9][0-9]*	0	0
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.tombstone_history VALUES (4, 'b');
+
+statement ok
+INSERT INTO my_datalake.default.tombstone_history VALUES (5, 'c');
+
+statement ok
+COMMIT;
+
+# No manifest containing only tombstones survives, with or without merging.
+query II
+SELECT count(*) FILTER (WHERE added_data_files_count = 0 AND existing_data_files_count = 0),
+       sum(added_data_files_count + existing_data_files_count)
+FROM iceberg_manifests(my_datalake.default.tombstone_history);
+----
+0	4
+
+query I
+SELECT string_agg(id, ',' ORDER BY id) FROM my_datalake.default.tombstone_history;
+----
+1,2,3,4,5
+
+query I
+SELECT string_agg(id, ',' ORDER BY id) FROM my_datalake.default.tombstone_history
+AT (VERSION => getvariable('before_rewrite'));
+----
+1,2,3
+
+# Repacking the surviving file must preserve its path and both sequence numbers.
+query III
+SELECT count(*), bool_and(t.data_sequence_number = i.data_sequence_number),
+       bool_and(t.file_sequence_number = i.file_sequence_number)
+FROM iceberg_metadata(my_datalake.default.tombstone_history) t
+JOIN untouched_identity i USING (file_path) WHERE t.status <> 'DELETED';
+----
+1	true	true
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE rewrite_list = (
+	SELECT manifest_list FROM iceberg_snapshots(my_datalake.default.tombstone_history)
+	WHERE sequence_number = 3
+);
+
+statement ok
+SET VARIABLE rewrite_manifests = (SELECT list(manifest_path) FROM read_avro(getvariable('rewrite_list')));
+
+# The immutable rewrite snapshot still records both files it deleted.
+query III
+SELECT count(*) FILTER (WHERE status = 2), count(*) FILTER (WHERE status <> 2),
+       sum(data_file.record_count) FILTER (WHERE status <> 2)
+FROM read_avro(getvariable('rewrite_manifests'));
+----
+2	2	3
+
+# Dropping old tombstones is metadata maintenance, not another deletion of their rows.
+query IIII
+WITH snapshots AS (
+	SELECT unnest(metadata::JSON->'snapshots'->'$[*]') AS snap
+	FROM iceberg_load_table_response(my_datalake.default.tombstone_history)
+)
+SELECT (snap->>'sequence-number')::BIGINT,
+       (snap->'summary'->>'total-data-files')::BIGINT,
+       (snap->'summary'->>'total-records')::BIGINT,
+       coalesce((snap->'summary'->>'deleted-data-files')::BIGINT, 0)
+FROM snapshots ORDER BY 1;
+----
+1	2	2	0
+2	3	3	0
+3	2	3	2
+4	3	4	0
+5	4	5	0
+
+statement ok
+COMMIT;
+
+statement ok
+DROP TABLE my_datalake.default.tombstone_history;
+
+endloop

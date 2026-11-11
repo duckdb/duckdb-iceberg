@@ -1,0 +1,98 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_copy_on_write_delete_conflicts.test
+# description: Copy-on-write commit conflicts never discard concurrent changes or publish failed rewrites
+# group: [delete]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env ATOMIC_COMMIT_CONFLICT_SUPPORT true
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cow_delete_conflicts;
+
+statement ok
+CREATE TABLE my_datalake.default.cow_delete_conflicts (id INTEGER) WITH (
+    'format-version' = '2',
+    'write.delete.mode' = 'copy-on-write',
+    'write.delete.isolation-level' = 'snapshot'
+);
+
+statement ok
+INSERT INTO my_datalake.default.cow_delete_conflicts VALUES (1), (2);
+
+# Partial rewrites are not retryable, even when DELETE uses snapshot isolation.
+statement ok rewriter
+BEGIN;
+
+query I rewriter
+DELETE FROM my_datalake.default.cow_delete_conflicts WHERE id = 1;
+----
+1
+
+statement ok writer
+INSERT INTO my_datalake.default.cow_delete_conflicts VALUES (3);
+
+statement error rewriter
+COMMIT;
+----
+TransactionContext Error
+
+query I
+SELECT id FROM my_datalake.default.cow_delete_conflicts ORDER BY id;
+----
+1
+2
+3
+
+# Removing a whole file can retry across a concurrent append under snapshot isolation.
+statement ok rewriter
+BEGIN;
+
+query I rewriter
+DELETE FROM my_datalake.default.cow_delete_conflicts WHERE id IN (1, 2);
+----
+2
+
+statement ok writer
+INSERT INTO my_datalake.default.cow_delete_conflicts VALUES (4);
+
+statement ok rewriter
+COMMIT;
+
+query I
+SELECT id FROM my_datalake.default.cow_delete_conflicts ORDER BY id;
+----
+3
+4
+
+# A no-match delete has nothing to publish and must preserve concurrent inserts.
+statement ok rewriter
+BEGIN;
+
+query I rewriter
+DELETE FROM my_datalake.default.cow_delete_conflicts WHERE id = 99;
+----
+0
+
+statement ok writer
+INSERT INTO my_datalake.default.cow_delete_conflicts VALUES (99);
+
+statement ok rewriter
+COMMIT;
+
+query I
+SELECT id FROM my_datalake.default.cow_delete_conflicts ORDER BY id;
+----
+3
+4
+99
+
+query I
+SELECT sum(record_count) FROM iceberg_metadata(my_datalake.default.cow_delete_conflicts)
+WHERE content = 'DATA' AND status != 'DELETED';
+----
+3
+
+statement ok
+DROP TABLE my_datalake.default.cow_delete_conflicts;

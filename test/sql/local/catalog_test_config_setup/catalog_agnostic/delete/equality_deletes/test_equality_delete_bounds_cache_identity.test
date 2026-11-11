@@ -1,0 +1,165 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/equality_deletes/test_equality_delete_bounds_cache_identity.test
+# description: Cached equality-delete bounds remain distinct across manifests, entries, and scans
+# group: [equality_deletes]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env EQUALITY_DELETE_WRITES_ENABLED 1
+
+include test/sql/init_requires
+
+statement ok
+set __iceberg_unsafe_enable_equality_deletes=true;
+
+statement ok
+set iceberg_use_server_side_scan_planning=false;
+
+statement ok
+set disabled_optimizers='column_lifetime,statistics_propagation,join_order';
+
+statement ok
+set enable_external_file_cache=false;
+
+statement ok
+call enable_logging('Iceberg');
+
+# With merging disabled the delete entries occupy different manifests. With
+# merging enabled they occupy different entries of the same manifest.
+foreach merge_enabled false true
+
+statement ok
+set threads=1;
+
+statement ok
+drop table if exists my_datalake.default.equality_delete_bounds_cache_identity;
+
+statement ok
+create table my_datalake.default.equality_delete_bounds_cache_identity (id integer, label varchar)
+with ('format-version'=2, 'commit.manifest-merge.enabled'='{merge_enabled}', 'commit.manifest.min-count-to-merge'=2);
+
+statement ok
+insert into my_datalake.default.equality_delete_bounds_cache_identity values
+	(1, 'keep-low'), (2, 'delete-low'), (3, NULL);
+
+statement ok
+insert into my_datalake.default.equality_delete_bounds_cache_identity values
+	(101, 'keep-high'), (102, 'delete-high'), (103, NULL);
+
+statement ok
+delete from my_datalake.default.equality_delete_bounds_cache_identity where id=2;
+
+statement ok
+delete from my_datalake.default.equality_delete_bounds_cache_identity where id=102;
+
+# Compaction repacks the base manifests on the next commit. These new rows
+# have higher sequence numbers and must survive both existing deletes.
+statement ok
+insert into my_datalake.default.equality_delete_bounds_cache_identity values
+	(2, 'new-low'), (102, 'new-high');
+
+# Verify the layout that exercises both components of the cache key.
+query II
+select count(*),
+       count(distinct manifest_path) = case when '{merge_enabled}' = 'true' then 1 else 2 end
+from iceberg_metadata(my_datalake.default.equality_delete_bounds_cache_identity)
+where content = 'EQUALITY_DELETES' and status != 'DELETED';
+----
+2	true
+
+# A filtered scan can encounter only a later manifest or entry. Cache storage
+# must retain the original indexes rather than the filtered candidate positions.
+query II
+select record_count, len(delete_files)
+from iceberg_scan_plan('my_datalake.default.equality_delete_bounds_cache_identity', row_filter='id >= 100')
+order by all;
+----
+2	0
+3	1
+
+foreach thread_count 1 4
+
+statement ok
+set threads={thread_count};
+
+# Each old file has exactly one applicable delete, with its own bounds.
+query II
+select record_count, len(delete_files)
+from iceberg_scan_plan('my_datalake.default.equality_delete_bounds_cache_identity')
+order by all;
+----
+2	0
+3	1
+3	1
+
+statement ok
+call truncate_duckdb_logs();
+
+query I
+select id from my_datalake.default.equality_delete_bounds_cache_identity order by id;
+----
+1
+2
+3
+101
+102
+103
+
+query III
+select count(*),
+       count(*) filter (message.contains('bounds [2, 2] outside data bounds [101, 103]')),
+       count(*) filter (message.contains('bounds [102, 102] outside data bounds [1, 3]'))
+from duckdb_logs()
+where type = 'Iceberg' and message.starts_with('Iceberg Equality Delete Pruning');
+----
+2	1	1
+
+endloop
+
+statement ok
+set threads=1;
+
+# An empty cache entry for unsafe NULL-key bounds must coexist with the two
+# usable entries. All three data files still need this new delete.
+statement ok
+delete from my_datalake.default.equality_delete_bounds_cache_identity
+where label is null or label = 'absent-key-with-a-long-string-value';
+
+query II
+select record_count, len(delete_files)
+from iceberg_scan_plan('my_datalake.default.equality_delete_bounds_cache_identity')
+order by all;
+----
+2	1
+3	2
+3	2
+
+statement ok
+prepare cached_bounds_scan as
+select id from my_datalake.default.equality_delete_bounds_cache_identity order by id;
+
+query I
+execute cached_bounds_scan;
+----
+1
+2
+101
+102
+
+# Re-executing a prepared query after a commit must use the new scan's metadata.
+statement ok
+delete from my_datalake.default.equality_delete_bounds_cache_identity where id=101;
+
+query I
+execute cached_bounds_scan;
+----
+1
+2
+102
+
+statement ok
+deallocate cached_bounds_scan;
+
+statement ok
+drop table my_datalake.default.equality_delete_bounds_cache_identity;
+
+endloop

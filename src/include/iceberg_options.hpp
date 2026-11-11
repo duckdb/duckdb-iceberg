@@ -21,6 +21,11 @@ static constexpr int32_t MAX_ICEBERG_FORMAT_VERSION = 3;
 static constexpr const char *METADATA_LOG_CLOCK_SKEW_CONFIG_VARIABLE = "iceberg_metadata_log_clock_skew_ms";
 static constexpr int64_t DEFAULT_METADATA_LOG_CLOCK_SKEW_MS = 0;
 
+// The number of manifest entries a manifest-list count may reserve up front for a single manifest
+static constexpr const char *MAX_RESERVED_MANIFEST_ENTRIES_CONFIG_VARIABLE = "iceberg_max_reserved_manifest_entries";
+static constexpr uint64_t DEFAULT_MAX_RESERVED_MANIFEST_ENTRIES = 1000000;
+static constexpr uint64_t MAX_MAX_RESERVED_MANIFEST_ENTRIES = 100000000;
+
 // Controls whether eligible delete-free iceberg_scan_tasks descriptor lists share
 // one Parquet multi-file executor. Lists with deletes or distinct residual filters
 // retain one-task-at-a-time execution.

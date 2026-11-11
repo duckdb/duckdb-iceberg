@@ -38,3 +38,21 @@ duckdb_link_extensions(
   iceberg
   httpfs
   iceberg_mock)
+
+# Drive overlapping LoadTable requests in a fixed order, without timing races.
+add_executable(unittest_iceberg_cache test_load_table_cache.cpp)
+target_include_directories(
+  unittest_iceberg_cache PRIVATE ${CMAKE_SOURCE_DIR}/third_party/catch
+                                 ${CMAKE_CURRENT_LIST_DIR}/../../src/include)
+set_target_properties(
+  unittest_iceberg_cache PROPERTIES RUNTIME_OUTPUT_DIRECTORY
+                                    ${CMAKE_BINARY_DIR}/test)
+target_link_libraries(unittest_iceberg_cache duckdb_static)
+duckdb_link_extensions(
+  unittest_iceberg_cache
+  avro
+  parquet
+  json
+  iceberg
+  httpfs
+  iceberg_mock)

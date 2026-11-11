@@ -7,6 +7,19 @@
 
 namespace duckdb {
 
+//! Delete-side bounds shared by all data files in one scan. An empty initialized
+//! entry also caches the absence of usable statistics.
+struct IcebergEqualityDeleteBounds {
+	struct ColumnBounds {
+		reference<const IcebergColumnDefinition> column;
+		Value lower_bound;
+		Value upper_bound;
+	};
+
+	bool initialized = false;
+	vector<ColumnBounds> columns;
+};
+
 struct IcebergFilePruner {
 public:
 	IcebergFilePruner(ClientContext &context, const IcebergTableMetadata &metadata, const IcebergTableSchema &schema,
@@ -22,13 +35,16 @@ public:
 	                               const IcebergManifestEntry &delete_manifest_entry,
 	                               const IcebergManifest &data_manifest,
 	                               const IcebergManifestEntry &data_manifest_entry,
-	                               const partition_value_map_t &data_partition_values) const;
+	                               const partition_value_map_t &data_partition_values,
+	                               optional_ptr<IcebergEqualityDeleteBounds> delete_bounds) const;
 	//! Built once per data file: every delete file considered for it is matched against the same values.
 	static partition_value_map_t PartitionValueMap(const IcebergDataFile &data_file);
 
 private:
 	bool FilePartitionMatchesFilter(const IcebergDataFile &data_file, const IcebergManifest &manifest_file) const;
-	bool EqualityDeleteMatchesDataFile(const IcebergDataFile &delete_file, const IcebergDataFile &data_file) const;
+	void InitializeEqualityDeleteBounds(const IcebergDataFile &delete_file, IcebergEqualityDeleteBounds &bounds) const;
+	bool EqualityDeleteMatchesDataFile(const IcebergDataFile &delete_file, const IcebergDataFile &data_file,
+	                                   const IcebergEqualityDeleteBounds &bounds) const;
 
 private:
 	ClientContext &context;
