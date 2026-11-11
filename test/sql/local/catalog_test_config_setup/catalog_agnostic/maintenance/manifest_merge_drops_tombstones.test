@@ -1,0 +1,63 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/manifest_merge_drops_tombstones.test
+# description: Manifest merging drops DELETED entries written by earlier snapshots
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.manifest_merge_drops_tombstones;
+
+statement ok
+CREATE TABLE my_datalake.default.manifest_merge_drops_tombstones (id INTEGER, category VARCHAR)
+PARTITIONED BY (category)
+WITH ('format-version' = 2, 'commit.manifest.min-count-to-merge' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.manifest_merge_drops_tombstones VALUES (1, 'a'), (2, 'b');
+
+statement ok
+INSERT INTO my_datalake.default.manifest_merge_drops_tombstones VALUES (3, 'a');
+
+# The rewrite merges both manifests first, then marks the two 'a' files as deleted in the merged manifest.
+query IIIII
+CALL iceberg_rewrite_data_files('my_datalake.default.manifest_merge_drops_tombstones', min_input_files => 2);
+----
+2	1	<REGEX>:[1-9][0-9]*	0	0
+
+query III
+SELECT added_data_files_count, existing_data_files_count, deleted_data_files_count
+FROM iceberg_manifests(my_datalake.default.manifest_merge_drops_tombstones)
+ORDER BY ALL;
+----
+0	1	2
+1	0	0
+
+# The next commit merges both manifests again. The rewrite's tombstones are not copied into the result.
+statement ok
+INSERT INTO my_datalake.default.manifest_merge_drops_tombstones VALUES (4, 'b');
+
+query III
+SELECT added_data_files_count, existing_data_files_count, deleted_data_files_count
+FROM iceberg_manifests(my_datalake.default.manifest_merge_drops_tombstones)
+ORDER BY ALL;
+----
+0	2	0
+1	0	0
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.manifest_merge_drops_tombstones) WHERE status = 'DELETED';
+----
+0
+
+query II
+SELECT id, category FROM my_datalake.default.manifest_merge_drops_tombstones ORDER BY id;
+----
+1	a
+2	b
+3	a
+4	b
+
+statement ok
+DROP TABLE my_datalake.default.manifest_merge_drops_tombstones;

@@ -386,9 +386,25 @@ IcebergScanPlanner::ResolveApplicableDeleteFiles(const BoundIcebergManifestEntry
 			                        delete_file.entry_idx, delete_file.manifest_idx);
 		}
 		auto &delete_entry = entries[delete_file.entry_idx];
-		if (IcebergDeletePlanner::DeleteEntryMatchesFilters(delete_context, delete_file.manifest_idx, delete_entry) &&
-		    IcebergDeletePlanner::DeleteEntryAppliesToDataFile(delete_context, delete_file.manifest_idx, delete_entry,
-		                                                       data_manifest_entry, partition_values)) {
+		if (!IcebergDeletePlanner::DeleteEntryMatchesFilters(delete_context, delete_file.manifest_idx, delete_entry)) {
+			continue;
+		}
+		optional_ptr<IcebergEqualityDeleteBounds> delete_bounds;
+		if (delete_entry.data_file.content == IcebergManifestEntryContentType::EQUALITY_DELETES) {
+			auto &bounds_cache = shared_state->equality_delete_bounds;
+			if (bounds_cache.empty()) {
+				bounds_cache.resize(delete_manifests.size());
+			}
+			D_ASSERT(bounds_cache.size() == delete_manifests.size());
+			auto &manifest_bounds = bounds_cache[delete_file.manifest_idx];
+			if (manifest_bounds.empty()) {
+				manifest_bounds.resize(entries.size());
+			}
+			D_ASSERT(manifest_bounds.size() == entries.size());
+			delete_bounds = &manifest_bounds[delete_file.entry_idx];
+		}
+		if (IcebergDeletePlanner::DeleteEntryAppliesToDataFile(delete_context, delete_file.manifest_idx, delete_entry,
+		                                                       data_manifest_entry, partition_values, delete_bounds)) {
 			result.emplace_back(delete_entry.data_file);
 		}
 	}

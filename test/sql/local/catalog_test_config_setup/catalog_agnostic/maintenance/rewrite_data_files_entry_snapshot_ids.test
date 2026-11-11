@@ -117,11 +117,11 @@ WHERE status = 2 AND file_path LIKE '%/category=b/%' ORDER BY sequence_number;
 1	1
 4	4
 
-# files deleted by the first rewrite keep that snapshot when their manifest is rewritten again
+# tombstones from the first rewrite belong only to that snapshot; they are not carried into the second
 query I
-SELECT count(*) FROM entries WHERE status = 2 AND snapshot_id = getvariable('first_rewrite') AND file_path LIKE '%/category=a/%';
+SELECT count(*) FROM entries WHERE status = 2 AND snapshot_id = getvariable('first_rewrite');
 ----
-2
+0
 
 query II
 SELECT id, category FROM my_datalake.default.entry_snapshot_ids ORDER BY id;
