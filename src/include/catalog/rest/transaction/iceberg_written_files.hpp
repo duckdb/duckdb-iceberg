@@ -26,9 +26,9 @@ public:
 	void AddFiles(vector<IcebergWrittenFile> files, Transaction &transaction);
 	vector<IcebergWrittenFile> GetFiles();
 	//! Called by the Iceberg transaction manager once 'transaction' committed
-	void CommitTransaction(Transaction &transaction);
+	void IcebergTransactionCommitted(Transaction &transaction);
 	//! Called by the Iceberg transaction manager when 'transaction' rolls back or fails to commit
-	void RollbackTransaction(Transaction &transaction);
+	void IcebergTransactionRolledBack(Transaction &transaction);
 
 	void QueryEnd(ClientContext &context, optional_ptr<ErrorData> error) override;
 

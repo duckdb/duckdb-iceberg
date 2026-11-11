@@ -32,7 +32,7 @@ vector<IcebergWrittenFile> IcebergWrittenFilesState::GetFiles() {
 	return files;
 }
 
-void IcebergWrittenFilesState::CommitTransaction(Transaction &transaction) {
+void IcebergWrittenFilesState::IcebergTransactionCommitted(Transaction &transaction) {
 	annotated_lock_guard<annotated_mutex> guard(lock);
 	if (pending_transaction.get() == &transaction) {
 		pending_transaction = nullptr;
@@ -42,7 +42,7 @@ void IcebergWrittenFilesState::CommitTransaction(Transaction &transaction) {
 	}
 }
 
-void IcebergWrittenFilesState::RollbackTransaction(Transaction &transaction) {
+void IcebergWrittenFilesState::IcebergTransactionRolledBack(Transaction &transaction) {
 	annotated_lock_guard<annotated_mutex> guard(lock);
 	if (pending_transaction.get() == &transaction) {
 		pending_files.clear();

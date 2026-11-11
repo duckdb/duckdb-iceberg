@@ -23,14 +23,14 @@ ErrorData IcebergTransactionManager::CommitTransaction(ClientContext &context, T
 	try {
 		ic_transaction.Commit();
 	} catch (std::exception &ex) {
-		// core does not roll back a transaction whose commit failed
+		// core marks a transaction whose commit failed as rolled back without calling RollbackTransaction
 		if (written_files) {
-			written_files->RollbackTransaction(transaction);
+			written_files->IcebergTransactionRolledBack(transaction);
 		}
 		return ErrorData(ex);
 	}
 	if (written_files) {
-		written_files->CommitTransaction(transaction);
+		written_files->IcebergTransactionCommitted(transaction);
 	}
 	lock_guard<mutex> l(transaction_lock);
 	transactions.erase(transaction);
@@ -43,7 +43,7 @@ void IcebergTransactionManager::RollbackTransaction(Transaction &transaction) {
 	auto context = ic_transaction.context.lock();
 	if (context) {
 		if (auto written_files = IcebergWrittenFilesState::TryGet(*context)) {
-			written_files->RollbackTransaction(transaction);
+			written_files->IcebergTransactionRolledBack(transaction);
 		}
 	}
 	lock_guard<mutex> l(transaction_lock);
