@@ -69,13 +69,22 @@ The CI build step also runs these serialization tests before packaging the SQL
 test runner.
 
 The LoadTable cache API tests deterministically interleave request construction,
-publication, and eviction, and check the credential-refresh fallback:
+publication, and eviction, and check the credential-refresh fallback. They also
+cover expired Azure SAS credentials and S3 credential refresh after an HTTP 304,
+without contacting cloud storage:
 
 ```sh
 ./build/reldebug/test/unittest_iceberg_cache
 ```
 
 The CI build step runs these tests alongside the other API executables.
+
+Run the ETag SQL tests with the native mock config:
+
+```sh
+./build/reldebug/test/unittest --test-config test/configs/mock_native.json \
+  'test/sql/local/native_catalog/load_table_etag*'
+```
 
 ## SQL test interfaces
 

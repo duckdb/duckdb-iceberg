@@ -16,6 +16,8 @@
 #include "common/iceberg_utils.hpp"
 #include "catalog/rest/api/api_utils.hpp"
 #include "catalog/rest/storage/iceberg_authorization.hpp"
+#include "catalog/rest/storage/iceberg_table_secret_provider.hpp"
+#include "catalog/rest/storage/authorization/sigv4_utils.hpp"
 
 #include <sys/stat.h>
 
@@ -188,17 +190,24 @@ IcebergLoadTableResult IcebergLoadTableRequest::Execute(ClientContext &context, 
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent(table_name));
 
 	HTTPHeaders headers(*context.db);
+	bool can_revalidate = cached_result && !etag.empty();
 	if (catalog.attach_options.access_mode == IRCAccessDelegationMode::VENDED_CREDENTIALS) {
 		headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
+		if (can_revalidate) {
+			// ETags validate metadata, not credential lifetime. Storage without an Iceberg refresh
+			// provider (e.g. Azure SAS) needs newly vended credentials from a full LoadTable response.
+			auto &location = cached_result->metadata.location;
+			can_revalidate = location && IcebergTableSecretProvider::SupportsStorageType(DetectStorageType(*location));
+		}
 	}
-	if (cached_result && !etag.empty()) {
+	if (can_revalidate) {
 		headers.Insert("If-None-Match", etag);
 	}
 	auto result = catalog.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers);
 	IcebergLoadTableResult ret;
 	ret.status_ = result->status;
 	if (result->status == HTTPStatusCode::NotModified_304) {
-		if (!cached_result || etag.empty()) {
+		if (!can_revalidate) {
 			throw HTTPException(*result, "LoadTable returned HTTP 304 without a cached response to revalidate");
 		}
 		ret.result_ = cached_result;

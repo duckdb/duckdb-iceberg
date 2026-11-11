@@ -51,7 +51,7 @@ public:
 };
 
 struct IcebergLoadTableResult : public APIResult<shared_ptr<const rest_api_objects::LoadTableResult>> {
-	//! HTTP validator for this complete response, kept separate from the JSON payload.
+	//! HTTP validator for the table metadata, kept separate from the JSON payload.
 	string etag;
 };
 using IcebergLoadViewResult = APIResult<unique_ptr<const rest_api_objects::LoadViewResult>>;
