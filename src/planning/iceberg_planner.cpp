@@ -1,6 +1,8 @@
 #include "planning/iceberg_planner.hpp"
 
 #include "planning/iceberg_optimizer.hpp"
+#include "catalog/rest/iceberg_table_prefetch.hpp"
+
 #include "iceberg_logging.hpp"
 #include "duckdb/planner/logical_operator.hpp"
 #include "duckdb/logging/logger.hpp"
@@ -82,8 +84,14 @@ void IcebergPlanner::PostBind(PlannerExtensionInput &input, BoundStatement &stat
 	}
 }
 
+void IcebergPlanner::PreBind(PlannerExtensionInput &input, SQLStatement &statement) {
+	IcebergTablePrefetch::PrefetchStatementTables(input.context, statement);
+}
+
 PlannerExtension IcebergPlanner::Create() {
 	PlannerExtension ext;
+	// Start loading the Iceberg tables a statement references before the binder looks them up one at a time
+	ext.pre_bind_function = IcebergPlanner::PreBind;
 	// Apply scan safety restrictions and late-materialization setup without invalidating
 	// the correlation-domain metadata that DuckDB generates after binding.
 	ext.post_bind_function = IcebergPlanner::PostBind;

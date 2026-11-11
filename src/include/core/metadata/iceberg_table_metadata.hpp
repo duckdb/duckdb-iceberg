@@ -21,6 +21,10 @@ const string WRITE_UPDATE_MODE = "write.update.mode";
 const string WRITE_DELETE_MODE = "write.delete.mode";
 const string WRITE_MERGE_MODE = "write.merge.mode";
 const string WRITE_DELETE_ISOLATION_LEVEL = "write.delete.isolation-level";
+const string WRITE_FORMAT_DEFAULT = "write.format.default";
+const string WRITE_DELETE_FORMAT_DEFAULT = "write.delete.format.default";
+const string WRITE_PARQUET_COMPRESSION_CODEC = "write.parquet.compression-codec";
+const string WRITE_DELETE_PARQUET_COMPRESSION_CODEC = "write.delete.parquet.compression-codec";
 
 struct IcebergMetadataLogItem {
 public:
@@ -68,7 +72,8 @@ public:
 	IcebergTableMetadata &operator=(IcebergTableMetadata &&) = default;
 
 public:
-	static rest_api_objects::TableMetadata Parse(const string &path, FileSystem &fs,
+	//! Opens `file` with its extended information, such as its named secret
+	static rest_api_objects::TableMetadata Parse(const OpenFileInfo &file, FileSystem &fs,
 	                                             const string &metadata_compression_codec);
 	static IcebergTableMetadata FromTableMetadata(const rest_api_objects::TableMetadata &table_metadata);
 	IcebergTableMetadata Copy() const;
@@ -115,9 +120,15 @@ public:
 
 	const case_insensitive_map_t<string> &GetTableProperties() const;
 	string GetTableProperty(string property_string) const;
+	//! Whether the given write mode property is explicitly set to copy-on-write
+	bool UsesCopyOnWrite(const string &write_mode_property) const;
+	static void VerifyNotReservedProperty(const string &key, const string &operation);
+	string GetDeleteCompressionCodec() const;
 	//! Whether the given write mode property (write.delete.mode, write.update.mode or write.merge.mode) allows
 	//! writing merge-on-read delete files
 	bool AllowsMergeOnRead(const string &write_mode_property) const;
+	void VerifyDataFileFormat() const;
+	void VerifyDeleteFileFormat() const;
 	string ToJSON() const;
 	void WriteMetadata(ClientContext &context, const string &path) const;
 	bool WriteVersionHint(ClientContext &context, const string &path, const string &metadata_json_path) const;
@@ -178,8 +189,18 @@ public:
 
 	vector<IcebergMetadataLogItem> metadata_log;
 
+	//! The registered secret named by reads of the table's manifest lists, manifests, data and delete files.
+	//! Set only on a read's metadata copy, never on the table's shared metadata or in a metadata file.
+	//! Set with SetFileSecret.
+	string file_secret;
+	//! The name of the file secret as one value, which every file that names it shares
+	Value file_secret_value;
+
 public:
 	explicit IcebergTableMetadata(IcebergTableMetadataSchemas schemas);
+	void SetFileSecret(string name);
+	//! Names the secret, if any, in `file`'s options. Existing extended information must belong to this file.
+	void ApplyFileSecret(OpenFileInfo &file) const;
 
 private:
 	int32_t current_schema_id = 0;

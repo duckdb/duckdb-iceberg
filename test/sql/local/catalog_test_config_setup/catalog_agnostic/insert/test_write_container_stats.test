@@ -9,12 +9,13 @@ include test/sql/init_requires
 statement ok
 DROP TABLE IF EXISTS my_datalake.default.container_stats;
 
+# Pin V2: iceberg_rewrite_data_files below does not support V3 tables yet.
 statement ok
 CREATE TABLE my_datalake.default.container_stats (
     s STRUCT(x INTEGER, n STRUCT(y INTEGER)),
     l INTEGER[],
     m MAP(INTEGER, INTEGER)
-);
+) WITH ('format-version' = '2');
 
 statement ok
 INSERT INTO my_datalake.default.container_stats VALUES

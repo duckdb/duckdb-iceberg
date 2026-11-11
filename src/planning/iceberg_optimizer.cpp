@@ -68,6 +68,11 @@ static void IcebergLateMaterializationFilterPushdown(ClientContext &context, Log
 	}
 }
 
+void IcebergOptimizer::EnableLateMaterialization(BoundTableFunction &function) {
+	function.late_materialization = true;
+	function.pushdown_complex_filter = IcebergLateMaterializationFilterPushdown;
+}
+
 void IcebergOptimizer::TryEnableLateMaterialization(ClientContext &context, LogicalOperator &op) {
 	auto get = TryGetTopNTableScan(context, op);
 	if (get) {
@@ -84,8 +89,7 @@ void IcebergOptimizer::TryEnableLateMaterialization(ClientContext &context, Logi
 				server_side_enabled = value.GetValue<bool>();
 			}
 			if (!server_side_enabled) {
-				get->function.late_materialization = true;
-				get->function.pushdown_complex_filter = IcebergLateMaterializationFilterPushdown;
+				EnableLateMaterialization(get->function);
 			}
 		}
 	}

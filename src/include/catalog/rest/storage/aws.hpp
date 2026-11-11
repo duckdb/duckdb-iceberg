@@ -7,13 +7,16 @@
 
 namespace duckdb {
 
-//! A SigV4-signed request to an AWS-hosted Iceberg REST catalog. Signing is done here with
-//! duckdb_mbedtls and the request goes out over duckdb's HTTPUtil, so this needs nothing from
-//! aws-sdk-cpp.
+//! A SigV4-signed request to an AWS-hosted Iceberg REST catalog. The request is composed here, signed with
+//! HTTPUtil::CreateSignatureV4 and sent over duckdb's HTTPUtil, so this needs nothing from aws-sdk-cpp.
 class AWSInput {
 public:
 	unique_ptr<HTTPResponse> Request(RequestType request_type, ClientContext &context, HTTPHeaders &headers,
 	                                 const string &data);
+	//! The headers to send with this request: the signed headers and the Authorization header holding their
+	//! SigV4 signature. Of 'headers', only Content-Type and X-Iceberg-Access-Delegation are signed and forwarded.
+	HTTPHeaders SignRequest(RequestType request_type, ClientContext &context, HTTPHeaders &headers,
+	                        const string &data) const;
 
 	//! The path that goes into the SigV4 canonical request. Mirrors
 	//! Aws::Http::URI::GetURLEncodedPath: every byte outside A-Za-z0-9-_.~ is percent-encoded,

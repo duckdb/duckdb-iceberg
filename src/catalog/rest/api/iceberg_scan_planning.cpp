@@ -113,7 +113,11 @@ static void CopyCountMap(const optional<rest_api_objects::CountMap> &source, uno
 		throw InvalidInputException("Iceberg server-side scan-planning returned a malformed CountMap");
 	}
 	for (idx_t i = 0; i < source->keys->size(); i++) {
-		target[(*source->keys)[i].value] = (*source->values)[i].value;
+		auto value = (*source->values)[i].value;
+		if (value < 0) {
+			throw InvalidConfigurationException("Iceberg server-side scan-planning returned a negative count");
+		}
+		target[(*source->keys)[i].value] = value;
 	}
 }
 
@@ -168,6 +172,13 @@ static void CopyValueMap(const optional<rest_api_objects::ValueMap> &source, con
 static IcebergDataFile ConvertContentFile(const rest_api_objects::ContentFile &source,
                                           const IcebergTableMetadata &metadata,
                                           IcebergManifestEntryContentType content) {
+	if (source.file_path.empty()) {
+		throw InvalidConfigurationException("Iceberg server-side scan-planning returned an empty file path");
+	}
+	if (source.record_count < 0 || source.file_size_in_bytes < 0) {
+		throw InvalidConfigurationException(
+		    "Iceberg server-side scan-planning returned a negative record count or file size");
+	}
 	IcebergDataFile result;
 	result.content = content;
 	result.file_path = source.file_path;

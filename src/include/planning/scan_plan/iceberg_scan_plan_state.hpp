@@ -2,6 +2,7 @@
 
 #include "duckdb/common/mutex.hpp"
 #include "iceberg_options.hpp"
+#include "planning/pruning/iceberg_file_pruner.hpp"
 #include "planning/snapshot/iceberg_scan_info.hpp"
 
 namespace duckdb {
@@ -55,6 +56,9 @@ public:
 	mutable annotated_mutex lock;
 	//! FIXME: these are only used by deletes, we should find a better way to do this
 	mutable unordered_map<string, IcebergPartition> data_file_partitions DUCKDB_GUARDED_BY(lock);
+	//! Dense manifest and entry indexes identify immutable delete entries across filtered views.
+	//! Allocate entry storage only for manifests with candidate equality deletes.
+	vector<vector<IcebergEqualityDeleteBounds>> equality_delete_bounds DUCKDB_GUARDED_BY(lock);
 
 private:
 	void RequireConfigurable() const DUCKDB_REQUIRES(lock);

@@ -141,6 +141,10 @@ public:
 	void SetFileSequenceNumber(optional<sequence_number_t> value);
 	sequence_number_t GetSequenceNumber(const IcebergManifest &manifest_file) const;
 	sequence_number_t GetFileSequenceNumber(const IcebergManifest &manifest_file) const;
+	//! The explicit sequence number, or the one inherited from the manifest for ADDED entries.
+	//! Empty for EXISTING/DELETED entries written without one (e.g. DELETED entries written by older Iceberg versions).
+	optional<sequence_number_t> TryGetSequenceNumber(const IcebergManifest &manifest_file) const;
+	optional<sequence_number_t> TryGetFileSequenceNumber(const IcebergManifest &manifest_file) const;
 	optional<sequence_number_t> ExplicitSequenceNumber() const;
 	optional<sequence_number_t> ExplicitFileSequenceNumber() const;
 

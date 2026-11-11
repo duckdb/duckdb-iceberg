@@ -1,0 +1,117 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/equality_deletes/test_equality_delete_bounds_cache_missing_metrics.test
+# description: Missing data-file bounds do not disable cached delete bounds for other files
+# group: [equality_deletes]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env EQUALITY_DELETE_WRITES_ENABLED 1
+
+include test/sql/init_requires
+
+statement ok
+set __iceberg_unsafe_enable_equality_deletes=true;
+
+statement ok
+set iceberg_use_server_side_scan_planning=false;
+
+statement ok
+set threads=1;
+
+statement ok
+set disabled_optimizers='column_lifetime,statistics_propagation,join_order';
+
+statement ok
+set enable_external_file_cache=false;
+
+statement ok
+call enable_logging('Iceberg');
+
+foreach metrics_mode none counts
+
+statement ok
+drop table if exists my_datalake.default.equality_delete_bounds_cache_missing_metrics;
+
+statement ok
+create table my_datalake.default.equality_delete_bounds_cache_missing_metrics (id integer, label varchar)
+with ('write.metadata.metrics.default'='{metrics_mode}');
+
+statement ok
+insert into my_datalake.default.equality_delete_bounds_cache_missing_metrics values
+	(1, 'missing-old'), (2, 'missing-old');
+
+statement ok
+alter table my_datalake.default.equality_delete_bounds_cache_missing_metrics
+set ('write.metadata.metrics.default'='full');
+
+statement ok
+insert into my_datalake.default.equality_delete_bounds_cache_missing_metrics values
+	(101, 'disjoint'), (102, 'disjoint'), (103, 'disjoint');
+
+statement ok
+insert into my_datalake.default.equality_delete_bounds_cache_missing_metrics values
+	(1, 'overlap'), (3, 'overlap'), (4, 'overlap'), (5, 'overlap');
+
+# Put missing statistics on both sides of the bounded files in sequence order.
+statement ok
+alter table my_datalake.default.equality_delete_bounds_cache_missing_metrics
+set ('write.metadata.metrics.default'='{metrics_mode}');
+
+statement ok
+insert into my_datalake.default.equality_delete_bounds_cache_missing_metrics values
+	(1, 'missing-new'), (6, 'missing-new'), (7, 'missing-new'), (8, 'missing-new'), (9, 'missing-new');
+
+statement ok
+delete from my_datalake.default.equality_delete_bounds_cache_missing_metrics where id=1;
+
+# The delete's own bounds are usable, independently of the data files' metrics mode.
+query III
+select lower_bound, upper_bound, null_value_count
+from iceberg_column_stats(my_datalake.default.equality_delete_bounds_cache_missing_metrics)
+where file_path like '%equality-deletes.parquet' and column_name = 'id';
+----
+1	1	0
+
+query III
+select count(*), count(lower_bound), count(upper_bound)
+from iceberg_column_stats(my_datalake.default.equality_delete_bounds_cache_missing_metrics)
+where file_path not like '%equality-deletes.parquet' and column_name = 'id';
+----
+4	2	2
+
+# Only the bounded, disjoint file can omit the delete. The overlap and both
+# unknown ranges must retain it, regardless of which initializes the cache.
+query II
+select record_count, len(delete_files)
+from iceberg_scan_plan('my_datalake.default.equality_delete_bounds_cache_missing_metrics')
+order by record_count;
+----
+2	1
+3	0
+4	1
+5	1
+
+statement ok
+call truncate_duckdb_logs();
+
+query II
+select label, count(*)
+from my_datalake.default.equality_delete_bounds_cache_missing_metrics
+group by label order by label;
+----
+disjoint	3
+missing-new	4
+missing-old	1
+overlap	3
+
+query II
+select count(*),
+       count(*) filter (message.contains('bounds [1, 1] outside data bounds [101, 103]'))
+from duckdb_logs()
+where type = 'Iceberg' and message.starts_with('Iceberg Equality Delete Pruning');
+----
+1	1
+
+statement ok
+drop table my_datalake.default.equality_delete_bounds_cache_missing_metrics;
+
+endloop

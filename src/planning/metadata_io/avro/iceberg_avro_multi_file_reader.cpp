@@ -19,113 +19,11 @@
 #include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
 #include "planning/metadata_io/manifest_list/iceberg_manifest_list_reader.hpp"
 #include "rest_catalog/objects/schema.hpp"
-#include "duckdb/common/json_document.hpp"
 
 namespace duckdb {
 
 unique_ptr<MultiFileReader> IcebergAvroMultiFileReader::CreateInstance(const BoundTableFunction &table) {
 	return make_uniq<IcebergAvroMultiFileReader>(table.function_info);
-}
-
-static optional<int32_t> TryGetMetadataInt(const InsertionOrderPreservingMap<Value> &metadata, const string &key) {
-	auto entry = metadata.find(key);
-	if (entry == metadata.end()) {
-		return nullopt;
-	}
-	try {
-		return std::stoi(entry->second.GetValue<string>());
-	} catch (...) {
-		return nullopt;
-	}
-}
-
-static optional<string> TryGetMetadataString(const InsertionOrderPreservingMap<Value> &metadata, const string &key) {
-	auto entry = metadata.find(key);
-	if (entry == metadata.end()) {
-		return nullopt;
-	}
-	return entry->second.GetValue<string>();
-}
-
-static string ManifestMetadataErrorPrefix(const string &path) {
-	if (path.empty()) {
-		return "Manifest";
-	}
-	return StringUtil::Format("Manifest '%s'", path);
-}
-
-static int32_t GetRequiredMetadataInt(const InsertionOrderPreservingMap<Value> &metadata, const string &key,
-                                      const string &path) {
-	auto value = TryGetMetadataInt(metadata, key);
-	if (!value) {
-		throw InvalidConfigurationException("%s is missing required Avro key-value metadata field '%s'",
-		                                    ManifestMetadataErrorPrefix(path), key);
-	}
-	return *value;
-}
-
-static string GetRequiredMetadataString(const InsertionOrderPreservingMap<Value> &metadata, const string &key,
-                                        const string &path) {
-	auto value = TryGetMetadataString(metadata, key);
-	if (!value) {
-		throw InvalidConfigurationException("%s is missing required Avro key-value metadata field '%s'",
-		                                    ManifestMetadataErrorPrefix(path), key);
-	}
-	return *value;
-}
-
-static optional<int32_t> TryParseSchemaIdFromSchemaJson(const string &schema_json) {
-	JSONParseError error;
-	auto doc = JSONDocument::TryParse(schema_json.c_str(), schema_json.size(), error);
-	if (!doc) {
-		return nullopt;
-	}
-	auto root = doc->GetRoot();
-	if (!root.IsValid()) {
-		return nullopt;
-	}
-	auto schema_id_val = root.GetMember("schema-id");
-	if (!schema_id_val.IsInteger()) {
-		return nullopt;
-	}
-	return static_cast<int32_t>(schema_id_val.GetType() == JSONValueType::SIGNED_INTEGER
-	                                ? schema_id_val.GetSignedInteger()
-	                                : schema_id_val.GetUnsignedInteger());
-}
-
-static IcebergManifestMetadata ParseManifestMetadata(const InsertionOrderPreservingMap<Value> &metadata,
-                                                     const string &path) {
-	auto schema_id = TryGetMetadataInt(metadata, "schema-id");
-	if (!schema_id) {
-		auto schema_json = GetRequiredMetadataString(metadata, "schema", path);
-		schema_id = TryParseSchemaIdFromSchemaJson(schema_json);
-		if (!schema_id) {
-			throw InvalidConfigurationException(
-			    "%s is missing required Avro key-value metadata field 'schema-id' and its 'schema' JSON does not "
-			    "contain one",
-			    ManifestMetadataErrorPrefix(path));
-		}
-	}
-
-	auto partition_spec_id = GetRequiredMetadataInt(metadata, "partition-spec-id", path);
-	auto format_version = GetRequiredMetadataInt(metadata, "format-version", path);
-
-	IcebergManifestContentType content = IcebergManifestContentType::DATA;
-	auto content_str = TryGetMetadataString(metadata, "content");
-	if (content_str) {
-		if (*content_str == "data") {
-			content = IcebergManifestContentType::DATA;
-		} else if (*content_str == "deletes") {
-			content = IcebergManifestContentType::DELETE;
-		} else {
-			throw InvalidConfigurationException("%s has invalid Avro key-value metadata content '%s'",
-			                                    ManifestMetadataErrorPrefix(path), content);
-		}
-	} else if (format_version > 1) {
-		throw InvalidConfigurationException("%s has invalid Avro key-value metadata, content is missing",
-		                                    ManifestMetadataErrorPrefix(path));
-	}
-	return IcebergManifestMetadata(*schema_id, partition_spec_id, format_version, content);
 }
 
 namespace manifest_list {
@@ -607,8 +505,9 @@ ReaderInitializeType IcebergAvroMultiFileReader::InitializeReader(
 				auto manifest_path = manifest_list_entry.GetFile().manifest_path.empty()
 				                         ? reader_data.reader->GetFileName()
 				                         : manifest_list_entry.GetFile().manifest_path;
-				manifest_list_entry.manifest_metadata.emplace(
-				    ParseManifestMetadata(reader_data.reader->GetMetadata(), manifest_path));
+				manifest_list_entry.manifest_metadata.emplace(IcebergManifestMetadata::FromAvroMetadata(
+				    reader_data.reader->GetMetadata(), manifest_path, avro_scan_info.metadata,
+				    manifest_list_entry.GetFile().partition_spec_id));
 			}
 		}
 		for (auto &partition_spec : avro_scan_info.metadata.partition_specs) {
@@ -714,6 +613,7 @@ shared_ptr<MultiFileList> IcebergAvroMultiFileReader::CreateFileList(ClientConte
 		open_files.emplace_back(paths[0]);
 		auto &file_info = open_files.back();
 		file_info.extended_info = make_uniq<ExtendedOpenFileInfo>();
+		scan_info->metadata.ApplyFileSecret(file_info);
 		file_info.extended_info->options["validate_external_file_cache"] = Value::BOOLEAN(false);
 		file_info.extended_info->options["force_full_download"] = Value::BOOLEAN(true);
 		file_info.extended_info->options["etag"] = Value("");
@@ -732,6 +632,7 @@ shared_ptr<MultiFileList> IcebergAvroMultiFileReader::CreateFileList(ClientConte
 			open_files.emplace_back(full_path);
 			auto &file_info = open_files.back();
 			file_info.extended_info = make_uniq<ExtendedOpenFileInfo>();
+			scan_info->metadata.ApplyFileSecret(file_info);
 			file_info.extended_info->options["validate_external_file_cache"] = Value::BOOLEAN(false);
 			file_info.extended_info->options["force_full_download"] = Value::BOOLEAN(true);
 			if (file.manifest_length > 0) {

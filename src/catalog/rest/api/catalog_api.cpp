@@ -16,6 +16,8 @@
 #include "common/iceberg_utils.hpp"
 #include "catalog/rest/api/api_utils.hpp"
 #include "catalog/rest/storage/iceberg_authorization.hpp"
+#include "catalog/rest/storage/iceberg_table_secret_provider.hpp"
+#include "catalog/rest/storage/authorization/sigv4_utils.hpp"
 
 #include <sys/stat.h>
 
@@ -170,8 +172,13 @@ bool IRCAPI::VerifyTableExistence(ClientContext &context, IcebergCatalog &catalo
 	return VerifyResponse(context, catalog, url_builder, execute_head);
 }
 
-IcebergLoadTableRequest::IcebergLoadTableRequest(vector<string> namespace_items, string table_name)
+IcebergLoadTableRequest::IcebergLoadTableRequest(vector<string> namespace_items, string table_name,
+                                                 optional_ptr<const LoadTableCachePublication> publication)
     : namespace_items(std::move(namespace_items)), table_name(std::move(table_name)) {
+	if (publication) {
+		cached_result = publication->cached_result;
+		etag = publication->etag;
+	}
 }
 
 IcebergLoadTableResult IcebergLoadTableRequest::Execute(ClientContext &context, IcebergCatalog &catalog) const {
@@ -183,12 +190,34 @@ IcebergLoadTableResult IcebergLoadTableRequest::Execute(ClientContext &context, 
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent(table_name));
 
 	HTTPHeaders headers(*context.db);
+	bool can_revalidate = cached_result && !etag.empty();
 	if (catalog.attach_options.access_mode == IRCAccessDelegationMode::VENDED_CREDENTIALS) {
 		headers.Insert("X-Iceberg-Access-Delegation", "vended-credentials");
+		if (can_revalidate) {
+			// ETags validate metadata, not credential lifetime. Storage without an Iceberg refresh
+			// provider (e.g. Azure SAS) needs newly vended credentials from a full LoadTable response.
+			auto &location = cached_result->metadata.location;
+			can_revalidate = location && IcebergTableSecretProvider::SupportsStorageType(DetectStorageType(*location));
+		}
+	}
+	if (can_revalidate) {
+		headers.Insert("If-None-Match", etag);
 	}
 	auto result = catalog.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers);
 	IcebergLoadTableResult ret;
 	ret.status_ = result->status;
+	if (result->status == HTTPStatusCode::NotModified_304) {
+		if (!can_revalidate) {
+			throw HTTPException(*result, "LoadTable returned HTTP 304 without a cached response to revalidate");
+		}
+		ret.result_ = cached_result;
+		ret.etag = result->headers.HasHeader("ETag") ? result->headers.GetHeaderValue("ETag") : etag;
+		DUCKDB_LOG(
+		    context, IcebergLogType, "Iceberg table '%s' is unchanged (HTTP 304); reusing cached metadata",
+		    IcebergLogType::Redact(context, StringUtil::Format("%s.%s.%s", catalog.GetName().GetIdentifierName(),
+		                                                       StringUtil::Join(namespace_items, "."), table_name)));
+		return ret;
+	}
 	if (result->status != HTTPStatusCode::OK_200) {
 		unique_ptr<JSONDocument> out_doc;
 		auto error_obj = ICUtils::GetErrorMessage(result->body, out_doc);
@@ -200,7 +229,11 @@ IcebergLoadTableResult IcebergLoadTableRequest::Execute(ClientContext &context, 
 	}
 	auto doc = ICUtils::APIResultToDoc(result->body);
 	auto metadata_root = doc->GetRoot();
-	ret.result_ = make_uniq<const rest_api_objects::LoadTableResult>(ICUtils::ParseLoadTableResult(metadata_root));
+	ret.result_ =
+	    make_shared_ptr<const rest_api_objects::LoadTableResult>(ICUtils::ParseLoadTableResult(metadata_root));
+	if (result->headers.HasHeader("ETag")) {
+		ret.etag = result->headers.GetHeaderValue("ETag");
+	}
 	return ret;
 }
 
@@ -223,8 +256,9 @@ static unique_ptr<HTTPResponse> LoadCredentials(ClientContext &context, IcebergC
 }
 
 IcebergLoadTableResult IRCAPI::GetTable(ClientContext &context, IcebergCatalog &catalog,
-                                        const IcebergSchemaEntry &schema, const string &table_name) {
-	return IcebergLoadTableRequest(schema.namespace_items, table_name).Execute(context, catalog);
+                                        const IcebergSchemaEntry &schema, const string &table_name,
+                                        optional_ptr<const LoadTableCachePublication> publication) {
+	return IcebergLoadTableRequest(schema.namespace_items, table_name, publication).Execute(context, catalog);
 }
 
 APIResult<IRCAPICredentials> IRCAPI::GetTableCredentials(ClientContext &context, IcebergCatalog &catalog,
@@ -233,6 +267,7 @@ APIResult<IRCAPICredentials> IRCAPI::GetTableCredentials(ClientContext &context,
 	ret.status_ = HTTPStatusCode::OK_200;
 	if (catalog.supported_urls.find("GET /v1/{prefix}/namespaces/{namespace}/tables/{table}/credentials") ==
 	    catalog.supported_urls.end()) {
+		// Credential refresh needs a full response even if the table metadata has not changed.
 		auto table_result = GetTable(context, catalog, schema, table_name);
 		if (table_result.error_) {
 			ret.status_ = table_result.status_;
@@ -550,7 +585,7 @@ void IRCAPI::CommitTableRename(ClientContext &context, IcebergCatalog &catalog, 
 	}
 }
 
-void IRCAPI::CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catalog, string body) {
+bool IRCAPI::CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catalog, const string &schema, string body) {
 	auto url_builder = catalog.GetBaseUrl();
 	url_builder.AddPrefixComponents(catalog.prefix);
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("namespaces"));
@@ -558,11 +593,16 @@ void IRCAPI::CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catal
 	headers.Insert("Content-Type", "application/json");
 	ICUtils::LogPostBody(context, url_builder, body);
 	auto response = catalog.auth_handler->Request(RequestType::POST_REQUEST, context, url_builder, headers, body);
+	// some catalogs also answer other conflicts with a 409
+	if (response->status == HTTPStatusCode::Conflict_409 && VerifySchemaExistence(context, catalog, schema)) {
+		return false;
+	}
 	if (response->status != HTTPStatusCode::OK_200) {
 		throw HTTPException(*response, "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s",
 		                    url_builder.GetURLEncoded(), EnumUtil::ToString(response->status), response->reason,
 		                    response->body);
 	}
+	return true;
 }
 
 void IRCAPI::CommitNamespaceDrop(ClientContext &context, IcebergCatalog &catalog,

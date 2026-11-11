@@ -1,0 +1,248 @@
+# name: test/sql/local/native_catalog/dv_supersedes_external_position_deletes.test
+# description: Vectors supersede referenced position deletes but retain shared and bounds-only files, including with an existing vector
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+CREATE TABLE my_datalake.default.dv_external_sources (id INTEGER) WITH ('format-version' = 2);
+
+statement ok
+INSERT INTO my_datalake.default.dv_external_sources SELECT range FROM range(10);
+
+statement ok
+INSERT INTO my_datalake.default.dv_external_sources SELECT range FROM range(10, 21);
+
+# Model an external writer, since DuckDB always writes referenced position-delete files.
+# Keep the catalog lookup and direct metadata reads in the same transaction.
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE dv_data_a = (
+	SELECT file_path FROM iceberg_metadata(my_datalake.default.dv_external_sources) WHERE record_count = 10
+);
+
+statement ok
+SET VARIABLE dv_data_b = (
+	SELECT file_path FROM iceberg_metadata(my_datalake.default.dv_external_sources) WHERE record_count = 11
+);
+
+statement ok
+SET VARIABLE dv_data_list = (
+	SELECT manifest_list FROM iceberg_snapshots(my_datalake.default.dv_external_sources) WHERE sequence_number = 2
+);
+
+statement ok
+CREATE TEMP TABLE dv_external_positions AS
+SELECT kind, CASE file WHEN 'a' THEN getvariable('dv_data_a') ELSE getvariable('dv_data_b') END AS file_path,
+	pos::BIGINT AS pos
+FROM (VALUES ('scoped', 'a', 1), ('bounds', 'a', 2), ('shared', 'a', 3), ('shared', 'b', 3)) t(kind, file, pos);
+
+foreach kind scoped bounds shared
+
+statement ok
+COPY (SELECT file_path, pos FROM dv_external_positions WHERE kind = '{kind}' ORDER BY file_path, pos)
+TO '{TEST_DIR}/dv_{kind}.parquet' (
+	FORMAT PARQUET, FIELD_IDS {file_path: 2147483546, pos: 2147483545}
+);
+
+endloop
+
+statement ok
+COPY (
+	SELECT 1::INTEGER AS status, 3::BIGINT AS snapshot_id,
+		3::BIGINT AS sequence_number, 3::BIGINT AS file_sequence_number,
+		{
+			content: 1::INTEGER, file_path: '{TEST_DIR}/dv_' || kind || '.parquet', file_format: 'PARQUET',
+			partition: {}, record_count: count(*)::BIGINT, file_size_in_bytes: 1000::BIGINT,
+			referenced_data_file: CASE WHEN kind = 'scoped' THEN getvariable('dv_data_a') END,
+			lower_bounds: CASE WHEN kind = 'bounds' THEN MAP {2147483546: encode(getvariable('dv_data_a'))} END,
+			upper_bounds: CASE WHEN kind = 'bounds' THEN MAP {2147483546: encode(getvariable('dv_data_a'))} END
+		} AS data_file
+	FROM dv_external_positions GROUP BY kind
+) TO '{TEST_DIR}/dv_external_deletes.avro' (
+	FORMAT AVRO,
+	METADATA {'schema-id': '0', 'partition-spec-id': '0', 'format-version': '2', 'content': 'deletes'},
+	FIELD_IDS {
+		status: 0, snapshot_id: 1, sequence_number: 3, file_sequence_number: 4,
+		data_file: {__duckdb_field_id: 2, content: 134, file_path: 100, file_format: 101,
+			partition: 102, record_count: 103, file_size_in_bytes: 104, referenced_data_file: 143,
+			lower_bounds: {__duckdb_field_id: 125, key: 126, value: 127},
+			upper_bounds: {__duckdb_field_id: 128, key: 129, value: 130}}
+	}
+);
+
+statement ok
+CREATE TEMP TABLE dv_external_list AS
+SELECT * FROM read_avro(getvariable('dv_data_list'))
+UNION ALL BY NAME
+SELECT '{TEST_DIR}/dv_external_deletes.avro' AS manifest_path,
+	1000::BIGINT AS manifest_length, 0::INTEGER AS partition_spec_id,
+	1::INTEGER AS content, 3::BIGINT AS sequence_number, 3::BIGINT AS min_sequence_number,
+	3::BIGINT AS added_snapshot_id, 3::INTEGER AS added_files_count,
+	0::INTEGER AS existing_files_count, 0::INTEGER AS deleted_files_count,
+	4::BIGINT AS added_rows_count, 0::BIGINT AS existing_rows_count, 0::BIGINT AS deleted_rows_count;
+
+statement ok
+COPY dv_external_list TO '{TEST_DIR}/dv_external_list.avro' (
+	FORMAT AVRO,
+	FIELD_IDS {
+		manifest_path: 500, manifest_length: 501, partition_spec_id: 502,
+		content: 517, sequence_number: 515, min_sequence_number: 516, added_snapshot_id: 503,
+		added_files_count: 504, existing_files_count: 505, deleted_files_count: 506,
+		added_rows_count: 512, existing_rows_count: 513, deleted_rows_count: 514,
+		partitions: {__duckdb_field_id: 507, list: {__duckdb_field_id: 508,
+			contains_null: 509, contains_nan: 518, lower_bound: 510, upper_bound: 511}}
+	}
+);
+
+statement ok
+COMMIT;
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/dv_external_sources',
+	json_object('requirements', json_array(), 'updates', json_array(
+		json_object('action', 'add-snapshot', 'snapshot', json_object(
+			'snapshot-id', 3, 'sequence-number', 3, 'schema-id', 0,
+			'timestamp-ms', epoch_ms(current_timestamp), 'manifest-list', '{TEST_DIR}/dv_external_list.avro',
+			'summary', json_object('operation', 'delete', 'total-data-files', '2', 'total-records', '21',
+				'total-delete-files', '3', 'total-position-deletes', '4', 'total-equality-deletes', '0'))),
+		json_object('action', 'set-snapshot-ref', 'ref-name', 'main', 'type', 'branch', 'snapshot-id', 3))));
+----
+200
+
+query II
+SELECT count(*), count(*) FILTER (WHERE id IN (1, 2, 3, 13)) FROM my_datalake.default.dv_external_sources;
+----
+17	0
+
+statement ok
+ALTER TABLE my_datalake.default.dv_external_sources SET ('format-version' = 3);
+
+query I
+DELETE FROM my_datalake.default.dv_external_sources WHERE id = 5;
+----
+1
+
+# The vector absorbs all positions for A, but only the explicitly referenced file is invalidated.
+# In particular, equal filename bounds do not make a source eligible for invalidation.
+query TII rowsort
+SELECT CASE WHEN file_format = 'puffin' THEN 'vector' ELSE regexp_extract(file_path, 'dv_(\w+).parquet', 1) END,
+	status = 'DELETED', record_count
+FROM iceberg_metadata(my_datalake.default.dv_external_sources) WHERE content = 'POSITION_DELETES';
+----
+bounds	false	1
+scoped	true	1
+shared	false	2
+vector	false	4
+
+query II
+SELECT count(*), count(*) FILTER (WHERE id IN (1, 2, 3, 5, 13)) FROM my_datalake.default.dv_external_sources;
+----
+16	0
+
+# Recreate the state left by writers predating this fix: a vector and its old referenced file coexist.
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE dv_current_list = (
+	SELECT manifest_list FROM iceberg_snapshots(my_datalake.default.dv_external_sources) WHERE sequence_number = 4
+);
+
+statement ok
+SET VARIABLE dv_vector_manifest = (
+	SELECT manifest_path FROM iceberg_metadata(my_datalake.default.dv_external_sources) WHERE file_format = 'puffin'
+);
+
+statement ok
+SET VARIABLE dv_next_row_id = (
+	SELECT (metadata::JSON->>'next-row-id')::BIGINT
+	FROM iceberg_load_table_response(my_datalake.default.dv_external_sources)
+);
+
+statement ok
+COPY (
+	SELECT * FROM dv_external_list WHERE content = 1
+	UNION ALL BY NAME
+	SELECT * FROM read_avro(getvariable('dv_current_list'))
+	WHERE content = 0 OR manifest_path = getvariable('dv_vector_manifest')
+) TO '{TEST_DIR}/dv_existing_list.avro' (
+	FORMAT AVRO,
+	FIELD_IDS {
+		manifest_path: 500, manifest_length: 501, partition_spec_id: 502,
+		content: 517, sequence_number: 515, min_sequence_number: 516, added_snapshot_id: 503, first_row_id: 520,
+		added_files_count: 504, existing_files_count: 505, deleted_files_count: 506,
+		added_rows_count: 512, existing_rows_count: 513, deleted_rows_count: 514,
+		partitions: {__duckdb_field_id: 507, list: {__duckdb_field_id: 508,
+			contains_null: 509, contains_nan: 518, lower_bound: 510, upper_bound: 511}}
+	}
+);
+
+statement ok
+COMMIT;
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/dv_external_sources',
+	json_object('requirements', json_array(), 'updates', json_array(
+		json_object('action', 'add-snapshot', 'snapshot', json_object(
+			'snapshot-id', 5, 'sequence-number', 5, 'schema-id', 0,
+			'timestamp-ms', epoch_ms(current_timestamp), 'manifest-list', '{TEST_DIR}/dv_existing_list.avro',
+			'first-row-id', getvariable('dv_next_row_id'), 'added-rows', 0,
+			'summary', json_object('operation', 'overwrite', 'total-data-files', '2', 'total-records', '21',
+				'total-delete-files', '4', 'total-position-deletes', '8', 'total-equality-deletes', '0'))),
+		json_object('action', 'set-snapshot-ref', 'ref-name', 'main', 'type', 'branch', 'snapshot-id', 5))));
+----
+200
+
+query II
+SELECT count(*), count(*) FILTER (WHERE id IN (1, 2, 3, 5, 13)) FROM my_datalake.default.dv_external_sources;
+----
+16	0
+
+query I
+DELETE FROM my_datalake.default.dv_external_sources WHERE id = 6;
+----
+1
+
+# Both the old vector and the old referenced Parquet file must now be superseded.
+query TII rowsort
+SELECT CASE WHEN file_format = 'puffin' THEN 'vector' ELSE regexp_extract(file_path, 'dv_(\w+).parquet', 1) END,
+	status = 'DELETED', record_count
+FROM iceberg_metadata(my_datalake.default.dv_external_sources) WHERE content = 'POSITION_DELETES';
+----
+bounds	false	1
+scoped	true	1
+shared	false	2
+vector	false	5
+vector	true	4
+
+query III
+WITH snapshots AS (
+	SELECT unnest(metadata::JSON->'snapshots'->'$[*]') AS snap
+	FROM iceberg_load_table_response(my_datalake.default.dv_external_sources)
+)
+SELECT (snap->'summary'->>'removed-delete-files')::BIGINT,
+	(snap->'summary'->>'removed-position-deletes')::BIGINT,
+	(snap->'summary'->>'total-position-deletes')::BIGINT
+FROM snapshots WHERE (snap->>'sequence-number')::BIGINT = 6;
+----
+2	5	8
+
+query II
+SELECT count(*), count(*) FILTER (WHERE id IN (1, 2, 3, 5, 6, 13)) FROM my_datalake.default.dv_external_sources;
+----
+15	0
+
+query I
+SELECT count(*) FROM my_datalake.default.dv_external_sources AT (VERSION => 5);
+----
+16
+
+statement ok
+DROP TABLE my_datalake.default.dv_external_sources;

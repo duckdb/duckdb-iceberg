@@ -1,0 +1,274 @@
+# name: test/sql/local/native_catalog/geography_column.test
+# description: A geography field only fails the statements that read or write it
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+# DuckDB can't create geography fields, so write the table with geometry and switch the field to geography
+# through REST. The data files then hold the WKB payload that a geography field stores.
+statement ok
+CREATE TABLE my_datalake.default.geography_table (
+	id BIGINT,
+	g GEOMETRY('OGC:CRS84'),
+	s STRUCT(a INTEGER, g GEOMETRY('OGC:CRS84')),
+	l GEOMETRY('OGC:CRS84')[],
+	m MAP(VARCHAR, GEOMETRY('OGC:CRS84'))
+) WITH ('format-version' = '3');
+
+statement ok
+INSERT INTO my_datalake.default.geography_table VALUES
+	(1, 'POINT (1 2)', {'a': 10, 'g': 'POINT (1 2)'}, ['POINT (1 2)'], MAP {'k': 'POINT (1 2)'}),
+	(2, 'POINT (3 4)', {'a': 20, 'g': 'POINT (3 4)'}, [], MAP {}),
+	(3, NULL, NULL, NULL, NULL);
+
+statement ok
+SET VARIABLE table_metadata = (
+	SELECT body FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/geography_table', NULL)
+);
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/geography_table',
+	'{"requirements":[],"updates":[
+		{"action":"add-schema","schema":' ||
+			replace(replace(json_extract(getvariable('table_metadata'), '$.metadata.schemas[0]')::VARCHAR,
+				'"geometry(OGC:CRS84)"', '"geography(OGC:CRS84, spherical)"'),
+				'"schema-id":0', '"schema-id":1') || '},
+		{"action":"set-current-schema","schema-id":1}]}');
+----
+200
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE my_datalake.default.geography_table);
+----
+id	BIGINT
+g	geography(OGC:CRS84, spherical)
+s	STRUCT(a INTEGER, g geography(OGC:CRS84, spherical))
+l	geography(OGC:CRS84, spherical)[]
+m	MAP(VARCHAR, geography(OGC:CRS84, spherical))
+
+query I
+SELECT count(*) FROM my_datalake.default.geography_table;
+----
+3
+
+query II
+SELECT id, s.a FROM my_datalake.default.geography_table ORDER BY id;
+----
+1	10
+2	20
+3	NULL
+
+query I
+SELECT id FROM my_datalake.default.geography_table WHERE id > 1 ORDER BY id;
+----
+2
+3
+
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.geography_table);
+----
+1
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.geography_table);
+----
+1
+
+query I
+SELECT count(*) > 0 FROM iceberg_column_stats(my_datalake.default.geography_table);
+----
+true
+
+query I
+SELECT count(*) FROM iceberg_files(my_datalake.default.geography_table);
+----
+1
+
+statement error
+SELECT g FROM my_datalake.default.geography_table;
+----
+Not implemented Error: Reading geography column "g" is not supported
+
+statement error
+SELECT * FROM my_datalake.default.geography_table;
+----
+Not implemented Error: Reading geography column "g" is not supported
+
+statement error
+SELECT id FROM my_datalake.default.geography_table WHERE g IS NULL;
+----
+Not implemented Error: Reading geography column "g" is not supported
+
+statement error
+SELECT s FROM my_datalake.default.geography_table;
+----
+Not implemented Error: Reading geography column "s" is not supported
+
+statement error
+SELECT s.g FROM my_datalake.default.geography_table;
+----
+Not implemented Error: Reading geography column "s.g" is not supported
+
+# CTAS of the other columns works
+statement ok
+CREATE TABLE my_datalake.default.geography_table_copy AS SELECT id, s.a FROM my_datalake.default.geography_table;
+
+query II
+SELECT * FROM my_datalake.default.geography_table_copy ORDER BY id;
+----
+1	10
+2	20
+3	NULL
+
+# Lists and maps that hold geography can't be read at all
+statement error
+SELECT len(l) FROM my_datalake.default.geography_table;
+----
+Not implemented Error: Reading geography column "l" is not supported
+
+statement error
+SELECT map_keys(m) FROM my_datalake.default.geography_table;
+----
+Not implemented Error: Reading geography column "m" is not supported
+
+statement error
+INSERT INTO my_datalake.default.geography_table (id) VALUES (4);
+----
+Not implemented Error: Writing to Iceberg tables with geography columns is not supported
+
+statement error
+UPDATE my_datalake.default.geography_table SET id = 5 WHERE id = 1;
+----
+Not implemented Error: Writing to Iceberg tables with geography columns is not supported
+
+# DELETE writes only delete files
+statement ok
+DELETE FROM my_datalake.default.geography_table WHERE id = 3;
+
+query I
+SELECT id FROM my_datalake.default.geography_table ORDER BY id;
+----
+1
+2
+
+# Schema changes keep the geography type as the catalog sent it
+statement ok
+ALTER TABLE my_datalake.default.geography_table ADD COLUMN c INTEGER;
+
+query IIII
+SELECT
+	json_extract_string(body, '$.metadata.schemas[-1].fields[1].type'),
+	json_extract_string(body, '$.metadata.schemas[-1].fields[2].type.fields[1].type'),
+	json_extract_string(body, '$.metadata.schemas[-1].fields[3].type.element'),
+	json_extract_string(body, '$.metadata.schemas[-1].fields[4].type.value')
+FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/geography_table', NULL);
+----
+geography(OGC:CRS84, spherical)	geography(OGC:CRS84, spherical)	geography(OGC:CRS84, spherical)	geography(OGC:CRS84, spherical)
+
+# Changes to a geography field, or to a column that holds one, are refused
+statement error
+ALTER TABLE my_datalake.default.geography_table RENAME COLUMN g TO g2;
+----
+Not implemented Error: Altering geography column "g" is not supported
+
+statement error
+ALTER TABLE my_datalake.default.geography_table DROP COLUMN g;
+----
+Not implemented Error: Altering geography column "g" is not supported
+
+statement error
+ALTER TABLE my_datalake.default.geography_table ALTER COLUMN g TYPE BLOB;
+----
+Not implemented Error: Altering geography column "g" is not supported
+
+statement error
+ALTER TABLE my_datalake.default.geography_table ALTER COLUMN g SET DEFAULT NULL;
+----
+Not implemented Error: Altering geography column "g" is not supported
+
+statement error
+ALTER TABLE my_datalake.default.geography_table ALTER COLUMN g DROP DEFAULT;
+----
+Not implemented Error: Altering geography column "g" is not supported
+
+statement error
+ALTER TABLE my_datalake.default.geography_table ALTER COLUMN g SET NOT NULL;
+----
+Not implemented Error: Altering geography column "g" is not supported
+
+statement error
+ALTER TABLE my_datalake.default.geography_table ALTER COLUMN g DROP NOT NULL;
+----
+Not implemented Error: Altering geography column "g" is not supported
+
+statement error
+COMMENT ON COLUMN my_datalake.default.geography_table.g IS 'location';
+----
+Not implemented Error: Altering geography column "g" is not supported
+
+statement error
+ALTER TABLE my_datalake.default.geography_table SET PARTITIONED BY (g);
+----
+Not implemented Error: Altering geography column "g" is not supported
+
+statement error
+ALTER TABLE my_datalake.default.geography_table SET PARTITIONED BY (bucket(4, g));
+----
+Not implemented Error: Altering geography column "g" is not supported
+
+statement error
+ALTER TABLE my_datalake.default.geography_table SET SORTED BY (id, g);
+----
+Not implemented Error: Altering geography column "g" is not supported
+
+statement error
+ALTER TABLE my_datalake.default.geography_table RENAME COLUMN s.g TO g2;
+----
+Not implemented Error: Altering geography column "s.g" is not supported
+
+statement error
+ALTER TABLE my_datalake.default.geography_table DROP COLUMN s.g;
+----
+Not implemented Error: Altering geography column "s.g" is not supported
+
+statement error
+ALTER TABLE my_datalake.default.geography_table ADD COLUMN s.b INTEGER;
+----
+Not implemented Error: Altering geography column "s" is not supported
+
+statement error
+ALTER TABLE my_datalake.default.geography_table DROP COLUMN s;
+----
+Not implemented Error: Altering geography column "s" is not supported
+
+statement error
+ALTER TABLE my_datalake.default.geography_table DROP COLUMN l;
+----
+Not implemented Error: Altering geography column "l" is not supported
+
+statement error
+ALTER TABLE my_datalake.default.geography_table RENAME COLUMN m TO m2;
+----
+Not implemented Error: Altering geography column "m" is not supported
+
+# Changes to other columns still work
+statement ok
+ALTER TABLE my_datalake.default.geography_table RENAME COLUMN c TO c2;
+
+statement ok
+ALTER TABLE my_datalake.default.geography_table SET PARTITIONED BY (id);
+
+# Geography isn't a DuckDB type, so it can't be declared
+statement error
+CREATE TABLE my_datalake.default.declared_geography (g GEOGRAPHY);
+----
+Catalog Error: Type with name GEOGRAPHY does not exist!
+
+statement error
+ALTER TABLE my_datalake.default.geography_table ADD COLUMN g2 GEOGRAPHY('OGC:CRS84');
+----
+Catalog Error: Type with name GEOGRAPHY does not exist!

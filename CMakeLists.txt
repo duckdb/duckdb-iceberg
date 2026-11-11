@@ -45,14 +45,11 @@ set(PARAMETERS "-warnings")
 
 if(EMSCRIPTEN)
   set(DUCKDB_EXTENSION_ICEBERG_LINKED_LIBS
-      "../../vcpkg_installed/wasm32-emscripten/lib/liblzma.a;../../vcpkg_installed/wasm32-emscripten/lib/libroaring.a;../../vcpkg_installed/wasm32-emscripten/lib/libsnappy.a;../../vcpkg_installed/wasm32-emscripten/lib/libz.a;../../vcpkg_installed/wasm32-emscripten/lib/libjansson.a;../../third_party/mbedtls/libduckdb_mbedtls.a"
+      "../../vcpkg_installed/${VCPKG_TARGET_TRIPLET}/lib/liblzma.a;../../vcpkg_installed/${VCPKG_TARGET_TRIPLET}/lib/libroaring.a;../../vcpkg_installed/${VCPKG_TARGET_TRIPLET}/lib/libsnappy.a;../../vcpkg_installed/${VCPKG_TARGET_TRIPLET}/lib/libz.a;../../vcpkg_installed/${VCPKG_TARGET_TRIPLET}/lib/libjansson.a;../../third_party/mbedtls/libduckdb_mbedtls.a"
   )
 endif()
 
 build_loadable_extension(${TARGET_NAME} ${PARAMETERS} ${ALL_OBJECT_FILES})
-target_link_libraries(${TARGET_NAME}_loadable_extension duckdb_mbedtls)
-
-# AWS request signing uses mbedTLS symbols that DuckDB does not export.
 target_link_libraries(${TARGET_NAME}_loadable_extension duckdb_mbedtls)
 
 # Link Roaring library
@@ -67,3 +64,14 @@ install(
   EXPORT "${DUCKDB_EXPORT_SET}"
   LIBRARY DESTINATION "${INSTALL_LIB_DIR}"
   ARCHIVE DESTINATION "${INSTALL_LIB_DIR}")
+
+# The IcebergFileCredentialsCallback the file credentials tests under
+# test/sql/local/native_catalog load with 'require iceberg_test_credentials'.
+# Test-only, so linked into unittest alone; it must share a binary with this
+# extension, so its own CMakeLists.txt links it only when the extension is
+# linked.
+if(BUILD_UNITTESTS
+   AND NOT CLANG_TIDY
+   AND DUCKDB_EXTENSION_ICEBERG_SHOULD_BUILD)
+  add_subdirectory(test/extension/iceberg_test_credentials)
+endif()

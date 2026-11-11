@@ -1,0 +1,107 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_copy_on_write_delete_schema_evolution.test
+# description: Copy-on-write rewrites preserve evolved schemas, nested values and virtual-column name collisions
+# group: [delete]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require core_functions
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cow_delete_schema;
+
+statement ok
+CREATE TABLE my_datalake.default.cow_delete_schema (
+    id INTEGER,
+    discarded VARCHAR,
+    filename VARCHAR,
+    file_row_number BIGINT,
+    payload STRUCT(label VARCHAR, items INTEGER[], attributes MAP(VARCHAR, INTEGER)),
+    amount DECIMAL(12, 2)
+) WITH ('format-version' = '2', 'write.delete.mode' = 'copy-on-write');
+
+statement ok
+INSERT INTO my_datalake.default.cow_delete_schema VALUES
+    (1, 'old', 'remove', 100, {'label': 'a', 'items': [1, 2], 'attributes': MAP {'x': 1}}, 1.25),
+    (2, 'old', 'keep', 200, {'label': NULL, 'items': [NULL, 4], 'attributes': MAP {'y': NULL}}, 2.50),
+    (3, 'old', NULL, NULL, NULL, NULL);
+
+statement ok
+ALTER TABLE my_datalake.default.cow_delete_schema DROP COLUMN discarded;
+
+statement ok
+ALTER TABLE my_datalake.default.cow_delete_schema ALTER COLUMN id TYPE BIGINT;
+
+statement ok
+BEGIN;
+
+# The keep scan must use these uncommitted schema changes too.
+statement ok
+ALTER TABLE my_datalake.default.cow_delete_schema RENAME COLUMN payload.label TO renamed;
+
+statement ok
+ALTER TABLE my_datalake.default.cow_delete_schema ADD COLUMN payload.extra VARCHAR;
+
+statement ok
+ALTER TABLE my_datalake.default.cow_delete_schema ADD COLUMN added INTEGER;
+
+statement ok
+INSERT INTO my_datalake.default.cow_delete_schema VALUES
+    (4, 'new', 400, {'renamed': 'd', 'items': [], 'attributes': MAP {}, 'extra': 'new field'}, 4.75, 40),
+    (5, 'new', 500, {'renamed': 'e', 'items': [5], 'attributes': MAP {'z': 5}, 'extra': NULL}, 5.00, 50);
+
+statement ok
+CREATE TEMP TABLE cow_schema_expected AS
+SELECT * FROM my_datalake.default.cow_delete_schema WHERE id NOT IN (1, 5);
+
+query I
+DELETE FROM my_datalake.default.cow_delete_schema WHERE id IN (1, 5);
+----
+2
+
+query I
+SELECT count(*) FROM (
+    (SELECT * FROM my_datalake.default.cow_delete_schema EXCEPT ALL SELECT * FROM cow_schema_expected)
+    UNION ALL
+    (SELECT * FROM cow_schema_expected EXCEPT ALL SELECT * FROM my_datalake.default.cow_delete_schema)
+);
+----
+0
+
+statement ok
+COMMIT;
+
+query I
+SELECT count(*) FROM (
+    (SELECT * FROM my_datalake.default.cow_delete_schema EXCEPT ALL SELECT * FROM cow_schema_expected)
+    UNION ALL
+    (SELECT * FROM cow_schema_expected EXCEPT ALL SELECT * FROM my_datalake.default.cow_delete_schema)
+);
+----
+0
+
+# Missing nested fields must not turn a NULL parent struct into a non-NULL struct.
+query IIII
+SELECT id, payload IS NULL, payload.extra IS NULL, added FROM my_datalake.default.cow_delete_schema ORDER BY id;
+----
+2	false	true	NULL
+3	true	true	NULL
+4	false	false	40
+
+query I
+DELETE FROM my_datalake.default.cow_delete_schema WHERE file_row_number = 200 AND filename = 'keep';
+----
+1
+
+query IIT
+SELECT id, file_row_number, filename FROM my_datalake.default.cow_delete_schema ORDER BY id;
+----
+3	NULL	NULL
+4	400	new
+
+statement ok
+DROP TABLE cow_schema_expected;
+
+statement ok
+DROP TABLE my_datalake.default.cow_delete_schema;

@@ -9,6 +9,7 @@
 #include "planning/scan_plan/iceberg_scan_planner.hpp"
 #include "function/scan_planning/iceberg_scan_task_codec.hpp"
 #include "function/scan_planning/iceberg_row_filter.hpp"
+#include "catalog/rest/iceberg_file_credentials.hpp"
 
 namespace duckdb {
 
@@ -101,13 +102,7 @@ static unique_ptr<FunctionData> IcebergScanPlanBind(ClientContext &context, Tabl
 	// resolves it (version hint, version, options).
 	IcebergTableSchemaVersion *table_entry = nullptr;
 	shared_ptr<IcebergScanInfo> scan_info;
-	auto qualified_name = QualifiedName::ParseComponents(input_string);
-	optional_ptr<CatalogEntry> catalog_entry;
-	if (qualified_name.size() == 3) {
-		EntryLookupInfo table_lookup(CatalogType::TABLE_ENTRY,
-		                             QualifiedName(qualified_name[0], qualified_name[1], qualified_name[2]));
-		catalog_entry = Catalog::GetEntry(context, table_lookup, OnEntryNotFound::RETURN_NULL);
-	}
+	auto catalog_entry = IcebergUtils::TryGetCatalogTable(context, input_string);
 	if (catalog_entry) {
 		if (catalog_entry->type != CatalogType::TABLE_ENTRY) {
 			throw InvalidInputException("'%s' is not a table", input_string);
@@ -118,6 +113,12 @@ static unique_ptr<FunctionData> IcebergScanPlanBind(ClientContext &context, Tabl
 		}
 		table_entry = &table.Cast<IcebergTableSchemaVersion>();
 		auto &metadata = table_entry->table_info.table_metadata;
+		if (!IcebergFileCredentialsCallback::Get(context, table_entry->table_info).empty()) {
+			// a scan task names its files by path, so iceberg_scan_tasks would open them with the secret matched to it
+			throw InvalidInputException("iceberg_scan_plan is not supported for table '%s', whose files are read with "
+			                            "file credentials; query the table directly",
+			                            input_string);
+		}
 		auto snapshot = metadata.GetSnapshot(*options.snapshot_lookup);
 		auto &schema = metadata.GetSchemaFromId(snapshot.schema_id);
 		auto &fs = FileSystem::GetFileSystem(context);

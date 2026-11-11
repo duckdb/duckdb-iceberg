@@ -16,6 +16,7 @@
 namespace duckdb {
 
 class IcebergCatalog;
+class LoadTableCachePublication;
 struct IcebergCreateTableRequest;
 class IcebergSchemaEntry;
 class IcebergTableSchemaVersion;
@@ -49,7 +50,10 @@ public:
 	optional<rest_api_objects::IcebergErrorResponse> error_;
 };
 
-using IcebergLoadTableResult = APIResult<unique_ptr<const rest_api_objects::LoadTableResult>>;
+struct IcebergLoadTableResult : public APIResult<shared_ptr<const rest_api_objects::LoadTableResult>> {
+	//! HTTP validator for the table metadata, kept separate from the JSON payload.
+	string etag;
+};
 using IcebergLoadViewResult = APIResult<unique_ptr<const rest_api_objects::LoadViewResult>>;
 
 //! Owns the request inputs; execution only fetches and parses view metadata.
@@ -72,12 +76,16 @@ class IcebergLoadTableRequest {
 public:
 	using Result = IcebergLoadTableResult;
 
-	IcebergLoadTableRequest(vector<string> namespace_items, string table_name);
+	IcebergLoadTableRequest(vector<string> namespace_items, string table_name,
+	                        optional_ptr<const LoadTableCachePublication> publication = nullptr);
 	IcebergLoadTableResult Execute(ClientContext &context, IcebergCatalog &catalog) const;
 
 private:
 	vector<string> namespace_items;
 	string table_name;
+	//! Pin the exact response being validated, even if the cache changes while the request runs.
+	shared_ptr<const rest_api_objects::LoadTableResult> cached_result;
+	string etag;
 };
 
 //! A refused table listing is distinct from a successful, empty listing.
@@ -160,7 +168,8 @@ public:
 	                                 const string &table);
 	static vector<string> ParseSchemaName(const string &namespace_name);
 	static IcebergLoadTableResult GetTable(ClientContext &context, IcebergCatalog &catalog,
-	                                       const IcebergSchemaEntry &schema, const string &table_name);
+	                                       const IcebergSchemaEntry &schema, const string &table_name,
+	                                       optional_ptr<const LoadTableCachePublication> publication = nullptr);
 	static APIResult<IRCAPICredentials> GetTableCredentials(ClientContext &context, IcebergCatalog &catalog,
 	                                                        const IcebergSchemaEntry &schema, const string &table_name);
 	static APIResult<unique_ptr<const rest_api_objects::GetNamespaceResponse>>
@@ -173,7 +182,9 @@ public:
 	                              const string &table_name);
 	static void CommitTableRename(ClientContext &context, IcebergCatalog &catalog, const string &body);
 	static CommitResult CommitMultiTableUpdate(ClientContext &context, IcebergCatalog &catalog, const string &body);
-	static void CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catalog, string body);
+	//! returns false if the namespace already exists
+	static bool CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catalog, const string &schema,
+	                                  string body);
 	static void CommitNamespaceDrop(ClientContext &context, IcebergCatalog &catalog,
 	                                const vector<string> &namespace_items);
 	static void CommitNamespacePropertiesUpdate(ClientContext &context, IcebergCatalog &catalog, string body,

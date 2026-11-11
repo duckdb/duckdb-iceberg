@@ -9,6 +9,8 @@ enum class IcebergDeleteType : uint8_t { POSITIONAL_DELETE, DELETION_VECTOR };
 
 struct IcebergDeleteData {
 public:
+	explicit IcebergDeleteData(IcebergDeleteType type) : type(type) {
+	}
 	IcebergDeleteData(IcebergDeleteType type, const IcebergFileIdentity &file) : type(type) {
 		source_files.push_back(file);
 	}
@@ -21,7 +23,8 @@ public:
 
 public:
 	IcebergDeleteType type;
-	//! Original file identities retained for invalidation when replacing a deletion vector.
+	//! Files a deletion vector written for the data file supersedes: the vector these positions were read from,
+	//! or the file-scoped position-delete files that hold them. Partition-scoped files stay live.
 	vector<IcebergFileIdentity> source_files;
 };
 

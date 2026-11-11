@@ -1,0 +1,23 @@
+# name: test/sql/local/iceberg_scans/manifest_list_invalid_spec_id.test
+# description: a manifest list that names a partition spec that is not in the table metadata is refused with an error
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+foreach spec_case spec_id_999 spec_id_negative
+
+foreach metadata_function iceberg_manifests iceberg_files iceberg_column_stats iceberg_partition_stats
+
+statement error
+SELECT * FROM {metadata_function}('{WORKING_DIRECTORY}/data/persistent/manifest_list_invalid_spec_id/metadata/{spec_case}.metadata.json');
+----
+<REGEX>:.*Manifest refers to partition spec -?[0-9]+, which is not in the table's partition-specs.*
+
+endloop
+
+statement error
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/manifest_list_invalid_spec_id/metadata/{spec_case}.metadata.json');
+----
+<REGEX>:.*references 'partition_spec_id' -?[0-9]+ which doesn't exist.*
+
+endloop

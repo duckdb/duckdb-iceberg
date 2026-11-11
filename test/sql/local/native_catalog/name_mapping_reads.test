@@ -1,0 +1,111 @@
+# name: test/sql/local/native_catalog/name_mapping_reads.test
+# description: Schema evolution updates name mappings used by transactional reads of ID-less files
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+CREATE TABLE my_datalake.default.name_mapping_reads (a INTEGER, b INTEGER, s STRUCT(x INTEGER, y INTEGER)) WITH (
+	'schema.name-mapping.default' = '[{"field-id":1,"names":["a"]},{"field-id":2,"names":["b"]},{"field-id":3,"names":["s"],"fields":[{"field-id":4,"names":["x"]},{"field-id":5,"names":["y"]}]}]'
+);
+
+statement ok
+INSERT INTO my_datalake.default.name_mapping_reads VALUES (11, 22, {'x': 33, 'y': 44});
+
+# Make a migrated-table fixture by rewriting the native catalog's local Parquet file without FIELD_IDS.
+# The rows and types stay the same. Normal Iceberg INSERT always writes IDs and would bypass the mapping.
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE data_file = (SELECT file_path FROM iceberg_metadata('my_datalake.default.name_mapping_reads'));
+
+statement ok
+COPY (SELECT 11::INTEGER a, 22::INTEGER b, {'x': 33::INTEGER, 'y': 44::INTEGER} s)
+TO (getvariable('data_file')) (FORMAT PARQUET);
+
+query I
+SELECT count(*) FILTER (WHERE field_id IS NOT NULL) FROM parquet_schema(getvariable('data_file'));
+----
+0
+
+statement ok
+COMMIT;
+
+query IIII
+SELECT a, b, s.x, s.y FROM my_datalake.default.name_mapping_reads;
+----
+11	22	33	44
+
+# Renames retain the original aliases, including inside a renamed struct.
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_reads RENAME COLUMN a TO a2;
+
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_reads RENAME COLUMN s TO t;
+
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_reads RENAME COLUMN t.x TO x2;
+
+query IIII
+SELECT a2, b, t.x2, t.y FROM my_datalake.default.name_mapping_reads;
+----
+11	22	33	44
+
+statement ok
+COMMIT;
+
+query IIII
+SELECT a2, b, t.x2, t.y FROM my_datalake.default.name_mapping_reads;
+----
+11	22	33	44
+
+# Reassigning old aliases must immediately affect the parsed mappings used by scans, at both levels.
+foreach finish ROLLBACK COMMIT
+
+# The second iteration also verifies that rollback restored both the schema and its parsed mapping.
+query IIII
+SELECT a2, b, t.x2, t.y FROM my_datalake.default.name_mapping_reads;
+----
+11	22	33	44
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_reads DROP COLUMN a2;
+
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_reads ADD COLUMN a INTEGER;
+
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_reads DROP COLUMN t.x2;
+
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_reads ADD COLUMN t.x INTEGER;
+
+query IIII
+SELECT a, b, t.x, t.y FROM my_datalake.default.name_mapping_reads;
+----
+11	22	33	44
+
+statement ok
+{finish};
+
+endloop
+
+# The mapping used while altering and the one reloaded after commit must agree.
+query IIII
+SELECT a, b, t.x, t.y FROM my_datalake.default.name_mapping_reads;
+----
+11	22	33	44
+
+statement ok
+DROP TABLE my_datalake.default.name_mapping_reads;
