@@ -590,6 +590,13 @@ void Catalog::Apply(Json &metadata, const Json &update, map<string, int64_t> &la
 			metadata.At("snapshot-log").Push(Json::Object({{"snapshot-id", identifier}, {"timestamp-ms", timestamp}}));
 			metadata["current-snapshot-id"] = identifier;
 		}
+	} else if (action == "remove-snapshot-ref") {
+		if (update.At("ref-name").String() != "main") {
+			Unsupported("Only the main branch is implemented");
+		}
+		// a table without main has no current snapshot, as a new table has none
+		metadata.At("refs").Erase("main");
+		metadata.Erase("current-snapshot-id");
 	} else {
 		Invalid("Unknown update action: " + action);
 	}

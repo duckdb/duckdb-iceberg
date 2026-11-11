@@ -446,5 +446,10 @@ class Catalog:
                     timestamp = next(s["timestamp-ms"] for s in metadata["snapshots"] if s["snapshot-id"] == identifier)
                 metadata["snapshot-log"].append({"snapshot-id": identifier, "timestamp-ms": timestamp})
                 metadata["current-snapshot-id"] = identifier
+        elif action == "remove-snapshot-ref":
+            if update["ref-name"] != "main":
+                unsupported("Only the main branch is implemented")
+            metadata["refs"].pop("main", None)
+            metadata.pop("current-snapshot-id", None)
         else:
             invalid(f"Unknown update action: {action}")

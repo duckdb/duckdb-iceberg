@@ -28,8 +28,10 @@ public:
 	                    const std::function<idx_t(void)> &next_field_id, idx_t iceberg_version);
 
 	static shared_ptr<IcebergTableSchema>
+	//! The columns get consecutive field ids from first_field_id on, a replaced table continues after its last one
 	CreateIcebergSchema(ClientContext &context, const IcebergTableMetadata &table_metadata, const ColumnList &columns,
-	                    optional_ptr<const vector<unique_ptr<Constraint>>> constraints, int32_t &last_column_id);
+	                    optional_ptr<const vector<unique_ptr<Constraint>>> constraints, int32_t &last_column_id,
+	                    int32_t first_field_id = 1);
 	string CreateTableToJSON(bool stage_create) const;
 	static void PopulateSchema(JSONWriter &writer, JSONMutableValue schema_json, const IcebergTableSchema &schema);
 

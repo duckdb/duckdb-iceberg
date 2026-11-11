@@ -24,6 +24,7 @@
 #include "duckdb/common/vector_operations/unary_executor.hpp"
 
 #include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "execution/operator/iceberg_delete.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
@@ -1149,6 +1150,18 @@ static unique_ptr<IcebergTableMetadata> BuildPlaceholderMetadata(ClientContext &
 		metadata->iceberg_version = default_version.GetValue<uint64_t>();
 	}
 	auto &create_info = info.Base().Cast<CreateTableInfo>();
+	if (create_info.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT) {
+		auto &schema_entry = info.schema.Cast<IcebergSchemaEntry>();
+		auto &catalog = schema_entry.catalog.Cast<IcebergCatalog>();
+		auto transaction = catalog.GetCatalogTransaction(context);
+		auto name = catalog.FoldName(create_info.GetQualifiedName());
+		auto entry = schema_entry.GetEntry(transaction, CatalogType::TABLE_ENTRY, name.Name());
+		if (entry && entry->type == CatalogType::TABLE_ENTRY) {
+			auto &existing = entry->Cast<IcebergTableSchemaVersion>().table_info.table_metadata;
+			metadata->iceberg_version = existing.iceberg_version;
+			metadata->table_properties = existing.table_properties;
+		}
+	}
 	auto binder = Binder::CreateBinder(context);
 	TableFunctionBinder property_binder(*binder, context, "format-version");
 	for (auto &option : create_info.options) {
@@ -1158,7 +1171,7 @@ static unique_ptr<IcebergTableMetadata> BuildPlaceholderMetadata(ClientContext &
 			throw ParameterNotResolvedException();
 		}
 		auto val = ExpressionExecutor::EvaluateScalar(context, *bound_expr, true);
-		if (option.first == "format-version") {
+		if (StringUtil::CIEquals(option.first, "format-version")) {
 			auto version = val.DefaultCastAs(LogicalType::INTEGER).GetValue<int32_t>();
 			if (version < 1) {
 				throw InvalidInputException("The lowest supported iceberg version is 1!");

@@ -51,10 +51,16 @@ drop schema my_datalake.new_schema_1;
 statement ok
 drop table my_datalake.new_schema_1.my_table;
 
-statement error
+statement ok
 create or replace table my_datalake.new_schema_1.table_2 as select range a from range(300);
+
+query I
+select count(*) from my_datalake.new_schema_1.table_2;
 ----
-<REGEX>:.*CREATE OR REPLACE not supported in DuckDB-Iceberg. Please use separate Drop and Create Statements.*
+300
+
+statement ok
+drop table my_datalake.new_schema_1.table_2;
 
 statement error
 create or replace schema my_datalake.new_schema_1;

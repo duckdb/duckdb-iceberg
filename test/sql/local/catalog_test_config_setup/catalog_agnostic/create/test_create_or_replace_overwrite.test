@@ -1,0 +1,312 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_or_replace_overwrite.test
+# description: Replacement publishes parent-linked overwrite snapshots, removes data and deletes, and preserves history
+# group: [create]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+require-env SNAPSHOT_HISTORY_SUPPORT
+
+require-env TIMETRAVEL_SUPPORT
+
+require-env METADATA_FILE_READ_SUPPORT
+
+include test/sql/init_requires
+
+foreach version 2 3
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cor_overwrite;
+
+statement ok
+CREATE TABLE my_datalake.default.cor_overwrite (id INTEGER, part VARCHAR)
+PARTITIONED BY (part) WITH ('format-version' = {version}, 'write.delete.mode' = 'merge-on-read');
+
+statement ok
+INSERT INTO my_datalake.default.cor_overwrite VALUES (1, 'a'), (2, 'a'), (3, 'b');
+
+statement ok
+DELETE FROM my_datalake.default.cor_overwrite WHERE id = 1;
+
+query I
+SELECT count(*) > 0 FROM iceberg_metadata(my_datalake.default.cor_overwrite)
+WHERE content <> 'DATA' AND status <> 'DELETED';
+----
+true
+
+statement ok
+SET VARIABLE cor_old_snapshot = (SELECT metadata."current-snapshot-id"::BIGINT
+FROM iceberg_load_table_response(my_datalake.default.cor_overwrite));
+
+statement ok
+CREATE OR REPLACE TEMP TABLE cor_old_files AS
+SELECT file_path, content, data_sequence_number, file_sequence_number
+FROM iceberg_metadata(my_datalake.default.cor_overwrite) WHERE status <> 'DELETED';
+
+# A CTAS is one overwrite, even though table creation and insertion execute separately.
+# The replacement drops the old partition column and introduces fresh field IDs.
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_overwrite AS SELECT 42 value;
+
+query II
+SELECT sequence_number, operation FROM iceberg_snapshots(my_datalake.default.cor_overwrite) ORDER BY sequence_number;
+----
+1	append
+2	delete
+3	overwrite
+
+query I
+SELECT parent_id = getvariable('cor_old_snapshot') FROM iceberg_snapshots(my_datalake.default.cor_overwrite)
+WHERE sequence_number = 3;
+----
+true
+
+query I
+SELECT value FROM my_datalake.default.cor_overwrite;
+----
+42
+
+# Every formerly live data/delete file has a deletion entry in the overwrite.
+query I
+SELECT count(*) = (SELECT count(*) FROM cor_old_files)
+FROM iceberg_metadata(my_datalake.default.cor_overwrite) m JOIN cor_old_files f USING (file_path, content)
+WHERE m.status = 'DELETED';
+----
+true
+
+query I
+SELECT bool_and(m.data_sequence_number = f.data_sequence_number AND m.file_sequence_number = f.file_sequence_number)
+FROM iceberg_metadata(my_datalake.default.cor_overwrite) m JOIN cor_old_files f USING (file_path, content)
+WHERE m.status = 'DELETED';
+----
+true
+
+# Deleted entries belong to the overwrite snapshot, while their file sequence
+# numbers remain those of the original files. Keep vended credentials in scope.
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE cor_new_snapshot = (SELECT snapshot_id FROM iceberg_snapshots(my_datalake.default.cor_overwrite)
+WHERE sequence_number = 3);
+
+statement ok
+SET VARIABLE cor_deleted_manifests = (SELECT list(DISTINCT manifest_path)
+FROM iceberg_metadata(my_datalake.default.cor_overwrite) WHERE status = 'DELETED');
+
+query I
+SELECT bool_and(status = 2 AND (snapshot_id IS NULL OR snapshot_id = getvariable('cor_new_snapshot')))
+FROM read_avro(getvariable('cor_deleted_manifests'));
+----
+true
+
+statement ok
+COMMIT;
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.cor_overwrite)
+WHERE content <> 'DATA' AND status <> 'DELETED';
+----
+0
+
+query IIIII
+SELECT s.summary."deleted-data-files"::BIGINT = (SELECT count(*) FROM cor_old_files WHERE content = 'DATA'),
+       s.summary."removed-delete-files"::BIGINT = (SELECT count(*) FROM cor_old_files WHERE content <> 'DATA'),
+       s.summary."total-records"::BIGINT,
+       s.summary."total-delete-files"::BIGINT,
+       s.summary."total-position-deletes"::BIGINT
+FROM iceberg_load_table_response(my_datalake.default.cor_overwrite), unnest(metadata.snapshots::VARIANT[]) t(s)
+WHERE s."sequence-number"::BIGINT = 3;
+----
+true	true	1	0	0
+
+query I
+SELECT CASE WHEN {version} = 3 THEN
+    s."first-row-id"::BIGINT = 3 AND s."added-rows"::BIGINT = 1 AND metadata."next-row-id"::BIGINT = 4
+    ELSE s."first-row-id" IS NULL END
+FROM iceberg_load_table_response(my_datalake.default.cor_overwrite), unnest(metadata.snapshots::VARIANT[]) t(s)
+WHERE s."sequence-number"::BIGINT = 3;
+----
+true
+
+query II
+SELECT id, part FROM my_datalake.default.cor_overwrite AT (VERSION => getvariable('cor_old_snapshot')) ORDER BY id;
+----
+2	a
+3	b
+
+# An empty replacement still advances main to an overwrite snapshot.
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_overwrite (empty_value VARCHAR);
+
+query III
+SELECT sequence_number, operation, parent_id IS NOT NULL FROM iceberg_snapshots(my_datalake.default.cor_overwrite)
+ORDER BY sequence_number DESC LIMIT 1;
+----
+4	overwrite	true
+
+query I
+SELECT count(*) FROM my_datalake.default.cor_overwrite;
+----
+0
+
+query III
+SELECT s.summary."total-records"::BIGINT, s.summary."total-data-files"::BIGINT, s.summary."total-files-size"::BIGINT
+FROM iceberg_load_table_response(my_datalake.default.cor_overwrite), unnest(metadata.snapshots::VARIANT[]) t(s)
+WHERE s."sequence-number"::BIGINT = 4;
+----
+0	0	0
+
+# A subsequent CTAS that produces no rows is also observable in snapshot history.
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_overwrite AS SELECT 99 value WHERE false;
+
+query II
+SELECT sequence_number, operation FROM iceberg_snapshots(my_datalake.default.cor_overwrite)
+ORDER BY sequence_number DESC LIMIT 1;
+----
+5	overwrite
+
+# Reads and further writes in the transaction see only the replacement rows.
+statement ok
+BEGIN;
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_overwrite AS SELECT 7 id;
+
+statement ok
+INSERT INTO my_datalake.default.cor_overwrite VALUES (8);
+
+statement ok
+UPDATE my_datalake.default.cor_overwrite SET id = 70 WHERE id = 7;
+
+statement ok
+DELETE FROM my_datalake.default.cor_overwrite WHERE id = 8;
+
+query I
+SELECT id FROM my_datalake.default.cor_overwrite;
+----
+70
+
+statement ok
+COMMIT;
+
+query I
+SELECT id FROM my_datalake.default.cor_overwrite;
+----
+70
+
+query II
+SELECT sequence_number, operation FROM iceberg_snapshots(my_datalake.default.cor_overwrite)
+WHERE sequence_number >= 6 ORDER BY sequence_number;
+----
+6	overwrite
+7	append
+8	overwrite
+9	delete
+
+query I
+WITH snapshots AS (
+    SELECT snapshot_id, parent_id, lag(snapshot_id) OVER (ORDER BY sequence_number) previous_id
+    FROM iceberg_snapshots(my_datalake.default.cor_overwrite)
+)
+SELECT bool_and(parent_id IS NOT DISTINCT FROM previous_id) FROM snapshots;
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.cor_overwrite;
+
+# A table with no snapshot gets a first, parentless overwrite, not a removed main reference.
+statement ok
+CREATE TABLE my_datalake.default.cor_overwrite (id INTEGER) WITH ('format-version' = {version});
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_overwrite (value VARCHAR);
+
+query III
+SELECT sequence_number, operation, parent_id IS NULL FROM iceberg_snapshots(my_datalake.default.cor_overwrite);
+----
+1	overwrite	true
+
+statement ok
+INSERT INTO my_datalake.default.cor_overwrite VALUES ('after');
+
+query I
+SELECT value FROM my_datalake.default.cor_overwrite;
+----
+after
+
+statement ok
+DROP TABLE my_datalake.default.cor_overwrite;
+
+endloop
+
+# Upgrading while replacing must preserve the old parent and keep row IDs unique.
+statement ok
+CREATE TABLE my_datalake.default.cor_overwrite (id INTEGER) WITH ('format-version' = 2);
+
+statement ok
+INSERT INTO my_datalake.default.cor_overwrite VALUES (1), (2), (3);
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_overwrite WITH ('format-version' = 3) AS SELECT 99 value;
+
+query II
+SELECT value, _row_id IS NOT NULL FROM my_datalake.default.cor_overwrite;
+----
+99	true
+
+query III
+SELECT operation, parent_id IS NOT NULL, sequence_number FROM iceberg_snapshots(my_datalake.default.cor_overwrite)
+ORDER BY sequence_number DESC LIMIT 1;
+----
+overwrite	true	2
+
+query II
+SELECT s.summary."added-records"::BIGINT, s.summary."deleted-records"::BIGINT
+FROM iceberg_load_table_response(my_datalake.default.cor_overwrite), unnest(metadata.snapshots::VARIANT[]) t(s)
+WHERE s."sequence-number"::BIGINT = 2;
+----
+1	3
+
+statement ok
+DROP TABLE my_datalake.default.cor_overwrite;
+
+# Replacement also works when commit-time merging repacks the source manifests.
+# Keep multiple schemas/specs in the input, including a removed partition column.
+statement ok
+CREATE TABLE my_datalake.default.cor_overwrite (id INTEGER, part VARCHAR)
+PARTITIONED BY (part) WITH ('commit.manifest-merge.enabled' = false);
+
+statement ok
+INSERT INTO my_datalake.default.cor_overwrite VALUES (1, 'a');
+
+statement ok
+INSERT INTO my_datalake.default.cor_overwrite VALUES (2, 'b');
+
+statement ok
+ALTER TABLE my_datalake.default.cor_overwrite SET PARTITIONED BY (id);
+
+statement ok
+INSERT INTO my_datalake.default.cor_overwrite VALUES (3, 'c');
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_overwrite (value INTEGER)
+WITH ('commit.manifest-merge.enabled' = true, 'commit.manifest.min-count-to-merge' = 2);
+
+query I
+SELECT count(*) FROM my_datalake.default.cor_overwrite;
+----
+0
+
+query III
+SELECT s.summary.operation::VARCHAR, s.summary."deleted-records"::BIGINT, s.summary."total-records"::BIGINT
+FROM iceberg_load_table_response(my_datalake.default.cor_overwrite), unnest(metadata.snapshots::VARIANT[]) t(s)
+WHERE s."snapshot-id"::BIGINT = metadata."current-snapshot-id"::BIGINT;
+----
+overwrite	3	0
+
+statement ok
+DROP TABLE my_datalake.default.cor_overwrite;

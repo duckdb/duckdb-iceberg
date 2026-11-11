@@ -1,0 +1,118 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_create_or_replace_history.test
+# description: Historical reads survive replacement and exclude its pending rows
+# group: [transactions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env TIMETRAVEL_SUPPORT
+
+require-env SNAPSHOT_HISTORY_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cor_history;
+
+statement ok
+CREATE TABLE my_datalake.default.cor_history AS SELECT 1 a;
+
+statement ok
+SET VARIABLE cor_snapshot = (SELECT snapshot_id FROM iceberg_snapshots(my_datalake.default.cor_history));
+
+statement ok
+SET VARIABLE cor_timestamp = (SELECT timestamp_ms FROM iceberg_snapshots(my_datalake.default.cor_history));
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_history (b VARCHAR);
+
+query I
+SELECT count(*) FROM my_datalake.default.cor_history;
+----
+0
+
+query I
+SELECT a FROM my_datalake.default.cor_history AT (VERSION => getvariable('cor_snapshot'));
+----
+1
+
+query I
+SELECT a FROM my_datalake.default.cor_history AT (TIMESTAMP => getvariable('cor_timestamp'));
+----
+1
+
+statement ok
+INSERT INTO my_datalake.default.cor_history VALUES ('new');
+
+query I
+SELECT b FROM my_datalake.default.cor_history;
+----
+new
+
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.cor_history);
+----
+1
+
+query I
+SELECT a FROM my_datalake.default.cor_history AT (VERSION => getvariable('cor_snapshot'));
+----
+1
+
+statement ok
+COMMIT;
+
+# The bare replacement and the later INSERT each publish a snapshot.
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.cor_history);
+----
+3
+
+query I
+SELECT parent_id IS NOT NULL FROM iceberg_snapshots(my_datalake.default.cor_history) ORDER BY sequence_number DESC LIMIT 1;
+----
+true
+
+query I
+SELECT a FROM my_datalake.default.cor_history AT (VERSION => getvariable('cor_snapshot'));
+----
+1
+
+statement ok
+BEGIN;
+
+# CTAS can read history while the replacement is being written.
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_history AS
+SELECT a + 1 c FROM my_datalake.default.cor_history AT (VERSION => getvariable('cor_snapshot'));
+
+query I
+SELECT c FROM my_datalake.default.cor_history;
+----
+2
+
+query I
+SELECT a FROM my_datalake.default.cor_history AT (VERSION => getvariable('cor_snapshot'));
+----
+1
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT b FROM my_datalake.default.cor_history;
+----
+new
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_history AS SELECT b || '-self' b FROM my_datalake.default.cor_history;
+
+query I
+SELECT b FROM my_datalake.default.cor_history;
+----
+new-self
+
+statement ok
+DROP TABLE my_datalake.default.cor_history;

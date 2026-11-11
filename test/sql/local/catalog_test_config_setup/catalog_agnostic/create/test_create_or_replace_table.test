@@ -1,0 +1,252 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_or_replace_table.test
+# description: CREATE OR REPLACE TABLE replaces the definition and data of a table in place, in one commit, keeping its identity
+# group: [create]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+drop table if exists my_datalake.default.cor_table;
+
+# --- replacing a table that does not exist creates it ---
+
+statement ok
+create or replace table my_datalake.default.cor_table as select range a from range(10);
+
+query I
+select count(*) from my_datalake.default.cor_table;
+----
+10
+
+statement ok
+set variable location_before = (select split_part(file_path, '/data/', 1) from iceberg_metadata(my_datalake.default.cor_table) limit 1);
+
+statement ok
+set variable snapshots_before = (select count(*) from iceberg_snapshots(my_datalake.default.cor_table));
+
+# --- outside of a transaction the table is replaced right away, schema included ---
+
+statement ok
+create or replace table my_datalake.default.cor_table as select range::varchar b, 1 c from range(3);
+
+query II
+select count(*), min(b) from my_datalake.default.cor_table;
+----
+3	0
+
+query I
+select column_name from (describe my_datalake.default.cor_table) order by 1;
+----
+b
+c
+
+# the table keeps its identity: same location, and the earlier snapshots stay in its history
+query I
+select (select split_part(file_path, '/data/', 1) from iceberg_metadata(my_datalake.default.cor_table) limit 1) = getvariable('location_before');
+----
+true
+
+query I
+select count(*) > getvariable('snapshots_before') from iceberg_snapshots(my_datalake.default.cor_table);
+----
+true
+
+# the overwrite remains linked to the previous snapshot
+query I
+select parent_id is not null from iceberg_snapshots(my_datalake.default.cor_table) order by sequence_number desc limit 1;
+----
+true
+
+query I
+select count(*) from duckdb_tables() where database_name = 'my_datalake' and schema_name = 'default' and table_name = 'cor_table';
+----
+1
+
+# --- inside a transaction the replacement is invisible to others until the commit ---
+
+statement ok con1
+begin;
+
+statement ok con1
+create or replace table my_datalake.default.cor_table as select 42 d;
+
+# the transaction sees the replacement
+query I con1
+select d from my_datalake.default.cor_table;
+----
+42
+
+# other connections still see the replaced table
+query II con2
+select count(*), min(b) from my_datalake.default.cor_table;
+----
+3	0
+
+statement ok con1
+rollback;
+
+# rolled back: the replaced table is untouched
+query II
+select count(*), min(b) from my_datalake.default.cor_table;
+----
+3	0
+
+# --- a committed replacement, with more rows inserted into it in the same transaction ---
+
+statement ok con1
+begin;
+
+statement ok con1
+create or replace table my_datalake.default.cor_table as select 42 d;
+
+statement ok con1
+insert into my_datalake.default.cor_table values (43);
+
+query I con1
+select d from my_datalake.default.cor_table order by d;
+----
+42
+43
+
+statement ok con1
+commit;
+
+query I
+select d from my_datalake.default.cor_table order by d;
+----
+42
+43
+
+query I con2
+select d from my_datalake.default.cor_table order by d;
+----
+42
+43
+
+# --- a replacement without data leaves an empty table ---
+
+statement ok
+create or replace table my_datalake.default.cor_table (e int, f varchar);
+
+query I
+select count(*) from my_datalake.default.cor_table;
+----
+0
+
+query I
+select column_name from (describe my_datalake.default.cor_table) order by 1;
+----
+e
+f
+
+statement ok
+insert into my_datalake.default.cor_table values (1, 'x');
+
+query II
+select * from my_datalake.default.cor_table;
+----
+1	x
+
+# --- the partitioning follows the new definition ---
+
+statement ok
+create or replace table my_datalake.default.cor_table as select range % 2 as part, range as v from range(20);
+
+statement ok
+create or replace table my_datalake.default.cor_table partitioned by (part) as select range % 2 as part, range as v from range(20);
+
+query II
+select part, count(*) from my_datalake.default.cor_table group by part order by part;
+----
+0	10
+1	10
+
+query I
+select count(*) > 0 from iceberg_metadata(my_datalake.default.cor_table) where file_path like '%part=%';
+----
+true
+
+# --- the format version cannot go down ---
+
+statement error
+create or replace table my_datalake.default.cor_table (g int) with ('format-version' = '1');
+----
+<REGEX>:.*cannot be downgraded.*
+
+# --- a table with pending changes in the transaction cannot be replaced ---
+
+statement ok con1
+begin;
+
+statement ok con1
+insert into my_datalake.default.cor_table values (0, 100);
+
+statement error con1
+create or replace table my_datalake.default.cor_table as select 1 e;
+----
+<REGEX>:.*pending updates in the same transaction.*
+
+statement ok con1
+rollback;
+
+# --- nor can a replaced table be replaced again or dropped before the commit ---
+
+statement ok con1
+begin;
+
+statement ok con1
+create or replace table my_datalake.default.cor_table as select 1 e;
+
+statement error con1
+create or replace table my_datalake.default.cor_table as select 2 f;
+----
+<REGEX>:.*pending updates in the same transaction.*
+
+statement ok con1
+rollback;
+
+statement ok con1
+begin;
+
+statement ok con1
+create or replace table my_datalake.default.cor_table as select 1 e;
+
+statement error con1
+drop table my_datalake.default.cor_table;
+----
+<REGEX>:.*cannot commit this transaction atomically.*
+
+statement ok con1
+rollback;
+
+query I
+select count(*) from my_datalake.default.cor_table;
+----
+20
+
+# --- a table dropped in the transaction cannot be replaced ---
+
+statement ok con1
+begin;
+
+statement ok con1
+drop table my_datalake.default.cor_table;
+
+statement error con1
+create or replace table my_datalake.default.cor_table as select 1 e;
+----
+<REGEX>:.*dropped or renamed in the same transaction.*
+
+statement ok con1
+rollback;
+
+# --- a plain CREATE still refuses an existing table ---
+
+statement error
+create table my_datalake.default.cor_table (x int);
+----
+<REGEX>:.*already exists.*
+
+statement ok
+drop table my_datalake.default.cor_table;

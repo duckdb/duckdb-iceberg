@@ -156,7 +156,7 @@ IcebergCreateTableRequest::CreateIcebergColumn(const ColumnDefinition &column_de
 
 shared_ptr<IcebergTableSchema> IcebergCreateTableRequest::CreateIcebergSchema(
     ClientContext &context, const IcebergTableMetadata &table_metadata, const ColumnList &columns,
-    optional_ptr<const vector<unique_ptr<Constraint>>> constraints_p, int32_t &last_column_id) {
+    optional_ptr<const vector<unique_ptr<Constraint>>> constraints_p, int32_t &last_column_id, int32_t first_field_id) {
 	auto schema = make_shared_ptr<IcebergTableSchema>();
 	schema->schema_id = table_metadata.GetCurrentSchemaId();
 
@@ -164,7 +164,7 @@ shared_ptr<IcebergTableSchema> IcebergCreateTableRequest::CreateIcebergSchema(
 	//  this makes the IcebergTableSchema, and we use that to dump data to JSON.
 	//  we can just directly dump it to json.
 	auto column_iterator = columns.Logical();
-	int32_t field_id = 1;
+	int32_t field_id = first_field_id;
 
 	auto next_field_id = [&field_id]() -> idx_t {
 		return field_id++;
