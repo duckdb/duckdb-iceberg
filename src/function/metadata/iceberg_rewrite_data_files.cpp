@@ -163,7 +163,7 @@ static unique_ptr<QueryNode> BuildCandidateSelect(const QualifiedName &table_nam
 //! "everything referenced", preserving all table columns for the later physical
 //! rewrite copy.
 static unique_ptr<LogicalOperator> BindCandidateCopy(Binder &binder, const RewritePlan &plan) {
-	auto &metadata = plan.table_info->table_metadata;
+	auto &metadata = plan.table_info->GetMetadata();
 	auto &current_schema = metadata.GetLatestSchema();
 
 	auto &fs = FileSystem::GetFileSystem(binder.context);

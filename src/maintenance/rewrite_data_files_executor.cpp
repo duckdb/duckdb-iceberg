@@ -8,7 +8,7 @@
 namespace duckdb {
 
 void ValidateRewriteSnapshot(const RewritePlan &plan, const IcebergTable &table_info, const string &phase) {
-	auto snapshot = table_info.table_metadata.GetLatestSnapshot();
+	auto snapshot = table_info.GetMetadata().GetLatestSnapshot();
 	if (plan.starting_snapshot_id < 0) {
 		if (snapshot) {
 			throw CatalogException(

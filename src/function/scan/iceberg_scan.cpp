@@ -196,9 +196,9 @@ static unique_ptr<FunctionData> IcebergScanDeserialize(Deserializer &deserialize
 		ThrowCannotCopyScan(qualified_name, "the table is no longer an Iceberg catalog table");
 	}
 	auto &table = catalog_entry->Cast<IcebergTableSchemaVersion>().table_info;
-	if ((!table_uuid.empty() && table.table_metadata.table_uuid != table_uuid) ||
+	if ((!table_uuid.empty() && table.GetMetadata().table_uuid != table_uuid) ||
 	    (table_uuid.empty() &&
-	     table.table_metadata.GetMetadataPath(FileSystem::GetFileSystem(context)) != metadata_path)) {
+	     table.GetMetadata().GetMetadataPath(FileSystem::GetFileSystem(context)) != metadata_path)) {
 		ThrowCannotCopyScan(qualified_name, "the table changed after the scan was bound");
 	}
 
@@ -206,7 +206,7 @@ static unique_ptr<FunctionData> IcebergScanDeserialize(Deserializer &deserialize
 	if (schema_entry == table.schema_versions.end()) {
 		ThrowCannotCopyScan(qualified_name, StringUtil::Format("schema id %d is no longer available", schema_id));
 	}
-	if (snapshot_id && !table.table_metadata.FindSnapshotByIdInternal(*snapshot_id)) {
+	if (snapshot_id && !table.GetMetadata().FindSnapshotByIdInternal(*snapshot_id)) {
 		ThrowCannotCopyScan(qualified_name,
 		                    StringUtil::Format("snapshot id %lld is no longer available", *snapshot_id));
 	}

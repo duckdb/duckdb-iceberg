@@ -71,7 +71,11 @@ test runner.
 The LoadTable cache API tests deterministically interleave request construction,
 publication, and eviction, and check the credential-refresh fallback. They also
 cover expired Azure SAS credentials and S3 credential refresh after an HTTP 304,
-without contacting cloud storage:
+without contacting cloud storage. Parsed metadata cases check response-generation
+identity, concurrent initialization, owner release after replacement, and
+copy-on-write isolation from readers. Authoritative-file fallback is retried, and
+historical metadata-log reconstruction keeps a separate owner from the cached
+head:
 
 ```sh
 ./build/reldebug/test/unittest_iceberg_cache

@@ -28,13 +28,14 @@ public:
 public:
 	static unique_ptr<AvroScan> ScanManifestList(const IcebergSnapshotScanInfo &snapshot_info,
 	                                             const IcebergTableMetadata &metadata, ClientContext &context,
-	                                             const string &path, vector<IcebergManifestListEntry> &result);
+	                                             const string &path, vector<IcebergManifestListEntry> &result,
+	                                             IcebergFileSecret file_secret = {});
 	static unique_ptr<AvroScan> ScanManifest(const IcebergSnapshotScanInfo &snapshot_info,
 	                                         vector<IcebergManifestListEntry> &manifest_files,
 	                                         const IcebergOptions &options, FileSystem &fs, const string &iceberg_path,
 	                                         const IcebergTableMetadata &metadata, ClientContext &context,
 	                                         optional_ptr<ManifestEntryReadState> read_state = nullptr,
-	                                         vector<idx_t> manifest_indexes = {});
+	                                         vector<idx_t> manifest_indexes = {}, IcebergFileSecret file_secret = {});
 
 public:
 	void InitializeChunk(DataChunk &chunk) const;

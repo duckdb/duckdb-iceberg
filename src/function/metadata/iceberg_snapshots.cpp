@@ -42,7 +42,7 @@ static Value SummaryValue(const case_insensitive_map_t<string> &summary) {
 
 struct IcebergSnaphotsBindData : public TableFunctionData {
 	IcebergSnaphotsBindData() {};
-	IcebergTableMetadata metadata {IcebergTableMetadataSchemas {}};
+	shared_ptr<const IcebergTableMetadata> metadata;
 };
 
 struct IcebergSnapshotGlobalTableFunctionState : public GlobalTableFunctionState {
@@ -51,15 +51,15 @@ public:
 		auto &bind_data = input.bind_data->Cast<IcebergSnaphotsBindData>();
 		auto global_state = make_uniq<IcebergSnapshotGlobalTableFunctionState>();
 
-		global_state->metadata = bind_data.metadata.Copy();
+		global_state->metadata = bind_data.metadata;
 
 		auto &info = global_state->metadata;
-		global_state->snapshot_it = info.snapshots.begin();
+		global_state->snapshot_it = info->snapshots.begin();
 		return std::move(global_state);
 	}
 
-	IcebergTableMetadata metadata {IcebergTableMetadataSchemas {}};
-	unordered_map<int64_t, IcebergSnapshot>::iterator snapshot_it;
+	shared_ptr<const IcebergTableMetadata> metadata;
+	unordered_map<int64_t, IcebergSnapshot>::const_iterator snapshot_it;
 };
 
 static unique_ptr<FunctionData> IcebergSnapshotsBind(ClientContext &context, TableFunctionBindInput &input,
@@ -116,7 +116,7 @@ static void IcebergSnapshotsFunction(ClientContext &context, TableFunctionInput 
 	auto &global_state = data.global_state->Cast<IcebergSnapshotGlobalTableFunctionState>();
 	idx_t i = 0;
 	auto &it = global_state.snapshot_it;
-	auto end = global_state.metadata.snapshots.end();
+	auto end = global_state.metadata->snapshots.end();
 	for (; it != end; it++) {
 		if (i >= STANDARD_VECTOR_SIZE) {
 			break;

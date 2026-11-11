@@ -105,17 +105,18 @@ static unique_ptr<FunctionData> IcebergMetaDataBind(ClientContext &context, Tabl
 	auto expected_table_uuid = input.named_parameters.find("expected_table_uuid");
 	if (expected_table_uuid != input.named_parameters.end()) {
 		auto expected = expected_table_uuid->second.ToString();
-		auto &table_uuid = resolved_metadata.metadata.table_uuid;
+		auto &table_uuid = resolved_metadata.metadata->table_uuid;
 		if (!StringUtil::CIEquals(expected, table_uuid)) {
 			throw InvalidInputException("Table UUID mismatch: expected '%s', found '%s'", expected, table_uuid);
 		}
 	}
 
-	auto snapshot_to_scan = resolved_metadata.metadata.GetSnapshot(*options.snapshot_lookup);
+	auto snapshot_to_scan = resolved_metadata.metadata->GetSnapshot(*options.snapshot_lookup);
 
 	if (snapshot_to_scan.snapshot) {
-		ret->iceberg_table = IcebergManifestList::Load(resolved_metadata.table_location, resolved_metadata.metadata,
-		                                               snapshot_to_scan, context, options);
+		ret->iceberg_table =
+		    IcebergManifestList::Load(resolved_metadata.table_location, *resolved_metadata.metadata, snapshot_to_scan,
+		                              context, options, resolved_metadata.file_secret);
 	}
 
 	auto manifest_types = IcebergManifestTypes();

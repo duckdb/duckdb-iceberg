@@ -40,7 +40,7 @@ public:
 struct IcebergTableMetadataSchemas {
 public:
 	IcebergTableMetadataSchemas() = default;
-	explicit IcebergTableMetadataSchemas(unordered_map<int32_t, shared_ptr<IcebergTableSchema>> schemas_p)
+	explicit IcebergTableMetadataSchemas(unordered_map<int32_t, shared_ptr<const IcebergTableSchema>> schemas_p)
 	    : schemas(std::move(schemas_p)) {
 		for (auto &[_, schema] : schemas) {
 			if (!schema) {
@@ -54,11 +54,11 @@ public:
 	const IcebergTableSchema &GetSchemaFromId(int32_t schema_id) const;
 	void ForEachSchema(const std::function<void(const IcebergTableSchema &)> &callback) const;
 	bool IsEmpty() const;
-	IcebergTableSchema &AddSchemaOrGetExisting(shared_ptr<IcebergTableSchema> schema);
+	const IcebergTableSchema &AddSchemaOrGetExisting(shared_ptr<IcebergTableSchema> schema);
 
 private:
 	//! schema_id -> schema
-	unordered_map<int32_t, shared_ptr<IcebergTableSchema>> schemas;
+	unordered_map<int32_t, shared_ptr<const IcebergTableSchema>> schemas;
 };
 
 //! A structure to store "LoadTableResult" information that changes as a transaction goes on
@@ -189,18 +189,8 @@ public:
 
 	vector<IcebergMetadataLogItem> metadata_log;
 
-	//! The registered secret named by reads of the table's manifest lists, manifests, data and delete files.
-	//! Set only on a read's metadata copy, never on the table's shared metadata or in a metadata file.
-	//! Set with SetFileSecret.
-	string file_secret;
-	//! The name of the file secret as one value, which every file that names it shares
-	Value file_secret_value;
-
 public:
 	explicit IcebergTableMetadata(IcebergTableMetadataSchemas schemas);
-	void SetFileSecret(string name);
-	//! Names the secret, if any, in `file`'s options. Existing extended information must belong to this file.
-	void ApplyFileSecret(OpenFileInfo &file) const;
 
 private:
 	int32_t current_schema_id = 0;

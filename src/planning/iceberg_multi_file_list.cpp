@@ -57,21 +57,18 @@ void IcebergMultiFileList::Bind(vector<LogicalType> &return_types, vector<Identi
 		D_ASSERT(!planner->GetPath().empty());
 		auto resolved_metadata =
 		    IcebergUtils::ResolveTableMetadata(planner->GetContext(), planner->GetPath(), planner->GetOptions());
-		auto temp_data = make_uniq<IcebergScanTemporaryData>(std::move(resolved_metadata.metadata));
-		auto &metadata = temp_data->metadata;
+		auto &metadata = *resolved_metadata.metadata;
 		auto snapshot_info = metadata.GetSnapshot(*planner->GetOptions().snapshot_lookup);
 		auto &schema = metadata.GetSchemaFromId(snapshot_info.schema_id);
-		planner->SetScanInfo(make_shared_ptr<IcebergScanInfo>(resolved_metadata.table_location, std::move(temp_data),
-		                                                      snapshot_info, schema));
+		planner->SetScanInfo(make_shared_ptr<IcebergScanInfo>(resolved_metadata.table_location,
+		                                                      std::move(resolved_metadata.metadata), snapshot_info,
+		                                                      schema, std::move(resolved_metadata.file_secret)));
 	}
 	for (auto &schema_entry : planner->GetSchema().columns) {
 		names.push_back(Identifier(schema_entry->name));
 		return_types.push_back(schema_entry->type);
 	}
 	QueryResult::DeduplicateColumns(names);
-	for (idx_t i = 0; i < names.size(); i++) {
-		planner->GetSchema().columns[i]->name = names[i].GetIdentifierName();
-	}
 	have_bound = true;
 	this->names = IdentifiersToStrings(names);
 	types = return_types;
@@ -82,8 +79,9 @@ shared_ptr<IcebergDeleteData> IcebergMultiFileList::GetExistingPositionalDeleteD
 }
 
 IcebergDeletePlan IcebergMultiFileList::ProcessDeletes(const IcebergFileScanTask &task) const {
-	IcebergDeleteExecutionContext execution {planner->GetContext(), FileSystem::GetFileSystem(planner->GetContext()),
-	                                         planner->GetPath(), planner->GetOptions(), planner->GetMetadata()};
+	IcebergDeleteExecutionContext execution {planner->GetContext(),  FileSystem::GetFileSystem(planner->GetContext()),
+	                                         planner->GetPath(),     planner->GetOptions(),
+	                                         planner->GetMetadata(), planner->GetFileSecret()};
 	return delete_execution->ProcessDeletes(execution, task.original_file_path, task.delete_files);
 }
 
@@ -159,7 +157,7 @@ OpenFileInfo IcebergMultiFileList::GetFileInternal(idx_t file_id) const {
 		return OpenFileInfo();
 	}
 	auto file = IcebergMultiFileReader::FileInfo(*task);
-	planner->GetMetadata().ApplyFileSecret(file);
+	planner->GetFileSecret().Apply(file);
 	return file;
 }
 

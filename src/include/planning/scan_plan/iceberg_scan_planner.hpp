@@ -44,6 +44,7 @@ public:
 	const IcebergTableFilters &Filters() const;
 
 	const IcebergTableMetadata &GetMetadata() const;
+	const IcebergFileSecret &GetFileSecret() const;
 	const IcebergTableSchema &GetSchema() const;
 	ClientContext &GetContext() const;
 	const string &GetPath() const;
