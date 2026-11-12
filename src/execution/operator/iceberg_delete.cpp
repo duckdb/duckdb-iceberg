@@ -91,6 +91,17 @@ optional_ptr<PhysicalTableScan> IcebergDelete::FindIcebergScan(PhysicalOperator 
 	return nullptr;
 }
 
+static bool CanUseMetadataOnlyDelete(PhysicalOperator &plan) {
+	if (plan.type == PhysicalOperatorType::TABLE_SCAN) {
+		return IsScanCreatedByDelete(plan.Cast<PhysicalTableScan>());
+	}
+	//! Only projections preserve every row selected by the scan. Joins and residual filters may reject them.
+	if (plan.type != PhysicalOperatorType::PROJECTION || plan.children.size() != 1) {
+		return false;
+	}
+	return CanUseMetadataOnlyDelete(plan.children[0]);
+}
+
 IcebergDelete::IcebergDelete(PhysicalPlan &physical_plan, IcebergTableSchemaVersion &table,
                              optional_ptr<IcebergMultiFileList> multi_file_list, PhysicalOperator &child,
                              vector<idx_t> row_id_indexes)
@@ -794,7 +805,7 @@ PhysicalOperator &IcebergCatalog::PlanDelete(ClientContext &context, PhysicalPla
 	auto &iceberg_delete = PlanDeleteOperation(context, planner, op, plan).Cast<IcebergDelete>();
 	//! UPDATE and MERGE share their scans with row-producing actions and must not skip covered files.
 	if (!IcebergTransaction::Get(context, *this).planning_merge_into && iceberg_delete.multi_file_list &&
-	    !iceberg_delete.is_equality_delete) {
+	    !iceberg_delete.is_equality_delete && CanUseMetadataOnlyDelete(plan)) {
 		iceberg_delete.multi_file_list->GetScanPlanner().EnableMetadataOnlyDelete();
 	}
 	return iceberg_delete;

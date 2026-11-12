@@ -1,0 +1,114 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/delete_metadata_only_join_guards.test
+# description: A partition predicate must not drop files before a DELETE join decides which rows match
+# group: [delete]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+foreach threads 1 4
+
+statement ok
+SET threads = {threads};
+
+statement ok
+CREATE TABLE my_datalake.default.metadata_delete_join (p INTEGER, id INTEGER, payload VARCHAR)
+PARTITIONED BY (p);
+
+statement ok
+INSERT INTO my_datalake.default.metadata_delete_join VALUES
+	(1, 1, 'apple'), (1, 2, 'banana'), (1, 3, 'cherry'), (1, 4, 'date'), (2, 5, 'apple');
+
+statement ok
+CREATE TEMP TABLE metadata_delete_patterns (pattern VARCHAR);
+
+statement ok
+INSERT INTO metadata_delete_patterns VALUES ('a%'), ('c%');
+
+# The scan's p = 1 predicate covers a file, but the join only deletes two of its rows.
+statement ok
+BEGIN;
+
+query I
+DELETE FROM my_datalake.default.metadata_delete_join
+USING metadata_delete_patterns
+WHERE p = 1 AND payload LIKE pattern;
+----
+2
+
+query II
+SELECT p, id FROM my_datalake.default.metadata_delete_join ORDER BY id;
+----
+1	2
+1	4
+2	5
+
+statement ok
+ROLLBACK;
+
+# A correlated subquery also leaves row selection above the partition scan.
+query I
+DELETE FROM my_datalake.default.metadata_delete_join t
+WHERE p = 1 AND EXISTS (
+	SELECT 1 FROM metadata_delete_patterns s WHERE t.payload LIKE s.pattern
+);
+----
+2
+
+query II
+SELECT p, id FROM my_datalake.default.metadata_delete_join ORDER BY id;
+----
+1	2
+1	4
+2	5
+
+query II
+SELECT count(*) FILTER (WHERE content = 'DATA'),
+	count(*) FILTER (WHERE content = 'POSITION_DELETES')
+FROM iceberg_metadata(my_datalake.default.metadata_delete_join)
+WHERE status != 'DELETED';
+----
+2	1
+
+# A join that rejects every scanned row must not publish a deletion.
+query I
+DELETE FROM my_datalake.default.metadata_delete_join
+USING metadata_delete_patterns
+WHERE p = 1 AND payload LIKE pattern;
+----
+0
+
+query II
+SELECT p, id FROM my_datalake.default.metadata_delete_join ORDER BY id;
+----
+1	2
+1	4
+2	5
+
+# A later standalone DELETE can still drop the file and its positional deletes.
+query I
+DELETE FROM my_datalake.default.metadata_delete_join WHERE p = 1;
+----
+2
+
+query II
+SELECT p, id FROM my_datalake.default.metadata_delete_join;
+----
+2	5
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.metadata_delete_join)
+WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.metadata_delete_join;
+
+statement ok
+DROP TABLE metadata_delete_patterns;
+
+endloop
+
+statement ok
+RESET threads;

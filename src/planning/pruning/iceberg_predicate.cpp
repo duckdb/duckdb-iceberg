@@ -132,17 +132,21 @@ static bool MatchBoundsConstantTemplated(const Value &constant, ExpressionType c
 //! Identity keeps the source value, so the predicate applies to the bounds unchanged - no projection.
 static bool AllRowsMatchIdentityBounds(const Value &constant, ExpressionType comparison_type,
                                        const IcebergPredicateStats &stats) {
+	//! File bounds exclude NaNs, which DuckDB orders above every other value.
+	auto type = stats.lower_bound->type().id();
+	bool may_have_nan =
+	    (type == LogicalTypeId::FLOAT || type == LogicalTypeId::DOUBLE) && (!stats.has_nan || *stats.has_nan);
 	switch (comparison_type) {
 	case ExpressionType::COMPARE_EQUAL:
-		return *stats.lower_bound == constant && *stats.upper_bound == constant;
+		return *stats.lower_bound == constant && *stats.upper_bound == constant && (!may_have_nan || IsNaN(constant));
 	case ExpressionType::COMPARE_GREATERTHAN:
 		return *stats.lower_bound > constant;
 	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
 		return *stats.lower_bound >= constant;
 	case ExpressionType::COMPARE_LESSTHAN:
-		return *stats.upper_bound < constant;
+		return !may_have_nan && *stats.upper_bound < constant;
 	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-		return *stats.upper_bound <= constant;
+		return *stats.upper_bound <= constant && (!may_have_nan || IsNaN(constant));
 	default:
 		return false;
 	}

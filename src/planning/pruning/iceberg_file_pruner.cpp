@@ -125,6 +125,10 @@ optional<IcebergPredicateStats> TryGetColumnBoundStats(ClientContext &context, c
 	auto result = IcebergPredicateStats::DeserializeBounds(context, lower_bound_it->second, upper_bound_it->second,
 	                                                       column.name, column.type);
 	ApplyNullCounts(data_file, column.id, result);
+	auto nan_count = data_file.nan_value_counts.find(column.id);
+	if (nan_count != data_file.nan_value_counts.end()) {
+		result.has_nan = nan_count->second > 0;
+	}
 	return result;
 }
 
@@ -400,6 +404,7 @@ bool IcebergFilePruner::FileFullyCoveredByFilter(const IcebergManifest &manifest
 		stats.upper_bound = partition_val.value;
 		stats.has_null = false;
 		stats.has_not_null = true;
+		stats.has_nan = IsNaN(partition_val.value);
 
 		if (IcebergPredicate::AllRowsMatchBounds(context, *filter, stats, field.transform)) {
 			covered.insert(column_id);
