@@ -4,11 +4,13 @@
 #include "duckdb/common/local_file_system.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/common/types/uuid.hpp"
+#include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/main/database_manager.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/filter/table_filter_functions.hpp"
 #include "duckdb/transaction/meta_transaction.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "core/expression/iceberg_value.hpp"
 #include "function/scan_planning/iceberg_row_filter.hpp"
 #include "planning/iceberg_multi_file_list.hpp"
 
@@ -789,6 +791,414 @@ TEST_CASE("Iceberg overlapping lazy delete loads publish atomically and propagat
 	if (retained) {
 		// The reusable portion owns the raw entries, not a pointer into the store.
 		REQUIRE_FALSE(retained->Entries().empty());
+	}
+}
+
+namespace {
+
+IcebergPredicateStats MetricsBounds(const Value &lower, const Value &upper) {
+	IcebergPredicateStats stats;
+	stats.lower_bound = lower;
+	stats.upper_bound = upper;
+	stats.has_null = false;
+	return stats;
+}
+
+void CheckMetrics(ClientContext &context, const ExpressionFilter &filter, const IcebergPredicateStats &stats,
+                  IcebergMetricsMatch expected, const IcebergTransform &transform = IcebergTransform::Identity()) {
+	INFO(filter.ToString("x"));
+	INFO(transform.RawType());
+	REQUIRE(IcebergPredicate::MatchBounds(context, filter, stats, transform, true) == expected);
+	auto inclusive =
+	    expected == IcebergMetricsMatch::ROWS_MUST_MATCH ? IcebergMetricsMatch::ROWS_MIGHT_MATCH : expected;
+	REQUIRE(IcebergPredicate::MatchBounds(context, filter, stats, transform) == inclusive);
+}
+
+void CheckComparison(ClientContext &context, ExpressionType comparison, const Value &constant,
+                     const IcebergPredicateStats &stats, IcebergMetricsMatch expected,
+                     const IcebergTransform &transform = IcebergTransform::Identity()) {
+	auto filter = ExpressionFilter::CreateComparisonFilter(comparison, constant);
+	CheckMetrics(context, *filter, stats, expected, transform);
+	ExpressionFilter reversed(BoundComparisonExpression::Create(
+	    FlipComparisonExpression(comparison), make_uniq<BoundConstantExpression>(constant),
+	    make_uniq<BoundReferenceExpression>(constant.type(), 0ULL)));
+	CheckMetrics(context, reversed, stats, expected, transform);
+}
+
+void SetIntegerMetrics(IcebergDataFile &file, int32_t field_id, int32_t lower, int32_t upper) {
+	auto lo = IcebergValue::SerializeValue(Value(lower), LogicalType::INTEGER, SerializeBound::LOWER_BOUND);
+	auto hi = IcebergValue::SerializeValue(Value(upper), LogicalType::INTEGER, SerializeBound::UPPER_BOUND);
+	REQUIRE_FALSE(lo.HasError());
+	REQUIRE_FALSE(hi.HasError());
+	file.lower_bounds[field_id] = lo.GetValue();
+	file.upper_bounds[field_id] = hi.GetValue();
+	file.value_counts[field_id] = file.record_count;
+	file.null_value_counts[field_id] = 0;
+}
+
+IcebergManifestEntry MetricsEntry() {
+	IcebergManifestEntry entry;
+	entry.status = IcebergManifestEntryStatusType::ADDED;
+	entry.data_file.content = IcebergManifestEntryContentType::DATA;
+	entry.data_file.file_path = "data.parquet";
+	entry.data_file.file_format = "parquet";
+	entry.data_file.record_count = 10;
+	entry.data_file.file_size_in_bytes = 100;
+	return entry;
+}
+
+} // namespace
+
+TEST_CASE("Iceberg strict metric steps preserve resolution and reject overflow", "[iceberg_metrics]") {
+	Value result;
+	for (auto &type :
+	     vector<LogicalType> {LogicalType::TINYINT, LogicalType::SMALLINT, LogicalType::INTEGER, LogicalType::BIGINT,
+	                          LogicalType::HUGEINT, LogicalType::UTINYINT, LogicalType::USMALLINT,
+	                          LogicalType::UINTEGER, LogicalType::UBIGINT, LogicalType::UHUGEINT}) {
+		INFO(type.ToString());
+		REQUIRE(IcebergTryIncrement(Value(0).DefaultCastAs(type), result));
+		REQUIRE(result.type() == type);
+		REQUIRE(result == Value(1).DefaultCastAs(type));
+		REQUIRE(IcebergTryDecrement(Value(1).DefaultCastAs(type), result));
+		REQUIRE(result.type() == type);
+		REQUIRE(result == Value(0).DefaultCastAs(type));
+		REQUIRE_FALSE(IcebergTryIncrement(Value::MaximumValue(type), result));
+		REQUIRE_FALSE(IcebergTryDecrement(Value::MinimumValue(type), result));
+		REQUIRE_FALSE(IcebergTryIncrement(Value(type), result));
+	}
+	for (auto width : {4, 9, 18, 38}) {
+		auto type = LogicalType::DECIMAL(width, 2);
+		INFO(type.ToString());
+		REQUIRE(IcebergTryIncrement(Value("-0.01").DefaultCastAs(type), result));
+		REQUIRE(result.type() == type);
+		REQUIRE(result == Value("0.00").DefaultCastAs(type));
+		REQUIRE(IcebergTryDecrement(Value("0.00").DefaultCastAs(type), result));
+		REQUIRE(result.type() == type);
+		REQUIRE(result == Value("-0.01").DefaultCastAs(type));
+		auto limit = string(width - 2, '9') + ".99";
+		REQUIRE_FALSE(IcebergTryIncrement(Value(limit).DefaultCastAs(type), result));
+		REQUIRE_FALSE(IcebergTryDecrement(Value("-" + limit).DefaultCastAs(type), result));
+	}
+	for (auto &type : vector<LogicalType> {LogicalType::TIMESTAMP, LogicalType::TIMESTAMP_TZ, LogicalType::TIMESTAMP_NS,
+	                                       LogicalType::TIMESTAMP_TZ_NS}) {
+		INFO(type.ToString());
+		bool nanos = type.id() == LogicalTypeId::TIMESTAMP_NS || type.id() == LogicalTypeId::TIMESTAMP_TZ_NS;
+		auto before_epoch =
+		    Value(nanos ? "1969-12-31 23:59:59.999999999" : "1969-12-31 23:59:59.999999").DefaultCastAs(type);
+		auto epoch = Value("1970-01-01 00:00:00").DefaultCastAs(type);
+		REQUIRE(IcebergTryIncrement(before_epoch, result));
+		REQUIRE(result.type() == type);
+		REQUIRE(result == epoch);
+		REQUIRE(IcebergTryDecrement(epoch, result));
+		REQUIRE(result == before_epoch);
+		REQUIRE_FALSE(IcebergTryIncrement(Value::MaximumValue(type), result));
+		for (auto infinity : {"infinity", "-infinity"}) {
+			REQUIRE_FALSE(IcebergTryIncrement(Value(infinity).DefaultCastAs(type), result));
+			REQUIRE_FALSE(IcebergTryDecrement(Value(infinity).DefaultCastAs(type), result));
+		}
+	}
+	REQUIRE(IcebergTryIncrement(Value::DATE(2000, 2, 28), result));
+	REQUIRE(result == Value::DATE(2000, 2, 29));
+	REQUIRE(IcebergTryDecrement(Value::DATE(2000, 3, 1), result));
+	REQUIRE(result == Value::DATE(2000, 2, 29));
+	REQUIRE_FALSE(IcebergTryIncrement(Value::DATE(date_t(date_t::infinity().days - 1)), result));
+	REQUIRE_FALSE(IcebergTryDecrement(Value::DATE(date_t(date_t::ninfinity().days + 1)), result));
+	for (auto infinity : {"infinity", "-infinity"}) {
+		REQUIRE_FALSE(IcebergTryIncrement(Value(infinity).DefaultCastAs(LogicalType::DATE), result));
+		REQUIRE_FALSE(IcebergTryDecrement(Value(infinity).DefaultCastAs(LogicalType::DATE), result));
+	}
+	for (auto &value : vector<Value> {Value(), Value("abc"), Value::DOUBLE(1), Value::FLOAT(1), Value::BOOLEAN(true),
+	                                  Value::BLOB_RAW(string("abc"))}) {
+		REQUIRE_FALSE(IcebergTryIncrement(value, result));
+		REQUIRE_FALSE(IcebergTryDecrement(value, result));
+	}
+}
+
+TEST_CASE("Iceberg strict identity metrics distinguish all some and no matching rows", "[iceberg_metrics]") {
+	DuckDB database(nullptr);
+	Connection connection(database);
+	auto &context = *connection.context;
+	auto stats = MetricsBounds(Value(10), Value(20));
+	using Match = IcebergMetricsMatch;
+	for (auto comparison :
+	     {ExpressionType::COMPARE_EQUAL, ExpressionType::COMPARE_LESSTHAN, ExpressionType::COMPARE_LESSTHANOREQUALTO,
+	      ExpressionType::COMPARE_GREATERTHAN, ExpressionType::COMPARE_GREATERTHANOREQUALTO}) {
+		for (auto constant : {9, 10, 15, 20, 21}) {
+			// Evaluate every possible row in this small domain independently of the metrics evaluator.
+			auto filter = ExpressionFilter::CreateComparisonFilter(comparison, Value(constant));
+			idx_t matches = 0;
+			for (int row = 10; row <= 20; row++) {
+				matches += filter->EvaluateWithConstant(context, Value(row));
+			}
+			auto expected = matches == 0    ? Match::ROWS_CANNOT_MATCH
+			                : matches == 11 ? Match::ROWS_MUST_MATCH
+			                                : Match::ROWS_MIGHT_MATCH;
+			CheckComparison(context, comparison, Value(constant), stats, expected);
+		}
+	}
+	auto singleton = MetricsBounds(Value(10), Value(10));
+	CheckComparison(context, ExpressionType::COMPARE_EQUAL, Value(10), singleton, Match::ROWS_MUST_MATCH);
+	singleton.has_null = true;
+	CheckComparison(context, ExpressionType::COMPARE_EQUAL, Value(10), singleton, Match::ROWS_MIGHT_MATCH);
+	singleton.has_null = false;
+	singleton.lower_bound.reset();
+	CheckComparison(context, ExpressionType::COMPARE_EQUAL, Value(10), singleton, Match::ROWS_MIGHT_MATCH);
+	CheckComparison(context, ExpressionType::COMPARE_EQUAL, Value(LogicalType::INTEGER), stats,
+	                Match::ROWS_CANNOT_MATCH);
+
+	auto floating = MetricsBounds(Value::DOUBLE(10), Value::DOUBLE(20));
+	CheckComparison(context, ExpressionType::COMPARE_LESSTHAN, Value::DOUBLE(30), floating, Match::ROWS_MIGHT_MATCH);
+	floating.has_nan = true;
+	CheckComparison(context, ExpressionType::COMPARE_LESSTHAN, Value::DOUBLE(30), floating, Match::ROWS_MIGHT_MATCH);
+	CheckComparison(context, ExpressionType::COMPARE_GREATERTHAN, Value::DOUBLE(30), floating, Match::ROWS_MIGHT_MATCH);
+	floating.has_nan = false;
+	CheckComparison(context, ExpressionType::COMPARE_LESSTHAN, Value::DOUBLE(30), floating, Match::ROWS_MUST_MATCH);
+	CheckComparison(context, ExpressionType::COMPARE_GREATERTHAN, Value::DOUBLE(30), floating,
+	                Match::ROWS_CANNOT_MATCH);
+}
+
+TEST_CASE("Iceberg strict null IN conjunction and optional filters remain conservative", "[iceberg_metrics]") {
+	DuckDB database(nullptr);
+	Connection connection(database);
+	auto &context = *connection.context;
+	using Match = IcebergMetricsMatch;
+	auto stats = MetricsBounds(Value(10), Value(10));
+	ExpressionFilter is_null(ExpressionFilter::CreateNullCheckExpression(
+	    make_uniq<BoundReferenceExpression>(LogicalType::INTEGER, 0ULL), ExpressionType::OPERATOR_IS_NULL));
+	ExpressionFilter not_null(ExpressionFilter::CreateNullCheckExpression(
+	    make_uniq<BoundReferenceExpression>(LogicalType::INTEGER, 0ULL), ExpressionType::OPERATOR_IS_NOT_NULL));
+	CheckMetrics(context, is_null, stats, Match::ROWS_CANNOT_MATCH);
+	CheckMetrics(context, not_null, stats, Match::ROWS_MUST_MATCH);
+	stats.has_null = true;
+	CheckMetrics(context, is_null, stats, Match::ROWS_MIGHT_MATCH);
+	CheckMetrics(context, not_null, stats, Match::ROWS_MIGHT_MATCH);
+	stats.has_not_null = false;
+	stats.lower_bound.reset();
+	stats.upper_bound.reset();
+	CheckMetrics(context, is_null, stats, Match::ROWS_MUST_MATCH);
+	CheckMetrics(context, not_null, stats, Match::ROWS_CANNOT_MATCH);
+	stats = MetricsBounds(Value(10), Value(10));
+	ExpressionFilter in(ExpressionFilter::CreateInExpression(
+	    make_uniq<BoundReferenceExpression>(LogicalType::INTEGER, 0ULL), {Value(5), Value(10), Value(25)}));
+	CheckMetrics(context, in, stats, Match::ROWS_MUST_MATCH);
+	stats.upper_bound = Value(20);
+	CheckMetrics(context, in, stats, Match::ROWS_MIGHT_MATCH);
+	stats.lower_bound = Value(11);
+	CheckMetrics(context, in, stats, Match::ROWS_CANNOT_MATCH);
+
+	stats = MetricsBounds(Value(10), Value(20));
+	for (auto upper : {9, 15, 20}) {
+		auto conjunction = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+		conjunction->GetChildrenMutable().push_back(
+		    ExpressionFilter::CreateComparisonFilter(ExpressionType::COMPARE_GREATERTHANOREQUALTO, Value(10))
+		        ->expr->Copy());
+		conjunction->GetChildrenMutable().push_back(
+		    ExpressionFilter::CreateComparisonFilter(ExpressionType::COMPARE_LESSTHANOREQUALTO, Value(upper))
+		        ->expr->Copy());
+		ExpressionFilter filter(std::move(conjunction));
+		CheckMetrics(context, filter, stats,
+		             upper == 9    ? Match::ROWS_CANNOT_MATCH
+		             : upper == 20 ? Match::ROWS_MUST_MATCH
+		                           : Match::ROWS_MIGHT_MATCH);
+	}
+	for (bool selectivity : {false, true}) {
+		for (auto constant : {5, 25}) {
+			auto child = ExpressionFilter::CreateComparisonFilter(ExpressionType::COMPARE_GREATERTHAN, Value(constant));
+			ExpressionFilter optional(
+			    selectivity
+			        ? CreateSelectivityOptionalFilterExpression(child->expr->Copy(), LogicalType::INTEGER, 0.5, 1)
+			        : CreateOptionalFilterExpression(child->expr->Copy(), LogicalType::INTEGER));
+			CheckMetrics(context, optional, stats, constant == 5 ? Match::ROWS_MIGHT_MATCH : Match::ROWS_CANNOT_MATCH);
+		}
+	}
+}
+
+TEST_CASE("Iceberg strict partition projections respect discrete boundaries", "[iceberg_metrics]") {
+	DuckDB database(nullptr);
+	Connection connection(database);
+	auto &context = *connection.context;
+	using Match = IcebergMetricsMatch;
+	for (auto &type :
+	     vector<LogicalType> {LogicalType::INTEGER, LogicalType::BIGINT, LogicalType::DECIMAL(4, 2),
+	                          LogicalType::DECIMAL(9, 2), LogicalType::DECIMAL(18, 2), LogicalType::DECIMAL(38, 2)}) {
+		bool decimal = type.id() == LogicalTypeId::DECIMAL;
+		for (bool negative : {false, true}) {
+			auto start =
+			    Value(negative ? (decimal ? "-1.00" : "-100") : (decimal ? "1.00" : "100")).DefaultCastAs(type);
+			auto end = Value(negative ? (decimal ? "-0.01" : "-1") : (decimal ? "1.99" : "199")).DefaultCastAs(type);
+			auto stats = MetricsBounds(start, start);
+			IcebergTransform transform("truncate[100]");
+			CheckComparison(context, ExpressionType::COMPARE_GREATERTHANOREQUALTO, start, stats, Match::ROWS_MUST_MATCH,
+			                transform);
+			CheckComparison(context, ExpressionType::COMPARE_GREATERTHAN, start, stats, Match::ROWS_MIGHT_MATCH,
+			                transform);
+			CheckComparison(context, ExpressionType::COMPARE_LESSTHANOREQUALTO, end, stats, Match::ROWS_MUST_MATCH,
+			                transform);
+			CheckComparison(context, ExpressionType::COMPARE_LESSTHAN, end, stats, Match::ROWS_MIGHT_MATCH, transform);
+			CheckComparison(context, ExpressionType::COMPARE_EQUAL, start, stats, Match::ROWS_MIGHT_MATCH, transform);
+		}
+	}
+	for (auto &type : vector<LogicalType> {LogicalType::DATE, LogicalType::TIMESTAMP, LogicalType::TIMESTAMP_TZ,
+	                                       LogicalType::TIMESTAMP_NS, LogicalType::TIMESTAMP_TZ_NS}) {
+		for (auto transform_name : {"year", "month", "day", "hour"}) {
+			if (type.id() == LogicalTypeId::DATE && string(transform_name) == "hour") {
+				continue;
+			}
+			INFO(type.ToString());
+			INFO(transform_name);
+			IcebergTransform transform(transform_name);
+			auto first = Value("2024-01-01").DefaultCastAs(type);
+			auto next = Value(string(transform_name) == "year"    ? "2025-01-01"
+			                  : string(transform_name) == "month" ? "2024-02-01"
+			                  : string(transform_name) == "day"   ? "2024-01-02"
+			                                                      : "2024-01-01 01:00:00")
+			                .DefaultCastAs(type);
+			Value last;
+			REQUIRE(IcebergTryDecrement(next, last));
+			auto partition = transform.ApplyTransform(first);
+			auto stats = MetricsBounds(partition, partition);
+			CheckComparison(context, ExpressionType::COMPARE_GREATERTHANOREQUALTO, first, stats, Match::ROWS_MUST_MATCH,
+			                transform);
+			CheckComparison(context, ExpressionType::COMPARE_LESSTHANOREQUALTO, last, stats, Match::ROWS_MUST_MATCH,
+			                transform);
+			CheckComparison(context, ExpressionType::COMPARE_GREATERTHAN, first, stats, Match::ROWS_MIGHT_MATCH,
+			                transform);
+			CheckComparison(context, ExpressionType::COMPARE_EQUAL, first, stats, Match::ROWS_MIGHT_MATCH, transform);
+			// A legacy writer can put a pre-epoch row in partition zero by truncating toward zero.
+			auto epoch = Value("1970-01-01").DefaultCastAs(type);
+			auto legacy = MetricsBounds(Value(0), Value(0));
+			CheckComparison(context, ExpressionType::COMPARE_GREATERTHANOREQUALTO, epoch, legacy,
+			                Match::ROWS_MIGHT_MATCH, transform);
+		}
+	}
+	auto stats = MetricsBounds(Value("abc"), Value("abc"));
+	CheckComparison(context, ExpressionType::COMPARE_LESSTHAN, Value("abd"), stats, Match::ROWS_MUST_MATCH,
+	                IcebergTransform("truncate[3]"));
+	CheckComparison(context, ExpressionType::COMPARE_EQUAL, Value("abcdef"), stats, Match::ROWS_MIGHT_MATCH,
+	                IcebergTransform("truncate[3]"));
+	auto bucket = IcebergTransform("bucket[4]");
+	auto partition = bucket.ApplyTransform(Value(10));
+	stats = MetricsBounds(partition, partition);
+	CheckComparison(context, ExpressionType::COMPARE_EQUAL, Value(10), stats, Match::ROWS_MIGHT_MATCH, bucket);
+	stats = MetricsBounds(Value(LogicalType::INTEGER), Value(LogicalType::INTEGER));
+	stats.has_null = true;
+	CheckComparison(context, ExpressionType::COMPARE_EQUAL, Value(10), stats, Match::ROWS_MIGHT_MATCH,
+	                IcebergTransform("void"));
+}
+
+TEST_CASE("Iceberg strict file metrics require proof for every filter and only cover data files", "[iceberg_metrics]") {
+	PlanningTest test;
+	Query(test.connection, "CREATE TABLE lake.default.t (id INTEGER, other INTEGER)");
+	auto bound = test.Bind();
+	auto &base = bound->Cast<MultiFileBindData>().file_list->Cast<IcebergMultiFileList>().GetScanPlanner();
+	auto metadata = base.GetMetadata().Copy();
+	auto schema = LogicalType::STRUCT({{"id", LogicalType::INTEGER}, {"other", LogicalType::INTEGER}});
+	auto filters = Filters(*test.connection.context, schema, "id >= 10 AND other = 20");
+	REQUIRE(filters.FilterCount() == 2);
+	IcebergFilePruner pruner(*test.connection.context, metadata, base.GetSchema(), filters);
+	IcebergManifest manifest(0, IcebergManifestContentType::DATA, 1);
+	auto entry = MetricsEntry();
+	auto id = base.GetSchema().columns[0]->id;
+	auto other = base.GetSchema().columns[1]->id;
+	SetIntegerMetrics(entry.data_file, id, 10, 30);
+	using Match = IcebergMetricsMatch;
+	REQUIRE(pruner.FileMatchesFilter(manifest, entry, true) == Match::ROWS_MIGHT_MATCH);
+	SetIntegerMetrics(entry.data_file, other, 20, 20);
+	REQUIRE(pruner.FileMatchesFilter(manifest, entry, true) == Match::ROWS_MUST_MATCH);
+	REQUIRE(pruner.FileMatchesFilter(manifest, entry) == Match::ROWS_MIGHT_MATCH);
+	entry.data_file.null_value_counts.erase(other);
+	REQUIRE(pruner.FileMatchesFilter(manifest, entry, true) == Match::ROWS_MIGHT_MATCH);
+	SetIntegerMetrics(entry.data_file, other, 21, 21);
+	REQUIRE(pruner.FileMatchesFilter(manifest, entry, true) == Match::ROWS_CANNOT_MATCH);
+	SetIntegerMetrics(entry.data_file, other, 20, 20);
+	for (auto content :
+	     {IcebergManifestEntryContentType::POSITION_DELETES, IcebergManifestEntryContentType::EQUALITY_DELETES}) {
+		entry.data_file.content = content;
+		REQUIRE(pruner.FileMatchesFilter(manifest, entry, true) == Match::ROWS_MIGHT_MATCH);
+	}
+	entry.data_file.content = IcebergManifestEntryContentType::DATA;
+	// Both partition fields prove the same filter; neither proves "other = 20".
+	auto spec = PartitionSpec();
+	spec.fields[0].source_id = id;
+	auto second = spec.fields[0];
+	second.partition_field_id++;
+	second.transform = IcebergTransform("truncate[10]");
+	spec.fields.push_back(second);
+	metadata.partition_specs.emplace(spec.spec_id, spec);
+	manifest.partition_spec_id = spec.spec_id;
+	entry.data_file.partition_info = {{1000, Value(10)}, {1001, Value(10)}};
+	entry.data_file.lower_bounds.clear();
+	entry.data_file.upper_bounds.clear();
+	entry.data_file.null_value_counts.clear();
+	REQUIRE(pruner.FileMatchesFilter(manifest, entry, true) == Match::ROWS_MIGHT_MATCH);
+	SetIntegerMetrics(entry.data_file, other, 20, 20);
+	REQUIRE(pruner.FileMatchesFilter(manifest, entry, true) == Match::ROWS_MUST_MATCH);
+}
+
+TEST_CASE("Iceberg strict partition metrics cannot cover a sibling struct predicate", "[iceberg_metrics]") {
+	PlanningTest test;
+	Query(test.connection, "CREATE TABLE lake.default.t (s STRUCT(x INTEGER, y INTEGER))");
+	auto bound = test.Bind();
+	auto &base = bound->Cast<MultiFileBindData>().file_list->Cast<IcebergMultiFileList>().GetScanPlanner();
+	auto metadata = base.GetMetadata().Copy();
+	auto nested = LogicalType::STRUCT({{"x", LogicalType::INTEGER}, {"y", LogicalType::INTEGER}});
+	auto schema = LogicalType::STRUCT({{"s", nested}});
+	IcebergTableFilters filters;
+	auto expression = IcebergRowFilter::Bind(*test.connection.context, "s.x=10 AND s.y=20", schema);
+	// The scan optimizer folds literal casts before handing filters to the pruner.
+	for (auto &child : expression->Cast<BoundConjunctionExpression>().GetChildrenMutable()) {
+		auto &constant = BoundComparisonExpression::RightMutable(child->Cast<BoundFunctionExpression>());
+		constant =
+		    make_uniq<BoundConstantExpression>(ExpressionExecutor::EvaluateScalar(*test.connection.context, *constant));
+	}
+	filters.PushFilter(ColumnIndex(0), make_uniq<ExpressionFilter>(std::move(expression)));
+	auto spec = PartitionSpec();
+	spec.fields[0].source_id = base.GetSchema().columns[0]->GetChild(0)->id;
+	auto path = base.GetSchema().GetSourceIdMap().at(spec.fields[0].source_id);
+	auto extracted = filters.GetFilterForColumnIndex(path);
+	REQUIRE(extracted);
+	INFO(extracted->ToString("x"));
+	CheckMetrics(*test.connection.context, *extracted, MetricsBounds(Value(10), Value(10)),
+	             IcebergMetricsMatch::ROWS_MUST_MATCH);
+	metadata.partition_specs.emplace(spec.spec_id, spec);
+	IcebergFilePruner pruner(*test.connection.context, metadata, base.GetSchema(), filters);
+	IcebergManifest manifest(spec.spec_id, IcebergManifestContentType::DATA, 1);
+	auto entry = MetricsEntry();
+	entry.data_file.partition_info = {{1000, Value(10)}};
+	REQUIRE(pruner.FileMatchesFilter(manifest, entry, true) == IcebergMetricsMatch::ROWS_MIGHT_MATCH);
+	entry.data_file.partition_info[0].value = Value(11);
+	REQUIRE(pruner.FileMatchesFilter(manifest, entry, true) == IcebergMetricsMatch::ROWS_CANNOT_MATCH);
+}
+
+TEST_CASE("Iceberg missing variant metrics do not hide another column's non-match", "[iceberg_metrics]") {
+	// Keep the filter keys and insertion order fixed while swapping the column types. This exercises
+	// the unknown variant both before and after the integer, regardless of unordered_map traversal order.
+	for (bool variant_first : {false, true}) {
+		PlanningTest test;
+		Query(test.connection, variant_first
+		                           ? "CREATE TABLE lake.default.t (a VARIANT, b INTEGER) WITH ('format-version'=3)"
+		                           : "CREATE TABLE lake.default.t (a INTEGER, b VARIANT) WITH ('format-version'=3)");
+		auto bound = test.Bind();
+		auto &base = bound->Cast<MultiFileBindData>().file_list->Cast<IcebergMultiFileList>().GetScanPlanner();
+		IcebergTableFilters filters;
+		for (idx_t i = 0; i < 2; i++) {
+			auto type = base.GetSchema().columns[i]->type;
+			filters.PushFilter(
+			    ColumnIndex(i),
+			    type.id() == LogicalTypeId::VARIANT
+			        ? make_uniq<ExpressionFilter>(ExpressionFilter::CreateNullCheckExpression(
+			              make_uniq<BoundReferenceExpression>(type, 0ULL), ExpressionType::OPERATOR_IS_NOT_NULL))
+			        : ExpressionFilter::CreateComparisonFilter(ExpressionType::COMPARE_EQUAL, Value(20)));
+		}
+		IcebergFilePruner pruner(*test.connection.context, base.GetMetadata(), base.GetSchema(), filters);
+		IcebergManifest manifest(0, IcebergManifestContentType::DATA, 1);
+		auto entry = MetricsEntry();
+		auto integer_id = base.GetSchema().columns[variant_first ? 1 : 0]->id;
+		SetIntegerMetrics(entry.data_file, integer_id, 21, 21);
+		REQUIRE(pruner.FileMatchesFilter(manifest, entry) == IcebergMetricsMatch::ROWS_CANNOT_MATCH);
+		REQUIRE(pruner.FileMatchesFilter(manifest, entry, true) == IcebergMetricsMatch::ROWS_CANNOT_MATCH);
+		SetIntegerMetrics(entry.data_file, integer_id, 20, 20);
+		REQUIRE(pruner.FileMatchesFilter(manifest, entry, true) == IcebergMetricsMatch::ROWS_MIGHT_MATCH);
 	}
 }
 
