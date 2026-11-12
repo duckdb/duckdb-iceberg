@@ -1,0 +1,147 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/null_values/test_null_partition_distinct_from.test
+# description: IS [NOT] DISTINCT FROM a constant must not prune the NULL partition's files when they match
+# group: [null_values]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SCAN_PLANNING_MODE client
+
+include test/sql/init_requires
+
+statement ok
+SET threads=1;
+
+statement ok
+CALL enable_logging('Iceberg');
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_null_partition_distinct_from;
+
+statement ok
+CREATE TABLE my_datalake.default.test_null_partition_distinct_from (id int, category varchar)
+PARTITIONED BY (category);
+
+# 10 rows each in NULL, 'alpha', 'beta' and 'gamma'
+statement ok
+insert into my_datalake.default.test_null_partition_distinct_from
+select range, case
+    when range % 4 = 0 then NULL
+    when range % 4 = 1 then 'alpha'
+    when range % 4 = 2 then 'beta'
+    else 'gamma'
+end
+from range(40);
+
+# Keep each query's pruning decisions separate.
+statement ok
+CALL truncate_duckdb_logs();
+
+# NULL IS DISTINCT FROM 'alpha' is true, so the NULL partition's rows match
+query I
+select count(*) from my_datalake.default.test_null_partition_distinct_from where category is distinct from 'alpha';
+----
+30
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%data_file%';
+----
+0
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.test_null_partition_distinct_from where 'alpha' is distinct from category;
+----
+30
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%data_file%';
+----
+0
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.test_null_partition_distinct_from where category is null and category is distinct from 'alpha';
+----
+10
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%data_file%';
+----
+3
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.test_null_partition_distinct_from where category is not distinct from 'alpha';
+----
+10
+
+# The NULL file cannot match; non-NULL DISTINCT FROM bounds remain conservative.
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%data_file%';
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.test_null_partition_distinct_from where category is not distinct from NULL;
+----
+10
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%data_file%';
+----
+3
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.test_null_partition_distinct_from where category is distinct from NULL;
+----
+30
+
+query I
+select count(*) from duckdb_logs() where type = 'Iceberg' and message like '%skipped%data_file%';
+----
+1
+
+# A second manifest has no NULLs. A NULL-safe equality must skip that manifest
+# while retaining the NULL file in the original mixed manifest.
+statement ok
+insert into my_datalake.default.test_null_partition_distinct_from values (40, 'alpha');
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.test_null_partition_distinct_from
+where category is not distinct from NULL;
+----
+10
+
+query II
+select count(*) filter (where message like '%skipped%manifest_file%'),
+       count(*) filter (where message like '%skipped%data_file%')
+from duckdb_logs() where type = 'Iceberg';
+----
+1	3
+
+statement ok
+drop table my_datalake.default.test_null_partition_distinct_from;
+
+statement ok
+CALL disable_logging();
+
+statement ok
+RESET threads;

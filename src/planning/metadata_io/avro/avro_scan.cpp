@@ -10,6 +10,8 @@
 #include "planning/iceberg_multi_file_reader.hpp"
 #include "planning/metadata_io/avro/iceberg_avro_multi_file_reader.hpp"
 #include "planning/metadata_io/avro/iceberg_avro_multi_file_list.hpp"
+#include "duckdb/logging/logger.hpp"
+#include "iceberg_logging.hpp"
 
 namespace duckdb {
 
@@ -69,6 +71,16 @@ AvroScan::AvroScan(const string &path, ClientContext &context, shared_ptr<Iceber
 
 	TableFunctionInitInput input(bind_data.get(), column_ids, vector<idx_t>(), nullptr);
 	global_state = avro_scan->init_global(context, input);
+}
+
+AvroScan::~AvroScan() {
+	if (scan_info->type == AvroScanInfoType::MANIFEST_FILE) {
+		auto &info = scan_info->Cast<IcebergManifestFileScanInfo>();
+		DUCKDB_LOG(context, IcebergLogType,
+		           "Iceberg metadata phase=manifest_parse scope=avro_scan manifest_parses=%llu "
+		           "manifest_entries_converted=%llu",
+		           info.manifest_parses.load(), info.manifest_entries_converted.load());
+	}
 }
 
 unique_ptr<AvroScan> AvroScan::ScanManifest(const IcebergSnapshotScanInfo &snapshot_info,

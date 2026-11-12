@@ -26,7 +26,13 @@ Reply Catalog::Route(const string &method, const string &path, const Json &body)
 		if (response_path.empty() || response_path[0] != '/' || status < 200 || status > 599) {
 			Invalid("Scripted responses require an absolute path and an HTTP status from 200 to 599");
 		}
-		responses[response_method + " " + response_path] = {static_cast<int>(status), body.At("body")};
+		Reply reply {static_cast<int>(status), body.At("body"), {}};
+		if (body.Has("headers")) {
+			for (auto &header : body.At("headers").Members()) {
+				reply.headers.Insert(header.first, header.second.String());
+			}
+		}
+		responses[response_method + " " + response_path] = std::move(reply);
 		return {204, Json()};
 	}
 	if (path == "/__test/response" && method == "DELETE") {
@@ -176,9 +182,10 @@ unique_ptr<HTTPResponse> Catalog::Request(const string &method, const string &pa
 	}
 	auto response = make_uniq<HTTPResponse>(HTTPUtil::ToStatusCode(reply.status));
 	response->body = reply.body.IsNull() ? "" : reply.body.Dump();
+	response->headers = std::move(reply.headers);
 	response->headers.Insert("Content-Type", "application/json");
 	response->headers.Insert("Content-Length", std::to_string(response->body.size()));
-	response->success = reply.status >= 200 && reply.status < 300;
+	response->success = (reply.status >= 200 && reply.status < 300) || reply.status == 304;
 	auto truncate = [](const string &text) {
 		return text.size() <= 16384 ? text : text.substr(0, 16384) + "... [truncated]";
 	};

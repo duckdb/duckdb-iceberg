@@ -22,6 +22,7 @@
 
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/rest/iceberg_view_entry.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "catalog/rest/api/iceberg_type.hpp"
@@ -289,6 +290,8 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateView(CatalogTransaction tra
 	if (info.binding_mode == CreateViewBindingMode::SKIP_BINDING) {
 		throw NotImplementedException("DEFER_BINDING is not supported for Iceberg views: an output schema is required");
 	}
+	// Refuse views that every read would refuse
+	IcebergViewEntry::CheckCreate(info);
 
 	// Generate default column names if the caller gave us types but no names.
 	if (info.names.empty() && !info.types.empty()) {
@@ -793,10 +796,6 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 	case AlterTableType::ADD_COLUMN: {
 		auto &add_column_info = alter_table_info.Cast<AddColumnInfo>();
 		auto &column_definition = add_column_info.new_column;
-		if (column_definition.GetType().IsNested()) {
-			throw NotImplementedException("ADD COLUMN for Nested Types not supported for Iceberg tables");
-		}
-
 		if (add_column_info.if_column_not_exists) {
 			for (auto &col : current_schema.columns) {
 				if (col->name == column_definition.GetName()) {

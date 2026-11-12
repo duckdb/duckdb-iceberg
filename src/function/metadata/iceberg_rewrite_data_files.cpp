@@ -4,15 +4,18 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/function/table_function.hpp"
-#include "duckdb/parser/expression/columnref_expression.hpp"
-#include "duckdb/parser/expression/constant_expression.hpp"
-#include "duckdb/parser/expression/operator_expression.hpp"
+#include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/parser/expression/star_expression.hpp"
 #include "duckdb/parser/qualified_name.hpp"
 #include "duckdb/parser/query_node/select_node.hpp"
 #include "duckdb/parser/statement/copy_statement.hpp"
 #include "duckdb/parser/tableref/basetableref.hpp"
 #include "duckdb/planner/binder.hpp"
+#include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_operator_expression.hpp"
+#include "duckdb/planner/operator/logical_filter.hpp"
+#include "duckdb/planner/operator/logical_get.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "common/iceberg_utils.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
@@ -134,8 +137,8 @@ static RewriteDataFilesPlanInput ParseRewritePlanInput(ClientContext &context, T
 	return result;
 }
 
-static unique_ptr<QueryNode> BuildCandidateSelect(const QualifiedName &table_name,
-                                                  const vector<RewriteCandidate> &candidates) {
+//! Read through the attached Iceberg table so the scan layer applies MoR position/equality deletes.
+static unique_ptr<QueryNode> BuildCandidateSelect(const QualifiedName &table_name) {
 	auto select = make_uniq<SelectNode>();
 	select->select_list.push_back(make_uniq<StarExpression>());
 
@@ -143,17 +146,37 @@ static unique_ptr<QueryNode> BuildCandidateSelect(const QualifiedName &table_nam
 	table->SetQualifiedName(table_name);
 	table->alias = "rewrite_source";
 	select->from_table = std::move(table);
-
-	vector<unique_ptr<ParsedExpression>> in_children;
-	in_children.push_back(make_uniq<ColumnRefExpression>("filename"));
-	for (auto &candidate : candidates) {
-		in_children.push_back(ConstantExpression::FromValue(Value(candidate.file_path)));
-	}
-	//! Read through the attached Iceberg table so the scan layer applies MoR
-	//! position/equality deletes, then scope the scan to the selected rewrite
-	//! source files using the `filename` virtual column.
-	select->where_clause = make_uniq<OperatorExpression>(ExpressionType::COMPARE_IN, std::move(in_children));
 	return std::move(select);
+}
+
+//! Scope the scan under the bound COPY to the selected files with a filter on the `filename` virtual column. The
+//! column is added by its id, not its name, so a table column that is also called `filename` can't hide it.
+static void FilterCandidateFiles(LogicalOperator &copy, const vector<RewriteCandidate> &candidates) {
+	reference<LogicalOperator> parent = copy;
+	while (parent.get().children.size() == 1 && parent.get().children[0]->type != LogicalOperatorType::LOGICAL_GET) {
+		parent = *parent.get().children[0];
+	}
+	if (parent.get().children.size() != 1) {
+		throw InternalException("iceberg_rewrite_data_files: expected the COPY to read a single table scan");
+	}
+	auto &get = parent.get().children[0]->Cast<LogicalGet>();
+	auto entry = get.virtual_columns.find(MultiFileReader::COLUMN_IDENTIFIER_FILENAME);
+	if (entry == get.virtual_columns.end()) {
+		throw InternalException("iceberg_rewrite_data_files: the table scan has no filename column");
+	}
+	auto &column_ids = get.GetMutableColumnIds();
+	column_ids.emplace_back(MultiFileReader::COLUMN_IDENTIFIER_FILENAME);
+	ColumnBinding binding(get.table_index, ProjectionIndex(column_ids.size() - 1));
+
+	auto in = make_uniq<BoundOperatorExpression>(ExpressionType::COMPARE_IN, LogicalType::BOOLEAN);
+	in->GetChildrenMutable().push_back(
+	    make_uniq<BoundColumnRefExpression>(entry->second.name, entry->second.type, binding));
+	for (auto &candidate : candidates) {
+		in->GetChildrenMutable().push_back(make_uniq<BoundConstantExpression>(Value(candidate.file_path)));
+	}
+	auto filter = make_uniq<LogicalFilter>(std::move(in));
+	filter->children.push_back(std::move(parent.get().children[0]));
+	parent.get().children[0] = std::move(filter);
 }
 
 //! Bind a LogicalCopyToFile over the candidate scan. The logical COPY is not
@@ -168,7 +191,7 @@ static unique_ptr<LogicalOperator> BindCandidateCopy(Binder &binder, const Rewri
 
 	auto &fs = FileSystem::GetFileSystem(binder.context);
 	CopyStatement copy_statement;
-	copy_statement.info->select_statement = BuildCandidateSelect(plan.table_name, plan.selected_candidates);
+	copy_statement.info->select_statement = BuildCandidateSelect(plan.table_name);
 	copy_statement.info->file_path = metadata.GetDataPath(fs);
 	copy_statement.info->format = "parquet";
 	copy_statement.info->is_from = false;
@@ -183,6 +206,7 @@ static unique_ptr<LogicalOperator> BindCandidateCopy(Binder &binder, const Rewri
 
 	auto copy_binder = Binder::CreateBinder(binder.context, &binder);
 	auto bound_copy = copy_binder->Bind(copy_statement);
+	FilterCandidateFiles(*bound_copy.plan, plan.selected_candidates);
 	return std::move(bound_copy.plan);
 }
 

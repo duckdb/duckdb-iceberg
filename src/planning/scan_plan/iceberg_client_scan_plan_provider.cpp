@@ -20,8 +20,9 @@ void ClientSideScanPlanProvider::ReadDeleteManifests(const vector<idx_t> &manife
 	store.ReadDeleteManifests(manifest_indexes, filter_count);
 }
 
-vector<IcebergDeleteFileReference> ClientSideScanPlanProvider::GetDeleteFiles(const vector<idx_t> &manifest_indexes) {
-	return store.GetDeleteFiles(manifest_indexes);
+vector<IcebergDeleteManifestHandle>
+ClientSideScanPlanProvider::GetDeleteIndexes(const vector<idx_t> &manifest_indexes) {
+	return store.GetDeleteIndexes(manifest_indexes);
 }
 
 bool ClientSideScanPlanProvider::TryGetNextBatch(IcebergDataViewCursor &cursor) {
@@ -50,7 +51,7 @@ vector<reference<const IcebergManifestListEntry>> ClientSideScanPlanProvider::Tr
 
 bool ClientSideScanPlanProvider::DeleteFileAppliesToDataFile(const string &data_file_path,
                                                              const IcebergFileIdentity &delete_file) const {
-	return true;
+	return !store.DeleteFileIsInvalidated(delete_file);
 }
 
 } // namespace duckdb

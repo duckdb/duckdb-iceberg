@@ -75,29 +75,30 @@ static bool NaNMayMatch(const Value &constant, ExpressionType comparison_type, c
 template <class TRANSFORM>
 static bool MatchBoundsConstantTemplated(const Value &constant, ExpressionType comparison_type,
                                          const IcebergPredicateStats &stats, const IcebergTransform &transform) {
+	if (constant.IsNull()) {
+		switch (comparison_type) {
+		case ExpressionType::COMPARE_DISTINCT_FROM:
+			return stats.has_not_null && !stats.BoundsAreNull();
+		case ExpressionType::COMPARE_NOT_DISTINCT_FROM:
+			return stats.has_null;
+		default:
+			//! Ordinary comparisons with NULL are never true.
+			return false;
+		}
+	}
+
 	auto constant_value = TRANSFORM::ApplyTransform(constant, transform);
 	if (constant_value.IsNull()) {
 		//! Comparison with NULL is never true here
 		return false;
 	}
 
-	if (stats.BoundsAreNull()) {
-		// bounds are actually null, expression is not a null comparison expression
-		// those are handled in MatchBoundsExpression
-		// So we can return false since no remaining expression type will match a null value
+	if (stats.BoundsAreNull() || !stats.has_not_null) {
+		// Explicit NULL partition bounds or null counts prove every value NULL.
+		// Only IS DISTINCT FROM can match a non-NULL constant.
 		D_ASSERT(comparison_type != ExpressionType::OPERATOR_IS_NOT_NULL);
 		D_ASSERT(comparison_type != ExpressionType::OPERATOR_IS_NULL);
-		D_ASSERT(comparison_type != ExpressionType::COMPARE_DISTINCT_FROM);
-		D_ASSERT(comparison_type != ExpressionType::COMPARE_NOT_DISTINCT_FROM);
-		return false;
-	}
-
-	if (!stats.has_not_null && comparison_type != ExpressionType::COMPARE_DISTINCT_FROM &&
-	    comparison_type != ExpressionType::COMPARE_NOT_DISTINCT_FROM) {
-		// has_not_null is false when every row of this column is NULL. Ordinary comparisons
-		// against a constant cannot match NULL so the file can be pruned. IS [NOT] DISTINCT FROM
-		// must consider NULL so cannot be pruned.
-		return false;
+		return comparison_type == ExpressionType::COMPARE_DISTINCT_FROM;
 	}
 
 	if (!stats.upper_bound || !stats.lower_bound) {
@@ -144,7 +145,7 @@ static bool MatchBoundsConstant(const Value &constant, ExpressionType comparison
 		return MatchBoundsConstantTemplated<DayTransform>(constant, comparison_type, stats, transform);
 	case IcebergTransformType::HOUR:
 		return MatchBoundsConstantTemplated<HourTransform>(constant, comparison_type, stats, transform);
-	case IcebergTransformType::VOID:
+	case IcebergTransformType::VOID_TRANSFORM:
 		return true;
 	default:
 		throw InvalidConfigurationException("Transform '%s' not implemented", transform.RawType());
@@ -436,7 +437,11 @@ static bool MatchBoundsExpression(ClientContext &context, const unique_ptr<Expre
 			if (stats.HasMissingOrNullBounds()) {
 				return true;
 			}
-			column_stats = stats.BuildColumnStats(stats.lower_bound->type());
+			auto column_type = FindFilteredColumnType(expr);
+			if (!column_type) {
+				return true;
+			}
+			column_stats = stats.BuildColumnStats(*column_type);
 		}
 		if (!column_stats) {
 			return true;

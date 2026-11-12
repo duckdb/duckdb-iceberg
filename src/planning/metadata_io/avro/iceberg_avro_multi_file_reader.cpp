@@ -509,6 +509,7 @@ ReaderInitializeType IcebergAvroMultiFileReader::InitializeReader(
 				    reader_data.reader->GetMetadata(), manifest_path, avro_scan_info.metadata,
 				    manifest_list_entry.GetFile().partition_spec_id));
 			}
+			manifest_scan_info.manifest_parses++;
 		}
 		for (auto &partition_spec : avro_scan_info.metadata.partition_specs) {
 			for (auto &spec_field : partition_spec.second.fields) {
@@ -568,6 +569,7 @@ void IcebergAvroMultiFileReader::FinalizeChunk(ClientContext &context, const Mul
 		vector<IcebergManifestEntry> decoded_entries;
 		manifest_file::ManifestReader::ReadChunk(output_chunk, manifest_scan_info.partition_field_id_to_type, input,
 		                                         decoded_entries);
+		manifest_scan_info.manifest_entries_converted += decoded_entries.size();
 
 		lock_guard<mutex> manifest_guard(manifest_scan_info.GetManifestLock(manifest_file_idx));
 		auto &manifest_entries = manifest_file.GetOrCreateManifestEntries();

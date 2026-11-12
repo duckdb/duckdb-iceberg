@@ -12,6 +12,7 @@
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/operator/add.hpp"
 #include "duckdb/parser/column_definition.hpp"
+#include "duckdb/parser/constraints/not_null_constraint.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "duckdb/main/config.hpp"
 #include "duckdb/common/types/uuid.hpp"
@@ -418,7 +419,13 @@ optional_ptr<CatalogEntry> IcebergTable::CreateSchemaVersion(const IcebergTableS
 	CreateTableInfo info;
 	info.SetTableName(Identifier(name));
 	for (auto &col : table_schema.columns) {
+		LogicalIndex column_index(info.columns.LogicalColumnCount());
 		info.columns.AddColumn(col->GetColumnDefinition());
+		//! Expose required top-level fields as NOT NULL, so DESCRIBE, information_schema and duckdb_constraints()
+		//! report them correctly. Required fields inside structs have no DuckDB constraint to map to.
+		if (col->required) {
+			info.constraints.push_back(make_uniq<NotNullConstraint>(column_index));
+		}
 	}
 
 	auto table_entry = make_uniq<IcebergTableSchemaVersion>(*this, catalog, schema, info, table_schema.schema_id);
@@ -850,7 +857,7 @@ bool IcebergTable::HasTransactionUpdates() const {
 
 void IcebergTable::RefreshFromCatalog(ClientContext &context) {
 	auto publication = catalog.table_request_cache.BeginLoad(GetTableKey());
-	ApplyRefreshResult(context, IRCAPI::GetTable(context, catalog, schema, name), *publication);
+	ApplyRefreshResult(context, IRCAPI::GetTable(context, catalog, schema, name, publication.get()), *publication);
 }
 
 void IcebergTable::ApplyRefreshResult(ClientContext &context, IcebergLoadTableResult get_table_result,
@@ -865,7 +872,7 @@ void IcebergTable::ApplyRefreshResult(ClientContext &context, IcebergLoadTableRe
 	dummy_entry.reset();
 	InitializeFromCatalogResponse(context, load_table_result);
 	initialization_source = nullptr;
-	if (publication.TryPublish(std::move(get_table_result.result_))) {
+	if (publication.TryPublish(std::move(get_table_result.result_), std::move(get_table_result.etag))) {
 		initialization_source = load_table_result;
 	}
 }
@@ -982,10 +989,14 @@ IcebergTransactionData &IcebergTable::GetOrCreateTransactionData(IcebergTransact
 }
 
 void IcebergTable::InitializeFromLoadTableResult(
-    const rest_api_objects::LoadTableResult &load_table_result,
+    ClientContext &context, const rest_api_objects::LoadTableResult &load_table_result,
     optional_ptr<const rest_api_objects::TableMetadata> metadata_override) {
 	table_metadata =
 	    IcebergTableMetadata::FromTableMetadata(metadata_override ? *metadata_override : load_table_result.metadata);
+	DUCKDB_LOG(context, IcebergLogType,
+	           "Iceberg metadata phase=table_metadata_conversion scope=catalog_initialization "
+	           "table_metadata_conversions=1 snapshots_converted=%llu",
+	           table_metadata.snapshots.size());
 	SetLoadTableResult(load_table_result);
 	D_ASSERT(!table_metadata.GetSchemas().IsEmpty());
 	InitSchemaVersions();
@@ -1014,11 +1025,11 @@ void IcebergTable::InitializeFromCatalogResponse(ClientContext &context,
 			           metadata_location, ex.what());
 		}
 		if (file_metadata) {
-			InitializeFromLoadTableResult(load_table_result, file_metadata.get());
+			InitializeFromLoadTableResult(context, load_table_result, file_metadata.get());
 			return;
 		}
 	}
-	InitializeFromLoadTableResult(load_table_result);
+	InitializeFromLoadTableResult(context, load_table_result);
 }
 
 void IcebergTable::SetLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result) {

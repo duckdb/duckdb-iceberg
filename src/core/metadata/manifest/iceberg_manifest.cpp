@@ -597,7 +597,7 @@ static LogicalType PartitionStructType(vector<IcebergExtendedPartitionInfo> exte
 				children.emplace_back(entry.name, LogicalType::INTEGER);
 				break;
 			case IcebergTransformType::INVALID:
-			case IcebergTransformType::VOID:
+			case IcebergTransformType::VOID_TRANSFORM:
 				throw InvalidInputException("Cannot use this transform type");
 				break;
 			default:

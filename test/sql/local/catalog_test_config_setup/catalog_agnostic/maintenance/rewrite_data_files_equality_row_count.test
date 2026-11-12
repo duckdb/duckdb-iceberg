@@ -1,0 +1,85 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_equality_row_count.test
+# description: One equality-delete key may remove many rows during maintenance, including an entire selected file
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env EQUALITY_DELETE_WRITES_ENABLED 1
+
+include test/sql/init_requires
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_equality_row_count (id INTEGER) WITH ('format-version' = 2);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_equality_row_count VALUES (1), (1), (1);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_equality_row_count VALUES (1), (1), (2);
+
+statement ok
+SET __iceberg_unsafe_enable_equality_deletes = true;
+
+statement ok
+DELETE FROM my_datalake.default.rewrite_equality_row_count WHERE id = 1;
+
+statement ok
+SET __iceberg_unsafe_enable_equality_deletes = false;
+
+# Confirm that the delete's record count is smaller than the number of removed rows.
+query I
+SELECT sum(record_count) < 5
+FROM iceberg_metadata(my_datalake.default.rewrite_equality_row_count)
+WHERE content = 'EQUALITY_DELETES' AND status <> 'DELETED';
+----
+true
+
+query II
+SELECT rewritten_data_files_count, added_data_files_count
+FROM iceberg_rewrite_data_files('my_datalake.default.rewrite_equality_row_count', rewrite_all := true);
+----
+2	1
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.rewrite_equality_row_count;
+----
+[2]
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_equality_row_count;
+
+# Empty output is also valid when a single equality key removes the whole input.
+statement ok
+CREATE TABLE my_datalake.default.rewrite_equality_row_count (id INTEGER) WITH ('format-version' = 2);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_equality_row_count VALUES (1), (1), (1);
+
+statement ok
+SET __iceberg_unsafe_enable_equality_deletes = true;
+
+statement ok
+DELETE FROM my_datalake.default.rewrite_equality_row_count WHERE id = 1;
+
+statement ok
+SET __iceberg_unsafe_enable_equality_deletes = false;
+
+query I
+SELECT sum(record_count) FROM iceberg_metadata(my_datalake.default.rewrite_equality_row_count)
+WHERE content = 'EQUALITY_DELETES' AND status <> 'DELETED';
+----
+1
+
+query II
+SELECT rewritten_data_files_count, added_data_files_count
+FROM iceberg_rewrite_data_files('my_datalake.default.rewrite_equality_row_count', rewrite_all := true);
+----
+1	0
+
+query I
+SELECT list(id) FROM my_datalake.default.rewrite_equality_row_count;
+----
+NULL
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_equality_row_count;

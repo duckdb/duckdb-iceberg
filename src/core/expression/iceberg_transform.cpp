@@ -166,7 +166,7 @@ IcebergTransform::IcebergTransform(const string &transform) : raw_transform(tran
 	} else if (transform == "hour") {
 		type = IcebergTransformType::HOUR;
 	} else if (transform == "void") {
-		type = IcebergTransformType::VOID;
+		type = IcebergTransformType::VOID_TRANSFORM;
 	} else {
 		throw NotImplementedException("Unrecognized transform ('%s')", transform);
 	}
@@ -234,7 +234,7 @@ bool IcebergTransform::CanTransform(const LogicalType &source) const {
 		default:
 			return false;
 		}
-	case IcebergTransformType::VOID:
+	case IcebergTransformType::VOID_TRANSFORM:
 		return true;
 	default:
 		return false;
@@ -257,7 +257,7 @@ LogicalType IcebergTransform::GetBoundsType(const LogicalType &input) const {
 	case IcebergTransformType::MONTH:
 	case IcebergTransformType::HOUR:
 		return LogicalType::INTEGER;
-	case IcebergTransformType::VOID:
+	case IcebergTransformType::VOID_TRANSFORM:
 		return input;
 	default:
 		throw InvalidConfigurationException("Can't produce a result type for transform %s and input type %s",
@@ -285,7 +285,7 @@ LogicalType IcebergTransform::GetSerializedType(const LogicalType &input) const 
 	case IcebergTransformType::HOUR:
 	case IcebergTransformType::DAY:
 		return LogicalType::INTEGER;
-	case IcebergTransformType::VOID:
+	case IcebergTransformType::VOID_TRANSFORM:
 		return input;
 	default:
 		throw InvalidConfigurationException("Can't produce a result type for transform %s and input type %s",
@@ -313,7 +313,7 @@ Value IcebergTransform::ApplyTransform(const Value &value) const {
 		return DayTransform::ApplyTransform(value, *this);
 	case IcebergTransformType::HOUR:
 		return HourTransform::ApplyTransform(value, *this);
-	case IcebergTransformType::VOID:
+	case IcebergTransformType::VOID_TRANSFORM:
 		return Value(GetSerializedType(value.type()));
 	default:
 		throw InvalidConfigurationException("Transform '%s' not implemented", RawType());
