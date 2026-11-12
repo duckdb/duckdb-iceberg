@@ -171,6 +171,7 @@ IcebergTableFilters::GetFilterForColumnIndex(const ColumnIndex &column_index) co
 	if (column_index.HasPrimaryIndex() && !column_index.HasChildren()) {
 		return TryGetFilterByColumnIndex(column_index);
 	}
+	lock_guard<mutex> guard(*partition_filter_lock);
 	auto cached = partition_filters.find(column_index);
 	if (cached != partition_filters.end()) {
 		return cached->second.get();

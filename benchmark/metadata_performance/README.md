@@ -5,6 +5,11 @@ These workloads measure the existing implementation of issues
 [#1721](https://github.com/duckdb/duckdb-iceberg/issues/1721). They do not implement
 predicate reuse, a delete index, or parsed metadata/manifest caches.
 
+The [delete candidate index results](delete-candidate-index-2026-11-11.md)
+record step 3's candidate counts, cold/repeated timings, and validation.
+The [native partition grouping follow-up](partition-delete-index-2026-11-11.md)
+compares the composite-key map with `GroupedAggregateHashTable`.
+
 ## Local baseline runner
 
 Build first. Use the repository's vcpkg toolchain and turn off coverage for timing:
@@ -31,6 +36,27 @@ Select a named case with `--case narrow_padded_in`, a workload with
 `--workload delete|manifest|snapshots`, and modes with `--modes staleness etag`.
 Each selected case is independently initialized. `--case` filters measurement,
 not data generation. `--build build/release` selects another built CLI.
+
+For unreferenced partitioned deletes, use the separate runner below. It requires
+`fastavro` from `scripts/requirements.txt` in addition to the CLI. It generates
+8/64/512 composite partitions, four data and delete files per partition, and
+NULL partition values. Before publishing its private fixtures, it removes the
+optional `referenced_data_file` field values and updates manifest lengths while
+preserving Avro schemas and metadata. This forces candidate lookup through the
+partition index. Every query checks its result and a separate query checks index
+builds, candidate visits, and predicate evaluations.
+
+```sh
+python3 scripts/metadata_performance/partition_delete_index.py \
+  --output .catalogs/partition-before
+# Rebuild the changed implementation, then reuse exactly the same files.
+python3 scripts/metadata_performance/partition_delete_index.py \
+  --source .catalogs/partition-before --output .catalogs/partition-after
+```
+
+The partition runner always measures one/eight threads and cold/warm modes
+serially, with five samples by default. It saves cases, environment, samples,
+profiles and diagnostic logs, and prints wall-time medians.
 
 | Mode | Database/connection/attachment | File-byte cache | LoadTable response |
 |---|---|---|---|
@@ -89,12 +115,17 @@ destroyed. Prepared statements or other owners can extend that lifetime. Filter
 | Phase / scope | Counters | Meaning |
 |---|---|---|
 | `delete_planning` / `planner_view` | `scan_tasks`, `delete_candidate_visits`, `delete_predicate_evaluations` | One lifetime total per filtered planner view that produces tasks. Repeated visits count again. Predicate evaluations exclude the helper's no-filter fast return. Views sharing a provider keep separate totals. |
+| `delete_candidate_index` / `manifest_load` or `server_provider` | `delete_index_builds` | Completed indexes published for selected delete manifests. Includes transaction-local manifests; excludes manifests rejected before loading. Views sharing a provider reuse these indexes. No cross-query index cache is implied. |
 | `manifest_parse` / `avro_scan` | `manifest_parses`, `manifest_entries_converted` | One lifetime total per Avro manifest scan. Parses count initialized manifest readers; entries count successfully decoded chunks before pruning, including deleted entries. Data/delete and eager scans can emit separate events. In-memory transaction entries and manifest lists are excluded. Partial/failed scans can emit partial work. |
 | `table_metadata_conversion` / `catalog_initialization` | `table_metadata_conversions`, `snapshots_converted` | One event after successful `FromTableMetadata` during catalog response initialization, including metadata-location overrides. This excludes standalone path reads, create-table constructors, and metadata-history reconstruction. |
 
-Candidate totals use the existing planning lock and one addition per candidate
-vector; parsing uses one atomic addition per manifest/chunk. There is no new
-public telemetry API, per-entry logging, or cache-hit counter.
+Candidate totals now count the path/partition buckets visited before provider,
+transaction, sequence, predicate and bounds checks. The planner adds them
+atomically once per data-file lookup; predicates count successful initialization
+of per-view cache entries. Parsing uses one atomic addition per manifest/chunk.
+Index builds, candidate visits and predicates measure separate work. Data-file
+and manifest pruning still run even when a lookup finds no delete candidates.
+There is no new public telemetry API, per-entry logging, or cross-query cache.
 
 Every output directory contains:
 

@@ -330,12 +330,16 @@ static void DropFullyCoveredDataFiles(ClientContext &context, const IcebergMulti
 namespace {
 
 string DeleteFilePath(FileSystem &fs, const string &filename, const string &format) {
-	auto last_sep = filename.rfind(fs.PathSeparator(filename));
+	// External writers can use forward slashes for Windows paths. Normalize only
+	// the output directory; delete matching must retain the original data-file path.
+	auto normalized_filename = fs.ConvertSeparators(filename);
+	auto last_sep = normalized_filename.rfind(fs.PathSeparator(normalized_filename));
 	if (last_sep == string::npos) {
 		throw InvalidConfigurationException("Cannot create valid file path for delete file");
 	}
 	// A shared Puffin file lives beside its first data file. Each blob retains its own partition in the manifest.
-	return fs.JoinPath(filename.substr(0, last_sep), UUID::ToString(UUID::GenerateRandomUUID()) + "-deletes." + format);
+	return fs.JoinPath(normalized_filename.substr(0, last_sep + 1),
+	                   UUID::ToString(UUID::GenerateRandomUUID()) + "-deletes." + format);
 }
 
 idx_t DeleteTargetFileSize(const IcebergTableMetadata &metadata) {
@@ -789,7 +793,8 @@ PhysicalOperator &IcebergCatalog::PlanDelete(ClientContext &context, PhysicalPla
                                              PhysicalOperator &plan) {
 	auto &iceberg_delete = PlanDeleteOperation(context, planner, op, plan).Cast<IcebergDelete>();
 	//! UPDATE and MERGE share their scans with row-producing actions and must not skip covered files.
-	if (iceberg_delete.multi_file_list && !iceberg_delete.is_equality_delete) {
+	if (!IcebergTransaction::Get(context, *this).planning_merge_into && iceberg_delete.multi_file_list &&
+	    !iceberg_delete.is_equality_delete) {
 		iceberg_delete.multi_file_list->GetScanPlanner().EnableMetadataOnlyDelete();
 	}
 	return iceberg_delete;

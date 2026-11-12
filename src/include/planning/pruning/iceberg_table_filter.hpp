@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb/common/column_index_map.hpp"
+#include "duckdb/common/mutex.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
 
 namespace duckdb {
@@ -32,7 +33,7 @@ public:
 	//! Resolve a partition source path from IcebergTableSchema::GetSourceIdMap.
 	//! Borrows the top-level filter or an owned, lazily extracted nested-path filter.
 	//! The result remains valid until this filter set is changed or destroyed.
-	//! Callers must hold the planner's shared lock while populating the path cache.
+	//! Nested-path publication has its own lock; the filter set is frozen before planning.
 	optional_ptr<const ExpressionFilter> GetFilterForColumnIndex(const ColumnIndex &column_index) const;
 	static bool FiltersEqual(const ExpressionFilter &left, const ExpressionFilter &right);
 
@@ -53,6 +54,7 @@ private:
 	filter_set_t table_filters;
 	//! Per-view nested partition paths, including nullptr for paths that cannot be extracted.
 	mutable filter_set_t partition_filters;
+	unique_ptr<mutex> partition_filter_lock = make_uniq<mutex>();
 };
 
 } // namespace duckdb

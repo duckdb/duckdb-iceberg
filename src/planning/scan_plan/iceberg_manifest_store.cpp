@@ -31,6 +31,7 @@ struct IcebergDeleteManifestLoadState {
 	bool complete = false;
 	ErrorData error;
 	vector<idx_t> manifest_indexes;
+	vector<reference<const IcebergManifestListEntry>> sources;
 	vector<IcebergManifestListEntry> manifests;
 	shared_ptr<IcebergManifestScanningState> scan_state;
 };
@@ -190,7 +191,9 @@ void IcebergManifestStore::LoadManifestList() {
 
 	{
 		annotated_lock_guard<annotated_mutex> delete_guard(delete_manifest_lock);
-		delete_manifest_loads.resize(committed_delete_manifests.size());
+		auto count = committed_delete_manifests.size() + transaction_delete_manifests.size();
+		delete_manifest_loads.resize(count);
+		delete_indexes.resize(count);
 	}
 
 	manifest_list_loaded = true;
@@ -257,6 +260,7 @@ void IcebergManifestStore::StartDataManifestScan(const vector<bool> &matching_ma
 void IcebergManifestStore::ReadDeleteManifests(const vector<idx_t> &manifest_indexes, idx_t filter_count) {
 	shared_ptr<IcebergDeleteManifestLoadState> new_load;
 	vector<shared_ptr<IcebergDeleteManifestLoadState>> required_loads;
+	unordered_set<idx_t> pending_indexes;
 	idx_t committed_manifest_count;
 	{
 		annotated_lock_guard<annotated_mutex> guard(lock);
@@ -267,26 +271,26 @@ void IcebergManifestStore::ReadDeleteManifests(const vector<idx_t> &manifest_ind
 			if (manifest_idx >= total_manifest_count) {
 				throw InternalException("Selected delete manifest index %llu is out of bounds", manifest_idx);
 			}
-			if (manifest_idx >= committed_manifest_count) {
-				continue;
-			}
-			auto &manifest = committed_delete_manifests[manifest_idx];
-			if (manifest.HasManifestEntries()) {
+			auto &manifest = manifest_idx < committed_manifest_count
+			                     ? committed_delete_manifests[manifest_idx]
+			                     : transaction_delete_manifests[manifest_idx - committed_manifest_count];
+			if (delete_indexes[manifest_idx]) {
 				//! Scan for this manifest is already completed
 				continue;
 			}
 			auto &load = delete_manifest_loads[manifest_idx];
 			if (!load) {
+				if (!pending_indexes.insert(manifest_idx).second) {
+					continue;
+				}
 				//! No load for this manifest exists yet
 				if (!new_load) {
 					//! We haven't created a load yet, initialize it here
 					new_load = make_shared_ptr<IcebergDeleteManifestLoadState>();
 					required_loads.push_back(new_load);
 				}
-				//! Set the load for this manifest to indicate it's being loaded
-				load = new_load;
 				new_load->manifest_indexes.push_back(manifest_idx);
-				new_load->manifests.push_back(manifest);
+				new_load->sources.push_back(manifest);
 			} else {
 				//! A load already exists for this manifest
 				bool already_required = false;
@@ -303,44 +307,78 @@ void IcebergManifestStore::ReadDeleteManifests(const vector<idx_t> &manifest_ind
 				}
 			}
 		}
+		// Register only after collecting all source references. An exception here
+		// must not leave a visible load without an owner.
+		if (new_load) {
+			for (auto manifest_idx : new_load->manifest_indexes) {
+				delete_manifest_loads[manifest_idx] = new_load;
+			}
+		}
 	}
 
 	if (new_load) {
 		//! At least one of the manifests we need aren't referenced yet, need to start a scan for it/them
 		ErrorData load_error;
 		try {
-			auto scan = AvroScan::ScanManifest(context.snapshot, new_load->manifests, context.options, context.fs,
-			                                   context.path, context.metadata, context.context);
-			new_load->scan_state =
-			    make_shared_ptr<IcebergManifestScanningState>(context.context, std::move(scan), new_load->manifests);
-
-			auto &executor = new_load->scan_state->executor;
-			auto &scheduler = TaskScheduler::GetScheduler(context.context);
-			auto num_threads = MinValue<idx_t>(scheduler.NumberOfThreads(), new_load->manifest_indexes.size());
-			for (idx_t i = 0; i < num_threads; i++) {
-				executor.ScheduleTask(make_uniq<ManifestReadTask>(*new_load->scan_state));
+			// Source descriptors and pending entries are frozen after LoadManifestList.
+			// Copy pending content outside the planning lock, within the failure boundary.
+			for (auto &source : new_load->sources) {
+				new_load->manifests.push_back(source.get());
 			}
-
+			vector<idx_t> to_read;
+			for (idx_t i = 0; i < new_load->manifests.size(); i++) {
+				if (!new_load->manifests[i].HasManifestEntries()) {
+					to_read.push_back(i);
+				}
+			}
+			if (!to_read.empty()) {
+				auto scan = AvroScan::ScanManifest(context.snapshot, new_load->manifests, context.options, context.fs,
+				                                   context.path, context.metadata, context.context, nullptr, to_read);
+				new_load->scan_state = make_shared_ptr<IcebergManifestScanningState>(context.context, std::move(scan),
+				                                                                     new_load->manifests);
+				auto &executor = new_load->scan_state->executor;
+				auto &scheduler = TaskScheduler::GetScheduler(context.context);
+				auto num_threads = MinValue<idx_t>(scheduler.NumberOfThreads(), to_read.size());
+				for (idx_t i = 0; i < num_threads; i++) {
+					executor.ScheduleTask(make_uniq<ManifestReadTask>(*new_load->scan_state));
+				}
+				DUCKDB_LOG(context.context, IcebergLogType,
+				           "Iceberg metadata phase=delete_manifest_scan_started selected_delete_manifests=%llu "
+				           "total_delete_manifests=%llu filters=%llu",
+				           to_read.size(), committed_manifest_count, filter_count);
+				executor.WorkOnTasks();
+			}
+			// Build the entire load before publication. On failure all overlapping waiters
+			// observe the same error, and no partial set of indexes becomes visible.
+			vector<shared_ptr<const IcebergDeleteCandidateIndex>> indexes;
+			for (auto &manifest : new_load->manifests) {
+				auto &spec = context.metadata.partition_specs.at(manifest.GetManifest().partition_spec_id);
+				indexes.push_back(make_shared_ptr<IcebergDeleteCandidateIndex>(
+				    context.context, std::move(manifest.GetManifestEntries()), spec));
+			}
+			{
+				annotated_lock_guard<annotated_mutex> guard(lock);
+				for (idx_t i = 0; i < indexes.size(); i++) {
+					delete_indexes[new_load->manifest_indexes[i]] = std::move(indexes[i]);
+				}
+			}
 			DUCKDB_LOG(context.context, IcebergLogType,
-			           "Iceberg metadata phase=delete_manifest_scan_started selected_delete_manifests=%llu "
-			           "total_delete_manifests=%llu filters=%llu",
-			           new_load->manifest_indexes.size(), committed_manifest_count, filter_count);
-			executor.WorkOnTasks();
-
-			annotated_lock_guard<annotated_mutex> guard(lock);
-			for (idx_t load_idx = 0; load_idx < new_load->manifest_indexes.size(); load_idx++) {
-				auto manifest_idx = new_load->manifest_indexes[load_idx];
-				auto &target = committed_delete_manifests[manifest_idx];
-				auto &source = new_load->manifests[load_idx];
-				D_ASSERT(!target.HasManifestEntries());
-				target.manifest_entries = std::move(source.manifest_entries);
-			}
+			           "Iceberg metadata phase=delete_candidate_index scope=manifest_load delete_index_builds=%llu",
+			           new_load->manifest_indexes.size());
 		} catch (std::exception &ex) {
 			load_error = ErrorData(ex);
 		} catch (...) { // LCOV_EXCL_START
 			load_error = ErrorData("Unknown exception while reading Iceberg delete manifests");
 		} // LCOV_EXCL_STOP
 
+		// Scheduling can fail after submitting tasks. Drain before any load storage
+		// can be released, preserving the original error for every waiter.
+		if (load_error.HasError() && new_load->scan_state) {
+			try {
+				new_load->scan_state->executor.WorkOnTasks();
+			} catch (...) {
+			}
+		}
 		{
 			lock_guard<mutex> guard(new_load->lock);
 			new_load->error = std::move(load_error);
@@ -358,52 +396,19 @@ void IcebergManifestStore::ReadDeleteManifests(const vector<idx_t> &manifest_ind
 	}
 }
 
-vector<IcebergDeleteFileReference> IcebergManifestStore::GetDeleteFiles(const vector<idx_t> &manifest_indexes) {
-	vector<IcebergDeleteFileReference> result;
-	auto committed_manifest_count = committed_delete_manifests.size();
-	auto total_manifest_count = committed_manifest_count + transaction_delete_manifests.size();
+vector<IcebergDeleteManifestHandle> IcebergManifestStore::GetDeleteIndexes(const vector<idx_t> &manifest_indexes) {
+	vector<IcebergDeleteManifestHandle> result;
 	for (auto manifest_idx : manifest_indexes) {
-		if (manifest_idx >= total_manifest_count) {
-			throw InternalException("Selected delete manifest index %llu is out of bounds", manifest_idx);
+		if (manifest_idx >= delete_indexes.size() || !delete_indexes[manifest_idx]) {
+			throw InternalException("Selected delete manifest %llu has no completed index", manifest_idx);
 		}
-
-		if (manifest_idx < committed_manifest_count) {
-			auto &manifest_list_entry = committed_delete_manifests[manifest_idx];
-			if (!manifest_list_entry.HasManifestEntries()) {
-				throw InternalException("Selected delete manifest %llu was not loaded", manifest_idx);
-			}
-			auto &manifest_entries = manifest_list_entry.GetManifestEntries();
-			for (idx_t entry_idx = 0; entry_idx < manifest_entries.size(); entry_idx++) {
-				auto &manifest_entry = manifest_entries[entry_idx];
-				if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
-					continue;
-				}
-				if (context.transaction_data &&
-				    context.transaction_data->IsFileInvalidated(
-				        {manifest_entry.data_file.file_path, manifest_entry.data_file.content_offset})) {
-					continue;
-				}
-				result.push_back({manifest_idx, entry_idx});
-			}
-		} else {
-			auto transaction_idx = manifest_idx - committed_manifest_count;
-			auto &manifest_list_entry = transaction_delete_manifests[transaction_idx];
-			auto &manifest_entries = manifest_list_entry.GetManifestEntries();
-			for (idx_t entry_idx = 0; entry_idx < manifest_entries.size(); entry_idx++) {
-				auto &manifest_entry = manifest_entries[entry_idx];
-				if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
-					continue;
-				}
-				if (context.transaction_data &&
-				    context.transaction_data->IsFileInvalidated(
-				        {manifest_entry.data_file.file_path, manifest_entry.data_file.content_offset})) {
-					continue;
-				}
-				result.push_back({manifest_idx, entry_idx});
-			}
-		}
+		result.push_back({manifest_idx, delete_indexes[manifest_idx]});
 	}
 	return result;
+}
+
+bool IcebergManifestStore::DeleteFileIsInvalidated(const IcebergFileIdentity &file) const {
+	return context.transaction_data && context.transaction_data->IsFileInvalidated(file);
 }
 
 bool IcebergManifestStore::TryGetNextBatch(IcebergDataViewCursor &cursor) {

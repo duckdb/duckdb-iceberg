@@ -140,8 +140,10 @@ create table my_datalake.default.rewrite_deleted_rows_partitioned (id INTEGER, k
 statement ok
 insert into my_datalake.default.rewrite_deleted_rows_partitioned values (1, 'a'), (2, 'a'), (3, 'b');
 
+# Include the non-partition column to keep this a row-level DELETE: the rewrite must remove
+# the fully deleted data file itself, rather than having metadata-only DELETE remove it first.
 statement ok
-delete from my_datalake.default.rewrite_deleted_rows_partitioned where k = 'a';
+delete from my_datalake.default.rewrite_deleted_rows_partitioned where k = 'a' and id <= 2;
 
 query II
 select rewritten_data_files_count, added_data_files_count
