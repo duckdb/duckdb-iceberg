@@ -572,17 +572,27 @@ static unique_ptr<Expression> GetTransformExpression(ClientContext &context, con
 // Partition directories
 //===--------------------------------------------------------------------===//
 
+//! Division rounding towards negative infinity, e.g. FloorDivide(-1, 12) = -1 where -1 / 12 = 0
 static int64_t FloorDivide(int64_t value, int64_t divisor) {
+	D_ASSERT(divisor != 0);
 	auto quotient = value / divisor;
-	return (value % divisor != 0 && value < 0) ? quotient - 1 : quotient;
+	auto remainder = value % divisor;
+	// C++ rounds towards zero, which rounds up when the exact result is negative
+	if (remainder != 0 && (remainder < 0) != (divisor < 0)) {
+		quotient--;
+	}
+	return quotient;
 }
 
 //! e.g. PadNumber(5, 2) = "05", PadNumber(-5, 4) = "-005", like printf's "%0*d"
+//! The width is a minimum: longer numbers are not cut, e.g. PadNumber(12345, 4) = "12345"
 static string PadNumber(int64_t value, idx_t width) {
-	auto digits = std::to_string(value < 0 ? -value : value);
-	auto padded_width = value < 0 ? width - 1 : width;
-	if (digits.size() < padded_width) {
-		digits.insert(0, padded_width - digits.size(), '0');
+	// unsigned, so that negating the minimum int64_t does not overflow
+	uint64_t magnitude = value < 0 ? 0 - static_cast<uint64_t>(value) : static_cast<uint64_t>(value);
+	auto digits = std::to_string(magnitude);
+	idx_t sign_width = value < 0 ? 1 : 0;
+	if (digits.size() + sign_width < width) {
+		digits.insert(0, width - sign_width - digits.size(), '0');
 	}
 	return value < 0 ? "-" + digits : digits;
 }
