@@ -372,6 +372,18 @@ void IcebergSnapshotMetrics::SetTotalFilesSize(int64_t total_files_size) {
 	metrics[IcebergSnapshotMetricType::TOTAL_FILES_SIZE] = total_files_size;
 }
 
+void IcebergSnapshotMetrics::SetManifestRewriteCounts(int64_t created, int64_t kept, int64_t replaced,
+                                                      int64_t entries_processed) {
+	metrics.erase(IcebergSnapshotMetricType::MANIFESTS_CREATED);
+	metrics.erase(IcebergSnapshotMetricType::MANIFESTS_KEPT);
+	metrics.erase(IcebergSnapshotMetricType::MANIFESTS_REPLACED);
+	metrics.erase(IcebergSnapshotMetricType::ENTRIES_PROCESSED);
+	AddMetric(IcebergSnapshotMetricType::MANIFESTS_CREATED, created);
+	AddMetric(IcebergSnapshotMetricType::MANIFESTS_KEPT, kept);
+	AddMetric(IcebergSnapshotMetricType::MANIFESTS_REPLACED, replaced);
+	AddMetric(IcebergSnapshotMetricType::ENTRIES_PROCESSED, entries_processed);
+}
+
 const metrics_map_t &IcebergSnapshotMetrics::GetMetrics() const {
 	return metrics;
 }

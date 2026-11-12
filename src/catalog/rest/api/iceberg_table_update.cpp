@@ -6,6 +6,7 @@
 #include "common/iceberg_utils.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "core/metadata/snapshot/iceberg_snapshot_writer.hpp"
+#include "maintenance/rewrite_manifests.hpp"
 #include "planning/metadata_io/avro/avro_scan.hpp"
 #include "planning/metadata_io/manifest_list/iceberg_manifest_list_reader.hpp"
 
@@ -165,6 +166,43 @@ IcebergCommitState::CreateSnapshotWriter(int32_t schema_id, IcebergSnapshotOpera
 		writer.SetTotalFilesSize(ReconstructTotalFilesSize(schema_id));
 	}
 	WriteExistingManifests(writer, schema_id, manifest_deletes);
+	return writer;
+}
+
+IcebergSnapshotWriter IcebergCommitState::CreateRewriteManifestsSnapshotWriter(int32_t schema_id,
+                                                                               const RewriteManifestsSpec &spec,
+                                                                               idx_t output_count) {
+	auto &metadata = GetTableMetadata();
+	auto parent = GetLatestSnapshot();
+	last_sequence_number = IcebergSnapshot::NextSequenceNumber(last_sequence_number);
+	IcebergSnapshotWriter writer(context, metadata, schema_id, IcebergSnapshotOperationType::REPLACE,
+	                             last_sequence_number, row_ids, created_metadata_files, parent);
+	if (parent && !parent->metrics.HasTotalFilesSize()) {
+		writer.SetTotalFilesSize(ReconstructTotalFilesSize(schema_id));
+	}
+	//! No merge pass: this snapshot is the repack, and the manifests it keeps are left exactly as they are.
+	vector<IcebergManifestListEntry> selected;
+	vector<IcebergManifestListEntry> kept;
+	for (auto &manifest : manifests) {
+		auto &target = IsRewriteManifestsCandidate(manifest, spec) ? selected : kept;
+		target.push_back(std::move(manifest));
+	}
+	manifests.clear();
+	//! Selected manifests holding only tombstones are replaced by nothing and still count as replaced, matching
+	//! the planned rewritten_manifests_count. Only the carried-forward manifests need the tombstone-only pruning.
+	DropManifestsWithoutLiveFiles(kept);
+
+	auto replaced_count = selected.size();
+	idx_t entries_processed = 0;
+	auto created =
+	    WriteRewrittenManifests(std::move(selected), spec, output_count, writer, *this, schema_id, entries_processed);
+	writer.SetManifestRewriteCounts(created.size(), kept.size(), replaced_count, entries_processed);
+	for (auto &manifest : created) {
+		writer.AddExistingManifest(std::move(manifest));
+	}
+	for (auto &manifest : kept) {
+		writer.AddExistingManifest(std::move(manifest));
+	}
 	return writer;
 }
 

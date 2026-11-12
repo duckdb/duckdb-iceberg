@@ -8,6 +8,7 @@
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
 #include "core/metadata/manifest/iceberg_manifest.hpp"
 #include "core/metadata/snapshot/iceberg_snapshot.hpp"
+#include "maintenance/rewrite_manifests.hpp"
 #include "catalog/rest/iceberg_table_set.hpp"
 #include "catalog/rest/api/table_update.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
@@ -33,13 +34,9 @@ static void VerifyNoSnapshotExpiration(const vector<unique_ptr<IcebergTableUpdat
 	}
 }
 
-static void LoadMissingManifestCounts(ClientContext &context, const IcebergTableMetadata &metadata,
-                                      const IcebergSnapshotScanInfo &snapshot_info,
-                                      IcebergManifestListEntry &manifest_list_entry) {
-	auto &counts = manifest_list_entry.GetFile().counts;
-	if (counts && counts->Complete()) {
-		return;
-	}
+static void ReloadManifestCountsFromEntries(ClientContext &context, const IcebergTableMetadata &metadata,
+                                            const IcebergSnapshotScanInfo &snapshot_info,
+                                            IcebergManifestListEntry &manifest_list_entry) {
 	vector<IcebergManifestListEntry> manifest_files;
 	manifest_files.push_back(manifest_list_entry);
 	manifest_files[0].ResetManifestEntries();
@@ -55,6 +52,16 @@ static void LoadMissingManifestCounts(ClientContext &context, const IcebergTable
 
 	manifest_list_entry = std::move(manifest_files[0]);
 	manifest_list_entry.GetManifest().SetCountsFromEntries(manifest_list_entry.GetManifestEntries());
+}
+
+static void LoadMissingManifestCounts(ClientContext &context, const IcebergTableMetadata &metadata,
+                                      const IcebergSnapshotScanInfo &snapshot_info,
+                                      IcebergManifestListEntry &manifest_list_entry) {
+	auto &counts = manifest_list_entry.GetFile().counts;
+	if (counts && counts->Complete()) {
+		return;
+	}
+	ReloadManifestCountsFromEntries(context, metadata, snapshot_info, manifest_list_entry);
 }
 
 static optional<int64_t> LoadExistingManifestList(ClientContext &context, const IcebergTableMetadata &metadata,
@@ -271,6 +278,52 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 		TableAddAssertCurrentSchemaId();
 	}
 	AddSnapshotUpdate(std::move(add_snapshot), std::move(altered_manifests), merge_action);
+}
+
+RewriteManifestsResult IcebergTransactionData::AddRewriteManifests(const RewriteManifestsSpec &spec) {
+	lock_guard<mutex> guard(lock);
+	//! Reject every combination before reading manifests, including one that would turn out to be a no-op.
+	VerifyNoSnapshotExpiration(updates, "Manifest rewrite");
+	VerifyCanAddSnapshot();
+	if (has_manifest_rewrite) {
+		throw NotImplementedException(
+		    "iceberg_rewrite_manifests: table '%s' already has a manifest rewrite in this transaction; commit it first",
+		    table_info.name);
+	}
+	//! The plan is made against the base manifest list; data changes staged earlier would not be part of it.
+	if (!alters.empty()) {
+		throw NotImplementedException(
+		    "iceberg_rewrite_manifests: table '%s' already has data changes in this transaction; commit them first",
+		    table_info.name);
+	}
+	CacheExistingManifestList(guard, table_info.GetMetadata());
+	auto &table_metadata = table_info.GetMetadata();
+	auto current_snapshot = table_metadata.GetLatestSnapshot();
+	optional_ptr<IcebergManifestListEntry> lone_candidate;
+	idx_t candidate_count = 0;
+	for (auto &manifest : existing_manifest_list) {
+		if (IsRewriteManifestsCandidate(manifest, spec)) {
+			lone_candidate = &manifest;
+			candidate_count++;
+		}
+	}
+	//! Hidden tombstones only decide whether a lone manifest is a no-op; with several candidates the rewrite
+	//! happens regardless, and the commit reads the entries then. Manifest-list footers can omit or zero
+	//! 'deleted_files_count' while entries still carry tombstones, so count them from the entries.
+	if (current_snapshot && candidate_count == 1) {
+		IcebergSnapshotScanInfo snapshot_info;
+		snapshot_info.snapshot = current_snapshot;
+		snapshot_info.schema_id = table_metadata.GetCurrentSchemaId();
+		ReloadManifestCountsFromEntries(context, table_metadata, snapshot_info, *lone_candidate);
+	}
+	auto planned = PlanRewriteManifests(existing_manifest_list, spec);
+	if (planned.rewritten_manifests_count == 0) {
+		return planned;
+	}
+	AddSnapshotUpdate(make_uniq<IcebergRewriteManifestsSnapshot>(table_info, spec, planned), IcebergManifestDeletes(),
+	                  false);
+	has_manifest_rewrite = true;
+	return planned;
 }
 
 void IcebergTransactionData::AddPendingDeleteManifests(IcebergAddSnapshot &add_snapshot,

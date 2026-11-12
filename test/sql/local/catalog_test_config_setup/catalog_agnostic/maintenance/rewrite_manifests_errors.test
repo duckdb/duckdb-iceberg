@@ -1,0 +1,151 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_manifests_errors.test
+# description: iceberg_rewrite_manifests no-ops and rejected inputs.
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.rewrite_manifests_errors;
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_manifests_errors (id INTEGER)
+WITH ('format-version' = 2, 'commit.manifest-merge.enabled' = false);
+
+# A table without snapshots has nothing to rewrite and gains no snapshot.
+query II
+CALL iceberg_rewrite_manifests('my_datalake.default.rewrite_manifests_errors');
+----
+0	0
+
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.rewrite_manifests_errors);
+----
+0
+
+statement error
+CALL iceberg_rewrite_manifests('my_datalake.default.does_not_exist');
+----
+does_not_exist
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_manifests_errors VALUES (1);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_manifests_errors VALUES (2);
+
+# The rewrite is planned against the committed manifests, so it cannot follow data changes in the same transaction.
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_manifests_errors VALUES (3);
+
+statement error
+CALL iceberg_rewrite_manifests('my_datalake.default.rewrite_manifests_errors');
+----
+already has data changes in this transaction
+
+statement ok
+ROLLBACK;
+
+# It can precede them.
+statement ok
+BEGIN;
+
+query II
+CALL iceberg_rewrite_manifests('my_datalake.default.rewrite_manifests_errors');
+----
+2	1
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_manifests_errors VALUES (3);
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.rewrite_manifests_errors;
+----
+[1, 2, 3]
+
+statement ok
+COMMIT;
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.rewrite_manifests_errors;
+----
+[1, 2, 3]
+
+query II
+SELECT count(*), sum(existing_data_files_count) FROM iceberg_manifests(my_datalake.default.rewrite_manifests_errors);
+----
+2	2
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_manifests_errors VALUES (4);
+
+# Manifest rewrite and snapshot expiration both stage snapshot-graph updates, so a
+# transaction cannot combine them in either order.
+statement ok
+BEGIN;
+
+query II
+CALL iceberg_rewrite_manifests('my_datalake.default.rewrite_manifests_errors');
+----
+3	1
+
+statement error
+SELECT * FROM iceberg_expire_snapshots('my_datalake.default.rewrite_manifests_errors',
+    retain_last => 1, older_than => TIMESTAMP '2999-01-01');
+----
+cannot follow data changes
+
+statement ok
+ROLLBACK;
+
+# A second rewrite in the same transaction is rejected with its own message.
+statement ok
+BEGIN;
+
+query II
+CALL iceberg_rewrite_manifests('my_datalake.default.rewrite_manifests_errors');
+----
+3	1
+
+statement error
+CALL iceberg_rewrite_manifests('my_datalake.default.rewrite_manifests_errors');
+----
+already has a manifest rewrite in this transaction
+
+statement ok
+ROLLBACK;
+
+# Expiring first needs an older snapshot to expire; catalogs without snapshot history keep only the current one.
+require-env SNAPSHOT_HISTORY_SUPPORT
+
+statement ok
+SET VARIABLE oldest_snapshot = (
+    SELECT snapshot_id
+    FROM iceberg_snapshots(my_datalake.default.rewrite_manifests_errors)
+    ORDER BY sequence_number ASC
+    LIMIT 1
+);
+
+statement ok
+BEGIN;
+
+query II
+SELECT * FROM iceberg_expire_snapshots('my_datalake.default.rewrite_manifests_errors',
+    snapshot_ids => [getvariable('oldest_snapshot')], retain_last => 10);
+----
+1	4
+
+statement error
+CALL iceberg_rewrite_manifests('my_datalake.default.rewrite_manifests_errors');
+----
+Manifest rewrite cannot be combined with snapshot expiration
+
+statement ok
+ROLLBACK;
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_manifests_errors;
