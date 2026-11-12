@@ -64,7 +64,10 @@ private:
 	explicit IcebergScanPlanner(shared_ptr<IcebergScanPlanState> shared_state);
 
 	IcebergScanPlanProvider &GetScanPlanProvider() const DUCKDB_REQUIRES(shared_state->lock);
-	IcebergDeletePlanningContext GetDeletePlanningContext() const DUCKDB_REQUIRES(shared_state->lock);
+	//! View manifest descriptors are frozen by InitializeView before use outside the lock.
+	IcebergDeletePlanningContext GetDeletePlanningContext(IcebergScanPlanProvider &provider) const;
+	bool DeleteEntryMatchesFilters(const IcebergDeletePlanningContext &delete_context, idx_t manifest_idx,
+	                               idx_t entry_idx, const IcebergManifestEntry &entry) const;
 	//! Whether an earlier statement of this transaction replaced files that the committed manifests still list
 	bool HasInvalidatedFiles() const;
 
@@ -87,22 +90,30 @@ private:
 	IcebergTableFilters table_filters;
 
 	mutable bool view_initialized DUCKDB_GUARDED_BY(shared_state->lock) = false;
-	mutable vector<BoundIcebergManifestListEntry> delete_manifests DUCKDB_GUARDED_BY(shared_state->lock);
-	mutable vector<bool> delete_manifest_matches DUCKDB_GUARDED_BY(shared_state->lock);
+	//! Written only by InitializeView under the planning lock, then immutable.
+	//! Completed delete content is owned by index handles, not these descriptors.
+	mutable vector<BoundIcebergManifestListEntry> delete_manifests;
+	mutable vector<bool> delete_manifest_matches;
 	//! Lazy per-view predicate answers keyed by stable manifest and entry indexes.
 	//! Absence means uncomputed; both true and false are cached after successful evaluation.
-	mutable unordered_map<idx_t, unordered_map<idx_t, bool>> delete_entry_matches DUCKDB_GUARDED_BY(shared_state->lock);
+	struct DeletePredicateResult {
+		mutex lock;
+		optional<bool> matches;
+	};
+	mutable mutex delete_predicate_lock;
+	mutable unordered_map<idx_t, unordered_map<idx_t, unique_ptr<DeletePredicateResult>>> delete_entry_matches;
 	mutable atomic<bool> has_matching_delete_manifests {true};
 	mutable IcebergDataViewCursor data_view_cursor DUCKDB_GUARDED_BY(shared_state->lock);
 	mutable vector<BoundIcebergManifestEntry> data_manifest_entries DUCKDB_GUARDED_BY(shared_state->lock);
-	mutable vector<BoundIcebergManifestListEntry> data_manifests DUCKDB_GUARDED_BY(shared_state->lock);
+	//! Like delete_manifests, the descriptor vector is frozen after initialization.
+	mutable vector<BoundIcebergManifestListEntry> data_manifests;
 	mutable vector<bool> data_manifest_matches DUCKDB_GUARDED_BY(shared_state->lock);
 	mutable IcebergScanOrder scan_order DUCKDB_GUARDED_BY(shared_state->lock);
 	//! Lifetime totals for this filtered planner view, emitted once on destruction.
-	//! Updated under the existing planning lock; no per-entry logging or atomics.
+	//! Visits are added once per lookup; predicates count only cache initialization.
 	mutable idx_t scan_tasks DUCKDB_GUARDED_BY(shared_state->lock) = 0;
-	mutable idx_t delete_candidate_visits DUCKDB_GUARDED_BY(shared_state->lock) = 0;
-	mutable idx_t delete_predicate_evaluations DUCKDB_GUARDED_BY(shared_state->lock) = 0;
+	mutable atomic<idx_t> delete_candidate_visits {0};
+	mutable atomic<idx_t> delete_predicate_evaluations {0};
 };
 
 } // namespace duckdb

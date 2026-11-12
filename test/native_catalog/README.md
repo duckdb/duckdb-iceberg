@@ -81,7 +81,11 @@ The CI build step runs these tests alongside the other API executables.
 
 The planning API tests check borrowed and extracted filter lifetimes and filtered
 views sharing a provider. They also check invalidation of cached missing paths.
-The delete-view case requires equality-delete writes:
+Delete-index cases compare indexed and exhaustive applicability, cover null/NaN
+and composite partitions, original paths and Puffin offsets, and drive concurrent
+views. A gated filesystem holds a lazy manifest read until an overlapping caller
+has registered, checking atomic publication, retained index ownership, and shared
+I/O/cancellation errors. The equality-delete view cases require equality-delete writes:
 
 ```sh
 ./build/reldebug/test/unittest_iceberg_planning

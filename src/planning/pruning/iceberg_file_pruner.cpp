@@ -518,8 +518,15 @@ bool IcebergFilePruner::DeleteFileMatchesDataFile(const IcebergManifest &delete_
 	}
 	if (delete_file.content == IcebergManifestEntryContentType::EQUALITY_DELETES) {
 		D_ASSERT(delete_bounds);
-		if (!delete_bounds->initialized) {
-			InitializeEqualityDeleteBounds(delete_file, *delete_bounds);
+		{
+			lock_guard<mutex> guard(delete_bounds->lock);
+			if (!delete_bounds->initialized) {
+				// Publish only a fully initialized result, including an empty one.
+				IcebergEqualityDeleteBounds prepared;
+				InitializeEqualityDeleteBounds(delete_file, prepared);
+				delete_bounds->columns = std::move(prepared.columns);
+				delete_bounds->initialized = true;
+			}
 		}
 		return EqualityDeleteMatchesDataFile(delete_file, data_file, *delete_bounds);
 	}

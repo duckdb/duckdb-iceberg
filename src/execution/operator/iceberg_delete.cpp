@@ -302,12 +302,16 @@ static void PopulateAlteredManifests(IcebergManifestDeletes &out, const IcebergD
 namespace {
 
 string DeleteFilePath(FileSystem &fs, const string &filename, const string &format) {
-	auto last_sep = filename.rfind(fs.PathSeparator(filename));
+	// External writers can use forward slashes for Windows paths. Normalize only
+	// the output directory; delete matching must retain the original data-file path.
+	auto normalized_filename = fs.ConvertSeparators(filename);
+	auto last_sep = normalized_filename.rfind(fs.PathSeparator(normalized_filename));
 	if (last_sep == string::npos) {
 		throw InvalidConfigurationException("Cannot create valid file path for delete file");
 	}
 	// A shared Puffin file lives beside its first data file. Each blob retains its own partition in the manifest.
-	return fs.JoinPath(filename.substr(0, last_sep), UUID::ToString(UUID::GenerateRandomUUID()) + "-deletes." + format);
+	return fs.JoinPath(normalized_filename.substr(0, last_sep + 1),
+	                   UUID::ToString(UUID::GenerateRandomUUID()) + "-deletes." + format);
 }
 
 idx_t DeleteTargetFileSize(const IcebergTableMetadata &metadata) {
