@@ -22,6 +22,8 @@ from workloads import (
     literal,
     manifest_case,
     manifest_setup,
+    wide_manifest_case,
+    wide_manifest_setup,
 )
 
 
@@ -140,6 +142,27 @@ def check_layout(shell, table, expected):
     return actual
 
 
+def check_wide_manifest(shell, table, entries):
+    # Catalog lookup and direct Avro reads share the transaction's credentials.
+    shell.query("BEGIN")
+    try:
+        paths = shell.query(f"SELECT DISTINCT manifest_path FROM iceberg_metadata({literal(table)})")
+        assert len(paths) == 1, paths
+        stats = shell.query(
+            f"""SELECT count(*) AS entries,
+                count(*) FILTER (WHERE cardinality(data_file.lower_bounds)=101
+                    AND cardinality(data_file.upper_bounds)=101) AS entries_with_full_bounds
+                FROM read_avro({literal(paths[0]['manifest_path'])})"""
+        )[0]
+        assert stats == {
+            "entries": entries,
+            "entries_with_full_bounds": entries,
+        }, stats
+        return stats
+    finally:
+        shell.query("COMMIT")
+
+
 def scan_nodes(node):
     if isinstance(node, dict):
         if node.get("extra_info", {}).get("Function", "").upper() == "ICEBERG_SCAN":
@@ -162,7 +185,9 @@ def main():
     parser.add_argument("--source", type=Path, help="Reuse a previous run's immutable cases.json and layouts.json")
     parser.add_argument("--size", choices=SHAPES, default="reduced")
     parser.add_argument(
-        "--workload", choices=["all", "delete", "manifest", "snapshots", "small-manifests"], default="all"
+        "--workload",
+        choices=["all", "delete", "manifest", "snapshots", "small-manifests", "wide-manifest"],
+        default="all",
     )
     parser.add_argument("--manifest-cache", choices=["on", "off"], default="on")
     parser.add_argument("--threads", nargs="+", type=int, default=[1, 8])
@@ -261,6 +286,38 @@ def main():
                 cases.append(
                     dict(name=name, table=name, sql=manifest_case(table), expected=1, payload=payload(setup, name))
                 )
+        if not args.source and args.workload == "wide-manifest":
+            entries = {"reduced": 32, "regression": 1000, "full": 5000}[args.size]
+            name = f"wide_manifest_{entries}"
+            print(f"Preparing {name}", flush=True)
+            table = f"my_datalake.default.{name}"
+            for sql in wide_manifest_setup(entries, table):
+                setup.query(sql)
+            layouts[name] = check_layout(
+                setup,
+                table,
+                dict(
+                    data_files=entries,
+                    data_rows=entries * 100,
+                    live_delete_entries=0,
+                    data_manifests=1,
+                    delete_manifests=0,
+                    delete_files=0,
+                ),
+            )
+            layouts[name]["statistics"] = check_wide_manifest(setup, table, entries)
+            cases.append(
+                dict(
+                    name=name,
+                    table=name,
+                    sql=wide_manifest_case(table),
+                    expected=0,
+                    expected_files=0,
+                    expected_rows_scanned=0,
+                    manifest_entries=entries,
+                    payload=payload(setup, name),
+                )
+            )
         if not args.source and args.workload == "small-manifests":
             # Native transport version of benchmark/metadata_late_materialization.
             # Keep its 256 x 4096 shape, predicates, result checks and 5ms I/O delay.
@@ -399,6 +456,9 @@ def main():
                             files = int(scan["extra_info"]["Total Files Read"])
                             rows = scan.get("operator_rows_scanned", scan.get("rows_scanned"))
                             assert rows is not None, scan
+                            if "expected_files" in case:
+                                assert files == case["expected_files"], (case["name"], files)
+                                assert rows == case["expected_rows_scanned"], (case["name"], rows)
                             results.append(
                                 dict(
                                     case=case["name"],
@@ -438,6 +498,7 @@ def main():
                                 "delete_index_builds",
                                 "parsed_manifest_hits",
                                 "parsed_manifest_misses",
+                                "scan_tasks",
                             )
                         }
                         if args.manifest_cache == "on" and mode != "cold":
@@ -447,6 +508,15 @@ def main():
                             ), counters
                         else:
                             assert counters["manifest_parses"] > 0, counters
+                        if "manifest_entries" in case:
+                            assert counters["scan_tasks"] == 0, counters
+                            assert counters["delete_index_builds"] == 0, counters
+                            if args.manifest_cache == "on" and mode != "cold":
+                                assert counters["parsed_manifest_hits"] == 1, counters
+                                assert counters["parsed_manifest_misses"] == 0, counters
+                            else:
+                                assert counters["manifest_parses"] == 1, counters
+                                assert counters["manifest_entries_converted"] == case["manifest_entries"], counters
                         requests = [
                             log["message"]
                             for log in logs
