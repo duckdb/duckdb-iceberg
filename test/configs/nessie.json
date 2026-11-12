@@ -49,6 +49,14 @@
 	],
 	"skip_tests": [
 		{
+			"reason": "Nessie treats remove-snapshot-ref(main) as a no-op. Bare replacement of a table with a snapshot is rejected before commit; CTAS and replacement followed by INSERT are covered by catalog_specifc/nessie/create/test_create_or_replace.test",
+			"paths": [
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_or_replace_table.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_or_replace_options.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_or_replace_lists.test"
+			]
+		},
+		{
 			"reason": "Requires reparsing url paths in logs or paths in data files",
 			"paths": [
 				"test/sql/local/catalog_test_config_setup/catalog_interop/reads/test_read_partitioned_table_type_promotion.test",

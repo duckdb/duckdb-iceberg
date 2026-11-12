@@ -70,6 +70,6 @@ struct IcebergTransactionData;
 class IcebergTableSchema;
 //! Makes new_schema the current schema of a table updated in a transaction, reusing an identical earlier schema
 void IntroduceNewSchema(ClientContext &context, IcebergTable &updated_table, IcebergTransactionData &transaction_data,
-                        shared_ptr<IcebergTableSchema> new_schema);
+                        shared_ptr<IcebergTableSchema> new_schema, bool update_schema_properties = true);
 
 } // namespace duckdb

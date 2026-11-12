@@ -294,4 +294,16 @@ void SetSnapshotRef::CreateUpdate(DatabaseInstance &db, ClientContext &context,
 	snapshot_reference.snapshot_id = snapshot_id;
 }
 
+RemoveSnapshotRef::RemoveSnapshotRef(string ref_name_p) : IcebergTableUpdate(TYPE), ref_name(std::move(ref_name_p)) {
+}
+
+void RemoveSnapshotRef::CreateUpdate(DatabaseInstance &db, ClientContext &context,
+                                     IcebergCommitState &commit_state) const {
+	rest_api_objects::TableUpdate update;
+	update.remove_snapshot_ref_update.emplace();
+	update.remove_snapshot_ref_update->base_update.action = "remove-snapshot-ref";
+	update.remove_snapshot_ref_update->ref_name = ref_name;
+	commit_state.table_change.updates.push_back(std::move(update));
+}
+
 } // namespace duckdb

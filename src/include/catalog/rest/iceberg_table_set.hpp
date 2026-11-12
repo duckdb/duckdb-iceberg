@@ -31,8 +31,8 @@ public:
 	static IcebergTable &CreateNewEntry(ClientContext &context, IcebergCatalog &catalog, IcebergSchemaEntry &schema,
 	                                    CreateTableInfo &info);
 	//! Stages the replacement of an existing table's definition and data in the transaction (CREATE OR REPLACE)
-	static IcebergTable &ReplaceEntry(ClientContext &context, IcebergCatalog &catalog, IcebergSchemaEntry &schema,
-	                                  IcebergTable &catalog_table, CreateTableInfo &info);
+	static IcebergTable &ReplaceEntry(ClientContext &context, IcebergCatalog &catalog, IcebergTable &catalog_table,
+	                                  CreateTableInfo &info);
 
 private:
 	bool TryFillEntryFromCache(ClientContext &context, IcebergTable &table);

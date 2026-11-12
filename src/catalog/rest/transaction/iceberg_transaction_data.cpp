@@ -85,6 +85,7 @@ IcebergTransactionData::IcebergTransactionData(ClientContext &context, IcebergTr
 	initial_table_uuid = table_info.table_metadata.table_uuid;
 	initial_format_version = table_info.table_metadata.iceberg_version;
 	initial_schema_id = table_info.table_metadata.GetCurrentSchemaId();
+	initial_snapshot_id = table_info.table_metadata.current_snapshot_id;
 	initial_default_spec_id = table_info.table_metadata.default_spec_id;
 	if (table_info.table_metadata.HasSortOrder()) {
 		initial_default_sort_order_id = table_info.table_metadata.default_sort_order_id;
@@ -270,9 +271,7 @@ void IcebergTransactionData::AddSnapshotUpdate(unique_ptr<IcebergAddSnapshot> ad
 	contains_merge |= merge_action;
 	// All action sinks share this execution's query ID; a later statement gets a different ID.
 	auto query_id = transaction.active_query.load();
-	// CTAS contributes its rows to the overwrite staged when its replacement table was created.
-	const bool combine_actions = merge_action || (replacement_query_id && *replacement_query_id == query_id);
-	if (combine_actions && merge_query_id && *merge_query_id == query_id) {
+	if (merge_action && merge_query_id && *merge_query_id == query_id) {
 		// Keeping one alter gives every action the same transaction-local sequence number.
 		auto &snapshot = alters[merge_alter_index].get();
 		snapshot.Merge(*add_snapshot);
@@ -288,7 +287,7 @@ void IcebergTransactionData::AddSnapshotUpdate(unique_ptr<IcebergAddSnapshot> ad
 	if (versioned_deletes.Merge(std::move(altered_manifests))) {
 		add_snapshot->SetManifestDeletes(std::move(versioned_deletes));
 	}
-	if (combine_actions) {
+	if (merge_action) {
 		// The first action that writes files establishes the snapshot, regardless of finalization order.
 		merge_query_id = query_id;
 		merge_alter_index = alters.size();
@@ -405,49 +404,24 @@ void IcebergTransactionData::TableSetDefaultSpec() {
 	updates.push_back(make_uniq<SetDefaultSpec>(table_info.table_metadata.default_spec_id));
 }
 
-void IcebergTransactionData::TableReplaceContents() {
+void IcebergTransactionData::TableReplaceContents(IcebergTableMetadata &metadata) {
 	lock_guard<mutex> guard(lock);
-	auto &metadata = table_info.table_metadata;
-	table_info.LoadCredentials(context);
-	CacheExistingManifestList(guard, metadata);
-
-	IcebergManifestDeletes removed_files;
-	auto current_snapshot = metadata.GetLatestSnapshot();
-	if (current_snapshot) {
-		// Load both data and delete manifests using the original schema. The replacement
-		// may remove partition columns, but their values must survive in deleted entries.
-		IcebergSnapshotScanInfo snapshot_info;
-		snapshot_info.snapshot = current_snapshot;
-		snapshot_info.schema_id = initial_schema_id;
-		vector<idx_t> manifests_to_load;
-		for (idx_t i = 0; i < existing_manifest_list.size(); i++) {
-			if (!existing_manifest_list[i].HasManifestEntries()) {
-				manifests_to_load.push_back(i);
-			}
-		}
-		if (!manifests_to_load.empty()) {
-			IcebergOptions options;
-			auto &fs = FileSystem::GetFileSystem(context);
-			auto scan = AvroScan::ScanManifest(snapshot_info, existing_manifest_list, options, fs, "", metadata,
-			                                   context, nullptr, std::move(manifests_to_load));
-			auto reader = make_uniq<manifest_file::ManifestReader>(*scan);
-			while (!reader->Finished()) {
-				reader->Read();
-			}
-		}
-		for (const auto &manifest : existing_manifest_list) {
-			for (const auto &entry : manifest.GetManifestEntries()) {
-				if (entry.status != IcebergManifestEntryStatusType::DELETED) {
-					removed_files.InvalidateFile({entry.data_file.file_path, entry.data_file.content_offset});
-				}
-			}
-		}
-	}
-	// Keep main as the parent. Even a replacement without rows publishes an empty
-	// overwrite snapshot. CTAS adds its files to this same statement's snapshot.
+	D_ASSERT(alters.empty());
+	replaces_table = true;
+	assert_schema_id = true;
 	replacement_query_id = transaction.active_query.load();
-	auto overwrite = make_uniq<IcebergAddSnapshot>(table_info, IcebergSnapshotOperationType::OVERWRITE);
-	AddSnapshotUpdate(std::move(overwrite), std::move(removed_files), false);
+	metadata.current_snapshot_id.reset();
+	if (metadata.refs) {
+		metadata.refs->additional_properties.erase("main");
+	}
+	existing_manifest_list.clear();
+	base_snapshot_id.reset();
+	// Emit this even when main was absent, commit also asserts its original state.
+	updates.push_back(make_uniq<RemoveSnapshotRef>("main"));
+}
+
+bool IcebergTransactionData::IsReplacementStatement() const {
+	return replacement_query_id && *replacement_query_id == transaction.active_query.load();
 }
 
 void IcebergTransactionData::TableSetProperties(const case_insensitive_map_t<string> &properties) {

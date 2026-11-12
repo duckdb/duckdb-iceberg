@@ -1,0 +1,91 @@
+# name: test/sql/local/native_catalog/replacement_nessie_guard.test
+# description: Nessie bare replacement is rejected before sending any table updates
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+SET VARIABLE nessie_config = (SELECT body::JSON FROM iceberg_test_catalog_request('GET', '/v1/config', NULL));
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response', json_object(
+    'method', 'GET', 'path', '/v1/config', 'status', 200,
+    'body', json_merge_patch(getvariable('nessie_config'), '{"overrides":{"nessie.is-nessie-catalog":"true"}}')
+));
+----
+204
+
+statement ok
+ATTACH '' AS nessie_mock (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+    AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none');
+
+statement ok
+CREATE TABLE nessie_mock.default.cor_guard AS SELECT 1 a;
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE OR REPLACE TABLE nessie_mock.default.cor_guard (b VARCHAR);
+
+query I
+SELECT count(*) FROM nessie_mock.default.cor_guard;
+----
+0
+
+statement error
+COMMIT;
+----
+Nessie cannot commit CREATE OR REPLACE TABLE without a new snapshot
+
+# No catalog update may escape a failed replacement.
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE request.type = 'POST';
+----
+0
+
+query I
+SELECT a FROM nessie_mock.default.cor_guard;
+----
+1
+
+statement ok
+CREATE OR REPLACE TABLE nessie_mock.default.cor_guard AS SELECT 'empty' b WHERE false;
+
+query I
+SELECT count(b) FROM nessie_mock.default.cor_guard;
+----
+0
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE OR REPLACE TABLE nessie_mock.default.cor_guard (c INTEGER);
+
+statement ok
+INSERT INTO nessie_mock.default.cor_guard VALUES (42);
+
+statement ok
+COMMIT;
+
+query I
+SELECT c FROM nessie_mock.default.cor_guard;
+----
+42
+
+statement ok
+DROP TABLE nessie_mock.default.cor_guard;
+
+statement ok
+DETACH nessie_mock;

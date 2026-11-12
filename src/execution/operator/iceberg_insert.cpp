@@ -410,7 +410,8 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 		}
 	} else {
 		// Stage an INSERT statement or a MERGE insert action; the latter may join an overwrite snapshot.
-		if (!written_files.empty()) {
+		if (!written_files.empty() ||
+		    (table_info.transaction_data && table_info.transaction_data->IsReplacementStatement())) {
 			ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTable &tbl) {
 				auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
 				IcebergManifestDeletes empty_deletes;
@@ -1150,6 +1151,7 @@ static unique_ptr<IcebergTableMetadata> BuildPlaceholderMetadata(ClientContext &
 		metadata->iceberg_version = default_version.GetValue<uint64_t>();
 	}
 	auto &create_info = info.Base().Cast<CreateTableInfo>();
+	optional_ptr<const IcebergTableMetadata> replacement_metadata;
 	if (create_info.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT) {
 		auto &schema_entry = info.schema.Cast<IcebergSchemaEntry>();
 		auto &catalog = schema_entry.catalog.Cast<IcebergCatalog>();
@@ -1158,6 +1160,7 @@ static unique_ptr<IcebergTableMetadata> BuildPlaceholderMetadata(ClientContext &
 		auto entry = schema_entry.GetEntry(transaction, CatalogType::TABLE_ENTRY, name.Name());
 		if (entry && entry->type == CatalogType::TABLE_ENTRY) {
 			auto &existing = entry->Cast<IcebergTableSchemaVersion>().table_info.table_metadata;
+			replacement_metadata = existing;
 			metadata->iceberg_version = existing.iceberg_version;
 			metadata->table_properties = existing.table_properties;
 		}
@@ -1190,6 +1193,9 @@ static unique_ptr<IcebergTableMetadata> BuildPlaceholderMetadata(ClientContext &
 	int32_t last_column_id;
 	auto schema = IcebergCreateTableRequest::CreateIcebergSchema(context, *metadata, create_info.columns,
 	                                                             &create_info.constraints, last_column_id);
+	if (replacement_metadata) {
+		last_column_id = IcebergCreateTableRequest::AssignReplacementFieldIds(*schema, *replacement_metadata);
+	}
 	metadata->last_column_id = last_column_id;
 	metadata->GetSchemasMutable().AddSchemaOrGetExisting(schema);
 

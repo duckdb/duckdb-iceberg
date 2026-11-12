@@ -66,6 +66,22 @@ drop view if exists base;
 statement ok
 create view duplicate_names as select i as a, i + 1 as a from my_datalake.view_regressions.base;
 
+# Replacing a view with a table must report the object type and preserve the view.
+statement error
+create or replace table duplicate_names (i integer);
+----
+<REGEX>:.*Catalog Error.*is of type View.*
+
+statement error
+create or replace table duplicate_names as select 99 as i;
+----
+<REGEX>:.*Catalog Error.*is of type View.*
+
+query II
+select * from duplicate_names;
+----
+42	43
+
 statement error
 drop table if exists duplicate_names;
 ----

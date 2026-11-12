@@ -64,11 +64,12 @@ public:
 	void TableSetLocation();
 	//! Roll main back to an ancestor snapshot (Spark rollback_to_snapshot semantics).
 	void TableRollbackToSnapshot(int64_t snapshot_id);
-	//! Stages a full-table overwrite, retaining main as its parent and preserving historical snapshots.
-	void TableReplaceContents();
+	//! Detach main without removing historical snapshots or enumerating their files.
+	void TableReplaceContents(IcebergTableMetadata &metadata);
+	bool IsReplacementStatement() const;
 
 private:
-	//! CTAS inserts join the overwrite staged by the same statement; later statements get their own snapshots.
+	//! A zero-row replacement CTAS still commits an append; later empty INSERTs remain no-ops.
 	optional<transaction_t> replacement_query_id;
 	void CacheExistingManifestList(lock_guard<mutex> &guard, const IcebergTableMetadata &metadata);
 	//! Retains one pending delete manifest per partition spec present in 'delete_files'.
@@ -91,6 +92,8 @@ public:
 	int32_t initial_schema_id;
 	int32_t initial_default_spec_id = 0;
 	optional_idx initial_default_sort_order_id;
+	optional<int64_t> initial_snapshot_id;
+	bool replaces_table = false;
 
 	ClientContext &context;
 	IcebergTransaction &transaction;

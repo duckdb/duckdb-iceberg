@@ -1,0 +1,70 @@
+# name: test/sql/local/native_catalog/replacement_no_manifest_reads.test
+# description: Replacement does not open old manifest lists, even with manifest merging enabled
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+foreach replacement bare ctas
+
+statement ok
+CREATE TABLE my_datalake.default.cor_no_read (a INTEGER)
+WITH ('format-version' = '2', 'commit.manifest-merge.enabled' = true, 'commit.manifest.min-count-to-merge' = 1);
+
+# An external snapshot references an intentionally unavailable manifest list.
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/cor_no_read',
+    json_object('requirements', json_array(), 'updates', json_array(
+        json_object('action', 'add-snapshot', 'snapshot', json_object(
+            'snapshot-id', 123, 'sequence-number', 1, 'timestamp-ms', epoch_ms(current_timestamp),
+            'schema-id', 0, 'manifest-list', '{TEST_DIR}/unavailable-cor-manifest.avro',
+            'summary', json_object('operation', 'append', 'total-records', '1'))),
+        json_object('action', 'set-snapshot-ref', 'ref-name', 'main', 'type', 'branch', 'snapshot-id', 123)
+    )));
+----
+200
+
+statement error
+SELECT * FROM my_datalake.default.cor_no_read;
+----
+<REGEX>:.*unavailable-cor-manifest.*
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_no_read (a INTEGER);
+
+query II
+SELECT metadata."current-snapshot-id" IS NULL, len(metadata.snapshots::VARIANT[])
+FROM iceberg_load_table_response(my_datalake.default.cor_no_read);
+----
+true	1
+
+# Restore main to the unavailable snapshot to exercise CTAS independently too.
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/cor_no_read',
+    json_object('requirements', json_array(), 'updates', json_array(
+        json_object('action', 'set-snapshot-ref', 'ref-name', 'main', 'type', 'branch', 'snapshot-id', 123)
+    )));
+----
+200
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_no_read AS SELECT 7 a WHERE '{replacement}' = 'ctas';
+
+query I
+SELECT count(*) = CASE WHEN '{replacement}' = 'ctas' THEN 1 ELSE 0 END FROM my_datalake.default.cor_no_read;
+----
+true
+
+query III
+SELECT operation, parent_id IS NULL, sequence_number FROM iceberg_snapshots(my_datalake.default.cor_no_read)
+ORDER BY sequence_number DESC LIMIT 1;
+----
+append	true	2
+
+statement ok
+DROP TABLE my_datalake.default.cor_no_read;
+
+endloop

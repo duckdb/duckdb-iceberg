@@ -499,30 +499,22 @@ IcebergTable &IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCat
 }
 
 //! Makes the sort order a replaced table's definition asks for its default, reusing an identical earlier one
-static void ReplaceSortOrder(ClientContext &context, IcebergTransaction &transaction, IcebergTable &table_info,
+static void ReplaceSortOrder(IcebergTransaction &transaction, IcebergTable &table_info,
                              const vector<unique_ptr<ParsedExpression>> &sort_keys, const IcebergTableSchema &schema) {
 	auto &metadata = table_info.table_metadata;
 	if (sort_keys.empty() && (!metadata.HasSortOrder() || metadata.default_sort_order_id.GetIndex() == 0)) {
-		// unsorted stays unsorted
+		table_info.GetOrCreateTransactionData(transaction).updates.push_back(make_uniq<SetDefaultSortOrder>(0));
 		return;
 	}
-	auto &transaction_data = table_info.GetOrCreateTransactionData(transaction);
-	auto new_sort_order_id =
-	    sort_keys.empty() ? UNSORTED_SORT_ORDER_ID : NumericCast<int32_t>(table_info.GetNextSortOrderId());
-	auto new_sort_order = IcebergTable::BuildSortOrder(context, sort_keys, schema, new_sort_order_id);
-	auto existing_sort_order_id = table_info.GetExistingSortOrderId(new_sort_order);
-	if (existing_sort_order_id) {
-		metadata.default_sort_order_id = NumericCast<idx_t>(*existing_sort_order_id);
-		transaction_data.TableSetDefaultSortOrder();
-		return;
+	vector<OrderByNode> orders;
+	orders.reserve(sort_keys.size());
+	for (auto &key : sort_keys) {
+		orders.emplace_back(OrderType::ORDER_DEFAULT, OrderByNullType::ORDER_DEFAULT, key->Copy());
 	}
-	metadata.sort_specs.emplace(new_sort_order_id, std::move(new_sort_order));
-	metadata.default_sort_order_id = NumericCast<idx_t>(new_sort_order_id);
-	transaction_data.TableAddSortOrder();
-	transaction_data.TableSetDefaultSortOrder();
+	table_info.SetSortedBy(transaction, orders, schema);
 }
 
-IcebergTable &IcebergTableSet::ReplaceEntry(ClientContext &context, IcebergCatalog &catalog, IcebergSchemaEntry &schema,
+IcebergTable &IcebergTableSet::ReplaceEntry(ClientContext &context, IcebergCatalog &catalog,
                                             IcebergTable &catalog_table, CreateTableInfo &info) {
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 	auto &alter_update = iceberg_transaction.GetOrCreateAlter();
@@ -583,19 +575,18 @@ IcebergTable &IcebergTableSet::ReplaceEntry(ClientContext &context, IcebergCatal
 		        .GetValue<string>();
 	}
 
-	// the new columns get field ids none of the table's earlier schemas used
-	int32_t first_field_id =
-	    metadata.last_column_id.IsValid() ? NumericCast<int32_t>(metadata.last_column_id.GetIndex()) + 1 : 1;
 	int32_t last_column_id;
 	auto new_schema = IcebergCreateTableRequest::CreateIcebergSchema(context, metadata, info.columns, &info.constraints,
-	                                                                 last_column_id, first_field_id);
+	                                                                 last_column_id);
+	last_column_id = IcebergCreateTableRequest::AssignReplacementFieldIds(*new_schema, metadata);
+	transaction_data.TableAddAssertLastAssignedFieldId();
 	metadata.last_column_id = NumericCast<idx_t>(last_column_id);
-	IntroduceNewSchema(context, table_info, transaction_data, std::move(new_schema));
+	IntroduceNewSchema(context, table_info, transaction_data, std::move(new_schema), false);
 	auto &current_schema = metadata.GetLatestSchema();
 
 	// the partitioning and sort order of the replaced table do not carry over
 	table_info.SetPartitionedBy(iceberg_transaction, info.partition_keys, current_schema);
-	ReplaceSortOrder(context, iceberg_transaction, table_info, info.sort_keys, current_schema);
+	ReplaceSortOrder(iceberg_transaction, table_info, info.sort_keys, current_schema);
 
 	if (!properties.empty()) {
 		for (auto &property : properties) {
@@ -604,7 +595,7 @@ IcebergTable &IcebergTableSet::ReplaceEntry(ClientContext &context, IcebergCatal
 		transaction_data.TableSetProperties(properties);
 	}
 	// nor does its data
-	transaction_data.TableReplaceContents();
+	transaction_data.TableReplaceContents(metadata);
 	return table_info;
 }
 

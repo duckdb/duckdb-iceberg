@@ -202,7 +202,14 @@ static void CreateTableRequirements(DatabaseInstance &db, ClientContext &context
 		auto uuid_requirement = AssertTableUUIDRequirement(transaction_data.initial_table_uuid);
 		uuid_requirement.CreateRequirement(db, context, commit_state);
 	}
-	if (current_snapshot && !transaction_data.alters.empty()) {
+	if (transaction_data.replaces_table) {
+		if (transaction_data.initial_snapshot_id) {
+			AssertRefSnapshotId requirement(*transaction_data.initial_snapshot_id);
+			requirement.CreateRequirement(db, context, commit_state);
+		} else {
+			commit_state.table_change.requirements.push_back(CreateAssertNoSnapshotRequirement());
+		}
+	} else if (current_snapshot && !transaction_data.alters.empty()) {
 		commit_state.table_change.requirements.push_back(CreateAssertRefSnapshotIdRequirement(*current_snapshot));
 	} else if (!current_snapshot && !transaction_data.alters.empty() && !has_assert_create) {
 		commit_state.table_change.requirements.push_back(CreateAssertNoSnapshotRequirement());
@@ -210,10 +217,8 @@ static void CreateTableRequirements(DatabaseInstance &db, ClientContext &context
 }
 
 //! Safe to re-apply a DELETE on retry only if every commit in (base, tip] was a
-//! pure append; anything else may have removed/rewritten the target data. Ranges
-//! over sequence numbers (parent links aren't populated on read snapshots). A
-//! scan/tip snapshot the catalog doesn't expose (e.g. no history) can't be
-//! proven safe, so it counts as not reappliable.
+//! pure append and the tip descends from the scanned snapshot. Keep the sequence
+//! range validation, then verify ancestry to reject replacement lineage breaks.
 static bool DeleteCanReapply(const IcebergTableMetadata &metadata, int64_t base_snapshot_id, int64_t tip_snapshot_id) {
 	if (base_snapshot_id == tip_snapshot_id) {
 		return true;
@@ -238,6 +243,19 @@ static bool DeleteCanReapply(const IcebergTableMetadata &metadata, int64_t base_
 			continue;
 		}
 		if (snapshot.operation != IcebergSnapshotOperationType::APPEND) {
+			return false;
+		}
+	}
+	// Replacement can publish a newer append with no parent. Sequence order alone
+	// does not prove that the tip continues the history the DELETE scanned.
+	unordered_set<int64_t> visited;
+	auto ancestor = tip;
+	while (ancestor->snapshot_id != base_snapshot_id) {
+		if (!ancestor->parent_snapshot_id || !visited.insert(ancestor->snapshot_id).second) {
+			return false;
+		}
+		ancestor = metadata.FindSnapshotByIdInternal(*ancestor->parent_snapshot_id);
+		if (!ancestor) {
 			return false;
 		}
 	}
@@ -301,6 +319,18 @@ static SingleTableStagedCommit StageSingleTableCommit(DatabaseInstance &db, Iceb
 	auto current_snapshot = metadata.GetLatestSnapshot();
 	auto &transaction_data = *commit_state.table_info.transaction_data;
 	transaction_data.VerifyMergeDeletesComplete();
+	if (transaction_data.replaces_table && transaction_data.initial_snapshot_id && transaction_data.alters.empty()) {
+		// Nessie accepts remove-snapshot-ref(main) as a no-op. Without a new snapshot,
+		// committing the replacement would silently keep the previous table's rows.
+		auto &properties = table_info.catalog.catalog_properties;
+		auto nessie = properties.find("nessie.is-nessie-catalog");
+		if (nessie != properties.end() && StringUtil::CIEquals(nessie->second, "true")) {
+			throw NotImplementedException(
+			    "Nessie cannot commit CREATE OR REPLACE TABLE without a new snapshot because it does not support "
+			    "removing the current snapshot. Use CREATE OR REPLACE TABLE AS SELECT (with WHERE false for an "
+			    "empty replacement), or insert into the replacement in the same transaction.");
+		}
+	}
 	info.retryable = transaction_data.SupportsAppendRetry();
 	info.retry_config = IcebergRetryConfig::FromTableMetadata(metadata);
 	if (!transaction_data.alters.empty()) {

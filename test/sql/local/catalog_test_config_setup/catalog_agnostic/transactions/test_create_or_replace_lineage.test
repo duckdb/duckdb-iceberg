@@ -1,0 +1,109 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_create_or_replace_lineage.test
+# description: Replacement ancestry checks and existing snapshotless DELETE retry behavior
+# group: [transactions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env TIMETRAVEL_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+CREATE TABLE my_datalake.default.cor_lineage AS SELECT 1 a;
+
+statement ok
+SET VARIABLE cor_old_head = (SELECT snapshot_id FROM iceberg_snapshots(my_datalake.default.cor_lineage));
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_lineage AS SELECT 2 a;
+
+statement error
+SELECT * FROM iceberg_rollback_to_snapshot('my_datalake.default.cor_lineage', getvariable('cor_old_head'));
+----
+not an ancestor
+
+query I
+SELECT a FROM my_datalake.default.cor_lineage AT (VERSION => getvariable('cor_old_head'));
+----
+1
+
+statement ok
+SET VARIABLE cor_new_head = (SELECT snapshot_id FROM iceberg_snapshots(my_datalake.default.cor_lineage)
+ORDER BY sequence_number DESC LIMIT 1);
+
+statement ok
+INSERT INTO my_datalake.default.cor_lineage VALUES (3);
+
+statement ok
+SELECT * FROM iceberg_rollback_to_snapshot('my_datalake.default.cor_lineage', getvariable('cor_new_head'));
+
+query I
+SELECT a FROM my_datalake.default.cor_lineage;
+----
+2
+
+statement ok
+DROP TABLE my_datalake.default.cor_lineage;
+
+statement ok
+CREATE TABLE my_datalake.default.cor_lineage (a INTEGER)
+WITH ('write.delete.isolation-level' = 'snapshot', 'write.delete.mode' = 'merge-on-read');
+
+statement ok
+INSERT INTO my_datalake.default.cor_lineage VALUES (1), (2);
+
+statement ok writer
+BEGIN;
+
+statement ok writer
+DELETE FROM my_datalake.default.cor_lineage WHERE a = 1;
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_lineage (a INTEGER);
+
+# A parentless append is not an append descendant of the DELETE's scanned snapshot.
+statement ok
+INSERT INTO my_datalake.default.cor_lineage VALUES (7);
+
+statement error writer
+COMMIT;
+----
+conflicts with a concurrent
+
+query I
+SELECT list(a) = [7] FROM my_datalake.default.cor_lineage;
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.cor_lineage;
+
+# Preserve the existing early return when refreshed metadata has no current snapshot.
+# Unlike the populated case above, a pending DELETE may commit after bare replacement.
+statement ok
+CREATE TABLE my_datalake.default.cor_lineage (a INTEGER)
+WITH ('write.delete.isolation-level' = 'snapshot', 'write.delete.mode' = 'merge-on-read');
+
+statement ok
+INSERT INTO my_datalake.default.cor_lineage VALUES (1), (2);
+
+statement ok writer
+BEGIN;
+
+statement ok writer
+DELETE FROM my_datalake.default.cor_lineage WHERE a = 1;
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_lineage (a INTEGER);
+
+statement ok writer
+COMMIT;
+
+# Retrying the old DELETE must not bring back the original table's data.
+query I
+SELECT count(*) FROM my_datalake.default.cor_lineage;
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.cor_lineage;

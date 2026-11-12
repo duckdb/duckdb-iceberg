@@ -156,7 +156,7 @@ IcebergCreateTableRequest::CreateIcebergColumn(const ColumnDefinition &column_de
 
 shared_ptr<IcebergTableSchema> IcebergCreateTableRequest::CreateIcebergSchema(
     ClientContext &context, const IcebergTableMetadata &table_metadata, const ColumnList &columns,
-    optional_ptr<const vector<unique_ptr<Constraint>>> constraints_p, int32_t &last_column_id, int32_t first_field_id) {
+    optional_ptr<const vector<unique_ptr<Constraint>>> constraints_p, int32_t &last_column_id) {
 	auto schema = make_shared_ptr<IcebergTableSchema>();
 	schema->schema_id = table_metadata.GetCurrentSchemaId();
 
@@ -164,7 +164,7 @@ shared_ptr<IcebergTableSchema> IcebergCreateTableRequest::CreateIcebergSchema(
 	//  this makes the IcebergTableSchema, and we use that to dump data to JSON.
 	//  we can just directly dump it to json.
 	auto column_iterator = columns.Logical();
-	int32_t field_id = first_field_id;
+	int32_t field_id = 1;
 
 	auto next_field_id = [&field_id]() -> idx_t {
 		return field_id++;
@@ -196,6 +196,44 @@ shared_ptr<IcebergTableSchema> IcebergCreateTableRequest::CreateIcebergSchema(
 	}
 	last_column_id = field_id - 1;
 	return schema;
+}
+
+static void IndexFieldNames(const vector<unique_ptr<IcebergColumnDefinition>> &columns, const string &parent,
+                            unordered_map<string, int32_t> &ids) {
+	for (auto &column : columns) {
+		auto name = parent.empty() ? column->name : parent + "." + column->name;
+		ids.emplace(name, column->id);
+		IndexFieldNames(column->GetChildren(), name, ids);
+	}
+}
+
+static void AssignFieldIds(const vector<unique_ptr<IcebergColumnDefinition>> &columns, const string &parent,
+                           const unordered_map<string, int32_t> &ids, int32_t &last_id) {
+	// Iceberg assigns sibling IDs before descending into structs, list elements or map keys/values.
+	for (auto &column : columns) {
+		auto name = parent.empty() ? column->name : parent + "." + column->name;
+		auto existing = ids.find(name);
+		if (existing != ids.end()) {
+			column->id = existing->second;
+		} else {
+			last_id = NumericCast<int32_t>(static_cast<int64_t>(last_id) + 1);
+			column->id = last_id;
+		}
+	}
+	for (auto &column : columns) {
+		auto name = parent.empty() ? column->name : parent + "." + column->name;
+		AssignFieldIds(column->GetChildren(), name, ids, last_id);
+	}
+}
+
+int32_t IcebergCreateTableRequest::AssignReplacementFieldIds(IcebergTableSchema &schema,
+                                                             const IcebergTableMetadata &metadata) {
+	unordered_map<string, int32_t> ids;
+	IndexFieldNames(metadata.GetLatestSchema().columns, string(), ids);
+	auto last_id = NumericCast<int32_t>(metadata.GetLastColumnId());
+	AssignFieldIds(schema.columns, string(), ids, last_id);
+	schema.last_column_id = last_id;
+	return last_id;
 }
 
 void IcebergCreateTableRequest::PopulateSchema(JSONWriter &writer, JSONMutableValue schema_json,

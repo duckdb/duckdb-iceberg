@@ -70,8 +70,8 @@ bool IcebergSchemaEntry::HandleCreateConflict(CatalogTransaction &transaction, C
 			return true;
 		}
 		if (existing_entry->type != CatalogType::TABLE_ENTRY) {
-			throw CatalogException("%s with name \"%s\" already exists!", CatalogTypeToString(existing_entry->type),
-			                       entry_name);
+			throw CatalogException("Existing object \"%s\" is of type %s, trying to replace with type Table",
+			                       entry_name, CatalogTypeToString(existing_entry->type));
 		}
 		if (latest_state && latest_state->GetInfo().HasTransactionUpdates()) {
 			throw NotImplementedException("Cannot replace Iceberg table '%s' that has pending updates in the same "
@@ -151,8 +151,7 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateTable(CatalogTransaction &t
 		if (!latest_state || !latest_state->IsAlive()) {
 			throw InternalException("Table '%s' to replace is not resolved in the transaction", table_name);
 		}
-		auto &table_info =
-		    IcebergTableSet::ReplaceEntry(context, ir_catalog, *this, latest_state->GetInfo(), base_info);
+		auto &table_info = IcebergTableSet::ReplaceEntry(context, ir_catalog, latest_state->GetInfo(), base_info);
 		return table_info.GetLatestSchema();
 	}
 
@@ -611,7 +610,7 @@ static void UpdateNameMapping(ClientContext &context, IcebergTable &updated_tabl
 }
 
 void IntroduceNewSchema(ClientContext &context, IcebergTable &updated_table, IcebergTransactionData &transaction_data,
-                        shared_ptr<IcebergTableSchema> new_schema) {
+                        shared_ptr<IcebergTableSchema> new_schema, bool update_schema_properties) {
 	auto &old_schema = updated_table.table_metadata.GetLatestSchema();
 	auto &schemas = updated_table.table_metadata.GetSchemasMutable();
 	auto new_schema_id = static_cast<int32_t>(updated_table.GetMaxSchemaId() + 1);
@@ -625,9 +624,12 @@ void IntroduceNewSchema(ClientContext &context, IcebergTable &updated_table, Ice
 	}
 	updated_table.table_metadata.SetCurrentSchemaId(result_schema.schema_id);
 
-	//! Keep schema-dependent properties together for every schema change, including historical schema reuse.
-	UpdatePerColumnProperties(updated_table, transaction_data, old_schema, result_schema);
-	UpdateNameMapping(context, updated_table, transaction_data, old_schema, result_schema);
+	//! ALTER maintains schema-dependent properties, including on historical schema reuse.
+	//! Reference replacement preserves these properties unless explicitly overridden.
+	if (update_schema_properties) {
+		UpdatePerColumnProperties(updated_table, transaction_data, old_schema, result_schema);
+		UpdateNameMapping(context, updated_table, transaction_data, old_schema, result_schema);
+	}
 }
 
 //! DuckDB can't read or write geography values, so a change to a geography field, or to a column that holds one, is

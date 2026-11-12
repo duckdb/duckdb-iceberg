@@ -66,7 +66,7 @@ SELECT sequence_number, operation FROM iceberg_snapshots(my_datalake.default.cor
 WHERE sequence_number <= 2 ORDER BY sequence_number;
 ----
 1	append
-2	overwrite
+2	append
 
 query II
 SELECT count(*) = 1, bool_and(operation = CASE WHEN {removed} = 3 THEN 'delete' ELSE 'overwrite' END)
@@ -76,10 +76,11 @@ true	true
 
 query I
 WITH snapshots AS (
-    SELECT parent_id, lag(snapshot_id) OVER (ORDER BY sequence_number) previous_id
+    SELECT sequence_number, parent_id, lag(snapshot_id) OVER (ORDER BY sequence_number) previous_id
     FROM iceberg_snapshots(my_datalake.default.cor_cow)
 )
-SELECT bool_and(parent_id IS NOT DISTINCT FROM previous_id) FROM snapshots;
+SELECT bool_and(CASE WHEN sequence_number = 2 THEN parent_id IS NULL
+                     ELSE parent_id IS NOT DISTINCT FROM previous_id END) FROM snapshots;
 ----
 true
 

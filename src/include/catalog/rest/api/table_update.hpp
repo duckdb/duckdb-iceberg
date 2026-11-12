@@ -196,4 +196,13 @@ struct SetSnapshotRef : public IcebergTableUpdate {
 	string ref_name;
 };
 
+struct RemoveSnapshotRef : public IcebergTableUpdate {
+	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::REMOVE_SNAPSHOT_REF;
+
+	explicit RemoveSnapshotRef(string ref_name);
+	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
+
+	string ref_name;
+};
+
 } // namespace duckdb

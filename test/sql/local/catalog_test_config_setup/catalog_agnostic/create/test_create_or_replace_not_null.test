@@ -1,0 +1,89 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_or_replace_not_null.test
+# description: Replacement exposes its own NOT NULL constraints and restores the original constraints on rollback
+# group: [create]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+foreach completion rollback commit
+
+statement ok
+CREATE TABLE my_datalake.default.cor_not_null (a INTEGER NOT NULL, b INTEGER);
+
+statement ok
+INSERT INTO my_datalake.default.cor_not_null VALUES (1, NULL);
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_not_null (b INTEGER NOT NULL, a INTEGER);
+
+query II
+SELECT column_name, "null" FROM (DESCRIBE my_datalake.default.cor_not_null);
+----
+b	NO
+a	YES
+
+query II
+SELECT column_name, is_nullable FROM information_schema.columns
+WHERE table_catalog = 'my_datalake' AND table_schema = 'default' AND table_name = 'cor_not_null'
+ORDER BY ordinal_position;
+----
+b	NO
+a	YES
+
+query II
+SELECT constraint_type, constraint_column_names FROM duckdb_constraints()
+WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'cor_not_null';
+----
+NOT NULL	[b]
+
+# Publish a snapshot too, so this also exercises supported replacement on Nessie.
+statement ok
+INSERT INTO my_datalake.default.cor_not_null VALUES (2, NULL);
+
+statement ok
+{completion};
+
+# Reload through table lookup before checking the catalog listing, as in
+# test_not_null_metadata.test. Listings can otherwise retain a schema from a
+# previous transaction (also after ordinary ALTER TABLE).
+query I
+SELECT list(column_name ORDER BY column_name) FILTER (WHERE "null" = 'NO') =
+    CASE WHEN '{completion}' = 'commit' THEN ['b'] ELSE ['a'] END
+FROM (DESCRIBE my_datalake.default.cor_not_null);
+----
+true
+
+query I
+SELECT list(column_name ORDER BY ordinal_position) FILTER (WHERE is_nullable = 'NO') =
+    CASE WHEN '{completion}' = 'commit' THEN ['b'] ELSE ['a'] END
+FROM information_schema.columns
+WHERE table_catalog = 'my_datalake' AND table_schema = 'default' AND table_name = 'cor_not_null';
+----
+true
+
+query I
+SELECT constraint_column_names = CASE WHEN '{completion}' = 'commit' THEN ['b'] ELSE ['a'] END
+FROM duckdb_constraints()
+WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'cor_not_null';
+----
+true
+
+# Rejection must use whichever required column survived commit/rollback.
+statement error
+INSERT INTO my_datalake.default.cor_not_null VALUES (NULL, NULL);
+----
+NOT NULL constraint failed
+
+query I
+SELECT count(*) FROM my_datalake.default.cor_not_null;
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.cor_not_null;
+
+endloop

@@ -22,9 +22,6 @@ select count(*) from my_datalake.default.cor_table;
 statement ok
 set variable location_before = (select split_part(file_path, '/data/', 1) from iceberg_metadata(my_datalake.default.cor_table) limit 1);
 
-statement ok
-set variable snapshots_before = (select count(*) from iceberg_snapshots(my_datalake.default.cor_table));
-
 # --- outside of a transaction the table is replaced right away, schema included ---
 
 statement ok
@@ -41,20 +38,16 @@ select column_name from (describe my_datalake.default.cor_table) order by 1;
 b
 c
 
-# the table keeps its identity: same location, and the earlier snapshots stay in its history
+# The location stays unchanged. Historical snapshot retention is checked in
+# test_create_or_replace_history.test, which requires SNAPSHOT_HISTORY_SUPPORT.
 query I
 select (select split_part(file_path, '/data/', 1) from iceberg_metadata(my_datalake.default.cor_table) limit 1) = getvariable('location_before');
 ----
 true
 
+# replacement starts a new lineage
 query I
-select count(*) > getvariable('snapshots_before') from iceberg_snapshots(my_datalake.default.cor_table);
-----
-true
-
-# the overwrite remains linked to the previous snapshot
-query I
-select parent_id is not null from iceberg_snapshots(my_datalake.default.cor_table) order by sequence_number desc limit 1;
+select parent_id is null from iceberg_snapshots(my_datalake.default.cor_table) order by sequence_number desc limit 1;
 ----
 true
 

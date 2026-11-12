@@ -64,14 +64,14 @@ SELECT a FROM my_datalake.default.cor_history AT (VERSION => getvariable('cor_sn
 statement ok
 COMMIT;
 
-# The bare replacement and the later INSERT each publish a snapshot.
+# Only the later INSERT publishes a snapshot; the bare replacement detaches main.
 query I
 SELECT count(*) FROM iceberg_snapshots(my_datalake.default.cor_history);
 ----
-3
+2
 
 query I
-SELECT parent_id IS NOT NULL FROM iceberg_snapshots(my_datalake.default.cor_history) ORDER BY sequence_number DESC LIMIT 1;
+SELECT parent_id IS NULL FROM iceberg_snapshots(my_datalake.default.cor_history) ORDER BY sequence_number DESC LIMIT 1;
 ----
 true
 
@@ -108,6 +108,13 @@ new
 
 statement ok
 CREATE OR REPLACE TABLE my_datalake.default.cor_history AS SELECT b || '-self' b FROM my_datalake.default.cor_history;
+
+# CTAS retains both historical snapshots and adds a new, parentless snapshot.
+query II
+SELECT count(*), count(*) FILTER (WHERE parent_id IS NOT NULL)
+FROM iceberg_snapshots(my_datalake.default.cor_history);
+----
+3	0
 
 query I
 SELECT b FROM my_datalake.default.cor_history;
