@@ -1,0 +1,72 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_manifests_target_size.test
+# description: iceberg_rewrite_manifests splits output by target size and clusters each manifest by partition.
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.rewrite_manifests_target_size;
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_manifests_target_size (id INTEGER, category VARCHAR)
+PARTITIONED BY (category)
+WITH ('format-version' = 2, 'commit.manifest-merge.enabled' = false);
+
+# Four appends that each touch all three partitions.
+loop i 0 4
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_manifests_target_size VALUES ({i}, 'c'), ({i}, 'a'), ({i}, 'b');
+
+endloop
+
+# Size the target so the four manifests are rewritten into three.
+statement ok
+SET VARIABLE target_size = (
+    SELECT sum(length) // 3 + 1 FROM iceberg_manifests(my_datalake.default.rewrite_manifests_target_size)
+);
+
+query II
+CALL iceberg_rewrite_manifests('my_datalake.default.rewrite_manifests_target_size',
+    target_manifest_size_bytes => getvariable('target_size'));
+----
+4	3
+
+# Twelve files sorted by partition and split evenly: one partition per manifest.
+query II
+SELECT category, count(DISTINCT manifest_path)
+FROM iceberg_metadata(my_datalake.default.rewrite_manifests_target_size) m
+JOIN (SELECT DISTINCT filename, category FROM my_datalake.default.rewrite_manifests_target_size) t
+ON m.file_path = t.filename
+GROUP BY category ORDER BY category;
+----
+a	1
+b	1
+c	1
+
+query III
+SELECT
+    partition_summaries[1].lower_bound,
+    partition_summaries[1].upper_bound,
+    existing_data_files_count
+FROM iceberg_manifests(my_datalake.default.rewrite_manifests_target_size)
+ORDER BY 1;
+----
+a	a	4
+b	b	4
+c	c	4
+
+query I
+SELECT count(*) FROM my_datalake.default.rewrite_manifests_target_size WHERE category = 'b';
+----
+4
+
+statement error
+CALL iceberg_rewrite_manifests('my_datalake.default.rewrite_manifests_target_size', target_manifest_size_bytes => 0);
+----
+must be > 0
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_manifests_target_size;
