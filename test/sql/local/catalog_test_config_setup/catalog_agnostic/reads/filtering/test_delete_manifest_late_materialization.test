@@ -67,7 +67,8 @@ select sum(payload) from my_datalake.default.delete_manifest_late_materializatio
 
 query I
 select count(*) from duckdb_logs()
-where type = 'Iceberg' and message.contains('phase=delete_manifest_scan_started');
+where type = 'Iceberg' and (message.contains('phase=delete_manifest_scan_started')
+  or message.contains('phase=delete_candidate_index'));
 ----
 0
 
@@ -82,7 +83,8 @@ select sum(payload) from my_datalake.default.delete_manifest_late_materializatio
 
 query I
 select count(*) from duckdb_logs()
-where type = 'Iceberg' and message.contains('phase=delete_manifest_scan_started');
+where type = 'Iceberg' and (message.contains('phase=delete_manifest_scan_started')
+  or message.contains('phase=delete_candidate_index'));
 ----
 0
 

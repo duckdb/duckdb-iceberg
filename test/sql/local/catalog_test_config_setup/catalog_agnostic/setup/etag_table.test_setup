@@ -1,0 +1,30 @@
+# Unexpected catalog errors must fail the capability assessment.
+set ignore_error_messages
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+# A fresh table makes the first LoadTable unconditional.
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.etag_revalidation;
+
+statement ok
+CREATE TABLE my_datalake.default.etag_revalidation AS SELECT 42 AS id;
+
+statement ok
+CALL enable_logging(['HTTP', 'Iceberg'], storage='memory');
+
+statement ok
+SET redact_http_logs = false;
+
+# Match only this table's LoadTable requests, excluding storage and scan-planning
+# requests. HTTP header names are case insensitive.
+statement ok
+CREATE TEMP VIEW etag_load_requests AS
+SELECT request, response,
+	list_first([header.value FOR header IN map_entries(response.headers) IF lower(header.key) = 'etag']) AS etag
+FROM duckdb_logs_parsed('HTTP')
+WHERE request.type = 'GET' AND request.url LIKE '%/namespaces/default/tables/etag_revalidation';
+
+statement ok
+CALL truncate_duckdb_logs();

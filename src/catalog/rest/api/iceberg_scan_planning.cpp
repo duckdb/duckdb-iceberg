@@ -328,7 +328,7 @@ static void FetchPlanTasks(ClientContext &context, IcebergTable &table_info, Pla
 		}
 		auto response_doc = ICUtils::APIResultToDoc(response->body);
 		auto tasks = rest_api_objects::FetchScanTasksResult::FromJSON(response_doc->GetRoot()).scan_tasks;
-		AppendTasks(std::move(tasks), table_info.table_metadata, accumulator);
+		AppendTasks(std::move(tasks), table_info.GetMetadata(), accumulator);
 	}
 }
 
@@ -449,7 +449,7 @@ bool IcebergServerSideScanPlanning::Plan(ClientContext &context, IcebergTable &t
 			auto status = GetRequiredString(root, "status");
 			if (status == "completed") {
 				auto completed = rest_api_objects::CompletedPlanningResult::FromJSON(root);
-				AppendTasks(std::move(completed.scan_tasks), table_info.table_metadata, accumulator);
+				AppendTasks(std::move(completed.scan_tasks), table_info.GetMetadata(), accumulator);
 				if (completed.object_10.storage_credentials) {
 					result.storage_credentials = std::move(*completed.object_10.storage_credentials);
 				}
@@ -513,8 +513,8 @@ bool IcebergServerSideScanPlanning::Plan(ClientContext &context, IcebergTable &t
 		}
 
 		result.data_manifests =
-		    MakeManifests(table_info.table_metadata, std::move(data_files), IcebergManifestContentType::DATA, 0);
-		result.delete_manifests = MakeManifests(table_info.table_metadata, std::move(accumulator.delete_files),
+		    MakeManifests(table_info.GetMetadata(), std::move(data_files), IcebergManifestContentType::DATA, 0);
+		result.delete_manifests = MakeManifests(table_info.GetMetadata(), std::move(accumulator.delete_files),
 		                                        IcebergManifestContentType::DELETE, 1);
 		return true;
 	} catch (...) {

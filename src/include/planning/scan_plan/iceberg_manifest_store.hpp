@@ -1,6 +1,7 @@
 #pragma once
 
 #include "planning/scan_plan/iceberg_scan_plan_context.hpp"
+#include "planning/deletes/iceberg_delete_candidate_index.hpp"
 #include "planning/iceberg_manifest_read_state.hpp"
 #include "planning/metadata_io/manifest/bound_iceberg_manifest_entry.hpp"
 
@@ -13,6 +14,8 @@ struct IcebergDeleteManifestLoadState;
 //! The caller's planning lock protects publication; delete I/O runs outside it.
 //! Owns background data-read tasks and drains them before releasing their storage.
 class IcebergManifestStore {
+	friend struct IcebergManifestStoreTest;
+
 public:
 	IcebergManifestStore(annotated_mutex &lock, IcebergScanPlanContext context);
 	~IcebergManifestStore();
@@ -20,7 +23,8 @@ public:
 	void LoadManifestList() DUCKDB_REQUIRES(lock);
 	void StartDataManifestScan(const vector<bool> &matching_manifests, idx_t filter_count) DUCKDB_REQUIRES(lock);
 	void ReadDeleteManifests(const vector<idx_t> &manifest_indexes, idx_t filter_count);
-	vector<IcebergDeleteFileReference> GetDeleteFiles(const vector<idx_t> &manifest_indexes) DUCKDB_REQUIRES(lock);
+	vector<IcebergDeleteManifestHandle> GetDeleteIndexes(const vector<idx_t> &manifest_indexes) DUCKDB_REQUIRES(lock);
+	bool DeleteFileIsInvalidated(const IcebergFileIdentity &file) const;
 	bool TryGetNextBatch(IcebergDataViewCursor &cursor) DUCKDB_REQUIRES(lock);
 	void FinishScanTasks() DUCKDB_REQUIRES(lock);
 	const vector<IcebergManifestListEntry> &DataManifests() DUCKDB_REQUIRES(lock);
@@ -42,6 +46,8 @@ private:
 	vector<IcebergManifestListEntry> committed_delete_manifests DUCKDB_GUARDED_BY(lock);
 	//! Owns the scan views of pending content; these never refer to Avro files.
 	vector<IcebergManifestListEntry> transaction_delete_manifests DUCKDB_GUARDED_BY(lock);
+	//! Completed content owns its entries independently of manifest-list inheritance.
+	vector<shared_ptr<const IcebergDeleteCandidateIndex>> delete_indexes DUCKDB_GUARDED_BY(lock);
 	vector<shared_ptr<IcebergDeleteManifestLoadState>> delete_manifest_loads DUCKDB_GUARDED_BY(delete_manifest_lock);
 
 	vector<IcebergManifestListEntry> committed_data_manifests DUCKDB_GUARDED_BY(lock);

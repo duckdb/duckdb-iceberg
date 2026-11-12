@@ -1,0 +1,142 @@
+# name: test/sql/local/native_catalog/delete_predicate_provider_guard.test
+# description: Server-assigned deletes are checked per data file before caching query predicates
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+SET threads=1;
+
+statement ok
+CREATE TABLE my_datalake.default.delete_provider_guard (id INTEGER) WITH ('format-version'=2);
+
+statement ok
+INSERT INTO my_datalake.default.delete_provider_guard VALUES (1), (2);
+
+statement ok
+INSERT INTO my_datalake.default.delete_provider_guard VALUES (1), (2);
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE provider_data_files = (
+	SELECT list(json_object('spec-id', 0, 'partition', []::JSON[], 'content', 'data',
+		'file-path', file_path, 'file-format', 'parquet', 'file-size-in-bytes', 100,
+		'record-count', record_count) ORDER BY file_path)
+	FROM iceberg_metadata(my_datalake.default.delete_provider_guard)
+	WHERE content='DATA' AND status<>'DELETED'
+);
+
+statement ok
+COMMIT;
+
+# An external equality delete is assigned only to the second data file. Both
+# files contain the deleted key, so ignoring the server assignment loses a row.
+statement ok
+SET VARIABLE provider_field_ids = (
+	SELECT {id: (field->>'id')::INTEGER}
+	FROM (
+		SELECT unnest(metadata::JSON->'schemas'->0->'fields'->'$[*]') AS field
+		FROM iceberg_load_table_response(my_datalake.default.delete_provider_guard)
+	) WHERE field->>'name'='id'
+);
+
+statement ok
+COPY (SELECT 2::INTEGER AS id) TO '{TEST_DIR}/provider_equality.parquet'
+(FORMAT PARQUET, FIELD_IDS getvariable('provider_field_ids'));
+
+statement ok
+SET VARIABLE provider_plan_config = (
+	SELECT json_merge_patch(body::JSON, json_object('endpoints',
+		list_append((body::JSON->'endpoints')::VARCHAR[],
+			'POST /v1/{prefix}/namespaces/{namespace}/tables/{table}/plan')))
+	FROM iceberg_test_catalog_request('GET', '/v1/config', NULL)
+);
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	json_object('method', 'GET', 'path', '/v1/config', 'status', 200, 'body', getvariable('provider_plan_config')));
+----
+204
+
+statement ok
+ATTACH '' AS provider_catalog (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none');
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	json_object('method', 'POST', 'path', '/v1/namespaces/default/tables/delete_provider_guard/plan',
+		'status', 200, 'body', json_object('status', 'completed',
+			'delete-files', [json_object('spec-id', 0, 'partition', []::JSON[], 'content', 'equality-deletes',
+				'file-path', '{TEST_DIR}/provider_equality.parquet', 'file-format', 'parquet',
+				'file-size-in-bytes', 100, 'record-count', 1,
+				'equality-ids', [getvariable('provider_field_ids').id])],
+			'file-scan-tasks', [
+				json_object('data-file', getvariable('provider_data_files')[1], 'delete-file-references', []::INTEGER[]),
+				json_object('data-file', getvariable('provider_data_files')[2], 'delete-file-references', [0])
+			])));
+----
+204
+
+statement ok
+SET iceberg_use_server_side_scan_planning=true;
+
+statement ok
+CALL enable_logging('Iceberg', storage='memory');
+
+foreach threads 1 8
+
+statement ok
+SET threads={threads};
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# The unassigned file is encountered first at one thread. Its rejection must
+# not become a cached false query predicate for the assigned file.
+query I
+SELECT list(id ORDER BY id) FROM provider_catalog.default.delete_provider_guard WHERE id>=1;
+----
+[1, 1, 2]
+
+query I
+SELECT message FROM duckdb_logs() WHERE type='Iceberg' AND message LIKE '%phase=delete_planning%';
+----
+Iceberg metadata phase=delete_planning scope=planner_view scan_tasks=2 delete_candidate_visits=2 delete_predicate_evaluations=1
+
+query I
+SELECT count(*) FROM duckdb_logs() WHERE message.contains('Scan planning failed');
+----
+0
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# The provider guard must also run on the unfiltered fast path.
+query I
+SELECT list(id ORDER BY id) FROM provider_catalog.default.delete_provider_guard;
+----
+[1, 1, 2]
+
+query I
+SELECT message FROM duckdb_logs() WHERE type='Iceberg' AND message LIKE '%phase=delete_planning%';
+----
+Iceberg metadata phase=delete_planning scope=planner_view scan_tasks=2 delete_candidate_visits=2 delete_predicate_evaluations=0
+
+endloop
+
+statement ok
+DETACH provider_catalog;
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+statement ok
+DROP TABLE my_datalake.default.delete_provider_guard;

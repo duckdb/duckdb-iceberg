@@ -52,7 +52,7 @@ IcebergTransactionTableState::IcebergTransactionTableState(shared_ptr<IcebergTab
 
 IcebergTransactionTableState::IcebergTransactionTableState(IcebergTable &&transaction_table_p)
     : transaction_table(make_uniq<IcebergTable>(std::move(transaction_table_p))), status(IcebergTableStatus::ALIVE) {
-	if (!transaction_table->table_metadata.GetSchemas().IsEmpty()) {
+	if (!transaction_table->GetMetadata().GetSchemas().IsEmpty()) {
 		transaction_table->InitSchemaVersions();
 	}
 }
@@ -276,9 +276,9 @@ static void VerifyDeleteRetryability(const IcebergTable &table_info,
 	//! other isolation - unset (Iceberg's default is 'serializable') or an explicit 'serializable' - must
 	//! abort, since a concurrent append can add rows matching the delete predicate that a silent re-apply
 	//! would leave behind.
-	auto isolation_level = table_info.table_metadata.GetTableProperty(WRITE_DELETE_ISOLATION_LEVEL);
+	auto isolation_level = table_info.GetMetadata().GetTableProperty(WRITE_DELETE_ISOLATION_LEVEL);
 	if (StringUtil::CIEquals(isolation_level, "snapshot") &&
-	    DeleteCanReapply(table_info.table_metadata, scan_snapshot_id, tip_snapshot_id)) {
+	    DeleteCanReapply(table_info.GetMetadata(), scan_snapshot_id, tip_snapshot_id)) {
 		return;
 	}
 	throw TransactionException(
@@ -297,7 +297,7 @@ static SingleTableStagedCommit StageSingleTableCommit(DatabaseInstance &db, Iceb
 	table_change.identifier->_namespace.value = schema.namespace_items;
 	table_change.identifier->name = table_info.name;
 
-	auto &metadata = commit_state.table_info.table_metadata;
+	auto &metadata = commit_state.table_info.GetMetadata();
 	auto current_snapshot = metadata.GetLatestSnapshot();
 	auto &transaction_data = *commit_state.table_info.transaction_data;
 	transaction_data.VerifyMergeDeletesComplete();

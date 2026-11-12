@@ -27,7 +27,7 @@ PhysicalOperator &IcebergCatalog::PlanMergeInto(ClientContext &context, Physical
 	if (update_delete_count > 0) {
 		auto &table_entry = op.table.Cast<IcebergTableSchemaVersion>();
 		auto &updated_table = irc_transaction.GetOrCreateAlter().GetOrInitializeTable(table_entry.table_info);
-		VerifyMergeOnRead(updated_table.table_metadata, table_entry.name.GetIdentifierName(), WRITE_MERGE_MODE);
+		VerifyMergeOnRead(updated_table.GetMetadata(), table_entry.name.GetIdentifierName(), WRITE_MERGE_MODE);
 	}
 	irc_transaction.planning_merge_into = true;
 	try {

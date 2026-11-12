@@ -1,0 +1,301 @@
+# name: test/sql/local/native_catalog/rewrite_row_count_delete_bounds.test
+# description: Only applicable live deletes relax rewrite row counts, and duplicate position deletes count once
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+# Model an external writer with a three-row data file and an incorrect manifest
+# count. Deletes must not hide that mismatch. In the upper-bound case the manifest
+# understates the count; even an applicable equality delete cannot allow extra rows.
+foreach kind duplicate_position stale_position unrelated_position stale_equality deleted_equality disjoint_equality equality_upper_bound
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_delete_bounds (id INTEGER) WITH ('format-version' = 2);
+
+statement ok
+SET VARIABLE rewrite_id = (
+	SELECT (metadata::JSON->'schemas'->0->'fields'->0->>'id')::INTEGER
+	FROM iceberg_load_table_response(my_datalake.default.rewrite_delete_bounds)
+);
+
+statement ok
+COPY (SELECT * FROM (VALUES (1), (1), (2)) t(id))
+TO '{TEST_DIR}/{kind}_data.parquet' (FORMAT PARQUET, FIELD_IDS {'id': getvariable('rewrite_id')});
+
+statement ok
+COPY (SELECT '{TEST_DIR}/{kind}_data.parquet' AS file_path, 0::BIGINT AS pos)
+TO '{TEST_DIR}/{kind}_position.parquet'
+(FORMAT PARQUET, FIELD_IDS {file_path: 2147483546, pos: 2147483545});
+
+statement ok
+COPY (SELECT CASE WHEN '{kind}' IN ('disjoint_equality', 'equality_upper_bound') THEN 9 ELSE 1 END::INTEGER AS id)
+TO '{TEST_DIR}/{kind}_equality.parquet' (FORMAT PARQUET, FIELD_IDS {'id': getvariable('rewrite_id')});
+
+statement ok
+COPY (
+	SELECT 1::INTEGER AS status, 9::BIGINT AS snapshot_id,
+		9::BIGINT AS sequence_number, 9::BIGINT AS file_sequence_number,
+		{
+			content: 0::INTEGER, file_path: '{TEST_DIR}/{kind}_data.parquet', file_format: 'PARQUET',
+			partition: {}, record_count: CASE WHEN '{kind}' = 'equality_upper_bound' THEN 2 ELSE 4 END::BIGINT,
+			file_size_in_bytes: 1000::BIGINT,
+			lower_bounds: MAP {getvariable('rewrite_id'): '\x01\x00\x00\x00'::BLOB},
+			upper_bounds: MAP {getvariable('rewrite_id'): '\x02\x00\x00\x00'::BLOB}
+		} AS data_file
+) TO '{TEST_DIR}/{kind}_data.avro' (
+	FORMAT AVRO,
+	METADATA {'schema-id': '0', 'partition-spec-id': '0', 'format-version': '2', 'content': 'data'},
+	FIELD_IDS {
+		status: 0, snapshot_id: 1, sequence_number: 3, file_sequence_number: 4,
+		data_file: {__duckdb_field_id: 2, content: 134, file_path: 100, file_format: 101,
+			partition: 102, record_count: 103, file_size_in_bytes: 104,
+			lower_bounds: {__duckdb_field_id: 125, key: 126, value: 127},
+			upper_bounds: {__duckdb_field_id: 128, key: 129, value: 130}}
+	}
+);
+
+statement ok
+COPY (
+	SELECT CASE WHEN '{kind}' = 'deleted_equality' THEN 2 ELSE 1 END::INTEGER AS status,
+		10::BIGINT AS snapshot_id,
+		CASE WHEN '{kind}' = 'stale_position' THEN 8
+			WHEN '{kind}' = 'stale_equality' THEN 9 ELSE 10 END::BIGINT AS sequence_number,
+		10::BIGINT AS file_sequence_number,
+		{
+			content: CASE WHEN contains('{kind}', 'position') THEN 1 ELSE 2 END::INTEGER,
+			file_path: '{TEST_DIR}/{kind}_' || CASE WHEN contains('{kind}', 'position') THEN 'position' ELSE 'equality' END || '.parquet',
+			file_format: 'PARQUET', partition: {}, record_count: 1::BIGINT, file_size_in_bytes: 1000::BIGINT,
+			referenced_data_file: CASE WHEN '{kind}' = 'unrelated_position' THEN '{TEST_DIR}/missing.parquet'
+				WHEN contains('{kind}', 'position') THEN '{TEST_DIR}/{kind}_data.parquet' END,
+			equality_ids: CASE WHEN NOT contains('{kind}', 'position') THEN [getvariable('rewrite_id')] END,
+			null_value_counts: MAP {getvariable('rewrite_id'): 0::BIGINT},
+			lower_bounds: CASE WHEN '{kind}' = 'disjoint_equality' THEN MAP {getvariable('rewrite_id'): '\x09\x00\x00\x00'::BLOB} END,
+			upper_bounds: CASE WHEN '{kind}' = 'disjoint_equality' THEN MAP {getvariable('rewrite_id'): '\x09\x00\x00\x00'::BLOB} END
+		} AS data_file
+	FROM range(CASE WHEN '{kind}' = 'duplicate_position' THEN 2 ELSE 1 END)
+) TO '{TEST_DIR}/{kind}_deletes.avro' (
+	FORMAT AVRO,
+	METADATA {'schema-id': '0', 'partition-spec-id': '0', 'format-version': '2', 'content': 'deletes'},
+	FIELD_IDS {
+		status: 0, snapshot_id: 1, sequence_number: 3, file_sequence_number: 4,
+		data_file: {__duckdb_field_id: 2, content: 134, file_path: 100, file_format: 101,
+			partition: 102, record_count: 103, file_size_in_bytes: 104, referenced_data_file: 143,
+			equality_ids: {__duckdb_field_id: 135, list: 136},
+			null_value_counts: {__duckdb_field_id: 110, key: 121, value: 122},
+			lower_bounds: {__duckdb_field_id: 125, key: 126, value: 127},
+			upper_bounds: {__duckdb_field_id: 128, key: 129, value: 130}}
+	}
+);
+
+statement ok
+COPY (
+	SELECT '{TEST_DIR}/{kind}_' || manifest || '.avro' AS manifest_path,
+		1000::BIGINT AS manifest_length, 0::INTEGER AS partition_spec_id,
+		content::INTEGER AS content, 10::BIGINT AS sequence_number,
+		8::BIGINT AS min_sequence_number, 10::BIGINT AS added_snapshot_id,
+		CASE WHEN manifest = 'deletes' AND '{kind}' = 'deleted_equality' THEN 0
+			WHEN manifest = 'deletes' AND '{kind}' = 'duplicate_position' THEN 2 ELSE 1 END::INTEGER AS added_files_count,
+		0::INTEGER AS existing_files_count,
+		CASE WHEN manifest = 'deletes' AND '{kind}' = 'deleted_equality' THEN 1 ELSE 0 END::INTEGER AS deleted_files_count,
+		CASE WHEN manifest = 'data' THEN CASE WHEN '{kind}' = 'equality_upper_bound' THEN 2 ELSE 4 END
+			WHEN '{kind}' = 'deleted_equality' THEN 0
+			WHEN '{kind}' = 'duplicate_position' THEN 2 ELSE 1 END::BIGINT AS added_rows_count,
+		0::BIGINT AS existing_rows_count,
+		CASE WHEN manifest = 'deletes' AND '{kind}' = 'deleted_equality' THEN 1 ELSE 0 END::BIGINT AS deleted_rows_count
+	FROM (VALUES ('data', 0), ('deletes', 1)) t(manifest, content)
+) TO '{TEST_DIR}/{kind}_list.avro' (
+	FORMAT AVRO,
+	FIELD_IDS {
+		manifest_path: 500, manifest_length: 501, partition_spec_id: 502,
+		content: 517, sequence_number: 515, min_sequence_number: 516, added_snapshot_id: 503,
+		added_files_count: 504, existing_files_count: 505, deleted_files_count: 506,
+		added_rows_count: 512, existing_rows_count: 513, deleted_rows_count: 514
+	}
+);
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/rewrite_delete_bounds',
+	json_object('requirements', json_array(), 'updates', json_array(
+		json_object('action', 'add-snapshot', 'snapshot', json_object(
+			'snapshot-id', 10, 'sequence-number', 10, 'schema-id', 0,
+			'timestamp-ms', epoch_ms(current_timestamp), 'manifest-list', '{TEST_DIR}/{kind}_list.avro',
+			'summary', json_object('operation', 'overwrite'))),
+		json_object('action', 'set-snapshot-ref', 'ref-name', 'main', 'type', 'branch', 'snapshot-id', 10))));
+----
+200
+
+statement error
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_delete_bounds', rewrite_all := true);
+----
+would change the table's data; nothing was committed
+
+query I
+SELECT max(sequence_number) FROM iceberg_snapshots(my_datalake.default.rewrite_delete_bounds);
+----
+10
+
+# Neither input-file replacement nor row loss is published after rejection.
+query I
+SELECT count(*) = 1 AND bool_and(file_path = '{TEST_DIR}/{kind}_data.parquet')
+FROM iceberg_metadata(my_datalake.default.rewrite_delete_bounds)
+WHERE content = 'DATA' AND status <> 'DELETED';
+----
+true
+
+query I
+SELECT list(id ORDER BY id) = CASE WHEN '{kind}' = 'duplicate_position' THEN [1, 2] ELSE [1, 1, 2] END
+FROM my_datalake.default.rewrite_delete_bounds;
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_delete_bounds;
+
+endloop
+
+# Each file's count fits in BIGINT, but the data or delete total does not.
+foreach overflow_kind selected_data position_delete
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_count_overflow_{overflow_kind} (id INTEGER) WITH ('format-version' = 2);
+
+statement ok
+SET VARIABLE rewrite_id = (
+	SELECT (metadata::JSON->'schemas'->0->'fields'->0->>'id')::INTEGER
+	FROM iceberg_load_table_response(my_datalake.default.rewrite_count_overflow_{overflow_kind})
+);
+
+foreach file 0 1
+
+statement ok
+COPY (SELECT {file}::INTEGER AS id) TO '{TEST_DIR}/overflow_{overflow_kind}_{file}.parquet'
+(FORMAT PARQUET, FIELD_IDS {'id': getvariable('rewrite_id')});
+
+statement ok
+COPY (SELECT '{TEST_DIR}/overflow_{overflow_kind}_{file}.parquet' AS file_path, 0::BIGINT AS pos)
+TO '{TEST_DIR}/overflow_{overflow_kind}_{file}_delete.parquet'
+(FORMAT PARQUET, FIELD_IDS {file_path: 2147483546, pos: 2147483545});
+
+statement ok
+COPY (
+	SELECT 1::INTEGER AS status, 1::BIGINT AS snapshot_id,
+		1::BIGINT AS sequence_number, 1::BIGINT AS file_sequence_number,
+		{
+			content: 0::INTEGER, file_path: '{TEST_DIR}/overflow_{overflow_kind}_{file}.parquet',
+			file_format: 'PARQUET', partition: {},
+			record_count: CASE WHEN '{overflow_kind}' = 'selected_data' THEN 9223372036854775807 ELSE 1 END::BIGINT,
+			file_size_in_bytes: 1000::BIGINT
+		} AS data_file
+) TO '{TEST_DIR}/overflow_{overflow_kind}_{file}_data.avro' (
+	FORMAT AVRO,
+	METADATA {'schema-id': '0', 'partition-spec-id': '0', 'format-version': '2', 'content': 'data'},
+	FIELD_IDS {
+		status: 0, snapshot_id: 1, sequence_number: 3, file_sequence_number: 4,
+		data_file: {__duckdb_field_id: 2, content: 134, file_path: 100, file_format: 101,
+			partition: 102, record_count: 103, file_size_in_bytes: 104}
+	}
+);
+
+statement ok
+COPY (
+	SELECT 1::INTEGER AS status, 2::BIGINT AS snapshot_id,
+		2::BIGINT AS sequence_number, 2::BIGINT AS file_sequence_number,
+		{
+			content: 1::INTEGER, file_path: '{TEST_DIR}/overflow_{overflow_kind}_{file}_delete.parquet',
+			file_format: 'PARQUET', partition: {}, record_count: 9223372036854775807::BIGINT,
+			file_size_in_bytes: 1000::BIGINT, referenced_data_file: '{TEST_DIR}/overflow_{overflow_kind}_{file}.parquet'
+		} AS data_file
+) TO '{TEST_DIR}/overflow_{overflow_kind}_{file}_deletes.avro' (
+	FORMAT AVRO,
+	METADATA {'schema-id': '0', 'partition-spec-id': '0', 'format-version': '2', 'content': 'deletes'},
+	FIELD_IDS {
+		status: 0, snapshot_id: 1, sequence_number: 3, file_sequence_number: 4,
+		data_file: {__duckdb_field_id: 2, content: 134, file_path: 100, file_format: 101,
+			partition: 102, record_count: 103, file_size_in_bytes: 104, referenced_data_file: 143}
+	}
+);
+
+endloop
+
+statement ok
+COPY (
+	SELECT '{TEST_DIR}/overflow_{overflow_kind}_' || range || '_' || manifest || '.avro' AS manifest_path,
+		1000::BIGINT AS manifest_length, 0::INTEGER AS partition_spec_id, content::INTEGER AS content,
+		2::BIGINT AS sequence_number, 1::BIGINT AS min_sequence_number, 2::BIGINT AS added_snapshot_id,
+		1::INTEGER AS added_files_count, 0::INTEGER AS existing_files_count, 0::INTEGER AS deleted_files_count,
+		CASE WHEN manifest = 'deletes' OR '{overflow_kind}' = 'selected_data' THEN 9223372036854775807 ELSE 1 END::BIGINT AS added_rows_count,
+		0::BIGINT AS existing_rows_count, 0::BIGINT AS deleted_rows_count
+	FROM range(2), (VALUES ('data', 0), ('deletes', 1)) t(manifest, content)
+	WHERE content = 0 OR '{overflow_kind}' = 'position_delete'
+) TO '{TEST_DIR}/overflow_{overflow_kind}_list.avro' (
+	FORMAT AVRO,
+	FIELD_IDS {
+		manifest_path: 500, manifest_length: 501, partition_spec_id: 502,
+		content: 517, sequence_number: 515, min_sequence_number: 516, added_snapshot_id: 503,
+		added_files_count: 504, existing_files_count: 505, deleted_files_count: 506,
+		added_rows_count: 512, existing_rows_count: 513, deleted_rows_count: 514
+	}
+);
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/rewrite_count_overflow_{overflow_kind}',
+	json_object('requirements', json_array(), 'updates', json_array(
+		json_object('action', 'add-snapshot', 'snapshot', json_object(
+			'snapshot-id', 2, 'sequence-number', 2, 'schema-id', 0,
+			'timestamp-ms', epoch_ms(current_timestamp), 'manifest-list', '{TEST_DIR}/overflow_{overflow_kind}_list.avro',
+			'summary', json_object('operation', 'overwrite'))),
+		json_object('action', 'set-snapshot-ref', 'ref-name', 'main', 'type', 'branch', 'snapshot-id', 2))));
+----
+200
+
+endloop
+
+# A delete upper bound can exceed the number of input rows (for example, with
+# overlapping deletes). It must saturate at the selected count instead of
+# overflowing and rejecting valid empty output. Roll back the staged rewrite:
+# this test exercises the guard, not publishing the deliberately inflated counts.
+statement ok
+BEGIN;
+
+query II
+SELECT rewritten_data_files_count, added_data_files_count
+FROM iceberg_rewrite_data_files('my_datalake.default.rewrite_count_overflow_position_delete', rewrite_all := true);
+----
+2	0
+
+statement ok
+ROLLBACK;
+
+query II
+SELECT count(*), count(*) FILTER (WHERE content = 'DATA')
+FROM iceberg_metadata(my_datalake.default.rewrite_count_overflow_position_delete)
+WHERE status <> 'DELETED';
+----
+4	2
+
+# The selected data total is needed as an exact upper bound. Reject an
+# unrepresentable total at planning time, before any data files are rewritten.
+statement error
+EXPLAIN CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_count_overflow_selected_data', rewrite_all := true);
+----
+record counts exceed the supported BIGINT range
+
+# The maximum individual count is representable when only one file is selected.
+statement ok
+EXPLAIN CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_count_overflow_selected_data',
+	rewrite_all := true, max_files_to_rewrite := 1);
+
+query I
+SELECT max(sequence_number) FROM iceberg_snapshots(my_datalake.default.rewrite_count_overflow_selected_data);
+----
+2
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_count_overflow_selected_data;
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_count_overflow_position_delete;

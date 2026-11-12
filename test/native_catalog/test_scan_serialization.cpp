@@ -141,7 +141,7 @@ TEST_CASE("Iceberg scan identity mismatches request optimizer fallback", "[icebe
 
 	SECTION("Different table UUID") {
 		test.Serialize(original, stream);
-		table.table_metadata.table_uuid = "replacement-table";
+		table.GetMetadataMutable().table_uuid = "replacement-table";
 		REQUIRE_THROWS_AS(test.Deserialize(original, stream), NotImplementedException);
 	}
 	SECTION("Missing schema") {

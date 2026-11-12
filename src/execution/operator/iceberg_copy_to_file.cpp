@@ -81,7 +81,7 @@ void IcebergCopyToFile::EnsureTableCreated(ClientContext &context) const {
 	// Load any per-table credentials (e.g. SigV4 for the data location).
 	ic_table.PrepareIcebergScanFromEntry(context);
 
-	auto &table_metadata = ic_table.table_info.table_metadata;
+	auto &table_metadata = ic_table.table_info.GetMetadata();
 	auto &table_schema = table_metadata.GetLatestSchema();
 
 	// Replace the plan-time options, which were derived from placeholder metadata without a location.

@@ -118,7 +118,7 @@ create view v_bad_tbl as select * from table_that_does_not_exist_vf;
 
 # ─── SELECT * view ────────────────────────────────────────────────────────────
 statement ok
-create view v_star as select * from vf_customers;
+create view v_star as select * from my_datalake.default.vf_customers;
 
 query III
 select * from v_star order by cust_id;
@@ -135,7 +135,7 @@ select no_such_col from v_star;
 
 # ─── SELECT * EXCLUDE view ────────────────────────────────────────────────────
 statement ok
-create view v_exclude as select * exclude (region) from vf_customers;
+create view v_exclude as select * exclude (region) from my_datalake.default.vf_customers;
 
 query II
 select * from v_exclude order by cust_id;
@@ -148,7 +148,7 @@ select * from v_exclude order by cust_id;
 statement ok
 create view v_join as
   select c.name, o.order_id, o.amount
-  from vf_customers c join vf_orders o on c.cust_id = o.cust_id;
+  from my_datalake.default.vf_customers c join my_datalake.default.vf_orders o on c.cust_id = o.cust_id;
 
 query III
 select * from v_join order by order_id;

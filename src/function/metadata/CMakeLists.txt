@@ -6,6 +6,7 @@ add_library(
   iceberg_metadata.cpp
   iceberg_partition_stats.cpp
   iceberg_partition_specs.cpp
+  iceberg_schemas.cpp
   iceberg_partitions.cpp
   iceberg_refs.cpp
   iceberg_rewrite_data_files.cpp

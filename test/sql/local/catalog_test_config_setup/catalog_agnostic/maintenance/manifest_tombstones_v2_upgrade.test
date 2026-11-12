@@ -1,0 +1,70 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/manifest_tombstones_v2_upgrade.test
+# description: Tombstones left by a V2 rewrite are dropped when the first V3 commit merges manifests, without disturbing row lineage
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.manifest_tombstones_v2_upgrade;
+
+statement ok
+CREATE TABLE my_datalake.default.manifest_tombstones_v2_upgrade (id INTEGER, category VARCHAR)
+PARTITIONED BY (category)
+WITH ('format-version' = 2, 'commit.manifest.min-count-to-merge' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.manifest_tombstones_v2_upgrade VALUES (1, 'a'), (2, 'b');
+
+statement ok
+INSERT INTO my_datalake.default.manifest_tombstones_v2_upgrade VALUES (3, 'a');
+
+query IIIII
+CALL iceberg_rewrite_data_files('my_datalake.default.manifest_tombstones_v2_upgrade', min_input_files => 2);
+----
+2	1	<REGEX>:[1-9][0-9]*	0	0
+
+# The V2 rewrite leaves a manifest with the untouched 'b' file and two tombstones for 'a'.
+query III
+SELECT added_data_files_count, existing_data_files_count, deleted_data_files_count
+FROM iceberg_manifests(my_datalake.default.manifest_tombstones_v2_upgrade)
+ORDER BY ALL;
+----
+0	1	2
+1	0	0
+
+statement ok
+ALTER TABLE my_datalake.default.manifest_tombstones_v2_upgrade SET ('format-version' = 3);
+
+# The first V3 commit merges the V2 manifests, assigns row IDs to their live files, and drops the tombstones.
+statement ok
+INSERT INTO my_datalake.default.manifest_tombstones_v2_upgrade VALUES (4, 'b');
+
+query III
+SELECT added_data_files_count, existing_data_files_count, deleted_data_files_count
+FROM iceberg_manifests(my_datalake.default.manifest_tombstones_v2_upgrade)
+ORDER BY ALL;
+----
+0	2	0
+1	0	0
+
+# Every row has a distinct row ID: three from the upgraded files, then one for the new insert.
+query III
+SELECT count(*), count(DISTINCT _row_id), max(_row_id)
+FROM my_datalake.default.manifest_tombstones_v2_upgrade;
+----
+4	4	3
+
+query II
+SELECT id, _last_updated_sequence_number FROM my_datalake.default.manifest_tombstones_v2_upgrade ORDER BY id;
+----
+1	2
+2	1
+3	2
+4	4
+
+statement ok
+DROP TABLE my_datalake.default.manifest_tombstones_v2_upgrade;

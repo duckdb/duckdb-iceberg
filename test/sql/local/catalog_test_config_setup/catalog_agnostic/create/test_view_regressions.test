@@ -1,5 +1,5 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_view_regressions.test
-# description: View namespace collisions, duplicate output names, and file shorthand survive reload
+# description: View namespace collisions and duplicate output names survive reload, and a view reading file shorthand is not created
 # group: [create]
 
 require-env CATALOG_TEST_CONFIG_SETUP
@@ -64,7 +64,7 @@ drop view if exists base;
 <REGEX>:.*trying to drop type View.*
 
 statement ok
-create view duplicate_names as select i as a, i + 1 as a from base;
+create view duplicate_names as select i as a, i + 1 as a from my_datalake.view_regressions.base;
 
 statement error
 drop table if exists duplicate_names;
@@ -80,8 +80,11 @@ select * from '{TEST_DIR}/view_input.parquet';
 ----
 7
 
-statement ok
+# A file name in the view's query is a table name without a namespace
+statement error
 create view file_view as select f.i from '{TEST_DIR}/view_input.parquet' as f;
+----
+<REGEX>:.*Not implemented Error: Creating Iceberg view 'file_view' is not supported: its query names a table without a namespace.*
 
 # A real table with a file-like name must still win over replacement scans.
 statement ok
@@ -91,12 +94,12 @@ statement ok
 insert into "table.parquet" values (88);
 
 statement ok
-create view dotted_table_view as select * from "table.parquet";
+create view dotted_table_view as select * from my_datalake.view_regressions."table.parquet";
 
 # Native view binding handles CTE scope and subqueries in the owning namespace.
 statement ok
 create view scoped_view as
-with base as (select i + 1 as i from base)
+with base as (select i + 1 as i from my_datalake.view_regressions.base)
 select i from base union all select (select max(i) from my_datalake.view_regressions.base);
 
 restart
@@ -126,11 +129,6 @@ select a, a_1 from duplicate_names;
 42	43
 
 query I
-select * from file_view;
-----
-7
-
-query I
 select * from dotted_table_view;
 ----
 88
@@ -145,9 +143,6 @@ drop view scoped_view;
 
 statement ok
 drop view duplicate_names;
-
-statement ok
-drop view file_view;
 
 statement ok
 drop view dotted_table_view;

@@ -10,7 +10,17 @@ namespace duckdb {
 class IcebergTableSchema;
 struct IcebergColumnDefinition;
 
-enum class IcebergTransformType : uint8_t { IDENTITY, BUCKET, TRUNCATE, YEAR, MONTH, DAY, HOUR, VOID, INVALID };
+enum class IcebergTransformType : uint8_t {
+	IDENTITY,
+	BUCKET,
+	TRUNCATE,
+	YEAR,
+	MONTH,
+	DAY,
+	HOUR,
+	VOID_TRANSFORM,
+	INVALID
+};
 
 struct IcebergTransform {
 public:

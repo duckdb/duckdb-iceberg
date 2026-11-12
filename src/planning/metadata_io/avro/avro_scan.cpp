@@ -10,6 +10,8 @@
 #include "planning/iceberg_multi_file_reader.hpp"
 #include "planning/metadata_io/avro/iceberg_avro_multi_file_reader.hpp"
 #include "planning/metadata_io/avro/iceberg_avro_multi_file_list.hpp"
+#include "duckdb/logging/logger.hpp"
+#include "iceberg_logging.hpp"
 
 namespace duckdb {
 
@@ -71,22 +73,35 @@ AvroScan::AvroScan(const string &path, ClientContext &context, shared_ptr<Iceber
 	global_state = avro_scan->init_global(context, input);
 }
 
+AvroScan::~AvroScan() {
+	if (scan_info->type == AvroScanInfoType::MANIFEST_FILE) {
+		auto &info = scan_info->Cast<IcebergManifestFileScanInfo>();
+		DUCKDB_LOG(context, IcebergLogType,
+		           "Iceberg metadata phase=manifest_parse scope=avro_scan manifest_parses=%llu "
+		           "manifest_entries_converted=%llu",
+		           info.manifest_parses.load(), info.manifest_entries_converted.load());
+	}
+}
+
 unique_ptr<AvroScan> AvroScan::ScanManifest(const IcebergSnapshotScanInfo &snapshot_info,
                                             vector<IcebergManifestListEntry> &manifest_files,
                                             const IcebergOptions &options, FileSystem &fs, const string &iceberg_path,
                                             const IcebergTableMetadata &metadata, ClientContext &context,
                                             optional_ptr<ManifestEntryReadState> read_state,
-                                            vector<idx_t> manifest_indexes) {
+                                            vector<idx_t> manifest_indexes, IcebergFileSecret file_secret) {
 	D_ASSERT(!manifest_files.empty());
 	auto avro_scan_info = make_shared_ptr<IcebergManifestFileScanInfo>(
 	    metadata, snapshot_info, manifest_files, options, fs, iceberg_path, read_state, std::move(manifest_indexes));
+	avro_scan_info->file_secret = std::move(file_secret);
 	return make_uniq<AvroScan>("placeholder", context, std::move(avro_scan_info));
 }
 
 unique_ptr<AvroScan> AvroScan::ScanManifestList(const IcebergSnapshotScanInfo &snapshot_info,
                                                 const IcebergTableMetadata &metadata, ClientContext &context,
-                                                const string &path, vector<IcebergManifestListEntry> &result) {
+                                                const string &path, vector<IcebergManifestListEntry> &result,
+                                                IcebergFileSecret file_secret) {
 	auto avro_scan_info = make_shared_ptr<IcebergManifestListScanInfo>(metadata, snapshot_info, result);
+	avro_scan_info->file_secret = std::move(file_secret);
 	return make_uniq<AvroScan>(path, context, std::move(avro_scan_info));
 }
 

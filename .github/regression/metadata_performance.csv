@@ -1,0 +1,8 @@
+benchmark/metadata_performance/wide_in.benchmark
+benchmark/metadata_performance/wide_between.benchmark
+benchmark/metadata_performance/wide_none.benchmark
+benchmark/metadata_performance/narrow_in.benchmark
+benchmark/metadata_performance/narrow_padded_in.benchmark
+benchmark/metadata_performance/narrow_between.benchmark
+benchmark/metadata_performance/wide_in_no_deletes.benchmark
+benchmark/metadata_performance/manifest_1000.benchmark

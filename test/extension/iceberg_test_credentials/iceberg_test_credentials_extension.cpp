@@ -232,8 +232,7 @@ void RecordReads(ClientContext &context, const FunctionParameters &parameters) {
 		throw InvalidInputException("iceberg_test_credentials_record was already called for this database");
 	}
 	auto directory = Absolute(parameters.values[0].GetValue<string>());
-	StringUtil::RTrim(directory, "/");
-	auto recording = make_uniq<RecordingFileSystem>(directory + "/");
+	auto recording = make_uniq<RecordingFileSystem>(LocalFileSystem().JoinPath(directory, "./"));
 	callback.recording = recording.get();
 	FileSystem::GetFileSystem(context).RegisterSubSystem(std::move(recording));
 }
@@ -287,7 +286,8 @@ void ReadsScan(ClientContext &context, TableFunctionInput &data, DataChunk &outp
 	idx_t count = 0;
 	for (; state.offset < reads.size() && count < STANDARD_VECTOR_SIZE; state.offset++, count++) {
 		auto &read = reads[state.offset];
-		output.data[0].Append(Value(read.path));
+		// Use portable separators in the report, leaving the path used for reads and secret lookup unchanged.
+		output.data[0].Append(Value(StringUtil::Replace(read.path, "\\", "/")));
 		output.data[1].Append(Value::BOOLEAN(read.listing));
 		output.data[2].Append(Value::BOOLEAN(read.has_credentials));
 		output.data[3].Append(read.key_id.empty() ? Value(LogicalType::VARCHAR) : Value(read.key_id));

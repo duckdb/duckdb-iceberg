@@ -1,0 +1,284 @@
+# name: test/sql/local/native_catalog/delete_candidate_index_partitions.test
+# description: Composite partition indexes select external equality deletes alongside pending position deletes
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+SET iceberg_use_server_side_scan_planning=false;
+
+statement ok
+SET threads=1;
+
+statement ok
+CREATE TABLE my_datalake.default.delete_candidate_partitions (p DOUBLE, q VARCHAR, id INTEGER)
+PARTITIONED BY (p, q) WITH ('format-version'=2, 'commit.manifest-merge.enabled'='false');
+
+statement ok
+SET VARIABLE candidate_field_ids = (
+	SELECT {
+		p: max((field->>'id')::INTEGER) FILTER (WHERE field->>'name'='p'),
+		q: max((field->>'id')::INTEGER) FILTER (WHERE field->>'name'='q'),
+		id: max((field->>'id')::INTEGER) FILTER (WHERE field->>'name'='id')
+	}
+	FROM (
+		SELECT unnest(metadata::JSON->'schemas'->0->'fields'->'$[*]') AS field
+		FROM iceberg_load_table_response(my_datalake.default.delete_candidate_partitions)
+	)
+);
+
+statement ok
+CREATE TEMP TABLE candidate_partitions AS
+SELECT * FROM (VALUES
+	(0, NULL::DOUBLE, 'a'), (1, 1, 'a'), (2, 1, 'b'), (3, 'NaN'::DOUBLE, 'a')
+) v(part, p, q);
+
+# Model a valid external writer: the internal equality-delete writer cannot
+# create partition-scoped files. Data and delete files use the table's field IDs.
+# Keep forward-slash paths to cover Windows accepting them for external files.
+loop part 0 4
+
+loop batch 0 2
+
+statement ok
+COPY (
+	SELECT p, q, id::INTEGER AS id FROM candidate_partitions CROSS JOIN range(1, 4) r(id) WHERE part={part}
+) TO '{TEST_DIR}/candidate_data_{part}_{batch}.parquet'
+(FORMAT PARQUET, FIELD_IDS getvariable('candidate_field_ids'));
+
+endloop
+
+statement ok
+COPY (SELECT 2::INTEGER AS id) TO '{TEST_DIR}/candidate_delete_{part}.parquet'
+(FORMAT PARQUET, FIELD_IDS {id: getvariable('candidate_field_ids').id});
+
+endloop
+
+statement ok
+COPY (
+	SELECT 1::INTEGER AS status, 3::BIGINT AS snapshot_id,
+		NULL::BIGINT AS sequence_number, 2::BIGINT AS file_sequence_number,
+		{
+			content: 0::INTEGER,
+			file_path: '{TEST_DIR}/candidate_data_' || part || '_' || batch || '.parquet',
+			file_format: 'PARQUET', partition: {p: p, q: q},
+			record_count: 3::BIGINT, file_size_in_bytes: 1000::BIGINT
+		} AS data_file
+	FROM candidate_partitions CROSS JOIN range(2) r(batch)
+) TO '{TEST_DIR}/candidate_data.avro' (
+	FORMAT AVRO,
+	METADATA {'schema-id': '0', 'partition-spec-id': '0', 'format-version': '2', 'content': 'data'},
+	FIELD_IDS {
+		status: 0, snapshot_id: 1, sequence_number: 3, file_sequence_number: 4,
+		data_file: {__duckdb_field_id: 2, content: 134, file_path: 100, file_format: 101,
+			partition: {__duckdb_field_id: 102, p: 1000, q: 1001}, record_count: 103, file_size_in_bytes: 104}
+	}
+);
+
+statement ok
+COPY (
+	SELECT 1::INTEGER AS status, 3::BIGINT AS snapshot_id,
+		NULL::BIGINT AS sequence_number, 3::BIGINT AS file_sequence_number,
+		{
+			content: 2::INTEGER, file_path: '{TEST_DIR}/candidate_delete_' || part || '.parquet',
+			file_format: 'PARQUET', partition: {p: p, q: q},
+			record_count: 1::BIGINT, file_size_in_bytes: 1000::BIGINT,
+			equality_ids: [getvariable('candidate_field_ids').id]
+		} AS data_file
+	FROM candidate_partitions
+) TO '{TEST_DIR}/candidate_deletes.avro' (
+	FORMAT AVRO,
+	METADATA {'schema-id': '0', 'partition-spec-id': '0', 'format-version': '2', 'content': 'deletes'},
+	FIELD_IDS {
+		status: 0, snapshot_id: 1, sequence_number: 3, file_sequence_number: 4,
+		data_file: {__duckdb_field_id: 2, content: 134, file_path: 100, file_format: 101,
+			partition: {__duckdb_field_id: 102, p: 1000, q: 1001}, record_count: 103, file_size_in_bytes: 104,
+			equality_ids: {__duckdb_field_id: 135, list: 136}}
+	}
+);
+
+statement ok
+COPY (
+	SELECT '{TEST_DIR}/candidate_' || kind || '.avro' AS manifest_path,
+		1000::BIGINT AS manifest_length, 0::INTEGER AS partition_spec_id,
+		content::INTEGER AS content, seq::BIGINT AS sequence_number,
+		0::BIGINT AS min_sequence_number, 3::BIGINT AS added_snapshot_id,
+		files::INTEGER AS added_files_count, 0::INTEGER AS existing_files_count, 0::INTEGER AS deleted_files_count,
+		rows::BIGINT AS added_rows_count, 0::BIGINT AS existing_rows_count, 0::BIGINT AS deleted_rows_count
+	FROM (VALUES ('data', 0, 2, 8, 24), ('deletes', 1, 3, 4, 4)) v(kind, content, seq, files, rows)
+) TO '{TEST_DIR}/candidate_list.avro' (
+	FORMAT AVRO,
+	FIELD_IDS {
+		manifest_path: 500, manifest_length: 501, partition_spec_id: 502,
+		content: 517, sequence_number: 515, min_sequence_number: 516, added_snapshot_id: 503,
+		added_files_count: 504, existing_files_count: 505, deleted_files_count: 506,
+		added_rows_count: 512, existing_rows_count: 513, deleted_rows_count: 514
+	}
+);
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/delete_candidate_partitions',
+	json_object('requirements', json_array(), 'updates', json_array(
+		json_object('action', 'add-snapshot', 'snapshot', json_object(
+			'snapshot-id', 3, 'sequence-number', 3, 'schema-id', 0,
+			'timestamp-ms', epoch_ms(current_timestamp), 'manifest-list', '{TEST_DIR}/candidate_list.avro',
+			'summary', json_object('operation', 'overwrite'))),
+		json_object('action', 'set-snapshot-ref', 'ref-name', 'main', 'type', 'branch', 'snapshot-id', 3))));
+----
+200
+
+query II
+SELECT count(*) FILTER (WHERE content='DATA'), count(*) FILTER (WHERE content='EQUALITY_DELETES')
+FROM iceberg_metadata(my_datalake.default.delete_candidate_partitions) WHERE status<>'DELETED';
+----
+8	4
+
+statement ok
+CALL enable_logging('Iceberg', storage='memory');
+
+foreach threads 1 8
+
+statement ok
+SET threads={threads};
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Each data file visits only its partition's delete, including NULL and NaN.
+# The equal first component of (1, 'a') and (1, 'b') must not merge their buckets.
+query III
+SELECT count(*), sum(id), count(*) FILTER (WHERE id=2)
+FROM my_datalake.default.delete_candidate_partitions WHERE id>=0;
+----
+16	32	0
+
+query III
+SELECT sum(regexp_extract(message, 'scan_tasks=(\d+)', 1)::BIGINT),
+       sum(regexp_extract(message, 'delete_candidate_visits=(\d+)', 1)::BIGINT),
+       sum(regexp_extract(message, 'delete_predicate_evaluations=(\d+)', 1)::BIGINT)
+FROM duckdb_logs() WHERE type='Iceberg' AND message LIKE '%phase=delete_planning%';
+----
+8	8	4
+
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM my_datalake.default.delete_candidate_partitions WHERE id=1;
+
+# A later insert retains a key deleted by the committed manifest.
+statement ok
+INSERT INTO my_datalake.default.delete_candidate_partitions SELECT p, q, 2 FROM candidate_partitions;
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query III
+SELECT count(*), sum(id), count(*) FILTER (WHERE id=2)
+FROM my_datalake.default.delete_candidate_partitions WHERE id>=0;
+----
+12	32	4
+
+# One committed equality-delete and one in-memory position-delete manifest are
+# indexed. The new data files are newer than both and must not visit either index.
+query III
+SELECT sum(regexp_extract(message, 'scan_tasks=(\d+)', 1)::BIGINT),
+       sum(regexp_extract(message, 'delete_candidate_visits=(\d+)', 1)::BIGINT),
+       sum(regexp_extract(message, 'delete_predicate_evaluations=(\d+)', 1)::BIGINT)
+FROM duckdb_logs() WHERE type='Iceberg' AND message LIKE '%phase=delete_planning%';
+----
+12	16	12
+
+query I
+SELECT sum(regexp_extract(message, 'delete_index_builds=(\d+)', 1)::BIGINT)
+FROM duckdb_logs() WHERE type='Iceberg' AND message LIKE '%phase=delete_candidate_index%';
+----
+2
+
+# Removing the remaining old rows invalidates their files. Later inserts must
+# survive the earlier pending delete as well as the committed one.
+statement ok
+DELETE FROM my_datalake.default.delete_candidate_partitions WHERE id=3;
+
+statement ok
+INSERT INTO my_datalake.default.delete_candidate_partitions SELECT p, q, 1 FROM candidate_partitions;
+
+query III
+SELECT count(*), sum(id), count(*) FILTER (WHERE id=2)
+FROM my_datalake.default.delete_candidate_partitions WHERE id>=0;
+----
+8	12	4
+
+statement ok
+ROLLBACK;
+
+query III
+SELECT count(*), sum(id), count(*) FILTER (WHERE id=2)
+FROM my_datalake.default.delete_candidate_partitions WHERE id>=0;
+----
+16	32	0
+
+endloop
+
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM my_datalake.default.delete_candidate_partitions WHERE id=1;
+
+statement ok
+INSERT INTO my_datalake.default.delete_candidate_partitions SELECT p, q, 1 FROM candidate_partitions;
+
+query III
+SELECT count(*), sum(id), count(*) FILTER (WHERE id=1)
+FROM my_datalake.default.delete_candidate_partitions WHERE id>=0;
+----
+12	28	4
+
+statement ok
+COMMIT;
+
+# The same applicability must hold after pending manifests acquire persisted sequences.
+query III
+SELECT count(*), sum(id), count(*) FILTER (WHERE id=1)
+FROM my_datalake.default.delete_candidate_partitions WHERE id>=0;
+----
+12	28	4
+
+# V3 must also create Puffin files beside the externally written data files.
+statement ok
+ALTER TABLE my_datalake.default.delete_candidate_partitions SET ('format-version'=3);
+
+statement ok
+BEGIN;
+
+query I
+DELETE FROM my_datalake.default.delete_candidate_partitions WHERE id=3;
+----
+8
+
+query II
+SELECT count(*), sum(id) FROM my_datalake.default.delete_candidate_partitions;
+----
+4	4
+
+statement ok
+COMMIT;
+
+query II
+SELECT count(*), sum(id) FROM my_datalake.default.delete_candidate_partitions;
+----
+4	4
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.delete_candidate_partitions)
+WHERE content='POSITION_DELETES' AND file_format='puffin' AND status<>'DELETED';
+----
+8
+
+statement ok
+DROP TABLE my_datalake.default.delete_candidate_partitions;

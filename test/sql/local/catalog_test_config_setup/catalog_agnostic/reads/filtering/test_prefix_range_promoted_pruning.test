@@ -1,0 +1,107 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_prefix_range_promoted_pruning.test
+# description: Prefix-range pruning reads the bounds of files written before a type promotion as the column's new type
+# group: [filtering]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SCAN_PLANNING_MODE client
+
+include test/sql/init_requires
+
+statement ok
+SET threads=1;
+
+statement ok
+SET dynamic_or_filter_threshold=0;
+
+statement ok
+CALL enable_logging('Iceberg');
+
+# ---- INTEGER -> BIGINT: the first file keeps 4-byte bounds ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.prf_promoted;
+
+statement ok
+CREATE TABLE my_datalake.default.prf_promoted (k INTEGER);
+
+statement ok
+INSERT INTO my_datalake.default.prf_promoted SELECT range FROM range(-100, 51);
+
+statement ok
+ALTER TABLE my_datalake.default.prf_promoted ALTER COLUMN k TYPE BIGINT;
+
+statement ok
+INSERT INTO my_datalake.default.prf_promoted SELECT range FROM range(1000, 1010);
+
+query I
+SELECT list(t.k ORDER BY t.k)
+FROM my_datalake.default.prf_promoted t JOIN (SELECT unnest([-50, -5, 10, 1005]::BIGINT[]) AS k) s USING (k);
+----
+[-50, -5, 10, 1005]
+
+# A cast in the join expression must use BIGINT column statistics first, then
+# derive the cast's bounds. The old file has an overflowing lower bound but
+# contains both matching keys, so TRY_CAST must keep it.
+statement ok
+CREATE TEMP TABLE prf_promoted_cast_keys AS SELECT unnest([0, 50]::UTINYINT[]) AS k;
+
+query I
+SELECT list(t.k ORDER BY t.k)
+FROM my_datalake.default.prf_promoted t
+JOIN prf_promoted_cast_keys s ON TRY_CAST(t.k AS UTINYINT) = s.k;
+----
+[0, 50]
+
+# A throwing cast must still report values outside UTINYINT's range.
+statement error
+SELECT list(t.k ORDER BY t.k)
+FROM my_datalake.default.prf_promoted t
+JOIN prf_promoted_cast_keys s ON CAST(t.k AS UTINYINT) = s.k;
+----
+out of range
+
+# The older file is still pruned when none of its values match
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(t.k ORDER BY t.k)
+FROM my_datalake.default.prf_promoted t JOIN (SELECT unnest([1003, 1005]::BIGINT[]) AS k) s USING (k);
+----
+[1003, 1005]
+
+query I
+SELECT count(DISTINCT message) FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE '%skipped ''data_file''%'
+	AND message LIKE '%IN PRF%';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.prf_promoted;
+
+# ---- An identity partition on a promoted column ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.prf_promoted_partitioned;
+
+statement ok
+CREATE TABLE my_datalake.default.prf_promoted_partitioned (k INTEGER, v INTEGER) PARTITIONED BY (k);
+
+statement ok
+INSERT INTO my_datalake.default.prf_promoted_partitioned SELECT range % 3 - 1, range FROM range(30);
+
+statement ok
+ALTER TABLE my_datalake.default.prf_promoted_partitioned ALTER COLUMN k TYPE BIGINT;
+
+query II
+SELECT t.k, count(*)
+FROM my_datalake.default.prf_promoted_partitioned t JOIN (SELECT unnest([-1, 1]::BIGINT[]) AS k) s USING (k)
+GROUP BY t.k ORDER BY t.k;
+----
+-1	10
+1	10
+
+statement ok
+DROP TABLE my_datalake.default.prf_promoted_partitioned;

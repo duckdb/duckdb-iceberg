@@ -1,0 +1,171 @@
+# name: test/sql/local/native_catalog/manifest_tombstones_unknown_counts.test
+# description: Nullable manifest counts retain live files while legacy data and delete tombstones are pruned
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+CREATE TABLE my_datalake.default.tombstone_unknown_counts (id INTEGER)
+WITH ('format-version' = 2, 'commit.manifest-merge.enabled' = false);
+
+statement ok
+INSERT INTO my_datalake.default.tombstone_unknown_counts VALUES (0), (1), (2);
+
+statement ok
+DELETE FROM my_datalake.default.tombstone_unknown_counts WHERE id = 0;
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE seed_list = (
+	SELECT manifest_list FROM iceberg_snapshots(my_datalake.default.tombstone_unknown_counts)
+	WHERE sequence_number = 2
+);
+
+statement ok
+CREATE TEMP TABLE seed_manifests AS SELECT * FROM read_avro(getvariable('seed_list'));
+
+statement ok
+SET VARIABLE seed_paths = (SELECT list(manifest_path) FROM seed_manifests);
+
+statement ok
+CREATE TEMP TABLE seed_entries AS
+SELECT m.content AS manifest_content,
+       coalesce(e.snapshot_id, m.added_snapshot_id) AS snapshot_id,
+       coalesce(e.sequence_number, m.sequence_number) AS sequence_number,
+       coalesce(e.file_sequence_number, m.sequence_number) AS file_sequence_number,
+       e.data_file
+FROM read_avro(getvariable('seed_paths'), filename = true) e
+JOIN seed_manifests m ON e.filename = m.manifest_path;
+
+# Model an older writer: one mixed manifest with unknown counts and one tombstone-only
+# manifest with known zero live counts, for each content type. Deleted paths need no data files.
+foreach content 0 1
+
+foreach kind mixed dead
+
+statement ok
+COPY (
+	SELECT status::INTEGER AS status, snapshot_id, sequence_number, file_sequence_number,
+	       {content: data_file.content,
+	        file_path: data_file.file_path || CASE WHEN status = 2 THEN '.deleted-{kind}' ELSE '' END,
+	        file_format: data_file.file_format, partition: {},
+	        record_count: data_file.record_count, file_size_in_bytes: data_file.file_size_in_bytes} AS data_file
+	FROM seed_entries, (VALUES (1), (2)) s(status)
+	WHERE manifest_content = {content} AND ('{kind}' = 'mixed' OR status = 2)
+) TO '{TEST_DIR}/tombstone_{content}_{kind}.avro' (
+	FORMAT AVRO,
+	METADATA {'schema-id': '0', 'partition-spec-id': '0', 'format-version': '2',
+	          'content': CASE WHEN {content} = 0 THEN 'data' ELSE 'deletes' END},
+	FIELD_IDS {
+		status: 0, snapshot_id: 1, sequence_number: 3, file_sequence_number: 4,
+		data_file: {__duckdb_field_id: 2, content: 134, file_path: 100, file_format: 101,
+		            partition: 102, record_count: 103, file_size_in_bytes: 104}
+	}
+);
+
+endloop
+
+endloop
+
+statement ok
+COPY (
+	SELECT '{TEST_DIR}/tombstone_' || content || '_' || kind || '.avro' AS manifest_path,
+	       1000::BIGINT AS manifest_length, 0::INTEGER AS partition_spec_id,
+	       content::INTEGER AS content, 3::BIGINT AS sequence_number,
+	       1::BIGINT AS min_sequence_number, 3::BIGINT AS added_snapshot_id,
+	       CASE WHEN kind = 'dead' THEN 0 END::INTEGER AS added_files_count,
+	       CASE WHEN kind = 'dead' THEN 0 END::INTEGER AS existing_files_count,
+	       1::INTEGER AS deleted_files_count,
+	       CASE WHEN kind = 'dead' THEN 0 END::BIGINT AS added_rows_count,
+	       CASE WHEN kind = 'dead' THEN 0 END::BIGINT AS existing_rows_count,
+	       CASE WHEN content = 0 THEN 3 ELSE 1 END::BIGINT AS deleted_rows_count
+	FROM (VALUES (0), (1)) c(content), (VALUES ('mixed'), ('dead')) k(kind)
+) TO '{TEST_DIR}/tombstone_unknown_list.avro' (
+	FORMAT AVRO,
+	FIELD_IDS {
+		manifest_path: 500, manifest_length: 501, partition_spec_id: 502,
+		content: 517, sequence_number: 515, min_sequence_number: 516, added_snapshot_id: 503,
+		added_files_count: 504, existing_files_count: 505, deleted_files_count: 506,
+		added_rows_count: 512, existing_rows_count: 513, deleted_rows_count: 514
+	}
+);
+
+statement ok
+COMMIT;
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/tombstone_unknown_counts',
+	json_object('requirements', json_array(), 'updates', json_array(
+		json_object('action', 'add-snapshot', 'snapshot', json_object(
+			'snapshot-id', 3, 'sequence-number', 3, 'schema-id', 0,
+			'timestamp-ms', epoch_ms(current_timestamp), 'manifest-list', '{TEST_DIR}/tombstone_unknown_list.avro',
+			'summary', json_object('operation', 'overwrite', 'total-data-files', '1', 'total-records', '3',
+				'total-delete-files', '1', 'total-position-deletes', '1', 'total-equality-deletes', '0'))),
+		json_object('action', 'set-snapshot-ref', 'ref-name', 'main', 'type', 'branch', 'snapshot-id', 3))));
+----
+200
+
+statement ok
+INSERT INTO my_datalake.default.tombstone_unknown_counts VALUES (3);
+
+# Unknown counts must be reconstructed rather than treated as zero. Both mixed manifests
+# survive unchanged, and both manifests known to hold only tombstones are dropped.
+query IIII rowsort
+SELECT content,
+       CASE content WHEN 0 THEN added_data_files_count ELSE added_delete_files_count END,
+       CASE content WHEN 0 THEN existing_data_files_count ELSE existing_delete_files_count END,
+       CASE content WHEN 0 THEN deleted_data_files_count ELSE deleted_delete_files_count END
+FROM iceberg_manifests(my_datalake.default.tombstone_unknown_counts);
+----
+0	1	0	0
+0	1	0	1
+1	1	0	1
+
+query I
+SELECT string_agg(id, ',' ORDER BY id) FROM my_datalake.default.tombstone_unknown_counts;
+----
+1,2,3
+
+statement ok
+ALTER TABLE my_datalake.default.tombstone_unknown_counts
+SET ('commit.manifest-merge.enabled' = true, 'commit.manifest.min-count-to-merge' = 2);
+
+# Merge the old data manifest and add a second live position-delete manifest.
+statement ok
+DELETE FROM my_datalake.default.tombstone_unknown_counts WHERE id = 1;
+
+# Now merge the delete manifests, dropping their old tombstone but preserving both live deletes.
+statement ok
+INSERT INTO my_datalake.default.tombstone_unknown_counts VALUES (4);
+
+query TII rowsort
+SELECT content, count(*), sum(record_count)
+FROM iceberg_metadata(my_datalake.default.tombstone_unknown_counts)
+WHERE status <> 'DELETED' GROUP BY content;
+----
+DATA	3	5
+POSITION_DELETES	2	2
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.tombstone_unknown_counts) WHERE status = 'DELETED';
+----
+0
+
+query I
+SELECT string_agg(id, ',' ORDER BY id) FROM my_datalake.default.tombstone_unknown_counts;
+----
+2,3,4
+
+query I
+SELECT string_agg(id, ',' ORDER BY id) FROM my_datalake.default.tombstone_unknown_counts AT (VERSION => 3);
+----
+1,2
+
+statement ok
+DROP TABLE my_datalake.default.tombstone_unknown_counts;

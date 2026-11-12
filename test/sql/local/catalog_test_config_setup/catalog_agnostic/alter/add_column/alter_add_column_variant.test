@@ -1,0 +1,106 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/add_column/alter_add_column_variant.test
+# description: ADD COLUMN supports VARIANT while enforcing format-version and default constraints
+# group: [add_column]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+require-env VARIANT_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.add_column_variant;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.add_column_variant_v2;
+
+statement ok
+CREATE TABLE my_datalake.default.add_column_variant (id INTEGER) WITH ('format-version' = '3');
+
+statement ok
+INSERT INTO my_datalake.default.add_column_variant VALUES (1);
+
+statement ok
+ALTER TABLE my_datalake.default.add_column_variant ADD COLUMN v VARIANT;
+
+query TT
+SELECT column_name, column_type FROM (DESCRIBE my_datalake.default.add_column_variant) ORDER BY ALL;
+----
+id	INTEGER
+v	VARIANT
+
+# rows written before the column was added read it as NULL
+statement ok
+INSERT INTO my_datalake.default.add_column_variant VALUES (2, {'a': 1, 'b': [1, 2]}::VARIANT), (3, 'x'::VARIANT);
+
+query IT
+SELECT id, v::VARCHAR FROM my_datalake.default.add_column_variant ORDER BY id;
+----
+1	NULL
+2	{'a': 1, 'b': [1, 2]}
+3	x
+
+query I
+SELECT id FROM my_datalake.default.add_column_variant WHERE v.a IS NOT NULL;
+----
+2
+
+statement ok
+ALTER TABLE my_datalake.default.add_column_variant ADD COLUMN IF NOT EXISTS v VARIANT;
+
+# a VARIANT column can only default to NULL
+statement error
+ALTER TABLE my_datalake.default.add_column_variant ADD COLUMN w VARIANT DEFAULT 1::VARIANT;
+----
+<REGEX>:.*Non-null DEFAULT values are not accepted for columns of type variant.*
+
+statement ok
+ALTER TABLE my_datalake.default.add_column_variant ADD COLUMN w VARIANT DEFAULT NULL;
+
+statement ok
+INSERT INTO my_datalake.default.add_column_variant (id) VALUES (4);
+
+query III
+SELECT id, v IS NULL, w IS NULL FROM my_datalake.default.add_column_variant ORDER BY id;
+----
+1	true	true
+2	false	true
+3	false	true
+4	true	true
+
+# VARIANT needs format-version 3
+statement ok
+CREATE TABLE my_datalake.default.add_column_variant_v2 (id INTEGER) WITH ('format-version' = '2');
+
+statement error
+ALTER TABLE my_datalake.default.add_column_variant_v2 ADD COLUMN v VARIANT;
+----
+<REGEX>:.*Column 'v' of type VARIANT requires Iceberg format-version 3, the table uses 2.*
+
+# The version check must recurse through each kind of container.
+statement error
+ALTER TABLE my_datalake.default.add_column_variant_v2 ADD COLUMN nested_v STRUCT(v VARIANT);
+----
+<REGEX>:.*requires Iceberg format-version 3, the table uses 2.*
+
+foreach type VARIANT[] MAP(VARCHAR,VARIANT)
+
+statement error
+ALTER TABLE my_datalake.default.add_column_variant_v2 ADD COLUMN nested_v {type};
+----
+<REGEX>:.*requires Iceberg format-version 3, the table uses 2.*
+
+endloop
+
+query TT
+SELECT column_name, column_type FROM (DESCRIBE my_datalake.default.add_column_variant_v2);
+----
+id	INTEGER
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.add_column_variant;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.add_column_variant_v2;

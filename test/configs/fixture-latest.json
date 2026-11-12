@@ -16,6 +16,10 @@
 			"env_value": "fixture"
 		},
 		{
+			"env_name": "ETAG_SUPPORT",
+			"env_value": "true"
+		},
+		{
 			"env_name": "FORMAT_V3_SUPPORT",
 			"env_value": "true"
 		},

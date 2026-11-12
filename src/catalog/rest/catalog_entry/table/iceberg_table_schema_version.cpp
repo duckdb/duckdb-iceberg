@@ -71,7 +71,7 @@ TableFunction IcebergTableSchemaVersion::GetScanFunction(ClientContext &context,
 		    "GetScanFunction was called with a dummy IcebergTableSchemaVersion, this should never happen");
 	}
 	const auto schema_id = this->schema_id.GetIndex();
-	const auto &metadata = table_info.table_metadata;
+	const auto &metadata = table_info.GetMetadata();
 	const auto &iceberg_schema = metadata.GetSchemaFromId(schema_id);
 
 	// The pinned metadata object's current snapshot is the transaction-visible head. Only an explicit AT clause
@@ -85,19 +85,9 @@ TableFunction IcebergTableSchemaVersion::GetScanFunction(ClientContext &context,
 	snapshot_info.schema_id = schema_id;
 
 	auto &fs = FileSystem::GetFileSystem(context);
-	shared_ptr<IcebergScanInfo> scan_info;
-	auto file_secret = IcebergFileCredentialsCallback::Get(context, table_info);
-	if (!file_secret.empty()) {
-		// the scan's own copy of the metadata carries the file secret: the table's is shared with other connections
-		auto scan_metadata = make_uniq<IcebergScanTemporaryData>(metadata.Copy());
-		scan_metadata->metadata.SetFileSecret(std::move(file_secret));
-		auto &scan_schema = scan_metadata->metadata.GetSchemaFromId(schema_id);
-		scan_info = make_shared_ptr<IcebergScanInfo>(metadata.GetMetadataPath(fs), std::move(scan_metadata),
-		                                             snapshot_info, scan_schema);
-	} else {
-		scan_info =
-		    make_shared_ptr<IcebergScanInfo>(metadata.GetMetadataPath(fs), metadata, snapshot_info, iceberg_schema);
-	}
+	auto scan_info = make_shared_ptr<IcebergScanInfo>(
+	    metadata.GetMetadataPath(fs), table_info.GetMetadataOwner(), snapshot_info, iceberg_schema,
+	    IcebergFileSecret(IcebergFileCredentialsCallback::Get(context, table_info)));
 	auto &transaction = IcebergTransaction::Get(context, catalog);
 	scan_info->serialization_transaction_id = transaction.scan_serialization_id;
 	scan_info->serialization_query_id = transaction.active_query.load();
@@ -132,7 +122,7 @@ TableFunction IcebergTableSchemaVersion::GetScanFunction(ClientContext &context,
 }
 
 virtual_column_map_t IcebergTableSchemaVersion::GetVirtualColumns() const {
-	return VirtualColumns(table_info.table_metadata.iceberg_version);
+	return VirtualColumns(table_info.GetMetadata().iceberg_version);
 }
 
 virtual_column_map_t IcebergTableSchemaVersion::VirtualColumns(int32_t iceberg_version) {
@@ -155,7 +145,7 @@ vector<column_t> IcebergTableSchemaVersion::GetRowIdColumns() const {
 	//! MERGE interprets a NULL first row-ID column as an absent target, so physical identity comes first.
 	result.push_back(MultiFileReader::COLUMN_IDENTIFIER_FILENAME);
 	result.push_back(MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER);
-	auto &table_metadata = table_info.table_metadata;
+	auto &table_metadata = table_info.GetMetadata();
 	if (table_metadata.iceberg_version >= 3) {
 		//! Preserve assigned lineage on UPDATE; pending rows may have no assigned ID.
 		result.push_back(COLUMN_IDENTIFIER_ROW_ID);

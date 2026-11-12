@@ -1,0 +1,67 @@
+# name: test/sql/local/iceberg_scans/iceberg_schemas.test
+# description: iceberg_schemas lists the top-level fields of every schema of a table
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+# The path can be a table directory or a metadata file:
+# - a table directory: the metadata version is read from metadata/version-hint.text
+# - a metadata file: that exact version is used, so the expected output can't change if a newer version is added
+
+# one schema, simple types
+# (a table directory; its version-hint.text points to v2.metadata.json)
+query IIIIIII
+SELECT * FROM iceberg_schemas('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg');
+----
+0	l_orderkey	1	BIGINT	false	NULL	true
+0	l_partkey	2	BIGINT	false	NULL	true
+0	l_suppkey	3	BIGINT	false	NULL	true
+0	l_linenumber	4	BIGINT	false	NULL	true
+0	l_quantity	5	DECIMAL(15,2)	false	NULL	true
+0	l_extendedprice	6	DECIMAL(15,2)	false	NULL	true
+0	l_discount	7	DECIMAL(15,2)	false	NULL	true
+0	l_tax	8	DECIMAL(15,2)	false	NULL	true
+0	l_returnflag	9	VARCHAR	false	NULL	true
+0	l_linestatus	10	VARCHAR	false	NULL	true
+0	l_shipdate	11	DATE	false	NULL	true
+0	l_commitdate	12	DATE	false	NULL	true
+0	l_receiptdate	13	DATE	false	NULL	true
+0	l_shipinstruct	14	VARCHAR	false	NULL	true
+0	l_shipmode	15	VARCHAR	false	NULL	true
+0	l_comment	16	VARCHAR	false	NULL	true
+
+# three schemas: 'b' is dropped in schema 1 and added again with a new field id in schema 2, the current one
+# (a metadata file, to pin v7, the version with these three schemas)
+query IIIIIII
+SELECT * FROM iceberg_schemas('{WORKING_DIRECTORY}/data/persistent/name_mapping/warehouse_1/mydb/t1/metadata/v7.metadata.json');
+----
+0	a	1	INTEGER	true	NULL	false
+0	b	2	BIGINT	false	NULL	false
+1	a	1	INTEGER	true	NULL	false
+2	a	1	INTEGER	true	NULL	true
+2	b	3	BIGINT	false	NULL	true
+
+# filtering on the current schema
+query II
+SELECT field_id, name FROM iceberg_schemas('{WORKING_DIRECTORY}/data/persistent/name_mapping/warehouse_1/mydb/t1/metadata/v7.metadata.json')
+WHERE is_current;
+----
+1	a
+3	b
+
+# a struct column is a single row: only top-level fields are listed, and the struct's fields show up in its type,
+# so the fields added to the struct in schema 1 are visible
+# (a metadata file is required here: the table has no version-hint.text)
+query IIIIIII
+SELECT * FROM iceberg_schemas('{WORKING_DIRECTORY}/data/persistent/add_columns_with_defaults_in_struct/default.db/add_columns_with_defaults_in_struct/metadata/00003-21a957f9-c2ee-431a-9d18-bf257b561198.metadata.json');
+----
+0	a	1	STRUCT(col1 VARCHAR)	false	NULL	false
+1	a	1	STRUCT(col1 VARCHAR, col_boolean BOOLEAN, col_integer INTEGER, col_long BIGINT, col_float FLOAT, col_double DOUBLE, col_decimal DECIMAL(16,2), col_date DATE, col_time TIME, col_timestamp TIMESTAMP, col_timestamptz TIMESTAMP WITH TIME ZONE, col_string VARCHAR, col_uuid UUID, col_fixed ICEBERG_FIXED(5), col_binary BLOB)	false	NULL	true
+
+statement ok
+create table t1 as select range a from range(10);
+
+statement error
+select * from iceberg_schemas(memory.main.t1);
+----
+<REGEX>:.*Invalid Input Error.*t1 is not an Iceberg table.*

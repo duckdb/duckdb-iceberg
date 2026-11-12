@@ -64,10 +64,17 @@ select * from my_datalake.default.refresh_second order by all;
 statement ok
 select * from my_datalake.default.refresh_second order by all;
 
-# The catalog is hit every time, to get a potential refresh of the state of the schemas/tables in it
+# Each transaction revalidates the table. Catalogs supporting ETags can return
+# HTTP 304 for unchanged metadata; a full HTTP 200 response is also valid.
 
 query II
-SELECT request.url, response.reason FROM duckdb_logs_parsed('HTTP') WHERE request.type='GET' AND (request.url).contains('/v1/') order by timestamp
+SELECT request.url,
+	response.status = 'OK_200' OR (
+		response.status = 'NotModified_304' AND request.headers['If-None-Match'] IS NOT NULL
+	) AS revalidated
+FROM duckdb_logs_parsed('HTTP')
+WHERE request.type = 'GET' AND (request.url).contains('/v1/')
+ORDER BY timestamp;
 ----
-<REGEX>:.*v1/.*namespaces/default/tables/refresh_second	OK
-<REGEX>:.*v1/.*namespaces/default/tables/refresh_second	OK
+<REGEX>:.*v1/.*namespaces/default/tables/refresh_second	true
+<REGEX>:.*v1/.*namespaces/default/tables/refresh_second	true

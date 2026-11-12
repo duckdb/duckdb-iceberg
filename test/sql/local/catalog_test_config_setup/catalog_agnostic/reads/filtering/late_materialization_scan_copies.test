@@ -1,0 +1,149 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/late_materialization_scan_copies.test
+# description: Prefetched and serialized TopN scans retain late materialization and virtual-filter safety
+# group: [filtering]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SCAN_PLANNING_MODE client
+
+include test/sql/init_requires
+
+statement ok
+CREATE TABLE my_datalake.default.lm_scan_copies (id INTEGER, payload VARCHAR)
+WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.lm_scan_copies VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+statement ok
+INSERT INTO my_datalake.default.lm_scan_copies VALUES (4, 'd'), (5, 'e'), (6, 'f');
+
+statement ok
+SET late_materialization_max_rows = 2;
+
+statement ok
+SET explain_output = 'optimized_only';
+
+foreach serialization false true
+
+statement ok
+SET iceberg_enable_scan_serialization = {serialization};
+
+foreach mode off on
+
+onlyif mode==off
+statement ok
+SET disabled_optimizers = 'late_materialization';
+
+onlyif mode==on
+statement ok
+SET disabled_optimizers = '';
+
+# Multiple CTE references force serialization when inlining. With serialization
+# disabled the original CTE is materialized; either path must retain TopN setup.
+onlyif mode==on
+query II
+EXPLAIN (FORMAT JSON)
+WITH top_rows AS NOT MATERIALIZED (
+	SELECT payload FROM my_datalake.default.lm_scan_copies
+	WHERE id <= 5 ORDER BY id DESC LIMIT 2
+)
+SELECT * FROM top_rows UNION ALL SELECT * FROM top_rows;
+----
+logical_opt	<REGEX>:(?s).*COMPARISON_JOIN.*TOP_N.*
+
+onlyif serialization==true
+query II
+EXPLAIN (FORMAT JSON)
+WITH top_rows AS NOT MATERIALIZED (
+	SELECT payload FROM my_datalake.default.lm_scan_copies
+	WHERE id <= 5 ORDER BY id DESC LIMIT 2
+)
+SELECT * FROM top_rows UNION ALL SELECT * FROM top_rows;
+----
+logical_opt	<!REGEX>:(?s).*CTE_SCAN.*
+
+query T rowsort
+WITH top_rows AS NOT MATERIALIZED (
+	SELECT payload FROM my_datalake.default.lm_scan_copies
+	WHERE id <= 5 ORDER BY id DESC LIMIT 2
+)
+SELECT * FROM top_rows UNION ALL SELECT * FROM top_rows;
+----
+d
+d
+e
+e
+
+# The restored scan must also keep the filter-pushdown guard. This alias resolves
+# to a virtual column only after CTE copying and projection/filter pushdown.
+query II
+EXPLAIN (FORMAT JSON)
+WITH top_rows AS NOT MATERIALIZED (
+	SELECT payload FROM (
+		SELECT id, payload, file_row_number AS row_key
+		FROM my_datalake.default.lm_scan_copies
+	) t WHERE row_key = 0 ORDER BY id DESC LIMIT 2
+)
+SELECT * FROM top_rows UNION ALL SELECT * FROM top_rows;
+----
+logical_opt	<!REGEX>:(?s).*COMPARISON_JOIN.*
+
+query T rowsort
+WITH top_rows AS NOT MATERIALIZED (
+	SELECT payload FROM (
+		SELECT id, payload, file_row_number AS row_key
+		FROM my_datalake.default.lm_scan_copies
+	) t WHERE row_key = 0 ORDER BY id DESC LIMIT 2
+)
+SELECT * FROM top_rows UNION ALL SELECT * FROM top_rows;
+----
+a
+a
+d
+d
+
+endloop
+
+endloop
+
+# Prefetching and scan rebinding must retain writes already staged in the
+# transaction, including when the same TopN plan is copied twice.
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.lm_scan_copies VALUES (7, 'g');
+
+statement ok
+DELETE FROM my_datalake.default.lm_scan_copies WHERE id = 5;
+
+query T rowsort
+WITH top_rows AS NOT MATERIALIZED (
+	SELECT payload FROM my_datalake.default.lm_scan_copies
+	WHERE id % 2 = 1 ORDER BY id DESC LIMIT 2
+)
+SELECT * FROM top_rows UNION ALL SELECT * FROM top_rows;
+----
+c
+c
+g
+g
+
+statement ok
+ROLLBACK;
+
+statement ok
+RESET iceberg_enable_scan_serialization;
+
+statement ok
+RESET disabled_optimizers;
+
+statement ok
+RESET late_materialization_max_rows;
+
+statement ok
+RESET explain_output;
+
+statement ok
+DROP TABLE my_datalake.default.lm_scan_copies;

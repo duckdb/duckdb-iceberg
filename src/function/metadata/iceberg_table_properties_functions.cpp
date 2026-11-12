@@ -183,7 +183,7 @@ static void SetIcebergTablePropertiesFunction(ClientContext &context, TableFunct
 		transaction_data.TableSetProperties(bind_data.properties);
 		// Later statements, including write-mode checks, must see this transaction's property changes.
 		for (auto &property : bind_data.properties) {
-			tbl.table_metadata.table_properties[property.first] = property.second;
+			tbl.GetMetadataMutable().table_properties[property.first] = property.second;
 		}
 	});
 
@@ -215,7 +215,7 @@ static void RemoveIcebergTablePropertiesFunction(ClientContext &context, TableFu
 		auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
 		transaction_data.TableRemoveProperties(bind_data.remove_properties);
 		for (auto &property : bind_data.remove_properties) {
-			tbl.table_metadata.table_properties.erase(property);
+			tbl.GetMetadataMutable().table_properties.erase(property);
 		}
 	});
 
@@ -223,7 +223,7 @@ static void RemoveIcebergTablePropertiesFunction(ClientContext &context, TableFu
 	auto table_name = iceberg_table->name;
 	global_state.properties_removed = true;
 	// set success output, failure happens during transaction commit.
-	FlatVector::GetDataMutable<int64_t>(output.data[0])[0] = table_info.table_metadata.table_properties.size();
+	FlatVector::GetDataMutable<int64_t>(output.data[0])[0] = table_info.GetMetadata().table_properties.size();
 	output.SetChildCardinality(1);
 }
 
@@ -242,7 +242,7 @@ static void GetIcebergTablePropertiesFunction(ClientContext &context, TableFunct
 	auto table_txn_state = iceberg_transaction.GetLatestTableState(table_key);
 	const IcebergTable &txn_table_info = table_txn_state ? table_txn_state->GetInfo() : iceberg_table->table_info;
 
-	const auto &properties = txn_table_info.table_metadata.GetTableProperties();
+	const auto &properties = txn_table_info.GetMetadata().GetTableProperties();
 	if (properties.empty()) {
 		output.SetChildCardinality(0);
 		return;

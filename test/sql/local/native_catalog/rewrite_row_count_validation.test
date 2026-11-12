@@ -1,0 +1,103 @@
+# name: test/sql/local/native_catalog/rewrite_row_count_validation.test
+# description: Maintenance rejects missing or extra rows before staging shared rewrite output and cleans up rejected files
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+require-env FILE_CLEANUP_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_row_count_validation (id INTEGER)
+WITH ('format-version' = 2);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_row_count_validation VALUES (1), (2);
+
+# Corrupt the local data file without changing its manifest's two-row count.
+# Exercise both bounds, including an empty scan with no replacement files.
+foreach written_rows 0 1 3
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE rewrite_input = (
+	SELECT file_path FROM iceberg_metadata(my_datalake.default.rewrite_row_count_validation)
+	WHERE content = 'DATA' AND status <> 'DELETED'
+);
+
+statement ok
+SET VARIABLE rewrite_field_id = (
+	SELECT field_id FROM parquet_schema(getvariable('rewrite_input')) WHERE name = 'id'
+);
+
+statement ok
+SET VARIABLE rewrite_snapshot = (
+	SELECT max(sequence_number) FROM iceberg_snapshots(my_datalake.default.rewrite_row_count_validation)
+);
+
+statement ok
+COPY (SELECT range::INTEGER + 1 AS id FROM range({written_rows}))
+TO (getvariable('rewrite_input')) (FORMAT PARQUET, FIELD_IDS {'id': getvariable('rewrite_field_id')});
+
+statement ok
+COMMIT;
+
+statement error
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_row_count_validation', rewrite_all = true);
+----
+would change the table's data; nothing was committed
+
+statement ok
+BEGIN;
+
+# The replacement was never published, and the shared sink removed its output.
+query I
+SELECT max(sequence_number) = getvariable('rewrite_snapshot')
+FROM iceberg_snapshots(my_datalake.default.rewrite_row_count_validation);
+----
+true
+
+query I
+SELECT file_path = getvariable('rewrite_input')
+FROM iceberg_metadata(my_datalake.default.rewrite_row_count_validation)
+WHERE content = 'DATA' AND status <> 'DELETED';
+----
+true
+
+statement ok
+SET VARIABLE rewrite_input = (
+	SELECT file_path FROM iceberg_metadata(my_datalake.default.rewrite_row_count_validation)
+	WHERE content = 'DATA' AND status <> 'DELETED'
+);
+
+query I
+SELECT count(*) FROM glob(parse_dirpath(getvariable('rewrite_input')) || '/*.parquet');
+----
+1
+
+# Restore the input while its catalog credentials are in scope.
+statement ok
+COPY (SELECT * FROM (VALUES (1), (2)) t(id))
+TO (getvariable('rewrite_input')) (FORMAT PARQUET, FIELD_IDS {'id': getvariable('rewrite_field_id')});
+
+statement ok
+COMMIT;
+
+endloop
+
+query II
+SELECT rewritten_data_files_count, added_data_files_count
+FROM iceberg_rewrite_data_files('my_datalake.default.rewrite_row_count_validation', rewrite_all = true);
+----
+1	1
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.rewrite_row_count_validation;
+----
+[1, 2]
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_row_count_validation;

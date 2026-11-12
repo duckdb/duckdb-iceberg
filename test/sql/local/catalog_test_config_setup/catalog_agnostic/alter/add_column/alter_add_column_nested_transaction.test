@@ -1,0 +1,169 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/add_column/alter_add_column_nested_transaction.test
+# description: Nested ADD COLUMN preserves field IDs, transactional rows and rollback
+# group: [add_column]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.nested_add_transaction;
+
+statement ok
+CREATE TABLE my_datalake.default.nested_add_transaction (id INTEGER) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.nested_add_transaction VALUES (1);
+
+statement ok
+CREATE MACRO nested_add_fields() AS TABLE
+SELECT field.atom::INTEGER AS field_id
+FROM iceberg_load_table_response(my_datalake.default.nested_add_transaction) t,
+     json_each(t.metadata::JSON, '$.schemas') schema,
+     json_tree(schema.value) field
+WHERE json_extract(schema.value, '$."schema-id"')::INTEGER = t.metadata."current-schema-id"::INTEGER
+  AND field.key IN ('id', 'element-id', 'key-id', 'value-id');
+
+statement ok
+SET VARIABLE original_ids = (SELECT list(field_id ORDER BY field_id) FROM nested_add_fields());
+
+statement ok
+SET VARIABLE original_last_id = (
+	SELECT metadata."last-column-id"::INTEGER
+	FROM iceberg_load_table_response(my_datalake.default.nested_add_transaction)
+);
+
+# Both on-disk rows and rows appended before ALTER must acquire NULL containers.
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.nested_add_transaction VALUES (2);
+
+statement ok
+ALTER TABLE my_datalake.default.nested_add_transaction
+ADD COLUMN payload STRUCT(l STRUCT(n INTEGER)[], m MAP(VARCHAR, STRUCT(n INTEGER)));
+
+statement ok
+ALTER TABLE my_datalake.default.nested_add_transaction ADD COLUMN tail BIGINT;
+
+statement ok
+INSERT INTO my_datalake.default.nested_add_transaction VALUES
+	(3, {'l': [{'n': 7}, NULL], 'm': MAP {'k': {'n': 8}}}, 99);
+
+query IIII
+SELECT id, payload.l[1].n, payload.m['k'].n, tail
+FROM my_datalake.default.nested_add_transaction ORDER BY id;
+----
+1	NULL	NULL	NULL
+2	NULL	NULL	NULL
+3	7	8	99
+
+statement ok
+ROLLBACK;
+
+query I
+FROM my_datalake.default.nested_add_transaction;
+----
+1
+
+query II
+SELECT list(field_id ORDER BY field_id) = getvariable('original_ids'),
+       (SELECT metadata."last-column-id"::INTEGER
+        FROM iceberg_load_table_response(my_datalake.default.nested_add_transaction)) = getvariable('original_last_id')
+FROM nested_add_fields();
+----
+true	true
+
+# Repeat the same changes and commit them.
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.nested_add_transaction VALUES (2);
+
+statement ok
+ALTER TABLE my_datalake.default.nested_add_transaction
+ADD COLUMN payload STRUCT(l STRUCT(n INTEGER)[], m MAP(VARCHAR, STRUCT(n INTEGER)));
+
+statement ok
+ALTER TABLE my_datalake.default.nested_add_transaction ADD COLUMN tail BIGINT;
+
+statement ok
+INSERT INTO my_datalake.default.nested_add_transaction VALUES
+	(3, {'l': [{'n': 7}, NULL], 'm': MAP {'k': {'n': 8}}}, 99),
+	(4, {'l': [], 'm': MAP {}}, 100);
+
+statement ok
+COMMIT;
+
+query IIII fresh
+SELECT id, payload.l[1].n, payload.m['k'].n, tail
+FROM my_datalake.default.nested_add_transaction ORDER BY id;
+----
+1	NULL	NULL	NULL
+2	NULL	NULL	NULL
+3	7	8	99
+4	NULL	NULL	100
+
+query IIIII fresh
+SELECT id, payload IS NULL, len(payload.l), payload.l[2] IS NULL, cardinality(payload.m)
+FROM my_datalake.default.nested_add_transaction ORDER BY id;
+----
+1	true	NULL	true	NULL
+2	true	NULL	true	NULL
+3	false	2	true	1
+4	false	0	true	0
+
+# Include list-element and map key/value IDs, not just named STRUCT fields.
+query IIII
+SELECT count(*), count(DISTINCT field_id), min(field_id) > 0,
+       max(field_id) = (SELECT metadata."last-column-id"::INTEGER
+                       FROM iceberg_load_table_response(my_datalake.default.nested_add_transaction))
+FROM nested_add_fields();
+----
+10	10	true	true
+
+statement ok
+SET VARIABLE committed_last_id = (
+	SELECT metadata."last-column-id"::INTEGER
+	FROM iceberg_load_table_response(my_datalake.default.nested_add_transaction)
+);
+
+# Reusing the column name must allocate fresh IDs for all descendants.
+statement ok
+ALTER TABLE my_datalake.default.nested_add_transaction DROP COLUMN payload;
+
+statement ok
+ALTER TABLE my_datalake.default.nested_add_transaction
+ADD COLUMN payload STRUCT(l STRUCT(n INTEGER)[], m MAP(VARCHAR, STRUCT(n INTEGER)));
+
+query II
+SELECT count(*), count(DISTINCT field_id)
+FROM nested_add_fields() WHERE field_id > getvariable('committed_last_id');
+----
+8	8
+
+query III fresh
+SELECT id, payload IS NULL, tail
+FROM my_datalake.default.nested_add_transaction ORDER BY id;
+----
+1	true	NULL
+2	true	NULL
+3	true	99
+4	true	100
+
+statement ok
+INSERT INTO my_datalake.default.nested_add_transaction (id, payload, tail)
+VALUES (5, {'l': [{'n': 17}], 'm': MAP {'k': {'n': 18}}}, 101);
+
+query IIII fresh
+SELECT id, payload.l[1].n, payload.m['k'].n, tail
+FROM my_datalake.default.nested_add_transaction WHERE payload IS NOT NULL;
+----
+5	17	18	101
+
+statement ok
+DROP TABLE my_datalake.default.nested_add_transaction;

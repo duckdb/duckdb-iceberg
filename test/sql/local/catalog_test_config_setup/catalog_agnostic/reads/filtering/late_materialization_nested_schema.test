@@ -1,0 +1,181 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/late_materialization_nested_schema.test
+# description: TopN preserves nested payloads, field mapping and physical columns named like virtual row keys
+# group: [filtering]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SCAN_PLANNING_MODE client
+
+require-env FORMAT_V3_SUPPORT
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+foreach version 2 3
+
+statement ok
+SET threads = 1;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.lm_nested_schema;
+
+# These user columns have the same names as the virtual join keys. They must
+# retain their own values and must never be used to identify physical rows.
+statement ok
+CREATE TABLE my_datalake.default.lm_nested_schema (
+	id INTEGER,
+	k INTEGER,
+	detail STRUCT(rank INTEGER, items VARCHAR[]),
+	attrs MAP(VARCHAR, INTEGER),
+	filename VARCHAR,
+	file_row_number BIGINT
+) WITH ('format-version' = {version});
+
+statement ok
+INSERT INTO my_datalake.default.lm_nested_schema VALUES
+	(1, 10, {'rank': 1, 'items': ['one', NULL]}, MAP {'a': 1}, 'same', 0),
+	(2, NULL, NULL, NULL, 'same', 0);
+
+statement ok
+INSERT INTO my_datalake.default.lm_nested_schema VALUES
+	(3, 30, {'rank': 3, 'items': ['deleted']}, MAP {'a': 3}, 'same', 0),
+	(4, 40, {'rank': 4, 'items': []}, MAP {}, 'same', 0);
+
+# The payload scan must retain field IDs through a rename, promote old keys,
+# and fill the new column with NULL for files written with the old schema.
+statement ok
+ALTER TABLE my_datalake.default.lm_nested_schema RENAME COLUMN detail TO payload;
+
+statement ok
+ALTER TABLE my_datalake.default.lm_nested_schema ALTER COLUMN k TYPE BIGINT;
+
+statement ok
+ALTER TABLE my_datalake.default.lm_nested_schema ADD COLUMN extra VARCHAR;
+
+statement ok
+INSERT INTO my_datalake.default.lm_nested_schema VALUES
+	(5, 2147483648, {'rank': 5, 'items': ['new']}, MAP {'a': 5}, 'same', 0, 'new column'),
+	(6, NULL, {'rank': 6, 'items': [NULL]}, MAP {'a': NULL}, 'same', 0, 'null key');
+
+statement ok
+DELETE FROM my_datalake.default.lm_nested_schema WHERE id = 3;
+
+# Independent visible-row oracle in the final schema.
+statement ok
+CREATE OR REPLACE TEMP TABLE lm_nested_expected (
+	id INTEGER, k BIGINT, payload STRUCT(rank INTEGER, items VARCHAR[]),
+	attrs MAP(VARCHAR, INTEGER), filename VARCHAR, file_row_number BIGINT, extra VARCHAR
+);
+
+statement ok
+INSERT INTO lm_nested_expected VALUES
+	(1, 10, {'rank': 1, 'items': ['one', NULL]}, MAP {'a': 1}, 'same', 0, NULL),
+	(2, NULL, NULL, NULL, 'same', 0, NULL),
+	(4, 40, {'rank': 4, 'items': []}, MAP {}, 'same', 0, NULL),
+	(5, 2147483648, {'rank': 5, 'items': ['new']}, MAP {'a': 5}, 'same', 0, 'new column'),
+	(6, NULL, {'rank': 6, 'items': [NULL]}, MAP {'a': NULL}, 'same', 0, 'null key');
+
+statement ok
+SET late_materialization_max_rows = 3;
+
+statement ok
+SET explain_output = 'optimized_only';
+
+foreach threads 1 4
+
+statement ok
+SET threads = {threads};
+
+foreach mode off on
+
+onlyif mode==off
+statement ok
+SET disabled_optimizers = 'late_materialization';
+
+onlyif mode==on
+statement ok
+SET disabled_optimizers = '';
+
+# V2 opts in, while V3 keeps its existing scan path.
+onlyif mode==on
+onlyif version==2
+query II
+EXPLAIN (FORMAT JSON)
+SELECT * FROM my_datalake.default.lm_nested_schema
+ORDER BY k DESC NULLS FIRST, id DESC LIMIT 3 OFFSET 1;
+----
+logical_opt	<REGEX>:(?s).*COMPARISON_JOIN.*TOP_N.*
+
+onlyif version==3
+query II
+EXPLAIN (FORMAT JSON)
+SELECT * FROM my_datalake.default.lm_nested_schema
+ORDER BY k DESC NULLS FIRST, id DESC LIMIT 3 OFFSET 1;
+----
+logical_opt	<!REGEX>:(?s).*COMPARISON_JOIN.*
+
+query IITTTIT nosort lm_nested_payload
+SELECT * FROM lm_nested_expected
+ORDER BY k DESC NULLS FIRST, id DESC LIMIT 3 OFFSET 1;
+
+query IITTTIT nosort lm_nested_payload
+SELECT * FROM my_datalake.default.lm_nested_schema
+ORDER BY k DESC NULLS FIRST, id DESC LIMIT 3 OFFSET 1;
+
+reset label lm_nested_payload
+
+# Project selected nested children and filter a different child. User columns
+# named like virtual keys remain safe filters; maps and lists retain their values.
+onlyif mode==on
+onlyif version==2
+query II
+EXPLAIN (FORMAT JSON)
+SELECT id, payload.items, attrs, extra
+FROM my_datalake.default.lm_nested_schema
+WHERE payload.rank >= 1 AND filename = 'same' AND file_row_number = 0
+ORDER BY k DESC NULLS LAST, id DESC LIMIT 3;
+----
+logical_opt	<REGEX>:(?s).*COMPARISON_JOIN.*TOP_N.*
+
+query ITTT nosort lm_nested_filter
+SELECT id, payload.items, attrs, extra FROM lm_nested_expected
+WHERE payload.rank >= 1 AND filename = 'same' AND file_row_number = 0
+ORDER BY k DESC NULLS LAST, id DESC LIMIT 3;
+
+query ITTT nosort lm_nested_filter
+SELECT id, payload.items, attrs, extra FROM my_datalake.default.lm_nested_schema
+WHERE payload.rank >= 1 AND filename = 'same' AND file_row_number = 0
+ORDER BY k DESC NULLS LAST, id DESC LIMIT 3;
+
+reset label lm_nested_filter
+
+endloop
+
+endloop
+
+statement ok
+DROP TABLE lm_nested_expected;
+
+statement ok
+DROP TABLE my_datalake.default.lm_nested_schema;
+
+endloop
+
+statement ok
+RESET disabled_optimizers;
+
+statement ok
+RESET late_materialization_max_rows;
+
+statement ok
+RESET explain_output;
+
+statement ok
+RESET threads;

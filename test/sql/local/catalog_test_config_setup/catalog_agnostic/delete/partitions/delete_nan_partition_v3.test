@@ -1,0 +1,47 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/partitions/delete_nan_partition_v3.test
+# description: Deletion vectors in a NaN identity partition apply when their delete manifest covers other partitions
+# group: [partitions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+foreach type FLOAT DOUBLE
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_delete_nan_v3;
+
+statement ok
+CREATE TABLE my_datalake.default.test_delete_nan_v3 (x {type}, id INT)
+PARTITIONED BY (x) WITH ('format-version'=3);
+
+statement ok
+INSERT INTO my_datalake.default.test_delete_nan_v3 VALUES
+    (1.0, 1), (2.0, 2), ('nan'::{type}, 3), ('-nan'::{type}, 4), (NULL, 5), (NULL, 6);
+
+statement ok
+DELETE FROM my_datalake.default.test_delete_nan_v3 WHERE id IN (2, 3, 5);
+
+# This must exercise deletion vectors, with numeric bounds that exclude NaN.
+query IIIII
+SELECT DISTINCT file_format, m.content, partition_summaries[1].contains_nan, partition_summaries[1].contains_null,
+	partition_summaries[1].upper_bound
+FROM iceberg_metadata(my_datalake.default.test_delete_nan_v3) d
+JOIN iceberg_manifests(my_datalake.default.test_delete_nan_v3) m ON d.manifest_path = m.path
+WHERE file_format = 'puffin';
+----
+puffin	1	true	true	2.0
+
+query II
+SELECT x, id FROM my_datalake.default.test_delete_nan_v3 ORDER BY id;
+----
+1.0	1
+nan	4
+NULL	6
+
+statement ok
+DROP TABLE my_datalake.default.test_delete_nan_v3;
+
+endloop

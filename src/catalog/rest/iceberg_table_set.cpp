@@ -52,7 +52,8 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTable &table) {
 		}
 	}
 	auto publication = ic_catalog.table_request_cache.BeginLoad(table.GetTableKey());
-	return ApplyLoadResult(context, table, IRCAPI::GetTable(context, ic_catalog, schema, table.name), *publication);
+	return ApplyLoadResult(context, table, IRCAPI::GetTable(context, ic_catalog, schema, table.name, publication.get()),
+	                       *publication);
 }
 
 bool IcebergTableSet::TryFillEntryFromCache(ClientContext &context, IcebergTable &table) {
@@ -67,7 +68,7 @@ bool IcebergTableSet::TryFillEntryFromCache(ClientContext &context, IcebergTable
 	// Only check cache if MAX_TABLE_STALENESS option is set
 	if (ic_catalog.attach_options.max_table_staleness_micros.IsValid()) {
 		auto cache_hit = ic_catalog.table_request_cache.Get(
-		    context, table_key, [&](const rest_api_objects::LoadTableResult &cached_result) {
+		    context, table_key, [&](shared_ptr<const IcebergLoadTableResponse> cached_result) {
 			    // Use the cached result instead of making a new request
 			    table.InitializeFromCatalogResponse(context, cached_result);
 		    });
@@ -98,11 +99,11 @@ bool IcebergTableSet::ApplyLoadResult(ClientContext &context, IcebergTable &tabl
 		    StringUtil::Format("GetTableInformation endpoint returned response code %s with message \"%s\"",
 		                       EnumUtil::ToString(get_table_result.status_), get_table_result.error_->_error.message));
 	}
-	auto &load_table_result = *get_table_result.result_;
+	auto load_table_result = get_table_result.result_;
 	table.InitializeFromCatalogResponse(context, load_table_result);
-	// Rejected payloads are destroyed; they must not remain as cache identities on the local table.
+	// A rejected result must not become the local table's cache identity.
 	table.initialization_source = nullptr;
-	if (publication.TryPublish(std::move(get_table_result.result_))) {
+	if (publication.TryPublish(std::move(get_table_result.result_), std::move(get_table_result.etag))) {
 		table.initialization_source = load_table_result;
 	}
 	return true;
@@ -122,6 +123,18 @@ struct PendingTableLoad {
 void WarnTableLoadFailure(ClientContext &context, IcebergTable &table, const ErrorData &error) {
 	DUCKDB_LOG_WARNING(context, "Could not resolve the columns of Iceberg table '%s' while listing: %s",
 	                   table.GetTableKey(), error.RawMessage());
+}
+
+optional_ptr<IcebergTable> GetVisibleTable(IcebergTransaction &transaction, IcebergTable &listed_table) {
+	auto state = transaction.GetLatestTableState(listed_table.GetTableKey());
+	if (!state) {
+		return listed_table;
+	}
+	if (!state->IsAlive()) {
+		return nullptr;
+	}
+	// Match ordinary table lookup: local ALTERs and transaction-pinned schemas take precedence over the listing.
+	return state->GetInfo();
 }
 
 } // namespace
@@ -151,7 +164,8 @@ void IcebergTableSet::ScanEagerEntries(ClientContext &context, const std::functi
 		}
 		if (needs_load) {
 			load->publication = ic_catalog.table_request_cache.BeginLoad(table.GetTableKey());
-			load->result = executor.Schedule(IcebergLoadTableRequest(table.schema.namespace_items, table.name));
+			load->result = executor.Schedule(
+			    IcebergLoadTableRequest(table.schema.namespace_items, table.name, load->publication.get()));
 		}
 		pending.push_back(std::move(load));
 	};
@@ -179,7 +193,10 @@ void IcebergTableSet::ScanEagerEntries(ClientContext &context, const std::functi
 		if (entry != entries.end()) {
 			schedule_next();
 		}
-		callback(GetScanEntry(load->table));
+		auto visible_table = GetVisibleTable(transaction, load->table);
+		if (visible_table) {
+			callback(GetScanEntry(*visible_table));
+		}
 	}
 	// Join at the scan boundary. Exceptions instead cancel and drain through the executor's destructor.
 	executor.Drain();
@@ -231,7 +248,10 @@ void IcebergTableSet::Scan(ClientContext &context, const std::function<void(Cata
 	for (auto &entry : entries) {
 		auto &table = *entry.second;
 		transaction.tables[table.GetTableKey()] = entry.second;
-		callback(GetScanEntry(table));
+		auto visible_table = GetVisibleTable(transaction, table);
+		if (visible_table) {
+			callback(GetScanEntry(*visible_table));
+		}
 	}
 }
 
@@ -444,11 +464,11 @@ IcebergTable &IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCat
 
 	// Immediately create the table with stage_create = true to get metadata & data location(s)
 	// transaction commit will either commit with data (OR) create the table with stage_create = false
-	auto new_table_result = make_uniq<const rest_api_objects::LoadTableResult>(
+	auto new_table_result = make_shared_ptr<const IcebergLoadTableResponse>(
 	    IRCAPI::CommitNewTable(context, catalog, schema.namespace_items, create_table_request));
 
 	auto key = IcebergTable::GetTableKey(catalog, schema.namespace_items, info.GetTableName().GetIdentifierName());
-	auto &load_table_result = *new_table_result;
+	auto load_table_result = new_table_result;
 	auto &alter_update = iceberg_transaction.GetOrCreateAlter();
 	auto &table_info = alter_update.CreateTable(
 	    key, IcebergTable(catalog, schema, info.GetTableName().GetIdentifierName(), load_table_result));
@@ -472,7 +492,7 @@ IcebergTable &IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCat
 	transaction_data.TableAddSortOrder();
 	transaction_data.TableSetDefaultSortOrder();
 	transaction_data.TableSetLocation();
-	transaction_data.TableSetProperties(table_info.table_metadata.table_properties);
+	transaction_data.TableSetProperties(table_info.GetMetadata().table_properties);
 
 	iceberg_transaction.SetLatestTableState(key, IcebergTableStatus::ALIVE);
 	return table_info;
@@ -534,7 +554,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 	}
 	iceberg_transaction.tables[table_key] = new_version;
 	auto &state = iceberg_transaction.SetCatalogTableState(new_version);
-	if (iceberg_transaction.StartedBefore(table_info.table_metadata.last_updated_ms)) {
+	if (iceberg_transaction.StartedBefore(table_info.GetMetadata().last_updated_ms)) {
 		state.GetOrCreateTransactionInfo(iceberg_transaction);
 	}
 	return state.GetInfo().GetSchemaVersion(at);
@@ -702,7 +722,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::ApplyViewLoadResult(ClientContext &c
 
 	unique_ptr<ViewCatalogEntry> view_entry;
 	if (unsupported_reason.empty()) {
-		view_entry = make_uniq<ViewCatalogEntry>(catalog, schema, *view_info);
+		view_entry = make_uniq<IcebergViewEntry>(catalog, schema, *view_info);
 	} else {
 		view_entry = make_uniq<UnsupportedIcebergViewEntry>(catalog, schema, *view_info, unsupported_reason);
 	}

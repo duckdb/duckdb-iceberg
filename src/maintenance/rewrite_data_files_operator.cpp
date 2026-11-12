@@ -68,7 +68,7 @@ PhysicalOperator &LogicalRewriteDataFiles::CreatePlan(ClientContext &context, Ph
 
 	D_ASSERT(children.size() == 1);
 	D_ASSERT(rewrite.plan.table_info);
-	auto &metadata = rewrite.plan.table_info->table_metadata;
+	auto &metadata = rewrite.plan.table_info->GetMetadata();
 
 	//! Bind attached a LogicalCopyToFile so RemoveUnusedColumns keeps all table
 	//! columns. Peel that logical COPY away and rebuild the physical copy with
@@ -116,6 +116,8 @@ void PhysicalRewriteDataFiles::StageRewrite(IcebergTransactionData &transaction_
                                             vector<IcebergManifestEntry> &&new_entries,
                                             IcebergManifestDeletes &&replaced_files) const {
 	auto &plan = state.Cast<RewriteDataFilesGlobalState>().plan;
+	//! Only replace the selected files after verifying that their live rows were preserved.
+	ValidateRewrittenRowCount(plan, new_entries);
 	ValidateRewriteSnapshot(plan, state.table_info, "commit");
 	ValidateRewriteSnapshot(plan, transaction_data.table_info, "transaction commit");
 	{

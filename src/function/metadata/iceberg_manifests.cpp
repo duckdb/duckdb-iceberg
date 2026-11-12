@@ -11,7 +11,7 @@ namespace duckdb {
 
 struct IcebergManifestsBindData : public TableFunctionData {
 	IcebergManifestsBindData() {};
-	IcebergTableMetadata metadata {IcebergTableMetadataSchemas {}};
+	shared_ptr<const IcebergTableMetadata> metadata;
 	optional_ptr<const IcebergTableSchema> schema;
 	unique_ptr<IcebergManifestList> manifest_list;
 };
@@ -43,11 +43,12 @@ static unique_ptr<FunctionData> IcebergManifestsBind(ClientContext &context, Tab
 	auto resolved_metadata = IcebergUtils::ResolveTableMetadata(context, input_string, options);
 
 	bind_data->metadata = std::move(resolved_metadata.metadata);
-	auto snapshot_to_scan = bind_data->metadata.GetSnapshot(*options.snapshot_lookup);
+	auto snapshot_to_scan = bind_data->metadata->GetSnapshot(*options.snapshot_lookup);
 	if (snapshot_to_scan.snapshot) {
-		bind_data->manifest_list = IcebergManifestList::Load(resolved_metadata.table_location, bind_data->metadata,
-		                                                     snapshot_to_scan, context, options);
-		bind_data->schema = bind_data->metadata.GetSchemaFromId(snapshot_to_scan.schema_id);
+		bind_data->manifest_list =
+		    IcebergManifestList::Load(resolved_metadata.table_location, *bind_data->metadata, snapshot_to_scan, context,
+		                              options, resolved_metadata.file_secret);
+		bind_data->schema = bind_data->metadata->GetSchemaFromId(snapshot_to_scan.schema_id);
 	}
 
 	names.emplace_back("content");
@@ -110,7 +111,7 @@ static Value BoundToString(const IcebergTransform &transform, const optional<Val
 
 static Value GetPartitionSummaries(ClientContext &context, const IcebergManifestsBindData &bind_data,
                                    const IcebergManifestFile &manifest) {
-	auto &metadata = bind_data.metadata;
+	auto &metadata = *bind_data.metadata;
 	auto spec_it = metadata.partition_specs.find(manifest.partition_spec_id);
 	if (spec_it == metadata.partition_specs.end()) {
 		throw InvalidInputException("Manifest %s references 'partition_spec_id' %d which doesn't exist",

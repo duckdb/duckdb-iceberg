@@ -217,7 +217,7 @@ IcebergDeleteFileInfo IcebergDelete::WritePositionalDeleteFile(ClientContext &co
 	field_input.push_back(std::move(field_ids));
 	info->options["field_ids"] = std::move(field_input);
 
-	auto codec = table.table_info.table_metadata.GetDeleteCompressionCodec();
+	auto codec = table.table_info.GetMetadata().GetDeleteCompressionCodec();
 	if (!codec.empty()) {
 		info->options["codec"].emplace_back(codec);
 	}
@@ -302,12 +302,16 @@ static void PopulateAlteredManifests(IcebergManifestDeletes &out, const IcebergD
 namespace {
 
 string DeleteFilePath(FileSystem &fs, const string &filename, const string &format) {
-	auto last_sep = filename.rfind(fs.PathSeparator(filename));
+	// External writers can use forward slashes for Windows paths. Normalize only
+	// the output directory; delete matching must retain the original data-file path.
+	auto normalized_filename = fs.ConvertSeparators(filename);
+	auto last_sep = normalized_filename.rfind(fs.PathSeparator(normalized_filename));
 	if (last_sep == string::npos) {
 		throw InvalidConfigurationException("Cannot create valid file path for delete file");
 	}
 	// A shared Puffin file lives beside its first data file. Each blob retains its own partition in the manifest.
-	return fs.JoinPath(filename.substr(0, last_sep), UUID::ToString(UUID::GenerateRandomUUID()) + "-deletes." + format);
+	return fs.JoinPath(normalized_filename.substr(0, last_sep + 1),
+	                   UUID::ToString(UUID::GenerateRandomUUID()) + "-deletes." + format);
 }
 
 idx_t DeleteTargetFileSize(const IcebergTableMetadata &metadata) {
@@ -479,8 +483,8 @@ public:
 	}
 
 	void Schedule() override {
-		if (op.table.table_info.table_metadata.iceberg_version >= 3) {
-			target_file_size = DeleteTargetFileSize(op.table.table_info.table_metadata);
+		if (op.table.table_info.GetMetadata().iceberg_version >= 3) {
+			target_file_size = DeleteTargetFileSize(op.table.table_info.GetMetadata());
 		}
 		vector<shared_ptr<Task>> tasks;
 		idx_t index = 0;
@@ -492,7 +496,7 @@ public:
 	}
 
 	void FinishEvent() override {
-		if (op.table.table_info.table_metadata.iceberg_version >= 3) {
+		if (op.table.table_info.GetMetadata().iceberg_version >= 3) {
 			InsertEvent(make_shared_ptr<IcebergDeletionVectorWriteEvent>(*pipeline, op, global_state, std::move(writes),
 			                                                             stage_snapshot, target_file_size));
 		} else {
@@ -538,7 +542,7 @@ void IcebergDelete::ScheduleDeletes(Pipeline &pipeline, Event &event, IcebergDel
 
 IcebergDeleteFileWrite IcebergDelete::MaterializeDeletes(ClientContext &context, const string &filename,
                                                          const vector<idx_t> &deleted_rows) const {
-	bool write_deletion_vector = table.table_info.table_metadata.iceberg_version >= 3;
+	bool write_deletion_vector = table.table_info.GetMetadata().iceberg_version >= 3;
 	IcebergDeleteFileWrite result;
 
 	// Check newly selected positions before adding existing deletes: only new duplicate matches are errors.
@@ -703,7 +707,7 @@ PhysicalOperator &IcebergDelete::PlanDelete(ClientContext &context, PhysicalPlan
                                             IcebergTableSchemaVersion &table, PhysicalOperator &child_plan,
                                             vector<idx_t> &&row_id_indexes) {
 	// DELETE, UPDATE and MERGE all plan their delete files here.
-	table.table_info.table_metadata.VerifyDeleteFileFormat();
+	table.table_info.GetMetadata().VerifyDeleteFileFormat();
 	auto scan = FindIcebergScan(child_plan);
 
 	optional_ptr<IcebergMultiFileList> multi_file_list;
@@ -734,7 +738,7 @@ PhysicalOperator &IcebergCatalog::PlanDelete(ClientContext &context, PhysicalPla
 		auto &table_entry = op.table.Cast<IcebergTableSchemaVersion>();
 		auto &alter = irc_transaction.GetOrCreateAlter();
 		auto &updated_table = alter.GetOrInitializeTable(table_entry.table_info);
-		auto &table_metadata = updated_table.table_metadata;
+		auto &table_metadata = updated_table.GetMetadata();
 		//! V3 is not supported yet: a rewrite has to carry each kept row's lineage into the new files. A V3 DELETE
 		//! continues below, where a copy-on-write mode is refused as before.
 		if (table_metadata.iceberg_version == 2 && table_metadata.UsesCopyOnWrite(WRITE_DELETE_MODE)) {
@@ -764,11 +768,11 @@ PhysicalOperator &IcebergCatalog::PlanDeleteOperation(ClientContext &context, Ph
 	auto &irc_transaction = IcebergTransaction::Get(context, *this);
 	auto &alter = irc_transaction.GetOrCreateAlter();
 	auto &updated_table = alter.GetOrInitializeTable(table_entry.table_info);
-	auto &table_metadata = updated_table.table_metadata;
+	auto &table_metadata = updated_table.GetMetadata();
 	auto &schema = table_metadata.GetLatestSchema();
 	auto &updated_table_entry = *updated_table.schema_versions[schema.schema_id];
 
-	auto &metadata = updated_table_entry.table_info.table_metadata;
+	auto &metadata = updated_table_entry.table_info.GetMetadata();
 	auto iceberg_version = metadata.iceberg_version;
 	if (iceberg_version < 2) {
 		throw NotImplementedException("Delete from Iceberg V%d tables", metadata.iceberg_version);
