@@ -71,6 +71,7 @@
 		{
 			"reason": "Nessie sets gc.enabled=false and rejects external snapshot management through remove-snapshots.",
 			"paths": [
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/expire_snapshots_atomic.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/expire_snapshots_commit.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/expire_snapshots_conflict.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/expire_snapshots_properties.test"

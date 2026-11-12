@@ -192,6 +192,88 @@ cannot be combined with snapshot expiration
 statement ok
 rollback;
 
+# DELETE and UPDATE use distinct snapshot-staging paths from INSERT.
+statement ok
+begin;
+
+statement ok
+delete from my_datalake.default.expire_snapshots_commit where id = 1;
+
+statement error
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_commit', retain_last => 1, older_than => timestamp '2999-01-01');
+----
+cannot follow data changes
+
+statement ok
+rollback;
+
+statement ok
+begin;
+
+statement ok
+update my_datalake.default.expire_snapshots_commit set id = 10 where id = 1;
+
+statement error
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_commit', retain_last => 1, older_than => timestamp '2999-01-01');
+----
+cannot follow data changes
+
+statement ok
+rollback;
+
+statement ok
+begin;
+
+query II
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_commit', snapshot_ids => [getvariable('oldest_snapshot')], retain_last => 10);
+----
+1	4
+
+statement error
+delete from my_datalake.default.expire_snapshots_commit where id = 1;
+----
+cannot be combined with snapshot expiration
+
+statement ok
+rollback;
+
+statement ok
+begin;
+
+query II
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_commit', snapshot_ids => [getvariable('oldest_snapshot')], retain_last => 10);
+----
+1	4
+
+statement error
+update my_datalake.default.expire_snapshots_commit set id = 10 where id = 1;
+----
+cannot be combined with snapshot expiration
+
+statement ok
+rollback;
+
+# A no-op initializes the expiration view without staging a removal. Subsequent
+# writes are allowed, but another expiration must still reject their pending snapshot.
+statement ok
+begin;
+
+query II
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_commit', retain_last => 10);
+----
+0	5
+
+statement ok
+insert into my_datalake.default.expire_snapshots_commit values (6);
+
+statement error
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_commit', retain_last => 1, older_than => timestamp '2999-01-01');
+----
+cannot follow data changes
+
+statement ok
+rollback;
+
 # Property updates can change the retention plan, so they cannot share a transaction with expiration.
 statement ok
 begin;
@@ -217,6 +299,40 @@ select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_com
 
 statement error
 call set_iceberg_table_properties(my_datalake.default.expire_snapshots_commit, {'gc.enabled': 'false'});
+----
+Table property changes cannot be combined with snapshot expiration
+
+statement ok
+rollback;
+
+# Removing a retention property is guarded independently from setting one.
+statement ok
+call set_iceberg_table_properties(my_datalake.default.expire_snapshots_commit, {'history.expire.min-snapshots-to-keep': '10'});
+
+statement ok
+begin;
+
+statement ok
+call remove_iceberg_table_properties(my_datalake.default.expire_snapshots_commit, ['history.expire.min-snapshots-to-keep']);
+
+statement error
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_commit');
+----
+cannot follow table property changes
+
+statement ok
+rollback;
+
+statement ok
+begin;
+
+query II
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_commit', snapshot_ids => [getvariable('oldest_snapshot')], retain_last => 10);
+----
+1	4
+
+statement error
+call remove_iceberg_table_properties(my_datalake.default.expire_snapshots_commit, ['history.expire.min-snapshots-to-keep']);
 ----
 Table property changes cannot be combined with snapshot expiration
 
