@@ -1,0 +1,55 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_written_files_failed_commit.test
+# description: iceberg_written_files() drops the files of a transaction whose COMMIT fails
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env ATOMIC_COMMIT_CONFLICT_SUPPORT true
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.written_files_conflict;
+
+statement ok
+CREATE TABLE my_datalake.default.written_files_conflict (id INTEGER) WITH (
+    'format-version' = '2',
+    'write.delete.mode' = 'copy-on-write',
+    'write.delete.isolation-level' = 'snapshot'
+);
+
+statement ok
+INSERT INTO my_datalake.default.written_files_conflict VALUES (1), (2);
+
+# a partial copy-on-write rewrite is not retried, so a concurrent INSERT makes the COMMIT fail
+statement ok rewriter
+BEGIN;
+
+query I rewriter
+DELETE FROM my_datalake.default.written_files_conflict WHERE id = 1;
+----
+1
+
+statement ok rewriter
+INSERT INTO my_datalake.default.written_files_conflict VALUES (10);
+
+query I rewriter
+SELECT count(*) FROM iceberg_written_files();
+----
+1
+
+statement ok writer
+INSERT INTO my_datalake.default.written_files_conflict VALUES (3);
+
+statement error rewriter
+COMMIT;
+----
+TransactionContext Error
+
+query I rewriter
+SELECT count(*) FROM iceberg_written_files();
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.written_files_conflict;

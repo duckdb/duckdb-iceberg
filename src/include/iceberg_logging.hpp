@@ -29,16 +29,4 @@ struct IcebergLogType : public LogType {
 	}
 };
 
-//! A data file an Iceberg write staged in its transaction, one entry per file
-struct IcebergDataFileWrittenLogType : public LogType {
-	static constexpr const char *NAME = "IcebergDataFileWritten";
-	static constexpr LogLevel LEVEL = LogLevel::LOG_INFO;
-
-	IcebergDataFileWrittenLogType();
-
-	static LogicalType GetLogType();
-	static string ConstructLogMessage(const string &table, const string &file_path, int64_t record_count,
-	                                  int64_t file_size_in_bytes);
-};
-
 } // namespace duckdb
