@@ -22,7 +22,28 @@ statement ok
 CREATE TABLE my_datalake.default.written_files (id INTEGER, p INTEGER) PARTITIONED BY (p) WITH ('format-version' = '2');
 
 statement ok
+CALL enable_logging('IcebergDataFileWritten');
+
+statement ok
 INSERT INTO my_datalake.default.written_files SELECT i, i % 3 FROM range(10) t(i);
+
+# the IcebergDataFileWritten log has the same files, from the INSERT's query on this connection
+query I
+SELECT count(*) FROM (
+    (SELECT file_path, record_count, file_size_in_bytes FROM iceberg_written_files()
+     EXCEPT SELECT file_path, record_count, file_size_in_bytes FROM duckdb_logs_parsed('IcebergDataFileWritten'))
+    UNION ALL
+    (SELECT file_path, record_count, file_size_in_bytes FROM duckdb_logs_parsed('IcebergDataFileWritten')
+     EXCEPT SELECT file_path, record_count, file_size_in_bytes FROM iceberg_written_files())
+);
+----
+0
+
+query III
+SELECT count(DISTINCT query_id), bool_and(connection_id = current_connection_id()), min("table")
+FROM duckdb_logs_parsed('IcebergDataFileWritten');
+----
+1	true	my_datalake.default.written_files
 
 # with the row counts the manifest records, and their sizes
 query II
