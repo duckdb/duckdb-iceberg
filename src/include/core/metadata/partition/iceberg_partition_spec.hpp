@@ -31,16 +31,13 @@ public:
 	//! Partition field IDs and names are deliberately ignored so historical fields can be reused.
 	bool Equals(const IcebergPartitionSpecField &other) const;
 
-	//! Sets the default name Java gives a partition field (BaseUpdatePartitionSpec.PartitionNameGenerator): the
-	//! source column's full name, followed by the transform unless it is identity: 'dep', 'id_bucket_4',
-	//! 's_trunc_10', 'ts_day'. Must be called after transform is set.
-	void SetPartitionSpecFieldName(const string &column_name);
+	//! Generate a preferred name using Java's partition-update convention, with an optional collision suffix.
+	//! The format does not mandate this convention. Must be called after transform is set.
+	void SetPartitionSpecFieldName(const string &column_name, const string &suffix = string());
 	const string &GetPartitionSpecFieldName() const;
 
 private:
-	//! Spec field name. Engines address a field by its name (Spark's DROP PARTITION FIELD <name>, partition.<name>
-	//! in the metadata tables), so a new field gets the name Iceberg Java would give it, and a field recycled from
-	//! an older spec keeps its name. Eventually users will be able to choose a partition name themselves.
+	//! Stored label, independent of the source column name. Recycled fields retain it verbatim.
 	string name;
 };
 
@@ -68,9 +65,9 @@ public:
 	//! Spec IDs and partition field IDs are ignored, like Java's PartitionSpec.compatibleWith, unless
 	//! 'compare_field_ids' is set: a manifest's partition values are keyed by the partition field IDs.
 	bool Equals(const IcebergPartitionSpec &other, bool compare_field_ids = false) const;
-	//! Java's PartitionSpec.Builder rules, applied to a table's default spec when Java loads it: a name is used
-	//! once per spec, and a name that is also a column's belongs to the identity of that column
-	void VerifyFieldNames(const IcebergTableSchema &schema) const;
+	//! Assign non-conflicting names to new fields (IDs >= first_new_field_id), preserving reused labels.
+	//! Generated names also avoid schema collisions for Java catalog compatibility.
+	void FinalizeFieldNames(const IcebergTableSchema &schema, idx_t first_new_field_id);
 
 private:
 	JSONMutableValue FieldsToJSON(JSONWriter &writer) const;

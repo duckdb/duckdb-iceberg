@@ -111,7 +111,7 @@ const vector<IcebergPartitionSpecField> &IcebergPartitionSpec::GetFields() const
 	return fields;
 }
 
-void IcebergPartitionSpecField::SetPartitionSpecFieldName(const string &column_name) {
+void IcebergPartitionSpecField::SetPartitionSpecFieldName(const string &column_name, const string &suffix) {
 	switch (transform.Type()) {
 	case IcebergTransformType::IDENTITY:
 		name = column_name;
@@ -137,30 +137,52 @@ void IcebergPartitionSpecField::SetPartitionSpecFieldName(const string &column_n
 	default:
 		throw NotImplementedException("No default partition field name for transform '%s'", transform.RawType());
 	}
+	name += suffix;
 }
 
-void IcebergPartitionSpec::VerifyFieldNames(const IcebergTableSchema &schema) const {
+void IcebergPartitionSpec::FinalizeFieldNames(const IcebergTableSchema &schema, idx_t first_new_field_id) {
 	case_insensitive_map_t<int32_t> schema_field_ids;
+	case_insensitive_set_t reserved_names;
 	for (auto &field : schema.GetFullNames()) {
 		schema_field_ids.emplace(field.second, field.first);
+		reserved_names.insert(field.second);
 	}
-	case_insensitive_set_t names;
+
+	case_insensitive_set_t assigned_names;
+	unordered_map<uint64_t, unordered_set<string>> source_transforms;
 	for (auto &field : fields) {
 		auto &name = field.GetPartitionSpecFieldName();
-		if (!names.insert(name).second) {
+		// Generating another label must not turn a repeated expression into a second partition field.
+		if (!source_transforms[field.source_id].insert(field.transform.RawType()).second) {
 			throw InvalidInputException("Cannot use partition name more than once: %s", name);
 		}
-		auto column = schema_field_ids.find(name);
-		if (column == schema_field_ids.end()) {
+		reserved_names.insert(name);
+		if (field.partition_field_id < first_new_field_id && !assigned_names.insert(name).second) {
+			throw InvalidInputException("Cannot use partition name more than once: %s", name);
+		}
+	}
+
+	for (auto &field : fields) {
+		if (field.partition_field_id < first_new_field_id) {
 			continue;
 		}
-		if (field.transform.Type() != IcebergTransformType::IDENTITY) {
-			throw InvalidInputException("Cannot create partition from name that exists in schema: %s", name);
+		auto &name = field.GetPartitionSpecFieldName();
+		auto column = schema_field_ids.find(name);
+		bool schema_conflict =
+		    column != schema_field_ids.end() && (field.transform.Type() != IcebergTransformType::IDENTITY ||
+		                                         static_cast<uint64_t>(column->second) != field.source_id);
+		if (schema_conflict || assigned_names.count(name)) {
+			auto source_name = schema.GetFullColumnName(field.source_id);
+			auto base_suffix = "_" + to_string(field.partition_field_id);
+			auto suffix = base_suffix;
+			idx_t attempt = 0;
+			do {
+				field.SetPartitionSpecFieldName(source_name, suffix);
+				suffix = base_suffix + "_" + to_string(++attempt);
+			} while (reserved_names.count(name));
 		}
-		if (static_cast<uint64_t>(column->second) != field.source_id) {
-			throw InvalidInputException("Cannot create identity partition sourced from different field in schema: %s",
-			                            name);
-		}
+		assigned_names.insert(name);
+		reserved_names.insert(name);
 	}
 }
 

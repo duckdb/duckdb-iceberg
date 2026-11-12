@@ -1,5 +1,5 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/partitioning/partition_field_names_quoted.test
-# description: Partition names preserve quoted and nested source names and reject schema name collisions
+# description: Partition names preserve quoted and nested source names and avoid schema name collisions
 # group: [partitioning]
 
 require-env CATALOG_TEST_CONFIG_SETUP
@@ -47,41 +47,60 @@ ORDER BY partition."1 key" NULLS LAST;
 NULL	NULL	NULL	1
 
 # These are complete schema names, not paths that can be split on dots.
-statement error
+statement ok
 CREATE TABLE my_datalake.default.partition_names_collision (
 	"event.ts" TIMESTAMP, "event.ts_day" INTEGER
 ) PARTITIONED BY (day("event.ts"));
-----
-Cannot create partition from name that exists in schema: event.ts_day
 
-statement error
+query TI
+SELECT transform, name <> 'event.ts_day'
+FROM iceberg_partition_specs(my_datalake.default.partition_names_collision) WHERE is_default;
+----
+day	true
+
+statement ok
+DROP TABLE my_datalake.default.partition_names_collision;
+
+statement ok
 CREATE TABLE my_datalake.default.partition_names_collision (
 	"event.data" STRUCT(ts TIMESTAMP, ts_day INTEGER)
 ) PARTITIONED BY (day("event.data".ts));
-----
-Cannot create partition from name that exists in schema: event.data.ts_day
 
-# CTAS validates its placeholder spec before planning a write.
-statement error
+query TI
+SELECT transform, name <> 'event.data.ts_day'
+FROM iceberg_partition_specs(my_datalake.default.partition_names_collision) WHERE is_default;
+----
+day	true
+
+statement ok
+DROP TABLE my_datalake.default.partition_names_collision;
+
+# CTAS applies the same collision policy to its placeholder and persisted specs.
+statement ok
 CREATE TABLE my_datalake.default.partition_names_collision PARTITIONED BY (day("event.ts")) AS
 SELECT TIMESTAMP '2024-01-02 03:00:00' AS "event.ts", 7 AS "event.ts_day";
+
+query TI
+SELECT "event.ts", "event.ts_day" FROM my_datalake.default.partition_names_collision;
 ----
-Cannot create partition from name that exists in schema: event.ts_day
+2024-01-02 03:00:00	7
+
+statement ok
+DROP TABLE my_datalake.default.partition_names_collision;
 
 statement ok
 CREATE TABLE my_datalake.default.partition_names_collision (
 	"event.ts" TIMESTAMP, "event.ts_day" INTEGER
 );
 
-statement error
+statement ok
 ALTER TABLE my_datalake.default.partition_names_collision SET PARTITIONED BY (day("event.ts"));
-----
-Cannot create partition from name that exists in schema: event.ts_day
 
-query I
-SELECT count(field_id) FROM iceberg_partition_specs(my_datalake.default.partition_names_collision) WHERE is_default;
+query TI
+SELECT transform, name <> 'event.ts_day'
+FROM iceberg_partition_specs(my_datalake.default.partition_names_collision) WHERE is_default;
 ----
-0
+day	true
 
 # Identity is allowed to have its own source's full name.
 statement ok
@@ -105,49 +124,6 @@ SELECT "event.ts", "event.ts_day" FROM my_datalake.default.partition_names_colli
 
 statement ok
 DROP TABLE my_datalake.default.partition_names_quoted;
-
-statement ok
-DROP TABLE my_datalake.default.partition_names_collision;
-
-# A recycled identity name may belong to a different source after a rename.
-# Stage the conflicting schema in a transaction and roll it back after rejection.
-statement ok
-CREATE TABLE my_datalake.default.partition_names_collision (
-	"original.name" INTEGER, replacement INTEGER
-) PARTITIONED BY ("original.name") WITH ('format-version' = '2');
-
-statement ok
-INSERT INTO my_datalake.default.partition_names_collision VALUES (42, 99);
-
-statement ok
-BEGIN;
-
-statement ok
-ALTER TABLE my_datalake.default.partition_names_collision RESET PARTITIONED BY;
-
-statement ok
-ALTER TABLE my_datalake.default.partition_names_collision RENAME COLUMN "original.name" TO renamed;
-
-statement ok
-ALTER TABLE my_datalake.default.partition_names_collision RENAME COLUMN replacement TO "original.name";
-
-statement error
-ALTER TABLE my_datalake.default.partition_names_collision SET PARTITIONED BY (renamed);
-----
-Cannot create identity partition sourced from different field in schema: original.name
-
-statement ok
-ROLLBACK;
-
-query IT
-SELECT field_id, name FROM iceberg_partition_specs(my_datalake.default.partition_names_collision) WHERE is_default;
-----
-1000	original.name
-
-query II
-SELECT "original.name", replacement FROM my_datalake.default.partition_names_collision;
-----
-42	99
 
 statement ok
 DROP TABLE my_datalake.default.partition_names_collision;

@@ -1,5 +1,5 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/partitioning/partition_field_names.test
-# description: New partition fields get Java's default names, the names Spark DDL and the metadata tables address them by
+# description: New partition fields prefer conventional names while reused fields preserve their stored labels
 # group: [partitioning]
 
 require-env CATALOG_TEST_CONFIG_SETUP
@@ -66,7 +66,7 @@ WHERE is_default ORDER BY field_id;
 statement ok
 DROP TABLE my_datalake.default.partition_field_names;
 
-# --- Names Java would refuse to load are refused ---
+# --- Duplicate expressions are rejected; generated name collisions are resolved ---
 
 statement error
 CREATE TABLE my_datalake.default.partition_field_names (a INTEGER, b INTEGER) PARTITIONED BY (a, b, a);
@@ -78,18 +78,29 @@ CREATE TABLE my_datalake.default.partition_field_names (a INTEGER, b INTEGER) PA
 ----
 Cannot use partition name more than once: a_bucket_4
 
-statement error
+statement ok
 CREATE TABLE my_datalake.default.partition_field_names (ts TIMESTAMP, ts_day INTEGER) PARTITIONED BY (day(ts));
+
+query TI
+SELECT transform, name <> 'ts_day'
+FROM iceberg_partition_specs(my_datalake.default.partition_field_names) WHERE is_default;
 ----
-Cannot create partition from name that exists in schema: ts_day
+day	true
+
+statement ok
+DROP TABLE my_datalake.default.partition_field_names;
 
 statement ok
 CREATE TABLE my_datalake.default.partition_field_names (ts TIMESTAMP, ts_day INTEGER);
 
-statement error
+statement ok
 ALTER TABLE my_datalake.default.partition_field_names SET PARTITIONED BY (day(ts));
+
+query TI
+SELECT transform, name <> 'ts_day'
+FROM iceberg_partition_specs(my_datalake.default.partition_field_names) WHERE is_default;
 ----
-Cannot create partition from name that exists in schema: ts_day
+day	true
 
 statement ok
 ALTER TABLE my_datalake.default.partition_field_names SET PARTITIONED BY (ts_day, hour(ts));
