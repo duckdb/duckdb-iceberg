@@ -50,6 +50,18 @@ Unlike the Python config, it does not skip unexpected unsupported errors.
 Filters use repository-relative paths so each test runs once and the config's
 relative skip paths also apply on Windows.
 
+DuckDB's core CI registers `test/sql/local/native_catalog` with
+`test/configs/mock_native.json` as its scoped `TEST_CONFIG`. It includes
+`test/native_catalog/extension_config.cmake` to build the mock and builds Avro
+alongside Iceberg in the cloud extension group. Core CI sets
+`ICEBERG_MOCK_BUILD_LOADABLE=OFF` and links the mock statically into its test build,
+so it is not published with the cloud extensions. Iceberg and its dependencies
+are also linked to support the credential callback tests. These tests run through
+the ordinary core test runner without invoking this repository's Makefile.
+The config applies only to the registered native tests; other extensions keep
+their own test setup. WebAssembly and the deployment autoloading checks do not
+register the native suite.
+
 The standalone API tests exercise independent database lifetimes and publication
 failure after completing the first file of a multi-table commit:
 
