@@ -25,7 +25,7 @@ IcebergUpdate::IcebergUpdate(PhysicalPlan &physical_plan, IcebergTableSchemaVers
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, {}, 1), table(table),
       columns(std::move(columns_p)), delete_op(delete_op_p), expressions(std::move(expressions_p)) {
 	children.push_back(child);
-	auto &table_metadata = table.table_info.table_metadata;
+	auto &table_metadata = table.table_info.GetMetadata();
 	if (table_metadata.iceberg_version >= 3) {
 		//! For v3, _row_id is the virtual column appended right after physical columns by DuckDB
 		row_id_index = columns.size();
@@ -46,7 +46,7 @@ IcebergUpdate::IcebergUpdate(PhysicalPlan &physical_plan, IcebergTableSchemaVers
 IcebergUpdate &IcebergUpdate::PlanUpdateOperator(ClientContext &context, PhysicalPlanGenerator &planner,
                                                  IcebergTableSchemaVersion &table, LogicalUpdate &op,
                                                  PhysicalOperator &child_plan, IcebergCopyInput &copy_input) {
-	auto &table_metadata = table.table_info.table_metadata;
+	auto &table_metadata = table.table_info.GetMetadata();
 	if (table_metadata.iceberg_version < 2) {
 		throw NotImplementedException("Update Iceberg V%d tables", table_metadata.iceberg_version);
 	}
@@ -233,7 +233,7 @@ PhysicalOperator &IcebergCatalog::PlanUpdate(ClientContext &context, PhysicalPla
 	auto &irc_transaction = IcebergTransaction::Get(context, *this);
 	auto &alter = irc_transaction.GetOrCreateAlter();
 	auto &updated_table = alter.GetOrInitializeTable(table_entry.table_info);
-	auto &table_metadata = updated_table.table_metadata;
+	auto &table_metadata = updated_table.GetMetadata();
 	auto &schema = table_metadata.GetLatestSchema();
 	auto &updated_table_entry = *updated_table.schema_versions[schema.schema_id];
 	if (!irc_transaction.planning_merge_into) {

@@ -29,8 +29,8 @@ vector<IcebergPartitionStructField> IcebergPartitionStruct::GetFields(const Iceb
 			if (existing == fields.end()) {
 				fields.emplace(field.partition_field_id,
 				               IcebergPartitionStructField {field.GetPartitionSpecFieldName(), type, field});
-			} else if (existing->second.field.get().transform.Type() == IcebergTransformType::VOID &&
-			           field.transform.Type() != IcebergTransformType::VOID) {
+			} else if (existing->second.field.get().transform.Type() == IcebergTransformType::VOID_TRANSFORM &&
+			           field.transform.Type() != IcebergTransformType::VOID_TRANSFORM) {
 				//! Fields dropped from v1 tables become void, use the field from before it was dropped
 				existing->second.field = field;
 				existing->second.type = type;

@@ -56,11 +56,14 @@ public:
 	mutable annotated_mutex lock;
 	//! FIXME: these are only used by deletes, we should find a better way to do this
 	mutable unordered_map<string, IcebergPartition> data_file_partitions DUCKDB_GUARDED_BY(lock);
-	//! Dense manifest and entry indexes identify immutable delete entries across filtered views.
-	//! Allocate entry storage only for manifests with candidate equality deletes.
-	vector<vector<IcebergEqualityDeleteBounds>> equality_delete_bounds DUCKDB_GUARDED_BY(lock);
+	IcebergEqualityDeleteBounds &GetEqualityDeleteBounds(idx_t manifest_idx, idx_t entry_idx);
 
 private:
+	//! The directory lock only protects stable allocations. Each entry separately
+	//! serializes bounds initialization; matching reads immutable columns.
+	//! Neither cache lock is held when acquiring the planning lock.
+	mutex equality_bounds_lock;
+	unordered_map<idx_t, unordered_map<idx_t, unique_ptr<IcebergEqualityDeleteBounds>>> equality_delete_bounds;
 	void RequireConfigurable() const DUCKDB_REQUIRES(lock);
 	bool configuration_frozen DUCKDB_GUARDED_BY(lock) = false;
 	unique_ptr<IcebergManifestStore> manifest_store DUCKDB_GUARDED_BY(lock);

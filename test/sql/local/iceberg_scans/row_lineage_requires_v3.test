@@ -19,3 +19,10 @@ SELECT _last_updated_sequence_number FROM iceberg_scan('{WORKING_DIRECTORY}/data
 query II
 SELECT _row_id, _last_updated_sequence_number FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/timestamptz_ns/metadata/v1.metadata.json') LIMIT 0;
 ----
+
+query II
+SELECT _row_id, _last_updated_sequence_number
+FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/timestamptz_ns/metadata/v1.metadata.json')
+ORDER BY _row_id
+LIMIT 0;
+----

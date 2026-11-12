@@ -144,7 +144,7 @@ IcebergCopyOnWriteDeleteFilter::IcebergCopyOnWriteDeleteFilter(PhysicalPlan &phy
 
 PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner,
                                                              LogicalDelete &op, IcebergTableSchemaVersion &table) {
-	auto &metadata = table.table_info.table_metadata;
+	auto &metadata = table.table_info.GetMetadata();
 	if (metadata.iceberg_version >= 3) {
 		//! A V3 rewrite has to carry each kept row's _row_id and _last_updated_sequence_number into the new files
 		//! Pending rows may not have their final lineage yet, so carrying scan-time values is not sufficient.

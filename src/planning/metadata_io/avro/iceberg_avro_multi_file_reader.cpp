@@ -509,6 +509,15 @@ ReaderInitializeType IcebergAvroMultiFileReader::InitializeReader(
 				    reader_data.reader->GetMetadata(), manifest_path, avro_scan_info.metadata,
 				    manifest_list_entry.GetFile().partition_spec_id));
 			}
+			manifest_list_entry.manifest_header = reader_data.reader->GetMetadata();
+			auto &header = *manifest_list_entry.manifest_metadata;
+			auto &descriptor = manifest_list_entry.GetFile();
+			if (header.content != descriptor.content ||
+			    (header.format_version >= 2 && header.partition_spec_id != descriptor.partition_spec_id)) {
+				throw InvalidConfigurationException(
+				    "Manifest file '%s' header does not match its manifest-list descriptor", descriptor.manifest_path);
+			}
+			manifest_scan_info.manifest_parses++;
 		}
 		for (auto &partition_spec : avro_scan_info.metadata.partition_specs) {
 			for (auto &spec_field : partition_spec.second.fields) {
@@ -568,13 +577,14 @@ void IcebergAvroMultiFileReader::FinalizeChunk(ClientContext &context, const Mul
 		vector<IcebergManifestEntry> decoded_entries;
 		manifest_file::ManifestReader::ReadChunk(output_chunk, manifest_scan_info.partition_field_id_to_type, input,
 		                                         decoded_entries);
+		manifest_scan_info.manifest_entries_converted += decoded_entries.size();
 
 		lock_guard<mutex> manifest_guard(manifest_scan_info.GetManifestLock(manifest_file_idx));
 		auto &manifest_entries = manifest_file.GetOrCreateManifestEntries();
 		idx_t start_index = manifest_entries.size();
 		if (manifest_scan_info.read_state) {
-			//! Streaming consumers retain references into this vector after publication. LoadManifestList
-			//! reserves the exact manifest-list file count before it enables this path, so exceeding the
+			//! Streaming consumers retain references into this vector after publication. AvroScan
+			//! reserves the exact manifest-list file count for selected misses, so exceeding the
 			//! reserved capacity means the advertised count was wrong; appending would invalidate those
 			//! references.
 			if (decoded_entries.size() > manifest_entries.capacity() - manifest_entries.size()) {
@@ -613,7 +623,7 @@ shared_ptr<MultiFileList> IcebergAvroMultiFileReader::CreateFileList(ClientConte
 		open_files.emplace_back(paths[0]);
 		auto &file_info = open_files.back();
 		file_info.extended_info = make_uniq<ExtendedOpenFileInfo>();
-		scan_info->metadata.ApplyFileSecret(file_info);
+		scan_info->file_secret.Apply(file_info);
 		file_info.extended_info->options["validate_external_file_cache"] = Value::BOOLEAN(false);
 		file_info.extended_info->options["force_full_download"] = Value::BOOLEAN(true);
 		file_info.extended_info->options["etag"] = Value("");
@@ -632,7 +642,7 @@ shared_ptr<MultiFileList> IcebergAvroMultiFileReader::CreateFileList(ClientConte
 			open_files.emplace_back(full_path);
 			auto &file_info = open_files.back();
 			file_info.extended_info = make_uniq<ExtendedOpenFileInfo>();
-			scan_info->metadata.ApplyFileSecret(file_info);
+			scan_info->file_secret.Apply(file_info);
 			file_info.extended_info->options["validate_external_file_cache"] = Value::BOOLEAN(false);
 			file_info.extended_info->options["force_full_download"] = Value::BOOLEAN(true);
 			if (file.manifest_length > 0) {

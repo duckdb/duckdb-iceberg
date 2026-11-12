@@ -149,6 +149,9 @@ static void LoadInternal(ExtensionLoader &loader) {
 	                          "Add the data files each Iceberg write stages to the temporary table "
 	                          "iceberg_written_files, in the write's transaction",
 	                          LogicalType::BOOLEAN, Value::BOOLEAN(false));
+	config.AddExtensionOption(ENABLE_MANIFEST_CACHE_CONFIG_VARIABLE,
+	                          "Cache immutable parsed Iceberg manifests and delete candidate indexes",
+	                          LogicalType::BOOLEAN, Value::BOOLEAN(true));
 	config.AddExtensionOption("iceberg_use_server_side_scan_planning",
 	                          "Whether or not to use server-side scanning planning (if available)",
 	                          LogicalType::BOOLEAN, Value::BOOLEAN(false), nullptr, SetScope::GLOBAL);

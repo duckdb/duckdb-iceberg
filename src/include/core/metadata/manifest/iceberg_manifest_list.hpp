@@ -1,5 +1,7 @@
 #pragma once
 
+#include "planning/iceberg_file_secret.hpp"
+
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/optional.hpp"
@@ -161,6 +163,9 @@ public:
 		if (this != &other) {
 			manifest = other.manifest;
 			manifest_entries = other.manifest_entries;
+			shared_entries = other.shared_entries;
+			parsed_manifest = other.parsed_manifest;
+			manifest_header = other.manifest_header;
 			if (other.manifest_metadata) {
 				manifest_metadata.reset();
 				manifest_metadata.emplace(*other.manifest_metadata);
@@ -174,6 +179,9 @@ public:
 		if (this != &other) {
 			manifest = std::move(other.manifest);
 			manifest_entries = std::move(other.manifest_entries);
+			shared_entries = std::move(other.shared_entries);
+			parsed_manifest = std::move(other.parsed_manifest);
+			manifest_header = std::move(other.manifest_header);
 			if (other.manifest_metadata) {
 				manifest_metadata.reset();
 				manifest_metadata.emplace(*other.manifest_metadata);
@@ -191,22 +199,15 @@ public:
 	                                              const IcebergManifestMetadata &manifest_metadata,
 	                                              vector<IcebergManifestEntry> entries);
 	bool HasManifestEntries() const {
-		return manifest_entries.has_value();
+		return manifest_entries.has_value() || shared_entries != nullptr || parsed_manifest != nullptr;
 	}
-	vector<IcebergManifestEntry> &GetManifestEntries() {
-		D_ASSERT(manifest_entries);
-		return *manifest_entries;
-	}
-	const vector<IcebergManifestEntry> &GetManifestEntries() const {
-		D_ASSERT(manifest_entries);
-		return *manifest_entries;
-	}
-	vector<IcebergManifestEntry> &GetOrCreateManifestEntries() {
-		if (!manifest_entries) {
-			manifest_entries.emplace();
-		}
-		return *manifest_entries;
-	}
+	const vector<IcebergManifestEntry> &GetManifestEntries() const;
+	//! Explicit copy-on-write; readers never detach the shared payload.
+	vector<IcebergManifestEntry> &GetOrCreateManifestEntries();
+	vector<IcebergManifestEntry> TakeManifestEntries();
+	//! Retain scan ownership while constructing a cache payload, including on failure.
+	shared_ptr<const vector<IcebergManifestEntry>> ShareManifestEntries();
+	void ResetManifestEntries();
 
 public:
 	bool HasFile() const {
@@ -226,8 +227,13 @@ public:
 	}
 	optional<IcebergManifestMetadata> manifest_metadata;
 	optional<vector<IcebergManifestEntry>> manifest_entries;
+	//! Only completed, unbound content is shared. The descriptor above stays scan-local.
+	shared_ptr<const class IcebergParsedManifest> parsed_manifest;
+	InsertionOrderPreservingMap<Value> manifest_header;
 
 private:
+	shared_ptr<const vector<IcebergManifestEntry>> shared_entries;
+
 	IcebergManifestListEntry(IcebergManifest manifest, IcebergManifestMetadata metadata,
 	                         vector<IcebergManifestEntry> entries)
 	    : manifest_metadata(std::move(metadata)), manifest_entries(std::move(entries)), manifest(std::move(manifest)) {
@@ -261,10 +267,11 @@ public:
 	static LogicalType FieldSummaryType();
 	static Value FieldSummaryFieldIds();
 	static void LoadManifestFiles(const IcebergSnapshotScanInfo &snapshot_info, const IcebergTableMetadata &metadata,
-	                              ClientContext &context, vector<IcebergManifestListEntry> &result);
+	                              ClientContext &context, vector<IcebergManifestListEntry> &result,
+	                              IcebergFileSecret file_secret = {});
 	static unique_ptr<IcebergManifestList> Load(const string &iceberg_path, const IcebergTableMetadata &metadata,
 	                                            const IcebergSnapshotScanInfo &snapshot_info, ClientContext &context,
-	                                            const IcebergOptions &options);
+	                                            const IcebergOptions &options, IcebergFileSecret file_secret = {});
 
 private:
 	string path;

@@ -33,6 +33,18 @@ SELECT * FROM ICEBERG_METADATA('{WORKING_DIRECTORY}/data/persistent/iceberg/line
 lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m1.avro	2	DATA	ADDED	DATA	lineitem_iceberg/data/00000-5-dad9988f-2a3b-464c-adb6-6034de93da19-00001.parquet	PARQUET	51793	2	2
 lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m0.avro	2	DATA	DELETED	DATA	lineitem_iceberg/data/00000-1-66fee7c2-c97c-4af9-963d-930afd99ace4-00001.parquet	PARQUET	60175	1	1
 
+query IIIIIIIIII
+SELECT * FROM ICEBERG_METADATA('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE, expected_table_uuid='cc2317c6-1937-45fc-b29f-935ff34bcf22');
+----
+lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m1.avro	2	DATA	ADDED	DATA	lineitem_iceberg/data/00000-5-dad9988f-2a3b-464c-adb6-6034de93da19-00001.parquet	PARQUET	51793	2	2
+lineitem_iceberg/metadata/179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m0.avro	2	DATA	DELETED	DATA	lineitem_iceberg/data/00000-1-66fee7c2-c97c-4af9-963d-930afd99ace4-00001.parquet	PARQUET	60175	1	1
+
+# The location resolves to another table than the caller expects
+statement error
+SELECT * FROM ICEBERG_METADATA('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE, expected_table_uuid='00000000-0000-0000-0000-000000000000');
+----
+Invalid Input Error: Table UUID mismatch: expected '00000000-0000-0000-0000-000000000000', found 'cc2317c6-1937-45fc-b29f-935ff34bcf22'
+
 # Written by Spark 3.3.1 / Iceberg 1.0.0: the DELETED entry has NULL sequence numbers, which may only be
 # inherited for ADDED entries. Report them as NULL instead of failing.
 query IIIIIIIIII

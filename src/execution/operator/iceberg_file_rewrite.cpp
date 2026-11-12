@@ -80,7 +80,7 @@ SinkResultType IcebergFileRewrite::Sink(ExecutionContext &context, DataChunk &ch
 			state.produced_paths.push_back(std::move(path));
 		}
 	}
-	state.AddFiles(chunk, state.table_info.name, state.table_info.table_metadata);
+	state.AddFiles(chunk, state.table_info.name, state.table_info.GetMetadata());
 	return SinkResultType::NEED_MORE_INPUT;
 }
 

@@ -264,7 +264,7 @@ bool IcebergDelete::TryGetEqualityDeletePredicates(ClientContext &context, Icebe
 
 	//! Equality-delete writing is only supported for v2 & v3, unpartitioned tables.
 	//! v1 has no delete files, and v4 forbids writing new equality deletes.
-	auto &table_metadata = table.table_info.table_metadata;
+	auto &table_metadata = table.table_info.GetMetadata();
 	if (table_metadata.iceberg_version != 2 && table_metadata.iceberg_version != 3) {
 		return false;
 	}
@@ -393,7 +393,7 @@ void IcebergDelete::WriteEqualityDeleteFile(ClientContext &context, IcebergDelet
 	D_ASSERT(!equality_predicates.empty());
 
 	auto &fs = FileSystem::GetFileSystem(context);
-	auto data_path = table.table_info.table_metadata.GetDataPath(fs);
+	auto data_path = table.table_info.GetMetadata().GetDataPath(fs);
 	string delete_filename = UUID::ToString(UUID::GenerateRandomUUID()) + "-equality-deletes.parquet";
 	string delete_file_path = fs.JoinPath(data_path, delete_filename);
 
@@ -418,7 +418,7 @@ void IcebergDelete::WriteEqualityDeleteFile(ClientContext &context, IcebergDelet
 	field_input.push_back(Value::STRUCT(std::move(field_id_values)));
 	info->options["field_ids"] = std::move(field_input);
 
-	auto codec = table.table_info.table_metadata.GetDeleteCompressionCodec();
+	auto codec = table.table_info.GetMetadata().GetDeleteCompressionCodec();
 	if (!codec.empty()) {
 		info->options["codec"].emplace_back(codec);
 	}
@@ -481,7 +481,7 @@ void IcebergDelete::WriteEqualityDeleteFile(ClientContext &context, IcebergDelet
 	delete_file.file_size_bytes = stats.file_size_bytes;
 	delete_file.equality_ids = std::move(equality_ids);
 	//! An equality delete targets no single data file, so it is not tied to any one partition.
-	delete_file.partition_info.partition_spec_id = GlobalEqualityDeleteSpecId(table.table_info.table_metadata);
+	delete_file.partition_info.partition_spec_id = GlobalEqualityDeleteSpecId(table.table_info.GetMetadata());
 
 	// Record per-field metrics for the equality-delete values so scans can prune this delete file when its
 	// equality-field range is disjoint from the scan predicate / a data file's bounds. Bounds span the min/max

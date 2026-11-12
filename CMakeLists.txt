@@ -45,7 +45,7 @@ set(PARAMETERS "-warnings")
 
 if(EMSCRIPTEN)
   set(DUCKDB_EXTENSION_ICEBERG_LINKED_LIBS
-      "../../vcpkg_installed/wasm32-emscripten/lib/liblzma.a;../../vcpkg_installed/wasm32-emscripten/lib/libroaring.a;../../vcpkg_installed/wasm32-emscripten/lib/libsnappy.a;../../vcpkg_installed/wasm32-emscripten/lib/libz.a;../../vcpkg_installed/wasm32-emscripten/lib/libjansson.a;../../third_party/mbedtls/libduckdb_mbedtls.a"
+      "../../vcpkg_installed/${VCPKG_TARGET_TRIPLET}/lib/liblzma.a;../../vcpkg_installed/${VCPKG_TARGET_TRIPLET}/lib/libroaring.a;../../vcpkg_installed/${VCPKG_TARGET_TRIPLET}/lib/libsnappy.a;../../vcpkg_installed/${VCPKG_TARGET_TRIPLET}/lib/libz.a;../../vcpkg_installed/${VCPKG_TARGET_TRIPLET}/lib/libjansson.a;../../third_party/mbedtls/libduckdb_mbedtls.a"
   )
 endif()
 
