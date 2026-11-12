@@ -38,12 +38,12 @@ SELECT sum(id) FROM my_datalake.default.metadata_diagnostics WHERE id>=0;
 ----
 190
 
-# Two opened files each visit the sole live delete entry. Statistics-only views
-# do not emit a delete_planning event; only the view that created scan tasks does.
+# Two opened files visit the sole live delete entry, but only its referenced
+# file evaluates the predicate. Statistics-only views do not emit an event.
 query I
 SELECT message FROM duckdb_logs() WHERE type='Iceberg' AND message LIKE '%phase=delete_planning%';
 ----
-Iceberg metadata phase=delete_planning scope=planner_view scan_tasks=2 delete_candidate_visits=2 delete_predicate_evaluations=2
+Iceberg metadata phase=delete_planning scope=planner_view scan_tasks=2 delete_candidate_visits=2 delete_predicate_evaluations=1
 
 # Data and delete manifests have separate Avro scans. Count actual conversions,
 # including entries that might later be pruned, without counting per file logs.
@@ -58,6 +58,20 @@ query I
 SELECT message FROM duckdb_logs() WHERE type='Iceberg' AND message LIKE '%phase=table_metadata_conversion%';
 ----
 Iceberg metadata phase=table_metadata_conversion scope=catalog_initialization table_metadata_conversions=1 snapshots_converted=3
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# An unrelated referenced file never needs query-predicate evaluation.
+query I
+SELECT sum(id) FROM my_datalake.default.metadata_diagnostics WHERE id>=10;
+----
+145
+
+query I
+SELECT message FROM duckdb_logs() WHERE type='Iceberg' AND message LIKE '%phase=delete_planning%';
+----
+Iceberg metadata phase=delete_planning scope=planner_view scan_tasks=1 delete_candidate_visits=1 delete_predicate_evaluations=0
 
 endloop
 

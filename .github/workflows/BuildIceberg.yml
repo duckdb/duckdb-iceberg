@@ -88,7 +88,8 @@ jobs:
           test: >-
             ./build/relassert/test/unittest_iceberg_native &&
             ./build/relassert/test/unittest_iceberg_serialization &&
-            ./build/relassert/test/unittest_iceberg_cache
+            ./build/relassert/test/unittest_iceberg_cache &&
+            ./build/relassert/test/unittest_iceberg_planning
           vcpkg-commit: cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3 # Release 2026.06.24
           bundle: |
             # Python needs the same ASan/UBSan runtime as the instrumented library.
@@ -126,6 +127,7 @@ jobs:
         with:
           build-type: release
           build: python3 duckdb/scripts/ci/retry.py -- make release
+          test: ./build/release/test/unittest_iceberg_planning
           vcpkg-commit: cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3 # Release 2026.06.24
           bundle: |
             bash duckdb/scripts/prepare_build_artifact.sh release
