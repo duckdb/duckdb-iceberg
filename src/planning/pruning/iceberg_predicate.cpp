@@ -159,17 +159,20 @@ static bool StrictMatchIdentityBounds(const Value &constant, ExpressionType comp
                                       const IcebergPredicateStats &stats) {
 	D_ASSERT(stats.lower_bound);
 	D_ASSERT(stats.upper_bound);
+	//! File bounds exclude NaNs, which DuckDB orders above every other value.
+	bool may_have_nan =
+	    (stats.lower_bound->type().IsFloating() || constant.type().IsFloating()) && (!stats.has_nan || *stats.has_nan);
 	switch (comparison_type) {
 	case ExpressionType::COMPARE_EQUAL:
-		return *stats.lower_bound == constant && *stats.upper_bound == constant;
+		return *stats.lower_bound == constant && *stats.upper_bound == constant && (!may_have_nan || IsNaN(constant));
 	case ExpressionType::COMPARE_GREATERTHAN:
 		return *stats.lower_bound > constant;
 	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
 		return *stats.lower_bound >= constant;
 	case ExpressionType::COMPARE_LESSTHAN:
-		return *stats.upper_bound < constant;
+		return !may_have_nan && *stats.upper_bound < constant;
 	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-		return *stats.upper_bound <= constant;
+		return *stats.upper_bound <= constant && (!may_have_nan || IsNaN(constant));
 	default:
 		return false;
 	}
@@ -245,11 +248,6 @@ static bool StrictMatchBoundsConstant(const Value &constant, ExpressionType comp
 	if (constant.IsNull() || stats.BoundsAreNull() || !stats.lower_bound || !stats.upper_bound || stats.has_null) {
 		return false;
 	}
-	if ((stats.lower_bound->type().IsFloating() || constant.type().IsFloating()) &&
-	    (!stats.has_nan.has_value() || *stats.has_nan)) {
-		return false;
-	}
-
 	switch (transform.Type()) {
 	case IcebergTransformType::IDENTITY:
 		return StrictMatchIdentityBounds(constant, comparison_type, stats);
@@ -263,9 +261,10 @@ static bool StrictMatchBoundsConstant(const Value &constant, ExpressionType comp
 		return false;
 	}
 	if (comparison_type == ExpressionType::COMPARE_EQUAL) {
-		//! No non-identity transform has a strict projection for equality; adjacent source values can share a
-		//! partition.
-		return false;
+		//! Equality is covered when both inequalities hold: the transform separates the constant from its
+		//! neighbours, as with day(DATE) or truncate[1] on an integer or decimal.
+		return StrictProjectBounds(constant, ExpressionType::COMPARE_GREATERTHANOREQUALTO, stats, transform) &&
+		       StrictProjectBounds(constant, ExpressionType::COMPARE_LESSTHANOREQUALTO, stats, transform);
 	}
 	return StrictProjectBounds(constant, comparison_type, stats, transform);
 }

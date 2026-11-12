@@ -1013,6 +1013,152 @@ TEST_CASE("Iceberg strict null IN conjunction and optional filters remain conser
 	}
 }
 
+TEST_CASE("Iceberg strict floating file bounds account for NaNs and missing metrics", "[iceberg_metrics]") {
+	using Match = IcebergMetricsMatch;
+	for (auto &type : vector<LogicalType> {LogicalType::FLOAT, LogicalType::DOUBLE}) {
+		INFO(type.ToString());
+		PlanningTest test;
+		Query(test.connection, "CREATE TABLE lake.default.t (x " + type.ToString() + ", p INTEGER)");
+		auto bound = test.Bind();
+		auto &base = bound->Cast<MultiFileBindData>().file_list->Cast<IcebergMultiFileList>().GetScanPlanner();
+		auto metadata = base.GetMetadata().Copy();
+		auto &schema = base.GetSchema();
+		auto field_id = schema.columns[0]->id;
+		// An evolved spec can retain a void source alongside a live partition field.
+		// The void value cannot settle x's filter, so coverage must come from file metrics.
+		auto spec = PartitionSpec();
+		spec.fields[0].source_id = field_id;
+		spec.fields[0].transform = IcebergTransform("void");
+		auto live_field = spec.fields[0];
+		live_field.source_id = schema.columns[1]->id;
+		live_field.partition_field_id = 1001;
+		live_field.transform = IcebergTransform::Identity();
+		spec.fields.push_back(live_field);
+		metadata.partition_specs.emplace(spec.spec_id, spec);
+		IcebergManifest manifest(spec.spec_id, IcebergManifestContentType::DATA, 1);
+		auto entry = MetricsEntry();
+		auto &file = entry.data_file;
+		file.partition_info = {{1000, Value(type)}, {1001, Value(1)}};
+		file.record_count = 2;
+		file.value_counts[field_id] = 2;
+		file.null_value_counts[field_id] = 0;
+		auto zero = Value(0).DefaultCastAs(type);
+		auto one = Value(1).DefaultCastAs(type);
+		auto two = Value(2).DefaultCastAs(type);
+		auto nan = Value("NaN").DefaultCastAs(type);
+		file.lower_bounds[field_id] = IcebergValue::SerializeValue(one, type, SerializeBound::LOWER_BOUND).GetValue();
+		file.upper_bounds[field_id] = IcebergValue::SerializeValue(one, type, SerializeBound::UPPER_BOUND).GetValue();
+		auto check = [&](ExpressionType comparison, const Value &constant, Match expected) {
+			auto filter = ExpressionFilter::CreateComparisonFilter(comparison, constant);
+			INFO(filter->ToString("x"));
+			IcebergTableFilters filters;
+			filters.PushFilter(ColumnIndex(0), std::move(filter));
+			IcebergFilePruner pruner(*test.connection.context, metadata, schema, filters);
+			CHECK(pruner.FileMatchesFilter(manifest, entry, true) == expected);
+			CHECK(pruner.FileMatchesFilter(manifest, entry) ==
+			      (expected == Match::ROWS_MUST_MATCH ? Match::ROWS_MIGHT_MATCH : expected));
+		};
+		for (auto nan_count : {-1, 0, 1}) {
+			INFO(nan_count);
+			if (nan_count >= 0) {
+				file.nan_value_counts[field_id] = nan_count;
+			}
+			auto finite_only = nan_count == 0 ? Match::ROWS_MUST_MATCH : Match::ROWS_MIGHT_MATCH;
+			check(ExpressionType::COMPARE_LESSTHAN, two, finite_only);
+			check(ExpressionType::COMPARE_LESSTHANOREQUALTO, one, finite_only);
+			check(ExpressionType::COMPARE_EQUAL, one, finite_only);
+			check(ExpressionType::COMPARE_LESSTHAN, nan, finite_only);
+			// NaN sorts above finite values, so it cannot invalidate these coverage proofs.
+			check(ExpressionType::COMPARE_GREATERTHAN, zero, Match::ROWS_MUST_MATCH);
+			check(ExpressionType::COMPARE_GREATERTHANOREQUALTO, one, Match::ROWS_MUST_MATCH);
+			check(ExpressionType::COMPARE_LESSTHANOREQUALTO, nan, Match::ROWS_MUST_MATCH);
+		}
+		file.nan_value_counts[field_id] = 0;
+		file.null_value_counts[field_id] = 1;
+		check(ExpressionType::COMPARE_GREATERTHAN, zero, Match::ROWS_MIGHT_MATCH);
+		file.null_value_counts.clear();
+		check(ExpressionType::COMPARE_GREATERTHAN, zero, Match::ROWS_MIGHT_MATCH);
+		file.null_value_counts[field_id] = 0;
+		file.lower_bounds.clear();
+		check(ExpressionType::COMPARE_GREATERTHAN, zero, Match::ROWS_MIGHT_MATCH);
+	}
+}
+
+TEST_CASE("Iceberg strict floating identity partitions need no file metrics", "[iceberg_metrics]") {
+	using Match = IcebergMetricsMatch;
+	for (auto &type : vector<LogicalType> {LogicalType::FLOAT, LogicalType::DOUBLE}) {
+		INFO(type.ToString());
+		PlanningTest test;
+		Query(test.connection, "CREATE TABLE lake.default.t (x " + type.ToString() + ")");
+		auto bound = test.Bind();
+		auto &base = bound->Cast<MultiFileBindData>().file_list->Cast<IcebergMultiFileList>().GetScanPlanner();
+		auto metadata = base.GetMetadata().Copy();
+		auto spec = PartitionSpec();
+		spec.fields[0].source_id = base.GetSchema().columns[0]->id;
+		metadata.partition_specs.emplace(spec.spec_id, spec);
+		IcebergManifest manifest(spec.spec_id, IcebergManifestContentType::DATA, 1);
+		auto entry = MetricsEntry();
+		auto check = [&](ExpressionType comparison, const Value &constant, Match expected) {
+			auto filter = ExpressionFilter::CreateComparisonFilter(comparison, constant);
+			INFO(filter->ToString("x"));
+			IcebergTableFilters filters;
+			filters.PushFilter(ColumnIndex(0), std::move(filter));
+			IcebergFilePruner pruner(*test.connection.context, metadata, base.GetSchema(), filters);
+			CHECK(pruner.FileMatchesFilter(manifest, entry, true) == expected);
+			CHECK(pruner.FileMatchesFilter(manifest, entry) ==
+			      (expected == Match::ROWS_MUST_MATCH ? Match::ROWS_MIGHT_MATCH : expected));
+		};
+		auto nan = Value("NaN").DefaultCastAs(type);
+		for (auto literal : {"1", "Infinity", "NaN"}) {
+			INFO(literal);
+			auto partition = Value(literal).DefaultCastAs(type);
+			entry.data_file.partition_info = {{1000, partition}};
+			check(ExpressionType::COMPARE_EQUAL, partition, Match::ROWS_MUST_MATCH);
+			check(ExpressionType::COMPARE_GREATERTHAN, Value(0).DefaultCastAs(type), Match::ROWS_MUST_MATCH);
+			check(ExpressionType::COMPARE_LESSTHANOREQUALTO, nan, Match::ROWS_MUST_MATCH);
+			check(ExpressionType::COMPARE_LESSTHAN, nan,
+			      string(literal) == "NaN" ? Match::ROWS_CANNOT_MATCH : Match::ROWS_MUST_MATCH);
+			check(ExpressionType::COMPARE_EQUAL, nan,
+			      string(literal) == "NaN" ? Match::ROWS_MUST_MATCH : Match::ROWS_CANNOT_MATCH);
+		}
+		entry.data_file.partition_info = {{1000, Value(type)}};
+		check(ExpressionType::COMPARE_EQUAL, Value(1).DefaultCastAs(type), Match::ROWS_CANNOT_MATCH);
+		check(ExpressionType::COMPARE_EQUAL, nan, Match::ROWS_CANNOT_MATCH);
+	}
+}
+
+TEST_CASE("Iceberg strict equality recognizes single-value truncated partitions", "[iceberg_metrics]") {
+	DuckDB database(nullptr);
+	Connection connection(database);
+	auto &context = *connection.context;
+	using Match = IcebergMetricsMatch;
+	IcebergTransform transform("truncate[1]");
+	for (auto &type :
+	     vector<LogicalType> {LogicalType::INTEGER, LogicalType::BIGINT, LogicalType::DECIMAL(4, 2),
+	                          LogicalType::DECIMAL(9, 2), LogicalType::DECIMAL(18, 2), LogicalType::DECIMAL(38, 2)}) {
+		INFO(type.ToString());
+		bool decimal = type.id() == LogicalTypeId::DECIMAL;
+		for (auto literal : {decimal ? "-0.01" : "-1", "0", "1"}) {
+			auto value = Value(literal).DefaultCastAs(type);
+			auto partition = transform.ApplyTransform(value);
+			auto stats = MetricsBounds(partition, partition);
+			CheckComparison(context, ExpressionType::COMPARE_EQUAL, value, stats, Match::ROWS_MUST_MATCH, transform);
+			Value successor;
+			REQUIRE(IcebergTryIncrement(value, successor));
+			CheckComparison(context, ExpressionType::COMPARE_EQUAL, successor, stats, Match::ROWS_CANNOT_MATCH,
+			                transform);
+			stats.has_null = true;
+			CheckComparison(context, ExpressionType::COMPARE_EQUAL, value, stats, Match::ROWS_MIGHT_MATCH, transform);
+		}
+	}
+	// Missing predecessor/successor values must leave the strict projection conservative.
+	for (auto &boundary :
+	     vector<Value> {Value::MinimumValue(LogicalType::INTEGER), Value::MaximumValue(LogicalType::INTEGER)}) {
+		CheckComparison(context, ExpressionType::COMPARE_EQUAL, boundary, MetricsBounds(boundary, boundary),
+		                Match::ROWS_MIGHT_MATCH, transform);
+	}
+}
+
 TEST_CASE("Iceberg strict partition projections respect discrete boundaries", "[iceberg_metrics]") {
 	DuckDB database(nullptr);
 	Connection connection(database);
@@ -1063,12 +1209,16 @@ TEST_CASE("Iceberg strict partition projections respect discrete boundaries", "[
 			                transform);
 			CheckComparison(context, ExpressionType::COMPARE_GREATERTHAN, first, stats, Match::ROWS_MIGHT_MATCH,
 			                transform);
-			CheckComparison(context, ExpressionType::COMPARE_EQUAL, first, stats, Match::ROWS_MIGHT_MATCH, transform);
+			auto equality = type.id() == LogicalTypeId::DATE && string(transform_name) == "day"
+			                    ? Match::ROWS_MUST_MATCH
+			                    : Match::ROWS_MIGHT_MATCH;
+			CheckComparison(context, ExpressionType::COMPARE_EQUAL, first, stats, equality, transform);
 			// A legacy writer can put a pre-epoch row in partition zero by truncating toward zero.
 			auto epoch = Value("1970-01-01").DefaultCastAs(type);
 			auto legacy = MetricsBounds(Value(0), Value(0));
 			CheckComparison(context, ExpressionType::COMPARE_GREATERTHANOREQUALTO, epoch, legacy,
 			                Match::ROWS_MIGHT_MATCH, transform);
+			CheckComparison(context, ExpressionType::COMPARE_EQUAL, epoch, legacy, Match::ROWS_MIGHT_MATCH, transform);
 		}
 	}
 	auto stats = MetricsBounds(Value("abc"), Value("abc"));

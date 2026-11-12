@@ -140,7 +140,10 @@ bool IcebergFilePruner::FilePartitionMatchesFilter(const IcebergDataFile &data_f
 		}
 
 		auto nan_counts_it = data_file.nan_value_counts.find(field.source_id);
-		if (nan_counts_it != data_file.nan_value_counts.end()) {
+		if (field.transform.Type() == IcebergTransformType::IDENTITY && !partition_val.value.IsNull()) {
+			//! An identity partition is exact, even when the file has no NaN counts.
+			stats.has_nan = IsNaN(partition_val.value);
+		} else if (nan_counts_it != data_file.nan_value_counts.end()) {
 			stats.has_nan = nan_counts_it->second != 0;
 		}
 
