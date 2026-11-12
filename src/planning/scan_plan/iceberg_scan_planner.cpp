@@ -226,8 +226,9 @@ IcebergScanPlanner::GetDataFile(idx_t file_id, annotated_lock_guard<annotated_mu
 			    transaction_data->IsFileInvalidated({data_file.file_path, data_file.content_offset})) {
 				continue;
 			}
-			if (table_filters.HasFilters() && !IcebergFilePruner(context, GetMetadata(), GetSchema(), table_filters)
-			                                       .FileMatchesFilter(manifest_file, manifest_entry)) {
+			if (table_filters.HasFilters() &&
+			    IcebergFilePruner(context, GetMetadata(), GetSchema(), table_filters)
+			            .FileMatchesFilter(manifest_file, manifest_entry) == IcebergMetricsMatch::ROWS_CANNOT_MATCH) {
 				continue;
 			}
 			if (StringUtil::CIEquals(data_file.file_format, "puffin")) {
