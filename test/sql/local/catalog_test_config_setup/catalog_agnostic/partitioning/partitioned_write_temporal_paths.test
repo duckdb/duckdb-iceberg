@@ -1,0 +1,142 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/partitioning/partitioned_write_temporal_paths.test
+# description: year/month/day/hour partition directories use the human readable value, e.g. year_a=2026 and not year_a=56
+# group: [partitioning]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+# the partition directories of a data file path, without the field names: 'x=2026/y=blue/f.parquet' -> '2026/blue'
+statement ok
+CREATE MACRO partition_dirs(path) AS
+regexp_replace(regexp_extract(replace(path, chr(92), '/'), '([^/]+=[^/]*(/[^/]+=[^/]*)*)/[^/]+$', 1), '[^/=]+=', '', 'g');
+
+# year, the example from the issue
+
+statement ok
+drop table if exists my_datalake.default.temporal_paths_year;
+
+statement ok
+create table my_datalake.default.temporal_paths_year (a TIMESTAMP) PARTITIONED BY (year(a));
+
+statement ok
+insert into my_datalake.default.temporal_paths_year select TIMESTAMP '2026-11-12 10:11:12' from range(2000);
+
+query I
+select partition_dirs(file_path) from iceberg_metadata(my_datalake.default.temporal_paths_year);
+----
+2026
+
+query I
+select count(*) from my_datalake.default.temporal_paths_year where a = TIMESTAMP '2026-11-12 10:11:12';
+----
+2000
+
+# month, day and hour, before and after the epoch
+
+foreach transform month day hour
+
+statement ok
+drop table if exists my_datalake.default.temporal_paths_{transform};
+
+statement ok
+create table my_datalake.default.temporal_paths_{transform} (id INT, a TIMESTAMP) PARTITIONED BY ({transform}(a));
+
+statement ok
+insert into my_datalake.default.temporal_paths_{transform} values
+	(1, TIMESTAMP '2026-11-12 10:11:12'),
+	(2, TIMESTAMP '1969-12-31 23:59:59'),
+	(3, TIMESTAMP '0099-01-02 03:04:05');
+
+query I
+select id from my_datalake.default.temporal_paths_{transform} where a = TIMESTAMP '1969-12-31 23:59:59';
+----
+2
+
+endloop
+
+query I
+select partition_dirs(file_path) from iceberg_metadata(my_datalake.default.temporal_paths_month) order by all;
+----
+0099-01
+1969-12
+2026-11
+
+query I
+select partition_dirs(file_path) from iceberg_metadata(my_datalake.default.temporal_paths_day) order by all;
+----
+0099-01-02
+1969-12-31
+2026-11-12
+
+query I
+select partition_dirs(file_path) from iceberg_metadata(my_datalake.default.temporal_paths_hour) order by all;
+----
+0099-01-02-03
+1969-12-31-23
+2026-11-12-10
+
+# a DATE source column, and NULL values
+
+statement ok
+drop table if exists my_datalake.default.temporal_paths_date;
+
+statement ok
+create table my_datalake.default.temporal_paths_date (d DATE) PARTITIONED BY (year(d));
+
+statement ok
+insert into my_datalake.default.temporal_paths_date values (DATE '2024-02-29'), (NULL);
+
+query I
+select partition_dirs(file_path) from iceberg_metadata(my_datalake.default.temporal_paths_date) order by all;
+----
+2024
+__HIVE_DEFAULT_PARTITION__
+
+query I
+select count(*) from my_datalake.default.temporal_paths_date where d is null;
+----
+1
+
+# mixed with identity and bucket fields: only the temporal value changes
+
+statement ok
+drop table if exists my_datalake.default.temporal_paths_mixed;
+
+statement ok
+create table my_datalake.default.temporal_paths_mixed (id INT, category VARCHAR, a TIMESTAMP)
+PARTITIONED BY (category, day(a), bucket(4, id));
+
+statement ok
+insert into my_datalake.default.temporal_paths_mixed values (1, 'blue', TIMESTAMP '2026-11-12 10:11:12');
+
+query I
+select partition_dirs(file_path) from iceberg_metadata(my_datalake.default.temporal_paths_mixed);
+----
+blue/2026-11-12/0
+
+query III
+select * from my_datalake.default.temporal_paths_mixed where a = TIMESTAMP '2026-11-12 10:11:12';
+----
+1	blue	2026-11-12 10:11:12
+
+# no partition directories at all with write.object-storage.partitioned-paths = false
+
+statement ok
+drop table if exists my_datalake.default.temporal_paths_flat;
+
+statement ok
+create table my_datalake.default.temporal_paths_flat (a TIMESTAMP) PARTITIONED BY (year(a)) WITH (
+	'write.object-storage.partitioned-paths' = 'false'
+);
+
+statement ok
+insert into my_datalake.default.temporal_paths_flat values (TIMESTAMP '2026-11-12 10:11:12');
+
+query I
+select count_if(replace(file_path, chr(92), '/') LIKE '%=%/%') from iceberg_metadata(my_datalake.default.temporal_paths_flat);
+----
+0
