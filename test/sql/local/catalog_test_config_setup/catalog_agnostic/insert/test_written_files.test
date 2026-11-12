@@ -22,7 +22,7 @@ statement ok
 CREATE TABLE my_datalake.default.written_files (id INTEGER, p INTEGER) PARTITIONED BY (p) WITH ('format-version' = '2');
 
 statement ok
-CALL enable_logging('IcebergDataFileWritten');
+CALL enable_logging('IcebergDataFileWritten', storage := 'memory');
 
 statement ok
 INSERT INTO my_datalake.default.written_files SELECT i, i % 3 FROM range(10) t(i);
@@ -165,6 +165,14 @@ SELECT count(*) = (SELECT count(*) FROM second_files), count(*) FILTER (WHERE fi
 ----
 true	0
 
+# unlike the function, the log has the files UPDATE and MERGE wrote
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('IcebergDataFileWritten')
+WHERE file_path NOT IN (SELECT file_path FROM iceberg_written_files())
+  AND file_path NOT IN (SELECT file_path FROM first_files);
+----
+true
+
 # COPY FROM is an INSERT too
 statement ok
 COPY (SELECT 200 AS id, 1 AS p) TO '__TEST_DIR__/written_files_copy.parquet';
@@ -209,6 +217,9 @@ SELECT count(*) FROM iceberg_written_files();
 
 # inside a transaction the files are listed after the INSERT, and dropped when the transaction rolls back
 statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
 BEGIN;
 
 statement ok
@@ -221,6 +232,12 @@ true
 
 statement ok
 ROLLBACK;
+
+# the log keeps the rolled-back INSERT's file
+query I
+SELECT count(*) FROM duckdb_logs_parsed('IcebergDataFileWritten');
+----
+1
 
 query I
 SELECT count(*) FROM iceberg_written_files();

@@ -394,13 +394,10 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 		lock_guard<mutex> guard(global_state.lock);
 		written_files = std::move(global_state.written_files);
 	}
-	auto log_table_name = StringUtil::Format("%s.%s.%s", effective_table->ParentCatalog().GetName().GetIdentifierName(),
-	                                         effective_table->ParentSchema().name.GetIdentifierName(),
-	                                         effective_table->name.GetIdentifierName());
+	vector<IcebergWrittenFile> files;
 	for (auto &entry : written_files) {
 		auto &data_file = entry.data_file;
-		DUCKDB_LOG(context, IcebergDataFileWrittenLogType, log_table_name, data_file.file_path, data_file.record_count,
-		           data_file.file_size_in_bytes);
+		files.push_back({data_file.file_path, data_file.record_count, data_file.file_size_in_bytes});
 	}
 
 	if (update_delete_op) {
@@ -422,12 +419,7 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 	} else {
 		// Stage an INSERT statement or a MERGE insert action; the latter may join an overwrite snapshot.
 		if (!merge_action) {
-			vector<IcebergWrittenFile> files;
-			for (auto &entry : written_files) {
-				auto &data_file = entry.data_file;
-				files.push_back({data_file.file_path, data_file.record_count, data_file.file_size_in_bytes});
-			}
-			IcebergWrittenFilesState::Get(context)->AddFiles(std::move(files), iceberg_transaction);
+			IcebergWrittenFilesState::Get(context)->AddFiles(files, iceberg_transaction);
 		}
 		if (!written_files.empty()) {
 			ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTable &tbl) {
@@ -437,6 +429,13 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 				                             std::move(empty_deletes), merge_action);
 			});
 		}
+	}
+	auto log_table_name = StringUtil::Format("%s.%s.%s", effective_table->ParentCatalog().GetName().GetIdentifierName(),
+	                                         effective_table->ParentSchema().name.GetIdentifierName(),
+	                                         effective_table->name.GetIdentifierName());
+	for (auto &file : files) {
+		DUCKDB_LOG(context, IcebergDataFileWrittenLogType, log_table_name, file.file_path, file.record_count,
+		           file.file_size_in_bytes);
 	}
 	return SinkFinalizeType::READY;
 }
