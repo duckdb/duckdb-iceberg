@@ -56,6 +56,10 @@ const IcebergOptions &IcebergScanPlanner::GetOptions() const {
 	return shared_state->Configuration().options;
 }
 
+const IcebergFileSecret &IcebergScanPlanner::GetFileSecret() const {
+	return shared_state->Configuration().scan_info->file_secret;
+}
+
 const IcebergTableMetadata &IcebergScanPlanner::GetMetadata() const {
 	return shared_state->Configuration().scan_info->metadata;
 }

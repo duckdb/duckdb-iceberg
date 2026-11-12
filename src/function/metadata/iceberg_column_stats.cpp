@@ -17,7 +17,7 @@ namespace duckdb {
 struct IcebergColumnStatsBindData : public TableFunctionData {
 	unique_ptr<IcebergManifestList> iceberg_table;
 	IcebergSnapshotScanInfo snapshot_to_scan;
-	IcebergTableMetadata metadata {IcebergTableMetadataSchemas {}};
+	shared_ptr<const IcebergTableMetadata> metadata;
 	optional_ptr<const IcebergTableSchema> schema;
 	unordered_map<uint64_t, ColumnIndex> source_to_column_id;
 };
@@ -66,12 +66,13 @@ static unique_ptr<FunctionData> IcebergColumnStatsBind(ClientContext &context, T
 	auto resolved_metadata = IcebergUtils::ResolveTableMetadata(context, input_string, options);
 	ret->metadata = std::move(resolved_metadata.metadata);
 
-	ret->snapshot_to_scan = ret->metadata.GetSnapshot(*options.snapshot_lookup);
+	ret->snapshot_to_scan = ret->metadata->GetSnapshot(*options.snapshot_lookup);
 
 	if (ret->snapshot_to_scan.snapshot) {
-		ret->iceberg_table = IcebergManifestList::Load(resolved_metadata.table_location, ret->metadata,
-		                                               ret->snapshot_to_scan, context, options);
-		ret->schema = ret->metadata.GetSchemaFromId(ret->snapshot_to_scan.schema_id);
+		ret->iceberg_table =
+		    IcebergManifestList::Load(resolved_metadata.table_location, *ret->metadata, ret->snapshot_to_scan, context,
+		                              options, resolved_metadata.file_secret);
+		ret->schema = ret->metadata->GetSchemaFromId(ret->snapshot_to_scan.schema_id);
 
 		ret->source_to_column_id = ret->schema->GetSourceIdMap();
 	}

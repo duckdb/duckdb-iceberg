@@ -901,7 +901,7 @@ Value IcebergManifestList::FieldSummaryFieldIds() {
 
 void IcebergManifestList::LoadManifestFiles(const IcebergSnapshotScanInfo &snapshot_info,
                                             const IcebergTableMetadata &metadata, ClientContext &context,
-                                            vector<IcebergManifestListEntry> &result) {
+                                            vector<IcebergManifestListEntry> &result, IcebergFileSecret file_secret) {
 	auto &snapshot = *snapshot_info.snapshot;
 	if (!snapshot.manifests.empty()) {
 		result.reserve(result.size() + snapshot.manifests.size());
@@ -916,7 +916,8 @@ void IcebergManifestList::LoadManifestFiles(const IcebergSnapshotScanInfo &snaps
 		throw InvalidConfigurationException("Snapshot must contain either 'manifest-list' or 'manifests'");
 	}
 
-	auto scan = AvroScan::ScanManifestList(snapshot_info, metadata, context, snapshot.manifest_list, result);
+	auto scan =
+	    AvroScan::ScanManifestList(snapshot_info, metadata, context, snapshot.manifest_list, result, file_secret);
 	auto manifest_list_reader = make_uniq<manifest_list::ManifestListReader>(*scan);
 	while (!manifest_list_reader->Finished()) {
 		manifest_list_reader->Read();
@@ -926,7 +927,8 @@ void IcebergManifestList::LoadManifestFiles(const IcebergSnapshotScanInfo &snaps
 unique_ptr<IcebergManifestList> IcebergManifestList::Load(const string &iceberg_path,
                                                           const IcebergTableMetadata &metadata,
                                                           const IcebergSnapshotScanInfo &snapshot_info,
-                                                          ClientContext &context, const IcebergOptions &options) {
+                                                          ClientContext &context, const IcebergOptions &options,
+                                                          IcebergFileSecret file_secret) {
 	auto &snapshot = *snapshot_info.snapshot;
 	if (!snapshot.sequence_number) {
 		throw InvalidConfigurationException("snapshot.sequence_number is not set");
@@ -935,13 +937,13 @@ unique_ptr<IcebergManifestList> IcebergManifestList::Load(const string &iceberg_
 
 	auto &fs = FileSystem::GetFileSystem(context);
 	if (!snapshot.manifests.empty()) {
-		LoadManifestFiles(snapshot_info, metadata, context, ret->manifest_entries);
+		LoadManifestFiles(snapshot_info, metadata, context, ret->manifest_entries, file_secret);
 	} else {
 		auto manifest_list_full_path = options.allow_moved_paths
 		                                   ? IcebergUtils::GetFullPath(iceberg_path, snapshot.manifest_list, fs)
 		                                   : snapshot.manifest_list;
 		auto scan = AvroScan::ScanManifestList(snapshot_info, metadata, context, manifest_list_full_path,
-		                                       ret->manifest_entries);
+		                                       ret->manifest_entries, file_secret);
 		auto manifest_list_reader = make_uniq<manifest_list::ManifestListReader>(*scan);
 		while (!manifest_list_reader->Finished()) {
 			manifest_list_reader->Read();
@@ -949,8 +951,8 @@ unique_ptr<IcebergManifestList> IcebergManifestList::Load(const string &iceberg_
 	}
 
 	//! Read all manifest files, producing 'manifest_entry' items
-	auto manifest_scan =
-	    AvroScan::ScanManifest(snapshot_info, ret->manifest_entries, options, fs, iceberg_path, metadata, context);
+	auto manifest_scan = AvroScan::ScanManifest(snapshot_info, ret->manifest_entries, options, fs, iceberg_path,
+	                                            metadata, context, nullptr, {}, file_secret);
 	auto manifest_file_reader = make_uniq<manifest_file::ManifestReader>(*manifest_scan);
 
 	while (!manifest_file_reader->Finished()) {

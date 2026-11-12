@@ -68,7 +68,7 @@ PhysicalOperator &LogicalRewriteDataFiles::CreatePlan(ClientContext &context, Ph
 
 	D_ASSERT(children.size() == 1);
 	D_ASSERT(rewrite.plan.table_info);
-	auto &metadata = rewrite.plan.table_info->table_metadata;
+	auto &metadata = rewrite.plan.table_info->GetMetadata();
 
 	//! Bind attached a LogicalCopyToFile so RemoveUnusedColumns keeps all table
 	//! columns. Peel that logical COPY away and rebuild the physical copy with

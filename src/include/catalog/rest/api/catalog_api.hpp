@@ -17,6 +17,7 @@ namespace duckdb {
 
 class IcebergCatalog;
 class LoadTableCachePublication;
+class IcebergLoadTableResponse;
 struct IcebergCreateTableRequest;
 class IcebergSchemaEntry;
 class IcebergTableSchemaVersion;
@@ -50,7 +51,7 @@ public:
 	optional<rest_api_objects::IcebergErrorResponse> error_;
 };
 
-struct IcebergLoadTableResult : public APIResult<shared_ptr<const rest_api_objects::LoadTableResult>> {
+struct IcebergLoadTableResult : public APIResult<shared_ptr<const IcebergLoadTableResponse>> {
 	//! HTTP validator for the table metadata, kept separate from the JSON payload.
 	string etag;
 };
@@ -84,7 +85,7 @@ private:
 	vector<string> namespace_items;
 	string table_name;
 	//! Pin the exact response being validated, even if the cache changes while the request runs.
-	shared_ptr<const rest_api_objects::LoadTableResult> cached_result;
+	shared_ptr<const IcebergLoadTableResponse> cached_result;
 	string etag;
 };
 

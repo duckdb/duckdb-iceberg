@@ -83,13 +83,15 @@ void IcebergManifestStore::LoadManifestList() {
 			manifest_list_entries = context.transaction_data->existing_manifest_list;
 		} else {
 			if (!snapshot.manifests.empty()) {
-				IcebergManifestList::LoadManifestFiles(snapshot_info, metadata, context.context, manifest_list_entries);
+				IcebergManifestList::LoadManifestFiles(snapshot_info, metadata, context.context, manifest_list_entries,
+				                                       context.file_secret);
 			} else {
 				auto manifest_list_full_path = context.options.allow_moved_paths
 				                                   ? IcebergUtils::GetFullPath(iceberg_path, snapshot.manifest_list, fs)
 				                                   : snapshot.manifest_list;
-				auto scan = AvroScan::ScanManifestList(snapshot_info, metadata, context.context,
-				                                       manifest_list_full_path, manifest_list_entries);
+				auto scan =
+				    AvroScan::ScanManifestList(snapshot_info, metadata, context.context, manifest_list_full_path,
+				                               manifest_list_entries, context.file_secret);
 				auto manifest_list_reader = make_uniq<manifest_list::ManifestListReader>(*scan);
 				while (!manifest_list_reader->Finished()) {
 					manifest_list_reader->Read();
@@ -153,9 +155,9 @@ void IcebergManifestStore::LoadManifestList() {
 		}
 
 		if (!manifests_to_eagerly_load.empty()) {
-			auto scan =
-			    AvroScan::ScanManifest(context.snapshot, data_manifests, context.options, context.fs, context.path,
-			                           context.metadata, context.context, nullptr, manifests_to_eagerly_load);
+			auto scan = AvroScan::ScanManifest(context.snapshot, data_manifests, context.options, context.fs,
+			                                   context.path, context.metadata, context.context, nullptr,
+			                                   manifests_to_eagerly_load, context.file_secret);
 			auto reader = make_uniq<manifest_file::ManifestReader>(*scan);
 			while (!reader->Finished()) {
 				reader->Read();
@@ -235,7 +237,7 @@ void IcebergManifestStore::StartDataManifestScan(const vector<bool> &matching_ma
 	if (!selected_committed_manifests.empty()) {
 		auto data_scan = AvroScan::ScanManifest(context.snapshot, committed_data_manifests, context.options, context.fs,
 		                                        context.path, context.metadata, context.context, &read_state,
-		                                        selected_committed_manifests);
+		                                        selected_committed_manifests, context.file_secret);
 		data_manifest_read_state =
 		    make_uniq<IcebergManifestScanningState>(context.context, std::move(data_scan), committed_data_manifests);
 
@@ -333,7 +335,8 @@ void IcebergManifestStore::ReadDeleteManifests(const vector<idx_t> &manifest_ind
 			}
 			if (!to_read.empty()) {
 				auto scan = AvroScan::ScanManifest(context.snapshot, new_load->manifests, context.options, context.fs,
-				                                   context.path, context.metadata, context.context, nullptr, to_read);
+				                                   context.path, context.metadata, context.context, nullptr, to_read,
+				                                   context.file_secret);
 				new_load->scan_state = make_shared_ptr<IcebergManifestScanningState>(context.context, std::move(scan),
 				                                                                     new_load->manifests);
 				auto &executor = new_load->scan_state->executor;

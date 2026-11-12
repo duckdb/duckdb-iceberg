@@ -23,7 +23,8 @@ struct IcebergPartitionsRow {
 
 struct IcebergPartitionsBindData : public TableFunctionData {
 	IcebergPartitionsBindData() {};
-	IcebergTableMetadata metadata {IcebergTableMetadataSchemas {}};
+	shared_ptr<const IcebergTableMetadata> metadata;
+	IcebergFileSecret file_secret;
 
 	IcebergOptions options;
 	string table_location;
@@ -79,9 +80,9 @@ struct IcebergPartitionsGlobalState : public GlobalTableFunctionState {
 			//! The table has no snapshot
 			return std::move(global_state);
 		}
-		auto &metadata = bind_data.metadata;
+		auto &metadata = *bind_data.metadata;
 		auto manifest_list = IcebergManifestList::Load(bind_data.table_location, metadata, bind_data.snapshot_to_scan,
-		                                               context, bind_data.options);
+		                                               context, bind_data.options, bind_data.file_secret);
 
 		unordered_map<int32_t, idx_t> projected_fields;
 		for (auto &spec : metadata.partition_specs) {
@@ -127,8 +128,9 @@ static unique_ptr<FunctionData> IcebergPartitionsBind(ClientContext &context, Ta
 	auto resolved_metadata = IcebergUtils::ResolveTableMetadata(context, input_string, bind_data->options);
 	bind_data->table_location = std::move(resolved_metadata.table_location);
 	bind_data->metadata = std::move(resolved_metadata.metadata);
-	bind_data->snapshot_to_scan = bind_data->metadata.GetSnapshot(*bind_data->options.snapshot_lookup);
-	bind_data->partition_fields = IcebergPartitionStruct::GetFields(bind_data->metadata);
+	bind_data->file_secret = std::move(resolved_metadata.file_secret);
+	bind_data->snapshot_to_scan = bind_data->metadata->GetSnapshot(*bind_data->options.snapshot_lookup);
+	bind_data->partition_fields = IcebergPartitionStruct::GetFields(*bind_data->metadata);
 
 	//! Unpartitioned tables have no 'partition' and 'spec_id', as Iceberg does
 	if (!bind_data->partition_fields.empty()) {

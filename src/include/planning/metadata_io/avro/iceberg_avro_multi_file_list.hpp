@@ -1,5 +1,7 @@
 #pragma once
 
+#include "planning/iceberg_file_secret.hpp"
+
 #include "duckdb/common/multi_file/multi_file_list.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/mutex.hpp"
@@ -29,6 +31,7 @@ public:
 public:
 	AvroScanInfoType type;
 	const IcebergTableMetadata &metadata;
+	IcebergFileSecret file_secret;
 	const IcebergSnapshotScanInfo &snapshot_info;
 
 public:
