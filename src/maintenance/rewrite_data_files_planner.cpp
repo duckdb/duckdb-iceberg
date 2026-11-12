@@ -2,6 +2,7 @@
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/numeric_utils.hpp"
+#include "duckdb/common/operator/add.hpp"
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/value.hpp"
@@ -14,6 +15,7 @@
 #include "iceberg_options.hpp"
 #include "maintenance/maintenance_table_loader.hpp"
 #include "maintenance/rewrite_data_files_executor.hpp"
+#include "planning/pruning/iceberg_file_pruner.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 
@@ -327,6 +329,23 @@ DeleteApplyMatch PositionDeleteApplies(const IcebergTableMetadata &metadata, con
 	return DeleteApplyMatch::YES;
 }
 
+LiveDataFiles CollectLiveDataFiles(const vector<IcebergManifestListEntry> &manifest_files) {
+	LiveDataFiles live_data;
+	for (const auto &list_entry : manifest_files) {
+		auto &manifest = list_entry.GetManifest();
+		for (const auto &entry : list_entry.GetManifestEntries()) {
+			if (entry.status == IcebergManifestEntryStatusType::DELETED) {
+				continue;
+			}
+			if (entry.data_file.content != IcebergManifestEntryContentType::DATA) {
+				continue;
+			}
+			live_data.emplace(entry.data_file.file_path, std::make_pair(&manifest, &entry));
+		}
+	}
+	return live_data;
+}
+
 //! Drop a delete file only when every data file it references is in the rewritten set.
 //! referenced_data_file names that file directly. Otherwise a position delete is removed only when every
 //! live data file it can match was rewritten. Dangling deletes stay (Spark remove-dangling-deletes defaults
@@ -385,19 +404,7 @@ void CollectFullyAppliedDeleteFiles(RewritePlan &plan, const IcebergTableMetadat
 		rewritten_paths.insert(candidate.file_path);
 	}
 
-	LiveDataFiles live_data;
-	for (const auto &list_entry : manifest_files) {
-		auto &manifest = list_entry.GetManifest();
-		for (const auto &entry : list_entry.GetManifestEntries()) {
-			if (entry.status == IcebergManifestEntryStatusType::DELETED) {
-				continue;
-			}
-			if (entry.data_file.content != IcebergManifestEntryContentType::DATA) {
-				continue;
-			}
-			live_data.emplace(entry.data_file.file_path, std::make_pair(&manifest, &entry));
-		}
-	}
+	auto live_data = CollectLiveDataFiles(manifest_files);
 
 	unordered_set<string> blocked_paths;
 	vector<string> removable_paths;
@@ -427,6 +434,76 @@ void CollectFullyAppliedDeleteFiles(RewritePlan &plan, const IcebergTableMetadat
 			continue;
 		}
 		plan.delete_files_to_remove.push_back(path);
+	}
+}
+
+//! Bounds the rows the rewrite must write, which the commit checks. Deletes are matched to the selected files with
+//! the scan's own rule, and a position delete file counts all its rows, so the bound only errs towards allowing
+//! more deleted rows.
+void BoundRewrittenRows(ClientContext &context, RewritePlan &plan, const IcebergTableMetadata &metadata,
+                        const vector<IcebergManifestListEntry> &manifest_files) {
+	plan.selected_record_count = 0;
+	plan.max_deleted_rows = 0;
+	for (auto &candidate : plan.selected_candidates) {
+		int64_t total;
+		if (!TryAddOperator::Operation(plan.selected_record_count, candidate.record_count, total)) {
+			throw InvalidConfigurationException(
+			    "iceberg_rewrite_data_files: selected data-file record counts exceed the supported BIGINT range");
+		}
+		plan.selected_record_count = total;
+	}
+	if (plan.selected_candidates.empty()) {
+		return;
+	}
+	auto live_data = CollectLiveDataFiles(manifest_files);
+	IcebergTableFilters no_filters;
+	IcebergFilePruner pruner(context, metadata, metadata.GetLatestSchema(), no_filters);
+	vector<std::pair<const IcebergManifestEntry *, partition_value_map_t>> selected;
+	for (auto &candidate : plan.selected_candidates) {
+		auto live = live_data.find(candidate.file_path);
+		if (live == live_data.end()) {
+			throw InternalException("iceberg_rewrite_data_files: selected file '%s' is not live", candidate.file_path);
+		}
+		selected.emplace_back(live->second.second,
+		                      IcebergFilePruner::PartitionValueMap(live->second.second->data_file));
+	}
+	unordered_set<string> counted;
+	for (const auto &list_entry : manifest_files) {
+		auto &manifest = list_entry.GetManifest();
+		for (const auto &entry : list_entry.GetManifestEntries()) {
+			auto &delete_file = entry.data_file;
+			if (entry.status == IcebergManifestEntryStatusType::DELETED ||
+			    (delete_file.content != IcebergManifestEntryContentType::POSITION_DELETES &&
+			     delete_file.content != IcebergManifestEntryContentType::EQUALITY_DELETES)) {
+				continue;
+			}
+			bool applies = false;
+			IcebergEqualityDeleteBounds delete_bounds;
+			for (auto &data : selected) {
+				auto &data_manifest = *live_data.at(data.first->data_file.file_path).first;
+				if (pruner.DeleteFileMatchesDataFile(manifest, entry, data_manifest, *data.first, data.second,
+				                                     &delete_bounds)) {
+					applies = true;
+					break;
+				}
+			}
+			if (!applies) {
+				continue;
+			}
+			if (delete_file.content == IcebergManifestEntryContentType::EQUALITY_DELETES) {
+				// an equality delete can remove any number of rows
+				plan.max_deleted_rows.reset();
+				return;
+			}
+			// a deletion vector shares its Puffin file with others, so it's identified by its offset too
+			auto key = delete_file.file_path + "@" +
+			           (delete_file.content_offset ? std::to_string(*delete_file.content_offset) : string());
+			if (counted.insert(key).second) {
+				// More deletes cannot lower the bound below zero, even when their counts overlap or overflow.
+				*plan.max_deleted_rows +=
+				    MinValue(delete_file.record_count, plan.selected_record_count - *plan.max_deleted_rows);
+			}
+		}
 	}
 }
 
@@ -536,6 +613,7 @@ RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input)
 	}
 
 	CollectFullyAppliedDeleteFiles(plan, table_metadata, manifest_files);
+	BoundRewrittenRows(context, plan, table_metadata, manifest_files);
 	return plan;
 }
 

@@ -437,7 +437,11 @@ static bool MatchBoundsExpression(ClientContext &context, const unique_ptr<Expre
 			if (stats.HasMissingOrNullBounds()) {
 				return true;
 			}
-			column_stats = stats.BuildColumnStats(stats.lower_bound->type());
+			auto column_type = FindFilteredColumnType(expr);
+			if (!column_type) {
+				return true;
+			}
+			column_stats = stats.BuildColumnStats(*column_type);
 		}
 		if (!column_stats) {
 			return true;
