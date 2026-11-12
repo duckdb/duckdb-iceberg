@@ -15,8 +15,7 @@ add_library(
   iceberg_manifests.cpp
   iceberg_history.cpp
   iceberg_files.cpp
-  iceberg_table_properties_functions.cpp
-  iceberg_written_files.cpp)
+  iceberg_table_properties_functions.cpp)
 set(ALL_OBJECT_FILES
     ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:iceberg_function_metadata>
     PARENT_SCOPE)

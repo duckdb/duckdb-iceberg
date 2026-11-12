@@ -1,5 +1,5 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_written_files.test
-# description: iceberg_written_files() lists the data files the connection's last INSERT or CREATE TABLE AS added
+# description: the IcebergDataFileWritten log type records the data files an Iceberg write staged
 # group: [insert]
 
 require-env CATALOG_TEST_CONFIG_SETUP
@@ -12,273 +12,43 @@ DROP TABLE IF EXISTS my_datalake.default.written_files;
 statement ok
 DROP TABLE IF EXISTS my_datalake.default.written_files_ctas;
 
-# before any write there are none
-query I
-SELECT count(*) FROM iceberg_written_files();
-----
-0
-
 statement ok
 CREATE TABLE my_datalake.default.written_files (id INTEGER, p INTEGER) PARTITIONED BY (p) WITH ('format-version' = '2');
 
 statement ok
-INSERT INTO my_datalake.default.written_files SELECT i, i % 3 FROM range(10) t(i);
+CALL enable_logging('IcebergDataFileWritten');
 
-# with the row counts the manifest records, and their sizes
-query II
-SELECT sum(record_count), bool_and(file_size_in_bytes > 0) FROM iceberg_written_files();
-----
-10	true
-
-query I
-SELECT count(*) = (SELECT count(*) FROM iceberg_written_files()) FROM iceberg_written_files() w
-JOIN iceberg_metadata(my_datalake.default.written_files) m USING (file_path)
-WHERE m.manifest_content = 'DATA' AND m.record_count = w.record_count;
-----
-true
-
-# the files the INSERT added are the table's data files
-query I
-SELECT count(*) > 0 FROM iceberg_written_files();
-----
-true
-
-query I
-SELECT count(*) FROM (
-    (SELECT file_path FROM iceberg_written_files()
-     EXCEPT SELECT file_path FROM iceberg_metadata(my_datalake.default.written_files) WHERE manifest_content = 'DATA')
-    UNION ALL
-    (SELECT file_path FROM iceberg_metadata(my_datalake.default.written_files) WHERE manifest_content = 'DATA'
-     EXCEPT SELECT file_path FROM iceberg_written_files())
-);
-----
-0
-
-# other statements leave them in place
-statement ok
-SELECT count(*) FROM my_datalake.default.written_files;
-
-statement ok
-CREATE TABLE first_files AS SELECT file_path FROM iceberg_written_files();
-
-query I
-SELECT count(*) = (SELECT count(*) FROM first_files) FROM iceberg_written_files();
-----
-true
-
-# the partitioned INSERT wrote a file for each of its three partitions
-query I
-SELECT count(*) >= 3 FROM iceberg_written_files();
-----
-true
-
-# failing statements that write nothing, and an empty transaction that rolls back, leave them in place
-statement error
-SELECT error('not a write');
-----
-not a write
-
-statement ok
-BEGIN;
-
-statement ok
-SELECT count(*) FROM my_datalake.default.written_files;
-
-statement ok
-ROLLBACK;
-
-query I
-SELECT count(*) = (SELECT count(*) FROM first_files) FROM iceberg_written_files();
-----
-true
-
-# a prepared query reads the list when it runs
-statement ok
-PREPARE written AS SELECT count(*) > 0, count(*) FILTER (WHERE file_path IN (SELECT file_path FROM first_files)) > 0 FROM iceberg_written_files();
-
-query II
-EXECUTE written;
-----
-true	true
-
-# the next write replaces them with the files it added
 statement ok
 INSERT INTO my_datalake.default.written_files SELECT i, i % 3 FROM range(10) t(i);
 
-query II
-SELECT count(*) > 0, count(*) FILTER (WHERE file_path IN (SELECT file_path FROM first_files)) FROM iceberg_written_files();
+# one entry per data file, from one query of this connection, with the counts the manifest records
+query III
+SELECT count(DISTINCT query_id), bool_and(connection_id = current_connection_id()), sum(record_count)
+FROM duckdb_logs_parsed('IcebergDataFileWritten');
 ----
-true	0
-
-query II
-EXECUTE written;
-----
-true	false
+1	true	10
 
 query I
 SELECT count(*) FROM (
-    (SELECT file_path FROM iceberg_written_files()
-     EXCEPT SELECT file_path FROM iceberg_metadata(my_datalake.default.written_files)
-     WHERE manifest_content = 'DATA' AND file_path NOT IN (SELECT file_path FROM first_files))
+    (SELECT file_path, record_count FROM duckdb_logs_parsed('IcebergDataFileWritten')
+     EXCEPT SELECT file_path, record_count FROM iceberg_metadata(my_datalake.default.written_files)
+     WHERE manifest_content = 'DATA')
     UNION ALL
-    (SELECT file_path FROM iceberg_metadata(my_datalake.default.written_files)
-     WHERE manifest_content = 'DATA' AND file_path NOT IN (SELECT file_path FROM first_files)
-     EXCEPT SELECT file_path FROM iceberg_written_files())
+    (SELECT file_path, record_count FROM iceberg_metadata(my_datalake.default.written_files)
+     WHERE manifest_content = 'DATA'
+     EXCEPT SELECT file_path, record_count FROM duckdb_logs_parsed('IcebergDataFileWritten'))
 );
 ----
 0
 
-# UPDATE and MERGE leave them in place
-statement ok
-CREATE TABLE second_files AS SELECT file_path FROM iceberg_written_files();
-
-statement ok
-UPDATE my_datalake.default.written_files SET id = id + 1 WHERE id = 0;
-
-statement ok
-MERGE INTO my_datalake.default.written_files t USING (SELECT 1000 AS id, 1 AS p) s ON t.id = s.id
-WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.p);
-
 query II
-SELECT count(*) = (SELECT count(*) FROM second_files), count(*) FILTER (WHERE file_path NOT IN (SELECT file_path FROM second_files)) FROM iceberg_written_files();
+SELECT DISTINCT "table", bool_and(file_size_in_bytes > 0) OVER () FROM duckdb_logs_parsed('IcebergDataFileWritten');
 ----
-true	0
+my_datalake.default.written_files	true
 
-# COPY FROM is an INSERT too
+# a write that fails while running logs none
 statement ok
-COPY (SELECT 200 AS id, 1 AS p) TO '__TEST_DIR__/written_files_copy.parquet';
-
-statement ok
-COPY my_datalake.default.written_files FROM '__TEST_DIR__/written_files_copy.parquet';
-
-query I
-SELECT sum(record_count) FROM iceberg_written_files();
-----
-1
-
-# an INSERT of no rows lists no files
-statement ok
-INSERT INTO my_datalake.default.written_files SELECT i, 0 FROM range(0) t(i);
-
-query I
-SELECT count(*) FROM iceberg_written_files();
-----
-0
-
-# CREATE TABLE AS
-statement ok
-CREATE TABLE my_datalake.default.written_files_ctas AS SELECT i AS id FROM range(5) t(i);
-
-query I
-SELECT count(*) FROM (
-    (SELECT file_path FROM iceberg_written_files()
-     EXCEPT SELECT file_path FROM iceberg_metadata(my_datalake.default.written_files_ctas) WHERE manifest_content = 'DATA')
-    UNION ALL
-    (SELECT file_path FROM iceberg_metadata(my_datalake.default.written_files_ctas) WHERE manifest_content = 'DATA'
-     EXCEPT SELECT file_path FROM iceberg_written_files())
-);
-----
-0
-
-# each connection has its own
-query I con2
-SELECT count(*) FROM iceberg_written_files();
-----
-0
-
-# inside a transaction the files are listed after the INSERT, and dropped when the transaction rolls back
-statement ok
-BEGIN;
-
-statement ok
-INSERT INTO my_datalake.default.written_files VALUES (100, 1);
-
-query I
-SELECT count(*) > 0 FROM iceberg_written_files();
-----
-true
-
-statement ok
-ROLLBACK;
-
-query I
-SELECT count(*) FROM iceberg_written_files();
-----
-0
-
-# a failing statement inside the transaction, then a rollback, drops them
-statement ok
-BEGIN;
-
-statement ok
-INSERT INTO my_datalake.default.written_files VALUES (103, 1);
-
-statement error
-SELECT error('inside the transaction');
-----
-inside the transaction
-
-statement ok
-ROLLBACK;
-
-query I
-SELECT count(*) FROM iceberg_written_files();
-----
-0
-
-# of two INSERTs in one transaction, the second's files are listed
-statement ok
-BEGIN;
-
-statement ok
-INSERT INTO my_datalake.default.written_files VALUES (104, 1);
-
-statement ok
-SET VARIABLE txn_first = (SELECT list(file_path) FROM iceberg_written_files());
-
-statement ok
-INSERT INTO my_datalake.default.written_files VALUES (105, 2);
-
-query II
-SELECT count(*), count(*) FILTER (WHERE list_contains(getvariable('txn_first'), file_path)) FROM iceberg_written_files();
-----
-1	0
-
-statement ok
-ROLLBACK;
-
-# after a COMMIT they stay, also when a later statement fails or a later transaction rolls back
-statement ok
-BEGIN;
-
-statement ok
-INSERT INTO my_datalake.default.written_files VALUES (102, 2);
-
-statement ok
-COMMIT;
-
-statement error
-SELECT error('not a write');
-----
-not a write
-
-statement ok
-BEGIN;
-
-statement ok
-SELECT count(*) FROM my_datalake.default.written_files;
-
-statement ok
-ROLLBACK;
-
-query I
-SELECT count(*) FROM iceberg_written_files();
-----
-1
-
-# a write that fails lists none
-statement ok
-INSERT INTO my_datalake.default.written_files VALUES (101, 1);
+CALL truncate_duckdb_logs();
 
 statement error
 INSERT INTO my_datalake.default.written_files SELECT CASE WHEN i = 5 THEN error('boom') ELSE i END, 0 FROM range(10) t(i);
@@ -286,9 +56,55 @@ INSERT INTO my_datalake.default.written_files SELECT CASE WHEN i = 5 THEN error(
 boom
 
 query I
-SELECT count(*) FROM iceberg_written_files();
+SELECT count(*) FROM duckdb_logs_parsed('IcebergDataFileWritten');
 ----
 0
+
+# inside a transaction the files are logged when the INSERT stages them, with the transaction's id
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.written_files VALUES (100, 1);
+
+query II
+SELECT count(*), count(DISTINCT transaction_id) FROM duckdb_logs_parsed('IcebergDataFileWritten');
+----
+1	1
+
+statement ok
+ROLLBACK;
+
+# CREATE TABLE AS
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+CREATE TABLE my_datalake.default.written_files_ctas AS SELECT i AS id FROM range(5) t(i);
+
+query I
+SELECT count(*) FROM (
+    (SELECT file_path FROM duckdb_logs_parsed('IcebergDataFileWritten')
+     EXCEPT SELECT file_path FROM iceberg_metadata(my_datalake.default.written_files_ctas) WHERE manifest_content = 'DATA')
+    UNION ALL
+    (SELECT file_path FROM iceberg_metadata(my_datalake.default.written_files_ctas) WHERE manifest_content = 'DATA'
+     EXCEPT SELECT file_path FROM duckdb_logs_parsed('IcebergDataFileWritten'))
+);
+----
+0
+
+# a MERGE that inserts rows logs the file it wrote
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+MERGE INTO my_datalake.default.written_files t USING (SELECT 1000 AS id, 1 AS p) s ON t.id = s.id
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.p);
+
+query I
+SELECT sum(record_count) FROM duckdb_logs_parsed('IcebergDataFileWritten');
+----
+1
 
 statement ok
 DROP TABLE my_datalake.default.written_files;
