@@ -20,7 +20,7 @@ select count(*) from my_datalake.default.cor_table;
 10
 
 statement ok
-set variable location_before = (select split_part(file_path, '/data/', 1) from iceberg_metadata(my_datalake.default.cor_table) limit 1);
+set variable location_before = (select metadata.location from iceberg_load_table_response(my_datalake.default.cor_table));
 
 # --- outside of a transaction the table is replaced right away, schema included ---
 
@@ -40,8 +40,9 @@ c
 
 # The location stays unchanged. Historical snapshot retention is checked in
 # test_create_or_replace_history.test, which requires SNAPSHOT_HISTORY_SUPPORT.
+# Compare the catalog location directly, without assuming filesystem path separators.
 query I
-select (select split_part(file_path, '/data/', 1) from iceberg_metadata(my_datalake.default.cor_table) limit 1) = getvariable('location_before');
+select metadata.location = getvariable('location_before') from iceberg_load_table_response(my_datalake.default.cor_table);
 ----
 true
 
