@@ -106,6 +106,9 @@ public:
 	IcebergTable &DeleteTable(IcebergTable &table);
 	IcebergTable &RenameTable(IcebergTable &table, const string &new_name);
 	bool MultiTableCommitAvailable() const;
+	//! Register a table the catalog created without stage-create, which exists there ahead of the commit.
+	void TableCreatedInCatalog(const string &table_key, const vector<string> &namespace_items, const string &name,
+	                           shared_ptr<const IcebergLoadTableResponse> created);
 
 public:
 	//! Set while a MERGE INTO is planned: its UPDATE and DELETE actions are governed by write.merge.mode, not by
@@ -122,11 +125,22 @@ private:
 	void RefreshRetryTables(IcebergTransactionAlterUpdate &alter_update, const unordered_set<string> &table_keys,
 	                        ClientContext &context);
 	void CleanupFiles();
+	//! Drop the tables registered through TableCreatedInCatalog, when the transaction does not commit.
+	void DropCreatedTables();
 	//! Evict the touched tables' cached LoadTableResult so a retry after a failed commit (e.g. a 409
 	//! conflict) doesn't keep reusing the same stale metadata.
 	void EvictCachedTables();
 	//! Commit outcome unknown (5xx / no HTTP status); CleanupFiles() then keeps the written files.
 	bool commit_state_unknown = false;
+
+	struct CreatedTable {
+		string table_key;
+		vector<string> namespace_items;
+		string name;
+		//! The catalog's response to the create request
+		shared_ptr<const IcebergLoadTableResponse> created;
+	};
+	vector<CreatedTable> created_tables;
 
 private:
 	DatabaseInstance &db;
