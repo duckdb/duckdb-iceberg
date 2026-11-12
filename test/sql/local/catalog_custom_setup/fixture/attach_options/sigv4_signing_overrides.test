@@ -4,13 +4,7 @@
 
 require-env FIXTURE_SERVER_AVAILABLE
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 require aws
 
@@ -29,12 +23,16 @@ CREATE SECRET (
 statement ok
 call enable_logging('http');
 
+# Inspect the region and service in the logged SigV4 Authorization header.
+statement ok
+SET redact_http_logs=false
+
 # sigv4_service and sigv4_region override SigV4 service/region parsing from host
 # The fixture catalog at 8181 does not validate auth, so the attach succeeds
 statement ok
 ATTACH '' AS my_datalake_both (
     TYPE ICEBERG,
-    ENDPOINT 'http://127.0.0.1:8181',
+    URI 'http://127.0.0.1:8181',
     AUTHORIZATION_TYPE 'sigv4',
     SIGV4_SERVICE 'MyCustomService',
     SIGV4_REGION 'us-west-2'
@@ -59,7 +57,7 @@ CALL truncate_duckdb_logs();
 statement ok
 ATTACH '' AS my_datalake_name_only (
     TYPE ICEBERG,
-    ENDPOINT 'http://127.0.0.1:8181',
+    URI 'http://127.0.0.1:8181',
     AUTHORIZATION_TYPE 'sigv4',
     SIGV4_SERVICE 'CustomService',
     SIGV4_REGION 'us-east-1'
@@ -83,7 +81,7 @@ CALL truncate_duckdb_logs();
 statement error
 ATTACH '' AS my_datalake_no_override (
     TYPE ICEBERG,
-    ENDPOINT 'http://127.0.0.1:8181',
+    URI 'http://127.0.0.1:8181',
     AUTHORIZATION_TYPE 'sigv4'
 );
 ----

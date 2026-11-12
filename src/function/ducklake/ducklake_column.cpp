@@ -18,13 +18,7 @@ DuckLakeColumn::DuckLakeColumn(const IcebergColumnDefinition &column, idx_t orde
 	column_name = column.name;
 	column_type = DuckLakeUtils::ToDuckLakeColumnType(column.type);
 	initial_default = column.initial_default ? *column.initial_default : Value(column.type);
-	if (column.write_default) {
-		default_value = *column.write_default;
-	} else if (column.initial_default) {
-		default_value = *column.initial_default;
-	} else {
-		default_value = Value(column.type);
-	}
+	default_value = column.write_default ? *column.write_default : Value(column.type);
 	nulls_allowed = !column.required;
 }
 

@@ -5,13 +5,7 @@
 # Requires: python3 scripts/sigv4_mock_server.py 19130
 require-env SIGV4_MOCK_SERVER_AVAILABLE
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 require aws
 
@@ -31,11 +25,15 @@ CREATE SECRET sigv4_secret (
 statement ok
 CALL enable_logging(level='debug');
 
+# Inspect the signing scheme in the logged Authorization header.
+statement ok
+SET redact_http_logs=false
+
 statement ok
 ATTACH ':' AS glue_catalog (
     TYPE ICEBERG,
     ENDPOINT_TYPE 'GLUE',
-    ENDPOINT 'http://127.0.0.1:19130',
+    URI 'http://127.0.0.1:19130',
     SECRET 'sigv4_secret'
 );
 
@@ -43,7 +41,7 @@ statement ok
 ATTACH 'arn:aws:s3tables:us-east-1:123456789012:bucket/test-bucket' AS s3tables_catalog (
     TYPE ICEBERG,
     ENDPOINT_TYPE 'S3_TABLES',
-    ENDPOINT 'http://127.0.0.1:19130',
+    URI 'http://127.0.0.1:19130',
     SECRET 'sigv4_secret'
 );
 

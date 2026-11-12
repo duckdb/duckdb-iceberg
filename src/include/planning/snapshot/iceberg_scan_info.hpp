@@ -15,6 +15,8 @@ struct IcebergTransactionData;
 
 //! Used when we are not scanning from a REST Catalog
 struct IcebergScanTemporaryData {
+	explicit IcebergScanTemporaryData(IcebergTableMetadata metadata) : metadata(std::move(metadata)) {
+	}
 	IcebergTableMetadata metadata;
 };
 
@@ -35,6 +37,10 @@ public:
 	unique_ptr<IcebergScanTemporaryData> owned_temp_data;
 	const IcebergTableMetadata &metadata;
 	optional_ptr<IcebergTransactionData> transaction_data;
+
+	//! Catalog scan serialization is an immediate plan copy, scoped to the binding statement.
+	hugeint_t serialization_transaction_id;
+	optional_idx serialization_query_id;
 
 	IcebergSnapshotScanInfo snapshot_info;
 	const IcebergTableSchema &schema;

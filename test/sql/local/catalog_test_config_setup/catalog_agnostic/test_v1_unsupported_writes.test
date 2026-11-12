@@ -1,0 +1,151 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/test_v1_unsupported_writes.test
+# description: Writes to Iceberg V1 tables are not supported
+# group: [catalog_agnostic]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require core_functions
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+use my_datalake.default;
+
+statement ok
+drop table if exists v1_tbl;
+
+statement ok
+create table v1_tbl (id int, val varchar) WITH ('format-version' = 1);
+
+query I
+SELECT metadata."format-version"::INT FROM iceberg_load_table_response(my_datalake.default.v1_tbl);
+----
+1
+
+query I
+SELECT count(*) FROM v1_tbl;
+----
+0
+
+statement error
+INSERT INTO v1_tbl VALUES (1, 'a');
+----
+<REGEX>:.*Not implemented Error.*Iceberg V1 tables.*
+
+statement error
+UPDATE v1_tbl SET val = 'b' WHERE id = 1;
+----
+<REGEX>:.*Not implemented Error.*Iceberg V1 tables.*
+
+statement error
+DELETE FROM v1_tbl WHERE id = 1;
+----
+<REGEX>:.*Not implemented Error.*Iceberg V1 tables.*
+
+statement error
+TRUNCATE v1_tbl;
+----
+<REGEX>:.*Not implemented Error.*Iceberg V1 tables.*
+
+statement error
+MERGE INTO v1_tbl USING (VALUES (1, 'c')) src(id, val) USING (id)
+WHEN MATCHED THEN UPDATE
+WHEN NOT MATCHED THEN INSERT;
+----
+<REGEX>:.*Not implemented Error.*Iceberg V1 tables.*
+
+statement error
+ALTER TABLE v1_tbl SET PARTITIONED BY (id);
+----
+<REGEX>:.*Not implemented Error.*Partition evolution on Iceberg V1 tables.*
+
+statement error
+CALL iceberg_rewrite_data_files('my_datalake.default.v1_tbl');
+----
+<REGEX>:.*Not implemented Error.*iceberg_rewrite_data_files on Iceberg V1 tables.*
+
+# the rejected operations left the table untouched
+query I
+SELECT metadata."format-version"::INT FROM iceberg_load_table_response(my_datalake.default.v1_tbl);
+----
+1
+
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.v1_tbl);
+----
+0
+
+query I
+SELECT count(*) FROM v1_tbl;
+----
+0
+
+# CTAS with format-version 1 is not supported
+statement ok
+drop table if exists v1_ctas_tbl;
+
+statement error
+CREATE TABLE v1_ctas_tbl WITH ('format-version' = 1) AS SELECT 1 AS id;
+----
+<REGEX>:.*Not implemented Error.*Iceberg V1 tables.*
+
+# the failed CTAS did not create the table
+statement error
+SELECT * FROM v1_ctas_tbl;
+----
+<REGEX>:.*does not exist.*
+
+# upgrading to v2 makes the table writable
+statement ok
+ALTER TABLE v1_tbl SET ('format-version' = '2');
+
+query I
+SELECT metadata."format-version"::INT FROM iceberg_load_table_response(my_datalake.default.v1_tbl);
+----
+2
+
+statement ok
+INSERT INTO v1_tbl VALUES (1, 'a');
+
+query II
+SELECT id, val FROM v1_tbl;
+----
+1	a
+
+statement ok
+drop table if exists v1_tbl;
+
+# an upgrade in the same transaction makes the table writable within that transaction
+statement ok
+drop table if exists v1_txn_tbl;
+
+statement ok
+create table v1_txn_tbl (id int, val varchar) WITH ('format-version' = 1);
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE v1_txn_tbl SET ('format-version' = '2');
+
+statement ok
+INSERT INTO v1_txn_tbl VALUES (1, 'a');
+
+statement ok
+COMMIT;
+
+query I
+SELECT metadata."format-version"::INT FROM iceberg_load_table_response(my_datalake.default.v1_txn_tbl);
+----
+2
+
+query II
+SELECT id, val FROM v1_txn_tbl;
+----
+1	a
+
+statement ok
+drop table if exists v1_txn_tbl;

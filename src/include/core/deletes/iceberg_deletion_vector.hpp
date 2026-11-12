@@ -3,26 +3,22 @@
 #include "duckdb/common/multi_file/multi_file_data.hpp"
 #include "core/deletes/iceberg_delete_data.hpp"
 #include <roaring/roaring.hh>
+#include "duckdb/common/mutex.hpp"
 
 namespace duckdb {
 
 struct IcebergDeletionVectorData : public enable_shared_from_this<IcebergDeletionVectorData>, IcebergDeleteData {
 public:
-	IcebergDeletionVectorData(const BoundIcebergManifestEntry &entry)
-	    : IcebergDeleteData(IcebergDeleteType::DELETION_VECTOR, entry) {
+	IcebergDeletionVectorData(const IcebergFileIdentity &file)
+	    : IcebergDeleteData(IcebergDeleteType::DELETION_VECTOR, file) {
 	}
 	virtual ~IcebergDeletionVectorData() override {
 	}
 
 public:
-	static shared_ptr<IcebergDeletionVectorData> FromBlob(const BoundIcebergManifestEntry &entry, data_ptr_t blob_start,
+	static shared_ptr<IcebergDeletionVectorData> FromBlob(const IcebergFileIdentity &file, data_ptr_t blob_start,
 	                                                      idx_t blob_length);
 	static vector<data_t> ToBlob(const unordered_map<int32_t, roaring::Roaring> &bitmaps);
-	//! Wrap a `deletion-vector-v1` blob (from ToBlob) in a spec-compliant Puffin file
-	//! container: leading magic + blob + footer. The blob is placed at offset 4 (right
-	//! after the leading magic), so the manifest entry's content_offset must be set to 4.
-	static vector<data_t> ToPuffinFile(const vector<data_t> &blob, const string &referenced_data_file,
-	                                   idx_t cardinality);
 
 public:
 	unique_ptr<DeleteFilter> ToFilter() const override;

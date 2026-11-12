@@ -1,0 +1,115 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/test_partition_summary_uuid_extrema.test
+# description: UUID summaries require matching signed and unsigned extrema, including ties in the first half.
+# group: [partitions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+CREATE TABLE uuid_summary_rows AS
+SELECT scenario, id, u::UUID AS u FROM (VALUES
+	('lower', 1, '10000000-0000-0000-7fff-ffffffffffff'),
+	('lower', 2, '10000000-0000-0000-8000-000000000000'),
+	('lower', 3, '20000000-0000-0000-0000-000000000000'),
+	('upper', 1, '10000000-0000-0000-0000-000000000000'),
+	('upper', 2, '20000000-0000-0000-7fff-ffffffffffff'),
+	('upper', 3, '20000000-0000-0000-8000-000000000000'),
+	('interior', 1, '10000000-0000-0000-0000-000000000000'),
+	('interior', 2, '20000000-0000-0000-7fff-ffffffffffff'),
+	('interior', 3, '20000000-0000-0000-8000-000000000000'),
+	('interior', 4, '30000000-0000-0000-0000-000000000000'),
+	('low', 1, '12345678-9abc-def0-0000-000000000000'),
+	('low', 2, '12345678-9abc-def0-7fff-ffffffffffff'),
+	('high', 1, 'fedcba98-7654-3210-8000-000000000000'),
+	('high', 2, 'fedcba98-7654-3210-ffff-ffffffffffff'),
+	('singleton', 1, 'ffffffff-ffff-ffff-ffff-ffffffffffff'),
+	('singleton', 2, 'ffffffff-ffff-ffff-ffff-ffffffffffff'),
+	('first_half', 1, '7fffffff-ffff-ffff-ffff-ffffffffffff'),
+	('first_half', 2, '80000000-0000-0000-0000-000000000000')
+) v(scenario, id, u);
+
+# "lower" and "upper" disagree on only one extremum. "interior" disagrees
+# between interior values but has common extrema, so it must retain summaries.
+foreach scenario lower upper interior low high singleton first_half
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.uuid_summary_extrema;
+
+# A conflicting UUID field invalidates the whole list, including adjacent fields.
+# Metrics mode none must not suppress otherwise valid partition summaries.
+statement ok
+CREATE TABLE my_datalake.default.uuid_summary_extrema (id INTEGER, category INTEGER, u UUID, t TIME)
+PARTITIONED BY (category, u, t)
+WITH ('write.metadata.metrics.default' = 'none', 'write.metadata.metrics.column.u' = 'full');
+
+statement ok
+INSERT INTO my_datalake.default.uuid_summary_extrema
+SELECT id, 42, u, TIME '00:00:00.000001' FROM uuid_summary_rows WHERE scenario = '{scenario}'
+UNION ALL SELECT 99, 42, NULL, TIME '00:00:00.000001';
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE uuid_extrema_list = (
+	SELECT manifest_list FROM iceberg_snapshots(my_datalake.default.uuid_summary_extrema)
+);
+
+query I
+SELECT CASE WHEN '{scenario}' IN ('lower', 'upper', 'first_half') THEN partitions IS NULL
+ELSE len(partitions) = 3
+	AND hex(partitions[1].lower_bound) = '2A000000' AND hex(partitions[1].upper_bound) = '2A000000'
+	AND partitions[2].contains_null AND NOT partitions[2].contains_nan
+	AND hex(partitions[2].lower_bound) = (
+		SELECT upper(replace(min(u)::VARCHAR, '-', '')) FROM uuid_summary_rows WHERE scenario = '{scenario}')
+	AND hex(partitions[2].upper_bound) = (
+		SELECT upper(replace(max(u)::VARCHAR, '-', '')) FROM uuid_summary_rows WHERE scenario = '{scenario}')
+	AND hex(partitions[3].lower_bound) = '0100000000000000'
+	AND hex(partitions[3].upper_bound) = '0100000000000000'
+END FROM read_avro(getvariable('uuid_extrema_list'));
+----
+true
+
+# Even safe partition bounds must not enable UUID data-file bounds in full mode.
+statement ok
+SET VARIABLE uuid_extrema_manifests = (
+	SELECT list(DISTINCT manifest_path) FROM iceberg_metadata(my_datalake.default.uuid_summary_extrema)
+);
+
+query II
+SELECT bool_and(data_file.lower_bounds[3] IS NULL), bool_and(data_file.upper_bounds[3] IS NULL)
+FROM read_avro(getvariable('uuid_extrema_manifests'));
+----
+true	true
+
+statement ok
+COMMIT;
+
+# Exercise equality for every non-null partition with constants, so pruning runs.
+foreach id 1 2 3 4
+
+statement ok
+SET VARIABLE uuid_extrema_value = (
+	SELECT u FROM uuid_summary_rows WHERE scenario = '{scenario}' AND id = {id}
+);
+
+query I
+SELECT list(id ORDER BY id) IS NOT DISTINCT FROM (
+	SELECT list(id ORDER BY id) FROM uuid_summary_rows
+	WHERE scenario = '{scenario}' AND u = getvariable('uuid_extrema_value'))
+FROM my_datalake.default.uuid_summary_extrema WHERE u = getvariable('uuid_extrema_value');
+----
+true
+
+endloop
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.uuid_summary_extrema WHERE u IS NULL;
+----
+[99]
+
+statement ok
+DROP TABLE my_datalake.default.uuid_summary_extrema;
+
+endloop

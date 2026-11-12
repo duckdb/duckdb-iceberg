@@ -4,14 +4,9 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
-require avro
+include test/sql/init_requires
 
-require parquet
-
-require iceberg
-
-require httpfs
-
+include test/sql/local/catalog_test_config_setup/catalog_agnostic/setup/table_unpartitioned.test_setup
 
 statement ok
 CALL enable_logging('HTTP');

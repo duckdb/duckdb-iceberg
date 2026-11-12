@@ -1,0 +1,128 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_fully_deleted.test
+# description: Rewriting fully deleted partitions commits input and delete removals even without output files
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require json
+
+foreach untouched 0 1
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_fully_deleted (id INTEGER, p INTEGER)
+PARTITIONED BY (p) WITH ('format-version' = 2);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_fully_deleted VALUES (1, NULL), (2, NULL);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_fully_deleted VALUES (3, NULL), (4, NULL);
+
+# Also exercise an empty rewrite while another, ineligible partition still has live rows.
+statement ok
+INSERT INTO my_datalake.default.rewrite_fully_deleted SELECT 10, 42 WHERE {untouched} = 1;
+
+statement ok
+DELETE FROM my_datalake.default.rewrite_fully_deleted WHERE id <= 4;
+
+query I
+SELECT count(*) = {untouched} FROM my_datalake.default.rewrite_fully_deleted;
+----
+true
+
+query TI rowsort
+SELECT content, count(*) - CASE WHEN content = 'DATA' THEN {untouched} ELSE 0 END
+FROM iceberg_metadata('my_datalake.default.rewrite_fully_deleted')
+WHERE status <> 'DELETED' GROUP BY content;
+----
+DATA	2
+POSITION_DELETES	2
+
+# A no-op must not count or remove deletes.
+query IIIII
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_fully_deleted');
+----
+0	0	0	0	0
+
+statement ok
+SET VARIABLE before_rewrite = (
+	SELECT metadata::JSON->>'current-snapshot-id'
+	FROM iceberg_load_table_response(my_datalake.default.rewrite_fully_deleted)
+);
+
+# Neither the data-file invalidations nor delete-file invalidations may survive rollback.
+statement ok
+BEGIN;
+
+query IIIII
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_fully_deleted', min_input_files => 2);
+----
+2	0	<REGEX>:[1-9][0-9]*	0	2
+
+query I
+SELECT count(*) = {untouched} FROM my_datalake.default.rewrite_fully_deleted;
+----
+true
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT metadata::JSON->>'current-snapshot-id' = getvariable('before_rewrite')
+FROM iceberg_load_table_response(my_datalake.default.rewrite_fully_deleted);
+----
+true
+
+query TI rowsort
+SELECT content, count(*) - CASE WHEN content = 'DATA' THEN {untouched} ELSE 0 END
+FROM iceberg_metadata('my_datalake.default.rewrite_fully_deleted')
+WHERE status <> 'DELETED' GROUP BY content;
+----
+DATA	2
+POSITION_DELETES	2
+
+query IIIII
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_fully_deleted', min_input_files => 2);
+----
+2	0	<REGEX>:[1-9][0-9]*	0	2
+
+query I
+SELECT count(*) = {untouched} FROM iceberg_metadata('my_datalake.default.rewrite_fully_deleted')
+WHERE status <> 'DELETED';
+----
+true
+
+# All removals belong to the same REPLACE snapshot, including the row and file totals.
+query TIIIIII
+SELECT summary->>'operation',
+	(summary->>'deleted-data-files')::BIGINT,
+	(summary->>'total-data-files')::BIGINT = {untouched},
+	(summary->>'removed-delete-files')::BIGINT,
+	(summary->>'total-delete-files')::BIGINT,
+	(summary->>'removed-position-deletes')::BIGINT,
+	(summary->>'total-position-deletes')::BIGINT
+FROM (
+	SELECT unnest(metadata::JSON->'snapshots'->'$[*]')->'summary' AS summary
+	FROM iceberg_load_table_response(my_datalake.default.rewrite_fully_deleted)
+)
+WHERE summary->>'operation' = 'replace';
+----
+replace	2	true	2	0	4	0
+
+query I
+SELECT count(*) = {untouched} AND count(*) FILTER (WHERE id <> 10) = 0
+FROM my_datalake.default.rewrite_fully_deleted;
+----
+true
+
+query IIIII
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_fully_deleted');
+----
+0	0	0	0	0
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_fully_deleted;
+
+endloop

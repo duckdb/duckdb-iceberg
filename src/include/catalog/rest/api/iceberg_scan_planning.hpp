@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb/common/types.hpp"
+#include "core/metadata/iceberg_file_identity.hpp"
 #include "duckdb/common/unordered_map.hpp"
 
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
@@ -16,8 +17,8 @@ struct IcebergTable;
 struct IcebergServerSideScanPlan {
 	vector<IcebergManifestListEntry> data_manifests;
 	vector<IcebergManifestListEntry> delete_manifests;
-	//! data-file path -> delete-file paths explicitly referenced by its FileScanTask.
-	case_insensitive_map_t<unordered_set<string>> delete_files_by_data_file;
+	//! data-file path -> file identities explicitly referenced by its FileScanTask.
+	unordered_map<string, unordered_set<IcebergFileIdentity, IcebergFileIdentityHash>> delete_files_by_data_file;
 	vector<rest_api_objects::StorageCredential> storage_credentials;
 	optional<string> plan_id;
 };

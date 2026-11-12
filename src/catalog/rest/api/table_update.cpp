@@ -141,6 +141,7 @@ UpgradeFormatVersion::UpgradeFormatVersion(int32_t format_version)
 
 void UpgradeFormatVersion::CreateUpdate(DatabaseInstance &db, ClientContext &context,
                                         IcebergCommitState &commit_state) const {
+	commit_state.SetFormatVersion(format_version);
 	commit_state.table_change.updates.push_back(rest_api_objects::TableUpdate());
 	auto &req = commit_state.table_change.updates.back();
 	req.upgrade_format_version_update = rest_api_objects::UpgradeFormatVersionUpdate();
@@ -280,8 +281,17 @@ void SetSnapshotRef::CreateUpdate(DatabaseInstance &db, ClientContext &context,
 	req.set_snapshot_ref_update = rest_api_objects::SetSnapshotRefUpdate();
 	req.set_snapshot_ref_update->base_update.action = "set-snapshot-ref";
 	req.set_snapshot_ref_update->ref_name = ref_name;
-	req.set_snapshot_ref_update->snapshot_reference.type = "branch";
-	req.set_snapshot_ref_update->snapshot_reference.snapshot_id = snapshot_id;
+	auto &snapshot_reference = req.set_snapshot_ref_update->snapshot_reference;
+	snapshot_reference.type = "branch";
+	auto &refs = commit_state.GetTableMetadata().refs;
+	if (refs) {
+		auto entry = refs->additional_properties.find(ref_name);
+		if (entry != refs->additional_properties.end()) {
+			// Updating the snapshot ID must preserve the reference's retention policy.
+			snapshot_reference = entry->second.Copy();
+		}
+	}
+	snapshot_reference.snapshot_id = snapshot_id;
 }
 
 } // namespace duckdb

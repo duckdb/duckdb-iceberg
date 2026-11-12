@@ -7,13 +7,7 @@ require-env AWS_ACCESS_KEY_ID
 
 require-env AWS_SECRET_ACCESS_KEY
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 require aws
 
@@ -26,7 +20,7 @@ CREATE SECRET iceberg_secret (
 statement ok
 attach '840140254803' as glue_catalog (
   type iceberg,
-  endpoint 'glue.us-east-1.amazonaws.com/iceberg',
+  URI 'glue.us-east-1.amazonaws.com/iceberg',
   AUTHORIZATION_TYPE 'sigv4'
 );
 

@@ -1,0 +1,73 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_deletion_vector_invalidation_versions.test
+# description: Transaction-wide invalidation tracking preserves the statement version that invalidated each deletion vector
+# group: [delete]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env TIMETRAVEL_SUPPORT
+
+include test/sql/init_requires
+
+require core_functions
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_dv_invalidation_versions;
+
+statement ok
+CREATE TABLE my_datalake.default.test_dv_invalidation_versions (id INT, part INT)
+PARTITIONED BY (part) WITH ('format-version' = 3);
+
+# The two partitions produce separate data files and therefore separate deletion vectors.
+statement ok
+INSERT INTO my_datalake.default.test_dv_invalidation_versions VALUES
+    (1, 10), (2, 10), (3, 20), (4, 20);
+
+statement ok
+DELETE FROM my_datalake.default.test_dv_invalidation_versions WHERE id IN (1, 3);
+
+statement ok
+BEGIN TRANSACTION;
+
+# Replace the deletion vector for part 10. The part 20 vector must remain active.
+statement ok
+DELETE FROM my_datalake.default.test_dv_invalidation_versions WHERE id = 2;
+
+query II
+SELECT * FROM my_datalake.default.test_dv_invalidation_versions ORDER BY id;
+----
+4	20
+
+# Replace the other deletion vector in a later snapshot of the same transaction.
+statement ok
+DELETE FROM my_datalake.default.test_dv_invalidation_versions WHERE id = 4;
+
+query I
+SELECT count(*) FROM my_datalake.default.test_dv_invalidation_versions;
+----
+0
+
+statement ok
+COMMIT;
+
+# The first snapshot committed by the transaction must not apply the second statement's invalidations.
+statement ok
+SET VARIABLE first_transaction_snapshot = (
+    SELECT snapshot_id::BIGINT
+    FROM iceberg_snapshots(my_datalake.default.test_dv_invalidation_versions)
+    WHERE sequence_number = 3
+);
+
+query II
+SELECT * FROM my_datalake.default.test_dv_invalidation_versions
+AT (VERSION => getvariable('first_transaction_snapshot'))
+ORDER BY id;
+----
+4	20
+
+query I
+SELECT count(*) FROM my_datalake.default.test_dv_invalidation_versions;
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.test_dv_invalidation_versions;

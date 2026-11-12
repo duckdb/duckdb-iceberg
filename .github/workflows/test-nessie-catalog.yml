@@ -99,8 +99,8 @@ jobs:
         env:
           NESSIE_SERVER_AVAILABLE: 1
         run: |
-          ./build/relassert/test/unittest --order lex "$PWD/test/sql/local/catalog_custom_setup/nessie/*" --list-test-names-only || true
-          ./build/relassert/test/unittest --order lex "$PWD/test/sql/local/catalog_custom_setup/nessie/*"
+          ./build/relassert/test/unittest --order lex "$PWD/test/sql/local/catalog_custom_setup/nessie/*" "exclude:*.test_slow" --list-test-names-only || true
+          ./build/relassert/test/unittest --order lex "$PWD/test/sql/local/catalog_custom_setup/nessie/*" "exclude:*.test_slow"
 
       - name: Generate data
         run: |
@@ -110,8 +110,8 @@ jobs:
         env:
           NESSIE_SERVER_AVAILABLE: 1
         run: |
-          ./build/relassert/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --list-test-names-only || true
-          ./build/relassert/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --test-config test/configs/nessie.json
+          ./build/relassert/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" "exclude:*.test_slow" --list-test-names-only || true
+          ./build/relassert/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" "exclude:*.test_slow" --test-config test/configs/nessie.json
 
       - name: Test reads with PyIceberg and Spark
         run: |

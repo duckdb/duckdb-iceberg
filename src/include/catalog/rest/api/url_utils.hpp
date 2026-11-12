@@ -31,7 +31,7 @@ public:
 	}
 	static IRCPathComponent NamespaceComponent(const vector<string> &items, const string &namespace_separator) {
 		auto raw = StringUtil::Join(items, items.size(), namespace_separator, [](const string &item) { return item; });
-		auto encoded = StringUtil::Join(items, items.size(), namespace_separator,
+		auto encoded = StringUtil::Join(items, items.size(), StringUtil::URLEncode(namespace_separator),
 		                                [](const string &item) { return StringUtil::URLEncode(item); });
 		return IRCPathComponent(raw, encoded);
 	}

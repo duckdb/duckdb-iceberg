@@ -1,0 +1,46 @@
+# name: test/sql/local/iceberg_scans/variant_schema.test
+# description: Parse variant types alongside primitives and inside nested types
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+statement ok
+COPY (SELECT '{
+  "format-version": 3,
+  "table-uuid": "00000000-0000-0000-0000-000000000001",
+  "location": "{TEST_DIR}",
+  "last-updated-ms": 0,
+  "last-column-id": 4,
+  "last-sequence-number": 0,
+  "next-row-id": 0,
+  "current-schema-id": 0,
+  "schemas": [{
+    "schema-id": 0,
+    "type": "struct",
+    "fields": [
+      {"id": 1, "name": "id", "required": false, "type": "int"},
+      {"id": 2, "name": "payload", "required": false, "type": "variant"},
+      {"id": 3, "name": "items", "required": false, "type": {
+        "type": "list", "element-id": 4, "element-required": false, "element": "variant"
+      }}
+    ]
+  }],
+  "partition-specs": [{"spec-id": 0, "fields": []}],
+  "default-spec-id": 0,
+  "sort-orders": [{"order-id": 0, "fields": []}],
+  "default-sort-order-id": 0,
+  "current-snapshot-id": null,
+  "snapshots": []
+}') TO '{TEST_DIR}/variant.metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+query TTTTTT
+DESCRIBE SELECT * FROM iceberg_scan('{TEST_DIR}/variant.metadata.json');
+----
+id	INTEGER	YES	NULL	NULL	NULL
+payload	VARIANT	YES	NULL	NULL	NULL
+items	VARIANT[]	YES	NULL	NULL	NULL
+
+query I
+SELECT count(*) FROM iceberg_scan('{TEST_DIR}/variant.metadata.json');
+----
+0

@@ -5,57 +5,82 @@
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
+#include "duckdb/planner/filter/table_filter_functions.hpp"
 #include "catalog/rest/api/iceberg_type.hpp"
 
 namespace duckdb {
 
+// Keep emitting legacy term/value operands so filters also work with catalogs
+// that predate the value-expression representation.
 rest_api_objects::Term IcebergExpression::ReferenceExpression(const string &column_name) {
 	rest_api_objects::Term result;
-	result.reference.emplace();
-	result.reference->value = column_name;
+	result.term_reference.emplace();
+	result.term_reference->value = column_name;
 	return result;
 }
 
-unique_ptr<rest_api_objects::Expression>
+unique_ptr<rest_api_objects::Predicate>
 IcebergExpression::LiteralExpression(const string &type, const string &column_name, const Value &value) {
 	if (value.IsNull()) {
 		return nullptr;
 	}
-	auto result = make_uniq<rest_api_objects::Expression>();
-	result->literal_expression.emplace();
-	result->literal_expression->type.value = type;
-	result->literal_expression->term = ReferenceExpression(column_name);
+	auto result = make_uniq<rest_api_objects::Predicate>();
+	result->comparison_predicate.emplace();
+	result->comparison_predicate->type.value = type;
+	result->comparison_predicate->term = ReferenceExpression(column_name);
 	try {
-		result->literal_expression->value = IcebergTypeHelper::PrimitiveTypeFromValue(value);
+		result->comparison_predicate->value.emplace();
+		result->comparison_predicate->value->primitive_type_value = IcebergTypeHelper::PrimitiveTypeFromValue(value);
 	} catch (...) {
 		return nullptr;
 	}
 	return result;
 }
 
-unique_ptr<rest_api_objects::Expression> IcebergExpression::UnaryExpression(const string &type,
-                                                                            const string &column_name) {
-	auto result = make_uniq<rest_api_objects::Expression>();
-	result->unary_expression.emplace();
-	result->unary_expression->type.value = type;
-	result->unary_expression->term = ReferenceExpression(column_name);
+unique_ptr<rest_api_objects::Predicate> IcebergExpression::UnaryExpression(const string &type,
+                                                                           const string &column_name) {
+	auto result = make_uniq<rest_api_objects::Predicate>();
+	result->unary_predicate.emplace();
+	result->unary_predicate->type.value = type;
+	result->unary_predicate->term = ReferenceExpression(column_name);
 	return result;
 }
 
-unique_ptr<rest_api_objects::Expression>
-IcebergExpression::AndExpression(unique_ptr<rest_api_objects::Expression> left,
-                                 unique_ptr<rest_api_objects::Expression> right) {
+unique_ptr<rest_api_objects::Predicate> IcebergExpression::SetExpression(const string &type, const string &column_name,
+                                                                         const vector<reference<const Value>> &values) {
+	auto result = make_uniq<rest_api_objects::Predicate>();
+	result->set_predicate.emplace();
+	result->set_predicate->type.value = type;
+	result->set_predicate->term = ReferenceExpression(column_name);
+	result->set_predicate->values.literals_one_of_1.emplace();
+	auto &literals = result->set_predicate->values.literals_one_of_1->value;
+	literals.reserve(values.size());
+	for (auto &value : values) {
+		try {
+			rest_api_objects::Literal literal;
+			literal.primitive_type_value = IcebergTypeHelper::PrimitiveTypeFromValue(value.get());
+			literals.push_back(std::move(literal));
+		} catch (...) {
+			return nullptr;
+		}
+	}
+	return result;
+}
+
+unique_ptr<rest_api_objects::Predicate>
+IcebergExpression::AndExpression(unique_ptr<rest_api_objects::Predicate> left,
+                                 unique_ptr<rest_api_objects::Predicate> right) {
 	if (!left) {
 		return right;
 	}
 	if (!right) {
 		return left;
 	}
-	auto result = make_uniq<rest_api_objects::Expression>();
-	result->and_or_expression.emplace();
-	result->and_or_expression->type.value = "and";
-	result->and_or_expression->left = std::move(left);
-	result->and_or_expression->right = std::move(right);
+	auto result = make_uniq<rest_api_objects::Predicate>();
+	result->and_or_predicate.emplace();
+	result->and_or_predicate->type.value = "and";
+	result->and_or_predicate->left = std::move(left);
+	result->and_or_predicate->right = std::move(right);
 	return result;
 }
 
@@ -78,12 +103,26 @@ optional<string> IcebergExpression::GetComparisonType(ExpressionType type, bool 
 	}
 }
 
-unique_ptr<rest_api_objects::Expression> IcebergExpression::TryConvertFilter(const Expression &expr,
-                                                                             const string &column_name) {
+unique_ptr<rest_api_objects::Predicate> IcebergExpression::TryConvertFilter(const Expression &expr,
+                                                                            const string &column_name) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		//! An optional filter wraps a predicate the scan may skip for performance but that the query
+		//! still implies, so the wrapped predicate is safe to send. IN lists arrive in this shape.
+		auto &func = expr.Cast<BoundFunctionExpression>();
+		auto &function_name = func.Function().GetName();
+		if (function_name == OptionalFilterScalarFun::NAME && func.BindInfo()) {
+			auto &data = func.BindInfo()->Cast<OptionalFilterFunctionData>();
+			return data.child_filter_expr ? TryConvertFilter(*data.child_filter_expr, column_name) : nullptr;
+		}
+		if (function_name == SelectivityOptionalFilterScalarFun::NAME && func.BindInfo()) {
+			auto &data = func.BindInfo()->Cast<SelectivityOptionalFilterFunctionData>();
+			return data.child_filter_expr ? TryConvertFilter(*data.child_filter_expr, column_name) : nullptr;
+		}
+	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conjunction = expr.Cast<BoundConjunctionExpression>();
 		const bool is_and = expr.GetExpressionType() == ExpressionType::CONJUNCTION_AND;
-		unique_ptr<rest_api_objects::Expression> result;
+		unique_ptr<rest_api_objects::Predicate> result;
 		for (auto &child : conjunction.GetChildren()) {
 			auto converted = TryConvertFilter(*child, column_name);
 			if (!converted) {
@@ -97,11 +136,11 @@ unique_ptr<rest_api_objects::Expression> IcebergExpression::TryConvertFilter(con
 				result = std::move(converted);
 				continue;
 			}
-			auto combined = make_uniq<rest_api_objects::Expression>();
-			combined->and_or_expression.emplace();
-			combined->and_or_expression->type.value = is_and ? "and" : "or";
-			combined->and_or_expression->left = std::move(result);
-			combined->and_or_expression->right = std::move(converted);
+			auto combined = make_uniq<rest_api_objects::Predicate>();
+			combined->and_or_predicate.emplace();
+			combined->and_or_predicate->type.value = is_and ? "and" : "or";
+			combined->and_or_predicate->left = std::move(result);
+			combined->and_or_predicate->right = std::move(converted);
 			result = std::move(combined);
 		}
 		return result;
@@ -127,13 +166,35 @@ unique_ptr<rest_api_objects::Expression> IcebergExpression::TryConvertFilter(con
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR) {
 		auto &op = expr.Cast<BoundOperatorExpression>();
+		auto expression_type = expr.GetExpressionType();
+		if (expression_type == ExpressionType::COMPARE_IN) {
+			//! IN has the column as its first child, followed by one child per value in the set.
+			auto &children = op.GetChildren();
+			if (children.size() < 2 || children[0]->GetExpressionClass() != ExpressionClass::BOUND_REF) {
+				return nullptr;
+			}
+			vector<reference<const Value>> values;
+			values.reserve(children.size() - 1);
+			for (idx_t i = 1; i < children.size(); i++) {
+				if (children[i]->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
+					return nullptr;
+				}
+				auto &constant = children[i]->Cast<BoundConstantExpression>();
+				if (constant.GetValue().IsNull()) {
+					//! A NULL in the set makes the comparison unknown rather than false; leave the set alone.
+					return nullptr;
+				}
+				values.emplace_back(constant.GetValue());
+			}
+			return SetExpression("in", column_name, values);
+		}
 		if (op.GetChildren().size() != 1 || op.GetChildren()[0]->GetExpressionClass() != ExpressionClass::BOUND_REF) {
 			return nullptr;
 		}
-		if (expr.GetExpressionType() == ExpressionType::OPERATOR_IS_NULL) {
+		if (expression_type == ExpressionType::OPERATOR_IS_NULL) {
 			return UnaryExpression("is-null", column_name);
 		}
-		if (expr.GetExpressionType() == ExpressionType::OPERATOR_IS_NOT_NULL) {
+		if (expression_type == ExpressionType::OPERATOR_IS_NOT_NULL) {
 			return UnaryExpression("not-null", column_name);
 		}
 	}

@@ -4,13 +4,7 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 
 statement ok
@@ -23,12 +17,13 @@ statement ok
 drop table if exists my_datalake.default.test_delete_table;
 
 statement ok
-create table my_datalake.default.test_delete_table (a int);
+create table my_datalake.default.test_delete_table (a int) with ('format-version' = 2);
 
 statement ok
 insert into my_datalake.default.test_delete_table select range a from range(1000);
 
-query I
+# _row_id is a v3 row lineage column, a v2 table doesn't have it
+statement error
 delete from my_datalake.default.test_delete_table where _row_id in (0, 2, 4, 6);
 ----
-0
+<REGEX>:.*Referenced column "_row_id" not found.*

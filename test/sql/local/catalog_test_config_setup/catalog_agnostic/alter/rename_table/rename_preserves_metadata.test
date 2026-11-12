@@ -1,0 +1,86 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/rename_table/rename_preserves_metadata.test
+# description: A committed rename preserves table identity, storage and snapshot state
+# group: [rename_table]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.rename_identity_source;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.rename_identity_target;
+
+statement ok
+CREATE TABLE my_datalake.default.rename_identity_source AS SELECT i::INTEGER id FROM range(3) t(i);
+
+statement ok
+SET VARIABLE before_rename = (
+	SELECT {
+		uuid: metadata."table-uuid",
+		location: metadata.location,
+		snapshot: metadata."current-snapshot-id"
+	}
+	FROM iceberg_load_table_response(my_datalake.default.rename_identity_source)
+);
+
+statement ok
+ALTER TABLE my_datalake.default.rename_identity_source RENAME TO rename_identity_target;
+
+query III
+SELECT
+	metadata."table-uuid" = getvariable('before_rename').uuid,
+	metadata.location = getvariable('before_rename').location,
+	metadata."current-snapshot-id" = getvariable('before_rename').snapshot
+FROM iceberg_load_table_response(my_datalake.default.rename_identity_target);
+----
+true	true	true
+
+# A fresh connection must see the published rename, not a transaction-local alias.
+query I fresh
+SELECT id FROM my_datalake.default.rename_identity_target ORDER BY id;
+----
+0
+1
+2
+
+statement error fresh
+SELECT * FROM my_datalake.default.rename_identity_source;
+----
+<REGEX>:.*does not exist.*
+
+# Reusing the old identifier must create an independent table.
+# Use a sibling directory; Polaris rejects overlapping table locations.
+statement ok
+CREATE TABLE my_datalake.default.rename_identity_source WITH (
+	'location' = rtrim(getvariable('before_rename').location::VARCHAR, '/') || '_reuse'
+) AS SELECT 99::INTEGER id;
+
+query I
+SELECT metadata."table-uuid" <> getvariable('before_rename').uuid
+FROM iceberg_load_table_response(my_datalake.default.rename_identity_source);
+----
+true
+
+statement ok
+INSERT INTO my_datalake.default.rename_identity_target VALUES (3);
+
+query I fresh
+SELECT id FROM my_datalake.default.rename_identity_target ORDER BY id;
+----
+0
+1
+2
+3
+
+query I fresh
+SELECT id FROM my_datalake.default.rename_identity_source;
+----
+99
+
+statement ok
+DROP TABLE my_datalake.default.rename_identity_source;
+
+statement ok
+DROP TABLE my_datalake.default.rename_identity_target;

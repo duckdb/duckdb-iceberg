@@ -1,11 +1,7 @@
 # name: test/sql/copy/basic_copy.test
 # group: [copy]
 
-require avro
-
-require parquet
-
-require iceberg
+include test/sql/init_requires
 
 require json
 

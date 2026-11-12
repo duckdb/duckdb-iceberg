@@ -1,0 +1,206 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/merge/test_merge_multiple_actions_transactions.test
+# description: Multi-action MERGE handles pending rows, snapshot history, rollback, and duplicate source matches.
+# group: [merge]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+require-env SNAPSHOT_HISTORY_SUPPORT
+
+require-env TIMETRAVEL_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+SET threads = 4;
+
+foreach version 2 3
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.merge_actions_transactions;
+
+statement ok
+CREATE TABLE my_datalake.default.merge_actions_transactions (id INTEGER, v VARCHAR)
+WITH ('format-version' = '{version}');
+
+statement ok
+INSERT INTO my_datalake.default.merge_actions_transactions VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd');
+
+statement ok
+BEGIN;
+
+# Pending v3 rows have NULL lineage, but their physical identities remain distinct.
+statement ok
+INSERT INTO my_datalake.default.merge_actions_transactions VALUES (5, 'e'), (6, 'f');
+
+query I
+MERGE INTO my_datalake.default.merge_actions_transactions t
+USING (VALUES (1, 'A'), (2, 'unused'), (5, 'E'), (7, 'g')) s(id, v) ON t.id = s.id
+WHEN MATCHED AND s.id = 1 THEN UPDATE SET v = s.v
+WHEN MATCHED AND s.id = 5 THEN UPDATE SET v = s.v
+WHEN MATCHED THEN DELETE
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v)
+WHEN NOT MATCHED BY SOURCE AND t.id = 6 THEN DELETE;
+----
+5
+
+query IT
+SELECT * FROM my_datalake.default.merge_actions_transactions ORDER BY id;
+----
+1	A
+3	c
+4	d
+5	E
+7	g
+
+# This execution replaces a transaction-local vector and rewrites a row inserted by the previous MERGE.
+query I
+MERGE INTO my_datalake.default.merge_actions_transactions t
+USING (VALUES (3, 'C'), (4, 'unused'), (7, 'G'), (8, 'h')) s(id, v) ON t.id = s.id
+WHEN MATCHED AND s.id = 3 THEN UPDATE SET v = s.v
+WHEN MATCHED AND s.id = 7 THEN UPDATE SET v = s.v
+WHEN MATCHED THEN DELETE
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
+----
+4
+
+query IT
+SELECT * FROM my_datalake.default.merge_actions_transactions ORDER BY id;
+----
+1	A
+3	C
+5	E
+7	G
+8	h
+
+statement ok
+COMMIT;
+
+query IT
+SELECT sequence_number, operation FROM iceberg_snapshots('my_datalake.default.merge_actions_transactions')
+ORDER BY sequence_number;
+----
+1	append
+2	append
+3	overwrite
+4	overwrite
+
+query IT
+SELECT * FROM my_datalake.default.merge_actions_transactions ORDER BY id;
+----
+1	A
+3	C
+5	E
+7	G
+8	h
+
+# Later statement invalidations must not change the first MERGE's committed snapshot.
+statement ok
+SET VARIABLE first_merge_snapshot = (
+    SELECT snapshot_id FROM iceberg_snapshots('my_datalake.default.merge_actions_transactions')
+    WHERE sequence_number = 3
+);
+
+query IT
+SELECT * FROM my_datalake.default.merge_actions_transactions
+AT (VERSION => getvariable('first_merge_snapshot')) ORDER BY id;
+----
+1	A
+3	c
+4	d
+5	E
+7	g
+
+statement ok
+BEGIN;
+
+query I
+MERGE INTO my_datalake.default.merge_actions_transactions t
+USING (VALUES (1, 'discarded'), (3, 'unused'), (9, 'discarded')) s(id, v) ON t.id = s.id
+WHEN MATCHED AND s.id = 1 THEN UPDATE SET v = s.v
+WHEN MATCHED THEN DELETE
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
+----
+3
+
+statement ok
+ROLLBACK;
+
+query IT
+SELECT * FROM my_datalake.default.merge_actions_transactions ORDER BY id;
+----
+1	A
+3	C
+5	E
+7	G
+8	h
+
+# Duplicate source matches spanning different actions must fail for committed and pending target rows.
+foreach duplicate_target 1 9
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.merge_actions_transactions VALUES (9, 'pending');
+
+statement error
+MERGE INTO my_datalake.default.merge_actions_transactions t
+USING (VALUES ({duplicate_target}, 'update'), ({duplicate_target}, 'delete')) s(id, action) ON t.id = s.id
+WHEN MATCHED AND s.action = 'update' THEN UPDATE SET v = 'discarded'
+WHEN MATCHED THEN DELETE;
+----
+cannot affect the same target row more than once
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT count(*) FROM iceberg_snapshots('my_datalake.default.merge_actions_transactions');
+----
+4
+
+query IT
+SELECT * FROM my_datalake.default.merge_actions_transactions ORDER BY id;
+----
+1	A
+3	C
+5	E
+7	G
+8	h
+
+endloop
+
+# A fresh execution with a different participant count must succeed after rollback.
+query I
+MERGE INTO my_datalake.default.merge_actions_transactions t
+USING (VALUES (1, 'A2'), (5, 'E2')) s(id, v) ON t.id = s.id
+WHEN MATCHED AND s.id = 1 THEN UPDATE SET v = s.v
+WHEN MATCHED THEN UPDATE SET v = s.v;
+----
+2
+
+query IT
+SELECT * FROM my_datalake.default.merge_actions_transactions ORDER BY id;
+----
+1	A2
+3	C
+5	E2
+7	G
+8	h
+
+query IT
+SELECT sequence_number, operation FROM iceberg_snapshots('my_datalake.default.merge_actions_transactions')
+ORDER BY sequence_number;
+----
+1	append
+2	append
+3	overwrite
+4	overwrite
+5	overwrite
+
+statement ok
+DROP TABLE my_datalake.default.merge_actions_transactions;
+
+endloop

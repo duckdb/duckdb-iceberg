@@ -95,6 +95,7 @@ static unique_ptr<FunctionData> SetIcebergTablePropertiesBind(ClientContext &con
 		auto &struct_children = StructValue::GetChildren(map_children[col_idx]);
 		auto &key = StringValue::Get(struct_children[0]);
 		auto &val = StringValue::Get(struct_children[1]);
+		IcebergTableMetadata::VerifyNotReservedProperty(key, "set_iceberg_table_properties()");
 		ret->properties.emplace(key, val);
 	}
 
@@ -126,7 +127,8 @@ static unique_ptr<FunctionData> RemoveIcebergTablePropertiesBind(ClientContext &
 	auto &remove_values = input.inputs[1];
 	auto &list_children = ListValue::GetChildren(remove_values);
 	for (idx_t col_idx = 0; col_idx < list_children.size(); col_idx++) {
-		auto &remove_property = StringValue::Get(list_children[0]);
+		auto &remove_property = StringValue::Get(list_children[col_idx]);
+		IcebergTableMetadata::VerifyNotReservedProperty(remove_property, "remove_iceberg_table_properties()");
 		ret->remove_properties.push_back(remove_property);
 	}
 
@@ -179,6 +181,10 @@ static void SetIcebergTablePropertiesFunction(ClientContext &context, TableFunct
 	ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTable &tbl) {
 		auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
 		transaction_data.TableSetProperties(bind_data.properties);
+		// Later statements, including write-mode checks, must see this transaction's property changes.
+		for (auto &property : bind_data.properties) {
+			tbl.table_metadata.table_properties[property.first] = property.second;
+		}
 	});
 
 	auto schema = iceberg_table->schema.name;
@@ -208,6 +214,9 @@ static void RemoveIcebergTablePropertiesFunction(ClientContext &context, TableFu
 	ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTable &tbl) {
 		auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
 		transaction_data.TableRemoveProperties(bind_data.remove_properties);
+		for (auto &property : bind_data.remove_properties) {
+			tbl.table_metadata.table_properties.erase(property);
+		}
 	});
 
 	auto schema = iceberg_table->schema.name;
@@ -268,8 +277,11 @@ static void GetIcebergTablePropertiesFunction(ClientContext &context, TableFunct
 TableFunctionSet IcebergFunctions::SetIcebergTablePropertiesFunctions() {
 	TableFunctionSet function_set("set_iceberg_table_properties");
 
-	auto fun = TableFunction({LogicalType::VARCHAR, LogicalType::ANY}, SetIcebergTablePropertiesFunction,
-	                         SetIcebergTablePropertiesBind, SetIcebergTablePropertiesGlobalTableFunctionState::Init);
+	auto fun = TableFunction(FunctionSignature()
+	                             .AddPositionalOnly("table_name", LogicalType::VARCHAR)
+	                             .AddPositionalOnly("properties", LogicalType::ANY),
+	                         SetIcebergTablePropertiesFunction, SetIcebergTablePropertiesBind,
+	                         SetIcebergTablePropertiesGlobalTableFunctionState::Init);
 	function_set.AddFunction(fun);
 
 	return function_set;
@@ -278,7 +290,9 @@ TableFunctionSet IcebergFunctions::SetIcebergTablePropertiesFunctions() {
 TableFunctionSet IcebergFunctions::RemoveIcebergTablePropertiesFunctions() {
 	TableFunctionSet function_set("remove_iceberg_table_properties");
 
-	auto fun = TableFunction({LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR)},
+	auto fun = TableFunction(FunctionSignature()
+	                             .AddPositionalOnly("table_name", LogicalType::VARCHAR)
+	                             .AddPositionalOnly("property_names", LogicalType::LIST(LogicalType::VARCHAR)),
 	                         RemoveIcebergTablePropertiesFunction, RemoveIcebergTablePropertiesBind,
 	                         SetIcebergTablePropertiesGlobalTableFunctionState::Init);
 	function_set.AddFunction(fun);
@@ -289,7 +303,8 @@ TableFunctionSet IcebergFunctions::RemoveIcebergTablePropertiesFunctions() {
 TableFunctionSet IcebergFunctions::GetIcebergTablePropertiesFunctions() {
 	TableFunctionSet function_set("iceberg_table_properties");
 
-	auto fun = TableFunction({LogicalType::VARCHAR}, GetIcebergTablePropertiesFunction, GetIcebergTablePropertiesBind,
+	auto fun = TableFunction(FunctionSignature().AddPositionalOnly("table_name", LogicalType::VARCHAR),
+	                         GetIcebergTablePropertiesFunction, GetIcebergTablePropertiesBind,
 	                         SetIcebergTablePropertiesGlobalTableFunctionState::Init);
 	function_set.AddFunction(fun);
 

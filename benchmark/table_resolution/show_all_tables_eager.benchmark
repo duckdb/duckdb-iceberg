@@ -1,0 +1,48 @@
+# name: benchmark/table_resolution/show_all_tables_eager.benchmark
+# description: SHOW ALL TABLES against a catalog attached with TABLE_RESOLUTION 'eager'
+# group: [table_resolution]
+
+name SHOW ALL TABLES - eager table resolution
+group table_resolution
+subgroup eager
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# REQUIRES toxiproxy on 127.0.0.1:8182, in front of the fixture catalog on 8181.
+# cannot inject a delay via debug_fs since the http calls are not filesystem calls
+#
+# The fixture runs on localhost, and toxiproxy adds a jitter delay so we can consistently test this
+# The commands below run the toxiproxy server 
+#
+#   toxiproxy-server > /dev/null 2>&1 &
+#   toxiproxy-cli create --listen 127.0.0.1:8182 --upstream 127.0.0.1:8181 iceberg-catalog
+#   toxiproxy-cli toxic add --type latency --attribute latency=50 --attribute jitter=5 iceberg-catalog
+
+init
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+load benchmark/load_helpers/create_many_tables.sql
+
+run
+DETACH IF EXISTS my_datalake;
+ATTACH OR REPLACE '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    URI 'http://127.0.0.1:8182',
+    TABLE_RESOLUTION 'eager'
+);
+SELECT * FROM information_schema.columns;

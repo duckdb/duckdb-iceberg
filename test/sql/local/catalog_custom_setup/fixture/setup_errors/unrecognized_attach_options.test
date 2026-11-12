@@ -3,18 +3,12 @@
 
 require-env FIXTURE_SERVER_AVAILABLE
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 statement error
 attach '' as my_datalake (
 	TYPE ICEBERG,
-	ENDPOINT 'http://127.0.0.1:8181',
+	URI 'http://127.0.0.1:8181',
 	SIGNER 'test'
 )
 ----

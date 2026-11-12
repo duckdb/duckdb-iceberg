@@ -1,0 +1,257 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_nan_null_count_pruning.test
+# description: Prune safely across NaN/NULL mixtures, metrics changes, appends, updates and deletes
+# group: [filtering]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SCAN_PLANNING_MODE client
+
+include test/sql/init_requires
+
+statement ok
+SET threads=1;
+
+statement ok
+CALL enable_logging('Iceberg');
+
+foreach type FLOAT DOUBLE
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.nan_null_pruning;
+
+statement ok
+CREATE TABLE my_datalake.default.nan_null_pruning (batch_id INTEGER, x {type})
+WITH (
+	'write.metadata.metrics.default'='none',
+	'write.metadata.metrics.column.batch_id'='full'
+);
+
+statement ok
+CREATE OR REPLACE TEMP TABLE nan_null_expected (batch_id INTEGER, x {type});
+
+statement ok
+CREATE OR REPLACE TEMP TABLE nan_null_expected_files (
+	batch_id INTEGER, metrics VARCHAR, value_count BIGINT, null_count BIGINT, nan_count BIGINT
+);
+
+statement ok
+SET VARIABLE nan_batch = 0;
+
+# Later inserts coexist with earlier files whose metrics were disabled or
+# counts-only. 'none' omits both counts and bounds; 'counts' omits only bounds.
+foreach metrics none counts full
+
+statement ok
+ALTER TABLE my_datalake.default.nan_null_pruning SET ('write.metadata.metrics.column.x'='{metrics}');
+
+foreach mixture finite_only finite_nulls finite_nans finite_nans_nulls nans_only nans_nulls nulls_only
+
+statement ok
+SET VARIABLE nan_batch = getvariable('nan_batch') + 1;
+
+# Two NaNs and three NULLs keep the metrics distinct. Small serial inserts
+# produce one data file per mixture, including files without finite bounds.
+statement ok
+INSERT INTO nan_null_expected
+SELECT getvariable('nan_batch'), x::{type}
+FROM (VALUES
+	('finite', '1'),
+	('finite', '3'),
+	('nans', 'NaN'),
+	('nans', '-NaN'),
+	('nulls', NULL),
+	('nulls', NULL),
+	('nulls', NULL)
+) t(kind, x)
+WHERE contains('{mixture}', kind);
+
+statement ok
+INSERT INTO nan_null_expected_files
+SELECT getvariable('nan_batch'), '{metrics}', count(*),
+	count(*) FILTER (WHERE x IS NULL), count(*) FILTER (WHERE isnan(x))
+FROM nan_null_expected WHERE batch_id = getvariable('nan_batch');
+
+statement ok
+INSERT INTO my_datalake.default.nan_null_pruning
+SELECT * FROM nan_null_expected WHERE batch_id = getvariable('nan_batch');
+
+endloop
+
+# Match stats to the batch using its bounds, so missing entries and counts
+# attached to another file cannot hide behind a correct table-wide total.
+statement ok
+CREATE OR REPLACE TEMP TABLE nan_null_stats AS
+WITH stats AS (SELECT * FROM iceberg_column_stats(my_datalake.default.nan_null_pruning))
+SELECT b.lower_bound::INTEGER AS batch_id,
+	x.value_count, x.null_value_count, x.nan_value_count, x.lower_bound, x.upper_bound
+FROM stats x JOIN stats b USING (file_path)
+WHERE x.column_name = 'x' AND b.column_name = 'batch_id';
+
+query I
+SELECT count(*) = getvariable('nan_batch') FROM nan_null_stats;
+----
+true
+
+query I
+SELECT count(*) FROM nan_null_stats s FULL JOIN nan_null_expected_files e USING (batch_id)
+WHERE s.batch_id IS NULL OR e.batch_id IS NULL
+	OR s.value_count IS DISTINCT FROM CASE WHEN e.metrics <> 'none' THEN e.value_count END
+	OR s.null_value_count IS DISTINCT FROM CASE WHEN e.metrics <> 'none' THEN e.null_count END
+	OR s.nan_value_count IS DISTINCT FROM CASE WHEN e.metrics <> 'none' THEN e.nan_count END
+	OR s.lower_bound IS DISTINCT FROM CASE
+		WHEN e.metrics = 'full' AND e.value_count > e.null_count + e.nan_count THEN '1.0' END
+	OR s.upper_bound IS DISTINCT FROM CASE
+		WHEN e.metrics = 'full' AND e.value_count > e.null_count + e.nan_count THEN '3.0' END;
+----
+0
+
+# NaNs satisfy > and >= even though finite bounds stop at 3. NULLs do not.
+foreach op > >=
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT (SELECT count(*) FROM my_datalake.default.nan_null_pruning WHERE x {op} 5) =
+	(SELECT count(*) FROM nan_null_expected WHERE x {op} 5);
+----
+true
+
+# All-NULL files with known counts can be pruned even without bounds. Other
+# files need finite bounds and an explicit zero NaN count for this predicate.
+query I
+SELECT count(*) = (
+	SELECT count(*) FROM nan_null_expected_files
+	WHERE (metrics <> 'none' AND value_count = null_count)
+		OR (metrics = 'full' AND nan_count = 0 AND value_count > null_count)
+)
+FROM duckdb_logs() WHERE type = 'Iceberg' AND message LIKE '%skipped ''data_file''%';
+----
+true
+
+endloop
+
+query I
+SELECT (SELECT count(*) FROM my_datalake.default.nan_null_pruning WHERE x = 'NaN'::{type}) =
+	(SELECT count(*) FROM nan_null_expected WHERE x = 'NaN'::{type});
+----
+true
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT (SELECT count(*) FROM my_datalake.default.nan_null_pruning WHERE x IS NULL) =
+	(SELECT count(*) FROM nan_null_expected WHERE x IS NULL);
+----
+true
+
+query I
+SELECT count(*) = (
+	SELECT count(*) FROM nan_null_expected_files WHERE metrics <> 'none' AND null_count = 0
+)
+FROM duckdb_logs() WHERE type = 'Iceberg' AND message LIKE '%skipped ''data_file''%';
+----
+true
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT (SELECT count(*) FROM my_datalake.default.nan_null_pruning WHERE x IS NOT NULL) =
+	(SELECT count(*) FROM nan_null_expected WHERE x IS NOT NULL);
+----
+true
+
+query I
+SELECT count(*) = (
+	SELECT count(*) FROM nan_null_expected_files WHERE metrics <> 'none' AND value_count = null_count
+)
+FROM duckdb_logs() WHERE type = 'Iceberg' AND message LIKE '%skipped ''data_file''%';
+----
+true
+
+foreach op < <= = !=
+
+query I
+SELECT (SELECT count(*) FROM my_datalake.default.nan_null_pruning WHERE x {op} 1) =
+	(SELECT count(*) FROM nan_null_expected WHERE x {op} 1);
+----
+true
+
+endloop
+
+query I
+SELECT (SELECT count(*) FROM my_datalake.default.nan_null_pruning WHERE x IS DISTINCT FROM 'NaN'::{type}) =
+	(SELECT count(*) FROM nan_null_expected WHERE x IS DISTINCT FROM 'NaN'::{type});
+----
+true
+
+query I
+SELECT (SELECT count(*) FROM my_datalake.default.nan_null_pruning WHERE x IS NOT DISTINCT FROM 'NaN'::{type}) =
+	(SELECT count(*) FROM nan_null_expected WHERE x IS NOT DISTINCT FROM 'NaN'::{type});
+----
+true
+
+query I
+SELECT (SELECT count(*) FROM my_datalake.default.nan_null_pruning WHERE x > 5 OR x IS NULL) =
+	(SELECT count(*) FROM nan_null_expected WHERE x > 5 OR x IS NULL);
+----
+true
+
+query I
+SELECT (SELECT count(*) FROM my_datalake.default.nan_null_pruning WHERE x = 'NaN'::{type} OR x IS NULL) =
+	(SELECT count(*) FROM nan_null_expected WHERE x = 'NaN'::{type} OR x IS NULL);
+----
+true
+
+query I
+SELECT (SELECT count(*) FROM my_datalake.default.nan_null_pruning WHERE x > 5 AND x IS NOT NULL) =
+	(SELECT count(*) FROM nan_null_expected WHERE x > 5 AND x IS NOT NULL);
+----
+true
+
+endloop
+
+# Updating an old file with missing metrics writes new NaN stats. Deleting
+# some NULLs then exercises the same predicates with positional deletes.
+statement ok
+UPDATE my_datalake.default.nan_null_pruning SET x = 'NaN'::{type} WHERE batch_id = 1 AND x = 1;
+
+statement ok
+UPDATE nan_null_expected SET x = 'NaN'::{type} WHERE batch_id = 1 AND x = 1;
+
+statement ok
+DELETE FROM my_datalake.default.nan_null_pruning WHERE batch_id % 2 = 0 AND x IS NULL;
+
+statement ok
+DELETE FROM nan_null_expected WHERE batch_id % 2 = 0 AND x IS NULL;
+
+query I
+SELECT count(*) FROM (
+	(SELECT * FROM my_datalake.default.nan_null_pruning EXCEPT ALL SELECT * FROM nan_null_expected)
+	UNION ALL
+	(SELECT * FROM nan_null_expected EXCEPT ALL SELECT * FROM my_datalake.default.nan_null_pruning)
+);
+----
+0
+
+query I
+SELECT (SELECT count(*) FROM my_datalake.default.nan_null_pruning WHERE x > 5 OR x IS NULL) =
+	(SELECT count(*) FROM nan_null_expected WHERE x > 5 OR x IS NULL);
+----
+true
+
+query I
+SELECT (SELECT count(*) FROM my_datalake.default.nan_null_pruning WHERE x IS NOT DISTINCT FROM 'NaN'::{type}) =
+	(SELECT count(*) FROM nan_null_expected WHERE x IS NOT DISTINCT FROM 'NaN'::{type});
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.nan_null_pruning;
+
+endloop
+
+statement ok
+RESET threads;

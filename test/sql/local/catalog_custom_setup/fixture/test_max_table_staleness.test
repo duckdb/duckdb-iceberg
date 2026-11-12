@@ -4,13 +4,7 @@
 
 require-env FIXTURE_SERVER_AVAILABLE
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 # Do not ignore 'HTTP' error messages!
 set ignore_error_messages
@@ -34,7 +28,7 @@ ATTACH '' AS my_datalake (
     TYPE ICEBERG,
     CLIENT_ID 'admin',
     CLIENT_SECRET 'password',
-    ENDPOINT 'http://127.0.0.1:8181',
+    URI 'http://127.0.0.1:8181',
     MAX_TABLE_STALENESS '5 minutes'
 );
 
@@ -64,7 +58,7 @@ ATTACH OR REPLACE '' AS my_datalake (
     TYPE ICEBERG,
     CLIENT_ID 'admin',
     CLIENT_SECRET 'password',
-    ENDPOINT 'http://127.0.0.1:8181',
+    URI 'http://127.0.0.1:8181',
     MAX_TABLE_STALENESS '10 seconds'
 );
 
@@ -94,7 +88,7 @@ ATTACH OR REPLACE '' AS my_datalake (
     TYPE ICEBERG,
     CLIENT_ID 'admin',
     CLIENT_SECRET 'password',
-    ENDPOINT 'http://127.0.0.1:8181',
+    URI 'http://127.0.0.1:8181',
     MAX_TABLE_STALENESS '4 hours'
 );
 
@@ -124,7 +118,7 @@ ATTACH OR REPLACE '' AS my_datalake (
     TYPE ICEBERG,
     CLIENT_ID 'admin',
     CLIENT_SECRET 'password',
-    ENDPOINT 'http://127.0.0.1:8181',
+    URI 'http://127.0.0.1:8181',
     MAX_TABLE_STALENESS '10 seconds'
 );
 
@@ -157,7 +151,7 @@ ATTACH OR REPLACE '' AS my_datalake (
     TYPE ICEBERG,
     CLIENT_ID 'admin',
     CLIENT_SECRET 'password',
-    ENDPOINT 'http://127.0.0.1:8181',
+    URI 'http://127.0.0.1:8181',
     MAX_TABLE_STALENESS 'blah blah'
 );
 ----
@@ -168,7 +162,7 @@ ATTACH OR REPLACE '' AS my_datalake (
     TYPE ICEBERG,
     CLIENT_ID 'admin',
     CLIENT_SECRET 'password',
-    ENDPOINT 'http://127.0.0.1:8181',
+    URI 'http://127.0.0.1:8181',
     MAX_TABLE_STALENESS '1000000 years'
 );
 ----

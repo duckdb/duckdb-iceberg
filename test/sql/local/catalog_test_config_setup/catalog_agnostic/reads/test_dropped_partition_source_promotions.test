@@ -1,0 +1,131 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/test_dropped_partition_source_promotions.test
+# description: Dropped partition sources use their widest historical type when scanning manifests
+# group: [reads]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+# INTEGER -> BIGINT: the promoted value cannot be represented by the original type.
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.dropped_partition_source_integer;
+
+statement ok
+CREATE TABLE my_datalake.default.dropped_partition_source_integer (p INTEGER, payload INTEGER)
+PARTITIONED BY (p) WITH ('format-version' = '2', 'commit.manifest-merge.enabled' = 'false');
+
+statement ok
+INSERT INTO my_datalake.default.dropped_partition_source_integer VALUES (1, 10);
+
+statement ok
+ALTER TABLE my_datalake.default.dropped_partition_source_integer ALTER COLUMN p TYPE BIGINT;
+
+statement ok
+INSERT INTO my_datalake.default.dropped_partition_source_integer VALUES (2147483648, 20);
+
+statement ok
+ALTER TABLE my_datalake.default.dropped_partition_source_integer RESET PARTITIONED BY;
+
+statement ok
+ALTER TABLE my_datalake.default.dropped_partition_source_integer DROP COLUMN p;
+
+statement ok
+INSERT INTO my_datalake.default.dropped_partition_source_integer VALUES (30);
+
+query I
+SELECT payload FROM my_datalake.default.dropped_partition_source_integer ORDER BY payload;
+----
+10
+20
+30
+
+query I
+SELECT payload FROM my_datalake.default.dropped_partition_source_integer WHERE payload = 20;
+----
+20
+
+statement ok
+DROP TABLE my_datalake.default.dropped_partition_source_integer;
+
+# FLOAT -> DOUBLE: the promoted value cannot be represented by the original type.
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.dropped_partition_source_float;
+
+statement ok
+CREATE TABLE my_datalake.default.dropped_partition_source_float (p FLOAT, payload INTEGER)
+PARTITIONED BY (p) WITH ('format-version' = '2', 'commit.manifest-merge.enabled' = 'false');
+
+statement ok
+INSERT INTO my_datalake.default.dropped_partition_source_float VALUES (1, 10);
+
+statement ok
+ALTER TABLE my_datalake.default.dropped_partition_source_float ALTER COLUMN p TYPE DOUBLE;
+
+statement ok
+INSERT INTO my_datalake.default.dropped_partition_source_float VALUES (1e100, 20);
+
+statement ok
+ALTER TABLE my_datalake.default.dropped_partition_source_float RESET PARTITIONED BY;
+
+statement ok
+ALTER TABLE my_datalake.default.dropped_partition_source_float DROP COLUMN p;
+
+statement ok
+INSERT INTO my_datalake.default.dropped_partition_source_float VALUES (30);
+
+query I
+SELECT payload FROM my_datalake.default.dropped_partition_source_float ORDER BY payload;
+----
+10
+20
+30
+
+query I
+SELECT payload FROM my_datalake.default.dropped_partition_source_float WHERE payload = 20;
+----
+20
+
+statement ok
+DROP TABLE my_datalake.default.dropped_partition_source_float;
+
+# DECIMAL(9, 2) -> DECIMAL(18, 2): the promoted value cannot be represented by the original type.
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.dropped_partition_source_decimal;
+
+statement ok
+CREATE TABLE my_datalake.default.dropped_partition_source_decimal (p DECIMAL(9, 2), payload INTEGER)
+PARTITIONED BY (p) WITH ('format-version' = '2', 'commit.manifest-merge.enabled' = 'false');
+
+statement ok
+INSERT INTO my_datalake.default.dropped_partition_source_decimal VALUES (1, 10);
+
+statement ok
+ALTER TABLE my_datalake.default.dropped_partition_source_decimal ALTER COLUMN p TYPE DECIMAL(18, 2);
+
+statement ok
+INSERT INTO my_datalake.default.dropped_partition_source_decimal VALUES (1234567890.12, 20);
+
+statement ok
+ALTER TABLE my_datalake.default.dropped_partition_source_decimal RESET PARTITIONED BY;
+
+statement ok
+ALTER TABLE my_datalake.default.dropped_partition_source_decimal DROP COLUMN p;
+
+statement ok
+INSERT INTO my_datalake.default.dropped_partition_source_decimal VALUES (30);
+
+query I
+SELECT payload FROM my_datalake.default.dropped_partition_source_decimal ORDER BY payload;
+----
+10
+20
+30
+
+query I
+SELECT payload FROM my_datalake.default.dropped_partition_source_decimal WHERE payload = 20;
+----
+20
+
+statement ok
+DROP TABLE my_datalake.default.dropped_partition_source_decimal;
+

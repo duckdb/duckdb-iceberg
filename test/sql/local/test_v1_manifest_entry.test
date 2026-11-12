@@ -2,13 +2,7 @@
 # description: Read a V1 manifest entry with a NULL snapshot_id
 # group: [local]
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 require core_functions
 

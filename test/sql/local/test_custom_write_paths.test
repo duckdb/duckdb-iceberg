@@ -2,11 +2,7 @@
 # description: test that write.data.path and write.metadata.path properties are properly parsed
 # group: [local]
 
-require avro
-
-require parquet
-
-require iceberg
+include test/sql/init_requires
 
 # Test that a table with custom write.data.path and write.metadata.path properties can be read
 # and the properties are properly parsed from the metadata

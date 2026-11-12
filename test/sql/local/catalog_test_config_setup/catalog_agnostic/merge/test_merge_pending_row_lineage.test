@@ -1,0 +1,162 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/merge/test_merge_pending_row_lineage.test
+# description: MERGE uses physical target identity when row lineage is NULL.
+# group: [merge]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.merge_pending_lineage;
+
+statement ok
+CREATE TABLE my_datalake.default.merge_pending_lineage (id INTEGER, val INTEGER) WITH ('format-version' = 3);
+
+statement ok
+INSERT INTO my_datalake.default.merge_pending_lineage VALUES (0, 0);
+
+statement ok
+BEGIN;
+
+# Two targets share a data file and both have NULL lineage.
+statement ok
+INSERT INTO my_datalake.default.merge_pending_lineage VALUES (1, 10), (2, 20);
+
+statement ok
+MERGE INTO my_datalake.default.merge_pending_lineage t
+USING (VALUES (1, 11), (2, 21), (3, 30)) s(id, val) ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET val = s.val
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.val);
+
+query IIII
+SELECT id, val, _row_id, _last_updated_sequence_number FROM my_datalake.default.merge_pending_lineage ORDER BY id;
+----
+0	0	0	1
+1	11	NULL	NULL
+2	21	NULL	NULL
+3	30	NULL	NULL
+
+# A later MERGE rewrites both an assigned and an unassigned row.
+statement ok
+MERGE INTO my_datalake.default.merge_pending_lineage t
+USING (VALUES (0, 1), (1, 12)) s(id, val) ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET val = s.val;
+
+query IIII
+SELECT id, val, _row_id, _last_updated_sequence_number
+FROM my_datalake.default.merge_pending_lineage WHERE id IN (0, 1) ORDER BY id;
+----
+0	1	0	NULL
+1	12	NULL	NULL
+
+statement ok
+MERGE INTO my_datalake.default.merge_pending_lineage t
+USING (VALUES (2)) s(id) ON t.id = s.id
+WHEN MATCHED THEN DELETE;
+
+statement ok
+MERGE INTO my_datalake.default.merge_pending_lineage t
+USING (VALUES (0), (1)) s(id) ON t.id = s.id
+WHEN NOT MATCHED BY SOURCE THEN DELETE;
+
+query II
+SELECT id, val FROM my_datalake.default.merge_pending_lineage ORDER BY id;
+----
+0	1
+1	12
+
+statement ok
+COMMIT;
+
+query III
+SELECT count(*), count(DISTINCT _row_id), min(_row_id) FILTER (WHERE id = 0)
+FROM my_datalake.default.merge_pending_lineage;
+----
+2	2	0
+
+statement ok
+DROP TABLE my_datalake.default.merge_pending_lineage;
+
+# Upgraded rows also have NULL lineage before the first V3 data commit.
+statement ok
+CREATE TABLE my_datalake.default.merge_pending_lineage (id INTEGER, val INTEGER) WITH ('format-version' = 2);
+
+statement ok
+INSERT INTO my_datalake.default.merge_pending_lineage VALUES (1, 10), (2, 20);
+
+statement ok
+ALTER TABLE my_datalake.default.merge_pending_lineage SET ('format-version' = 3);
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.merge_pending_lineage VALUES (3, 30);
+
+query III
+SELECT id, _row_id, _last_updated_sequence_number FROM my_datalake.default.merge_pending_lineage ORDER BY id;
+----
+1	NULL	NULL
+2	NULL	NULL
+3	NULL	NULL
+
+statement ok
+MERGE INTO my_datalake.default.merge_pending_lineage t
+USING (VALUES (2, 21), (3, 31), (4, 40)) s(id, val) ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET val = s.val
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.val);
+
+query IIII
+SELECT id, val, _row_id, _last_updated_sequence_number FROM my_datalake.default.merge_pending_lineage ORDER BY id;
+----
+1	10	NULL	NULL
+2	21	NULL	NULL
+3	31	NULL	NULL
+4	40	NULL	NULL
+
+statement ok
+COMMIT;
+
+query II
+SELECT count(*), count(DISTINCT _row_id) FROM my_datalake.default.merge_pending_lineage;
+----
+4	4
+
+query I
+SELECT metadata."next-row-id"::BIGINT > (SELECT max(_row_id) FROM my_datalake.default.merge_pending_lineage)
+FROM iceberg_load_table_response('my_datalake.default.merge_pending_lineage');
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.merge_pending_lineage;
+
+# Physical identity still detects two source rows matching the same pending target.
+statement ok
+CREATE TABLE my_datalake.default.merge_pending_lineage (id INTEGER, val INTEGER) WITH ('format-version' = 3);
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.merge_pending_lineage VALUES (1, 10), (2, 20);
+
+statement error
+MERGE INTO my_datalake.default.merge_pending_lineage t
+USING (VALUES (1, 11), (1, 12)) s(id, val) ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET val = s.val;
+----
+cannot affect the same target row more than once
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT count(*) FROM my_datalake.default.merge_pending_lineage;
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.merge_pending_lineage;

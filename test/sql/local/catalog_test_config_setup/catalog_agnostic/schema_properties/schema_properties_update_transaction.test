@@ -3,6 +3,8 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
+require-env NAMESPACE_PROPERTIES_SUPPORT
+
 statement ok
 DROP SCHEMA IF EXISTS my_datalake.myschema123;
 

@@ -4,13 +4,7 @@
 
 require-env FIXTURE_SERVER_AVAILABLE
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 set ignore_error_messages
 
@@ -20,7 +14,7 @@ CALL enable_logging('HTTP');
 statement ok
 set logging_level='debug';
 
-# Create S3 storage secret for MinIO
+# Create S3 storage secret for SeaweedFS
 statement ok
 CREATE SECRET (
     TYPE S3,
@@ -38,7 +32,7 @@ ATTACH '' AS expiry_lake (
     CLIENT_ID 'admin',
     CLIENT_SECRET 'password',
     OAUTH2_SERVER_URI 'http://127.0.0.1:8181/v1/oauth/tokens',
-    ENDPOINT 'http://127.0.0.1:8181'
+    URI 'http://127.0.0.1:8181'
 );
 
 # Verify the initial token fetch happened

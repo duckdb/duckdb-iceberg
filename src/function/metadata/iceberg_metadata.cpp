@@ -102,6 +102,15 @@ static unique_ptr<FunctionData> IcebergMetaDataBind(ClientContext &context, Tabl
 	auto input_string = input.inputs[0].ToString();
 	auto resolved_metadata = IcebergUtils::ResolveTableMetadata(context, input_string, options);
 
+	auto expected_table_uuid = input.named_parameters.find("expected_table_uuid");
+	if (expected_table_uuid != input.named_parameters.end()) {
+		auto expected = expected_table_uuid->second.ToString();
+		auto &table_uuid = resolved_metadata.metadata.table_uuid;
+		if (!StringUtil::CIEquals(expected, table_uuid)) {
+			throw InvalidInputException("Table UUID mismatch: expected '%s', found '%s'", expected, table_uuid);
+		}
+	}
+
 	auto snapshot_to_scan = resolved_metadata.metadata.GetSnapshot(*options.snapshot_lookup);
 
 	if (snapshot_to_scan.snapshot) {
@@ -151,17 +160,14 @@ static void IcebergMetaDataFunction(ClientContext &context, TableFunctionInput &
 				output.SetChildCardinality(out);
 				return;
 			}
-			auto &manifest = table_entry.file;
+			auto &manifest = table_entry.GetFile();
 			auto &manifest_entry = entries[global_state.current_manifest_entry_idx];
 			auto &data_file = manifest_entry.data_file;
 
 			//! manifest_path
 			AddString(output.data[0], out, string_t(manifest.manifest_path));
 			//! manifest_sequence_number
-			if (!manifest.sequence_number) {
-				throw InvalidConfigurationException("manifest_file.sequence_number is not set");
-			}
-			FlatVector::GetDataMutable<int64_t>(output.data[1])[out] = *manifest.sequence_number;
+			FlatVector::GetDataMutable<int64_t>(output.data[1])[out] = manifest.sequence_number;
 			//! manifest_content
 			AddString(output.data[2], out, string_t(IcebergManifestContentTypeToString(manifest.content)));
 
@@ -175,8 +181,19 @@ static void IcebergMetaDataFunction(ClientContext &context, TableFunctionInput &
 			AddString(output.data[6], out, string_t(data_file.file_format));
 			//! record_count
 			FlatVector::GetDataMutable<int64_t>(output.data[7])[out] = data_file.record_count;
-			FlatVector::GetDataMutable<int64_t>(output.data[8])[out] = manifest_entry.GetSequenceNumber(manifest);
-			FlatVector::GetDataMutable<int64_t>(output.data[9])[out] = manifest_entry.GetFileSequenceNumber(manifest);
+			//! data_sequence_number / file_sequence_number: NULL when an EXISTING/DELETED entry has none
+			auto data_sequence_number = manifest_entry.TryGetSequenceNumber(manifest);
+			if (data_sequence_number) {
+				FlatVector::GetDataMutable<int64_t>(output.data[8])[out] = *data_sequence_number;
+			} else {
+				FlatVector::SetNull(output.data[8], out, true);
+			}
+			auto file_sequence_number = manifest_entry.TryGetFileSequenceNumber(manifest);
+			if (file_sequence_number) {
+				FlatVector::GetDataMutable<int64_t>(output.data[9])[out] = *file_sequence_number;
+			} else {
+				FlatVector::SetNull(output.data[9], out, true);
+			}
 			out++;
 		}
 		global_state.current_manifest_entry_idx = 0;
@@ -187,14 +204,18 @@ static void IcebergMetaDataFunction(ClientContext &context, TableFunctionInput &
 TableFunctionSet IcebergFunctions::GetIcebergMetadataFunction() {
 	TableFunctionSet function_set("iceberg_metadata");
 
-	auto fun = TableFunction({LogicalType::VARCHAR}, IcebergMetaDataFunction, IcebergMetaDataBind,
-	                         IcebergMetaDataGlobalTableFunctionState::Init);
-	fun.named_parameters["allow_moved_paths"] = LogicalType::BOOLEAN;
-	fun.named_parameters["metadata_compression_codec"] = LogicalType::VARCHAR;
-	fun.named_parameters["version"] = LogicalType::VARCHAR;
-	fun.named_parameters["version_name_format"] = LogicalType::VARCHAR;
-	fun.named_parameters["snapshot_from_timestamp"] = LogicalType::TIMESTAMP_MS;
-	fun.named_parameters["snapshot_from_id"] = LogicalType::UBIGINT;
+	auto fun =
+	    TableFunction(FunctionSignature().AddPositionalOnly("path", LogicalType::VARCHAR), IcebergMetaDataFunction,
+	                  IcebergMetaDataBind, IcebergMetaDataGlobalTableFunctionState::Init);
+	fun.GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
+		options.Add("allow_moved_paths", LogicalType::BOOLEAN)
+		    .Add("metadata_compression_codec", LogicalType::VARCHAR)
+		    .Add("version", LogicalType::ANY)
+		    .Add("version_name_format", LogicalType::VARCHAR)
+		    .Add("snapshot_from_timestamp", LogicalType::ANY)
+		    .Add("snapshot_from_id", LogicalType::UBIGINT)
+		    .Add("expected_table_uuid", LogicalType::VARCHAR);
+	});
 	function_set.AddFunction(fun);
 
 	return function_set;

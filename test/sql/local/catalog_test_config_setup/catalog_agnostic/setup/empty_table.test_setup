@@ -1,0 +1,11 @@
+# Small fixture: reset on every include.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.empty_table;
+
+statement ok
+CREATE TABLE my_datalake.default.empty_table (
+     col1 date,
+     col2 integer,
+     col3 VARCHAR
+) WITH ('format-version' = '2');

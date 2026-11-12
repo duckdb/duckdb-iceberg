@@ -3,13 +3,15 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
-require avro
+require-env COLUMN_DEFAULT_SUPPORT
 
-require parquet
+require-env FORMAT_V3_SUPPORT
 
-require iceberg
+require-env TIMESTAMPTZ_NS_DEFAULT_SUPPORT
 
-require httpfs
+require-env TIMESTAMP_NS_SUPPORT
+
+include test/sql/init_requires
 
 require icu
 

@@ -1,0 +1,169 @@
+# name: test/sql/local/catalog_custom_setup/fixture/case_sensitivity/exact_match_identifier_cache.test
+# description: schema and table lookups are exact-match regardless of whether the catalog caches are warm
+# group: [case_sensitivity]
+
+require-env FIXTURE_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+SET preserve_identifier_case = 'preserve_case';
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+statement ok
+ATTACH '' AS exact_cache (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+# Clear leftovers from an earlier run that stopped before its cleanup.
+statement ok
+DROP TABLE IF EXISTS exact_cache.ExactCaseSchema.Twin;
+
+statement ok
+DROP TABLE IF EXISTS exact_cache.ExactCaseSchema.twin;
+
+statement ok
+DROP TABLE IF EXISTS exact_cache.ExactCaseSchema.ExactCaseTable;
+
+statement ok
+DROP SCHEMA IF EXISTS exact_cache.ExactCaseSchema;
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS exact_cache.ExactCaseSchema;
+
+statement ok
+CREATE TABLE exact_cache.ExactCaseSchema.ExactCaseTable AS SELECT 42 AS i;
+
+statement ok
+DETACH exact_cache;
+
+statement ok
+ATTACH '' AS exact_cache (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181'
+);
+
+# Cold lookups have always been exact-match: the wrong-cased name goes to the server as-is.
+statement error
+SELECT i FROM exact_cache.exactcaseschema.ExactCaseTable;
+----
+does not exist
+
+statement error
+SELECT i FROM exact_cache.ExactCaseSchema.exactcasetable;
+----
+does not exist
+
+# Warm the schema cache with a listing, and the table caches with an exact-case read.
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'exact_cache' AND schema_name = 'ExactCaseSchema';
+----
+1
+
+query I
+SELECT i FROM exact_cache.ExactCaseSchema.ExactCaseTable;
+----
+42
+
+# A warm cache must not make the wrong-cased names resolve.
+statement error
+SELECT i FROM exact_cache.exactcaseschema.ExactCaseTable;
+----
+does not exist
+
+statement error
+SELECT i FROM exact_cache.ExactCaseSchema.exactcasetable;
+----
+does not exist
+
+# Same within a single transaction, where the transaction-local table state is warm.
+statement ok
+BEGIN;
+
+query I
+SELECT i FROM exact_cache.ExactCaseSchema.ExactCaseTable;
+----
+42
+
+statement error
+SELECT i FROM exact_cache.ExactCaseSchema.EXACTCASETABLE;
+----
+does not exist
+
+statement ok
+ROLLBACK;
+
+# Iceberg identifiers are exact strings, so case-distinct tables can coexist. A warm cache
+# entry for one must never be served for the other.
+statement ok
+CREATE TABLE exact_cache.ExactCaseSchema.Twin AS SELECT 'upper' AS v;
+
+statement ok
+CREATE TABLE exact_cache.ExactCaseSchema.twin AS SELECT 'lower' AS v;
+
+query T
+SELECT v FROM exact_cache.ExactCaseSchema.Twin;
+----
+upper
+
+query T
+SELECT v FROM exact_cache.ExactCaseSchema.twin;
+----
+lower
+
+statement ok
+BEGIN;
+
+query T
+SELECT v FROM exact_cache.ExactCaseSchema.twin;
+----
+lower
+
+query T
+SELECT v FROM exact_cache.ExactCaseSchema.Twin;
+----
+upper
+
+statement ok
+ROLLBACK;
+
+statement ok
+DROP TABLE exact_cache.ExactCaseSchema.Twin;
+
+statement ok
+DROP TABLE exact_cache.ExactCaseSchema.twin;
+
+statement ok
+DROP TABLE exact_cache.ExactCaseSchema.ExactCaseTable;
+
+statement ok
+DROP SCHEMA exact_cache.ExactCaseSchema;
+
+statement ok
+DETACH exact_cache;
+
+statement ok
+RESET preserve_identifier_case;

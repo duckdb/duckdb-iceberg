@@ -49,6 +49,8 @@ public:
 	static Value BucketValue(const Value &v, int32_t num_buckets);
 	//! TruncateValue: returns the truncated Value preserving type; throws for unsupported types
 	static Value TruncateValue(const Value &v, idx_t width);
+	//! Byte length of the first `width` Unicode code points of a UTF-8 string (Iceberg truncate[L] on strings)
+	static idx_t TruncatedStringLength(const char *data, idx_t size, idx_t width);
 
 private:
 	static constexpr uint32_t C1 = 0xcc9e2d51;

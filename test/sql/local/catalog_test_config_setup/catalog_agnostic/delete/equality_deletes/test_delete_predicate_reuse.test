@@ -1,0 +1,126 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/equality_deletes/test_delete_predicate_reuse.test
+# description: Delete predicate answers are reused per entry and stay local to each filtered scan
+# group: [equality_deletes]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env EQUALITY_DELETE_WRITES_ENABLED 1
+
+include test/sql/init_requires
+
+statement ok
+SET __iceberg_unsafe_enable_equality_deletes=true;
+
+statement ok
+SET iceberg_use_server_side_scan_planning=false;
+
+statement ok
+CALL enable_logging('Iceberg', storage='memory');
+
+# Exercise both different manifests and different entries within one manifest.
+foreach merge_enabled false true
+
+statement ok
+SET threads=1;
+
+statement ok
+CREATE TABLE my_datalake.default.delete_predicate_reuse (id INTEGER)
+WITH ('format-version'=2, 'commit.manifest-merge.enabled'='{merge_enabled}', 'commit.manifest.min-count-to-merge'=2);
+
+loop batch 0 3
+
+statement ok
+INSERT INTO my_datalake.default.delete_predicate_reuse SELECT range FROM range(1,11);
+
+endloop
+
+statement ok
+DELETE FROM my_datalake.default.delete_predicate_reuse WHERE id=2;
+
+statement ok
+DELETE FROM my_datalake.default.delete_predicate_reuse WHERE id=8;
+
+# A later commit merges existing delete manifests when merging is enabled.
+# Its rows must survive the older deletes, preserving the sequence-number rule.
+statement ok
+INSERT INTO my_datalake.default.delete_predicate_reuse VALUES (2), (8);
+
+query II
+SELECT count(*), count(DISTINCT manifest_path) = CASE WHEN '{merge_enabled}'='true' THEN 1 ELSE 2 END
+FROM iceberg_metadata(my_datalake.default.delete_predicate_reuse)
+WHERE content='EQUALITY_DELETES' AND status<>'DELETED';
+----
+2	true
+
+foreach threads 1 8
+
+statement ok
+SET threads={threads};
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Each old file encounters both entries: id=2 matches and id=8 is rejected.
+# Both answers must be cached, even though only one delete file is opened.
+query I
+SELECT sum(id) FROM my_datalake.default.delete_predicate_reuse WHERE id<=3;
+----
+14
+
+query III
+SELECT sum(regexp_extract(message, 'scan_tasks=(\d+)', 1)::BIGINT),
+       sum(regexp_extract(message, 'delete_candidate_visits=(\d+)', 1)::BIGINT)
+           = CASE WHEN '{merge_enabled}'='true' THEN 8 ELSE 6 END,
+       sum(regexp_extract(message, 'delete_predicate_evaluations=(\d+)', 1)::BIGINT)
+FROM duckdb_logs() WHERE type='Iceberg' AND message LIKE '%phase=delete_planning%';
+----
+4	true	2
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# The next view reverses the positive and negative answers.
+query I
+SELECT sum(id) FROM my_datalake.default.delete_predicate_reuse WHERE id>=7;
+----
+86
+
+query III
+SELECT sum(regexp_extract(message, 'scan_tasks=(\d+)', 1)::BIGINT),
+       sum(regexp_extract(message, 'delete_candidate_visits=(\d+)', 1)::BIGINT)
+           = CASE WHEN '{merge_enabled}'='true' THEN 8 ELSE 6 END,
+       sum(regexp_extract(message, 'delete_predicate_evaluations=(\d+)', 1)::BIGINT)
+FROM duckdb_logs() WHERE type='Iceberg' AND message LIKE '%phase=delete_planning%';
+----
+4	true	2
+
+# Two scans in the same statement must keep their own predicates.
+query II
+SELECT (SELECT sum(id) FROM my_datalake.default.delete_predicate_reuse WHERE id<=3),
+       (SELECT sum(id) FROM my_datalake.default.delete_predicate_reuse WHERE id>=7);
+----
+14	86
+
+# Successive runtime filters on the same table must also see the right deletes.
+statement ok
+CREATE OR REPLACE TEMP TABLE delete_predicate_keys AS SELECT unnest([1,2,3]) AS id;
+
+query I
+SELECT sum(id) FROM my_datalake.default.delete_predicate_reuse WHERE id IN (SELECT id FROM delete_predicate_keys);
+----
+14
+
+statement ok
+CREATE OR REPLACE TEMP TABLE delete_predicate_keys AS SELECT unnest([7,8,9,10]) AS id;
+
+query I
+SELECT sum(id) FROM my_datalake.default.delete_predicate_reuse WHERE id IN (SELECT id FROM delete_predicate_keys);
+----
+86
+
+endloop
+
+statement ok
+DROP TABLE my_datalake.default.delete_predicate_reuse;
+
+endloop

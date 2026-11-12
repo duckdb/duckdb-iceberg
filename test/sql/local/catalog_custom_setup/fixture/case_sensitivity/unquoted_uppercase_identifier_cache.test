@@ -1,0 +1,238 @@
+# name: test/sql/local/catalog_custom_setup/fixture/case_sensitivity/unquoted_uppercase_identifier_cache.test
+# description: unquoted SQL uses uppercase folding consistently across cold, listing and transaction caches
+# group: [case_sensitivity]
+
+require-env FIXTURE_SERVER_AVAILABLE
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+SET preserve_identifier_case = 'preserve_case';
+
+statement ok
+CREATE SECRET (TYPE S3, KEY_ID 'admin', SECRET 'password', ENDPOINT '127.0.0.1:9000', URL_STYLE 'path', USE_SSL 0);
+
+statement ok
+ATTACH '' AS unquoted_cache (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181',
+    MAX_TABLE_STALENESS '5 minutes'
+);
+
+# Clear leftovers from an earlier run that stopped before its cleanup.
+statement ok
+DROP TABLE IF EXISTS unquoted_cache.UNQUOTED_CASE.ORDERS;
+
+statement ok
+DROP TABLE IF EXISTS unquoted_cache.UNQUOTED_CASE.MixedCase;
+
+statement ok
+DROP TABLE IF EXISTS unquoted_cache.UNQUOTED_CASE.lower_t;
+
+statement ok
+DROP TABLE IF EXISTS unquoted_cache.UNQUOTED_CASE.Orders;
+
+statement ok
+DROP SCHEMA IF EXISTS unquoted_cache.UNQUOTED_CASE;
+
+statement ok
+CREATE SCHEMA unquoted_cache.UNQUOTED_CASE;
+
+# Preserve spelling during setup; every schema and table identifier is unquoted.
+
+statement ok
+CREATE TABLE unquoted_cache.UNQUOTED_CASE.ORDERS AS SELECT 1 AS id;
+
+statement ok
+CREATE TABLE unquoted_cache.UNQUOTED_CASE.MixedCase AS SELECT 2 AS id;
+
+statement ok
+CREATE TABLE unquoted_cache.UNQUOTED_CASE.lower_t AS SELECT 3 AS id;
+
+statement ok
+CREATE TABLE unquoted_cache.UNQUOTED_CASE.Orders AS SELECT 4 AS id;
+
+statement ok
+DETACH unquoted_cache;
+
+statement ok
+SET preserve_identifier_case = 'uppercase';
+
+statement ok
+ATTACH '' AS unquoted_cache (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181',
+    MAX_TABLE_STALENESS '5 minutes'
+);
+
+# Fresh attachment: no setup cache or listing has run.
+
+query I
+SELECT id FROM unquoted_cache.unquoted_case.orders;
+----
+1
+
+query I
+SELECT id FROM unquoted_cache.unquoted_case.ORDERS;
+----
+1
+
+query I
+SELECT id FROM unquoted_cache.unquoted_case.OrDeRs;
+----
+1
+
+statement error
+SELECT id FROM unquoted_cache.unquoted_case.mixedcase;
+----
+does not exist
+
+statement error
+SELECT id FROM unquoted_cache.unquoted_case.MixedCase;
+----
+does not exist
+
+statement error
+SELECT id FROM unquoted_cache.unquoted_case.lower_t;
+----
+does not exist
+
+statement ok
+USE unquoted_cache.unquoted_case;
+
+query I
+SELECT id FROM orders;
+----
+1
+
+# List both case-distinct names, then repeat the identical unquoted SQL.
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'UNQUOTED_CACHE' AND schema_name = 'UNQUOTED_CASE';
+----
+4
+
+query I
+SELECT id FROM unquoted_cache.unquoted_case.orders;
+----
+1
+
+query I
+SELECT id FROM unquoted_cache.unquoted_case.ORDERS;
+----
+1
+
+query I
+SELECT id FROM unquoted_cache.unquoted_case.OrDeRs;
+----
+1
+
+statement error
+SELECT id FROM unquoted_cache.unquoted_case.mixedcase;
+----
+does not exist
+
+statement error
+SELECT id FROM unquoted_cache.unquoted_case.MixedCase;
+----
+does not exist
+
+statement error
+SELECT id FROM unquoted_cache.unquoted_case.lower_t;
+----
+does not exist
+
+query I
+SELECT id FROM orders;
+----
+1
+
+# Same transaction: warm ORDERS, then select each exact stored name with folding disabled.
+
+statement ok
+BEGIN;
+
+query I
+SELECT id FROM orders;
+----
+1
+
+statement ok
+SET preserve_identifier_case = 'preserve_case';
+
+query I
+SELECT id FROM unquoted_cache.UNQUOTED_CASE.Orders;
+----
+4
+
+query I
+SELECT id FROM unquoted_cache.UNQUOTED_CASE.ORDERS;
+----
+1
+
+query I
+SELECT id FROM unquoted_cache.UNQUOTED_CASE.MixedCase;
+----
+2
+
+query I
+SELECT id FROM unquoted_cache.UNQUOTED_CASE.lower_t;
+----
+3
+
+statement ok
+SET preserve_identifier_case = 'uppercase';
+
+query I
+SELECT id FROM orders;
+----
+1
+
+statement ok
+COMMIT;
+
+# Lowercase lookup stays absent after all exact-name caches were populated.
+
+statement ok
+SET preserve_identifier_case = 'preserve_case';
+
+statement error
+SELECT id FROM unquoted_cache.UNQUOTED_CASE.orders;
+----
+does not exist
+
+statement ok
+USE memory.main;
+
+statement ok
+DROP TABLE unquoted_cache.UNQUOTED_CASE.ORDERS;
+
+statement ok
+DROP TABLE unquoted_cache.UNQUOTED_CASE.MixedCase;
+
+statement ok
+DROP TABLE unquoted_cache.UNQUOTED_CASE.lower_t;
+
+statement ok
+DROP TABLE unquoted_cache.UNQUOTED_CASE.Orders;
+
+statement ok
+DROP SCHEMA unquoted_cache.UNQUOTED_CASE;
+
+statement ok
+DETACH unquoted_cache;
+
+statement ok
+RESET preserve_identifier_case;

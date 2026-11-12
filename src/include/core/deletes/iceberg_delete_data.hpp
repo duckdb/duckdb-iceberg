@@ -1,8 +1,7 @@
 #pragma once
 
 #include "duckdb/common/multi_file/multi_file_data.hpp"
-#include "core/metadata/manifest/iceberg_manifest.hpp"
-#include "planning/metadata_io/manifest/bound_iceberg_manifest_entry.hpp"
+#include "core/metadata/iceberg_file_identity.hpp"
 
 namespace duckdb {
 
@@ -10,8 +9,10 @@ enum class IcebergDeleteType : uint8_t { POSITIONAL_DELETE, DELETION_VECTOR };
 
 struct IcebergDeleteData {
 public:
-	IcebergDeleteData(IcebergDeleteType type, const BoundIcebergManifestEntry &entry) : type(type) {
-		entries.push_back(entry);
+	explicit IcebergDeleteData(IcebergDeleteType type) : type(type) {
+	}
+	IcebergDeleteData(IcebergDeleteType type, const IcebergFileIdentity &file) : type(type) {
+		source_files.push_back(file);
 	}
 	virtual ~IcebergDeleteData() {
 	}
@@ -22,8 +23,9 @@ public:
 
 public:
 	IcebergDeleteType type;
-	//! The manifest entry(s) that created this delete data
-	vector<BoundIcebergManifestEntry> entries;
+	//! Files a deletion vector written for the data file supersedes: the vector these positions were read from,
+	//! or the file-scoped position-delete files that hold them. Partition-scoped files stay live.
+	vector<IcebergFileIdentity> source_files;
 };
 
 } // namespace duckdb

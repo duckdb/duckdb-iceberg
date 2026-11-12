@@ -1,49 +1,11 @@
 #include "maintenance/rewrite_data_files_executor.hpp"
 
 #include "duckdb/common/exception.hpp"
-#include "duckdb/logging/logger.hpp"
-#include "iceberg_logging.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
-#include "catalog/rest/iceberg_catalog.hpp"
-#include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_data.hpp"
-#include "catalog/rest/transaction/iceberg_transaction_metadata.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
-#include "core/metadata/schema/iceberg_table_schema.hpp"
-#include "storage/statistics/iceberg_data_file_stats.hpp"
 
 namespace duckdb {
-
-IcebergManifestEntry BuildRewriteManifestEntry(ClientContext &context, const vector<RewriteCandidate> &group,
-                                               int64_t starting_sequence_number, int64_t record_count,
-                                               const string &produced_file, int64_t file_size_in_bytes,
-                                               const Value &column_stats, const IcebergTableMetadata &table_metadata,
-                                               const string &table_name) {
-	if (group.empty()) {
-		throw InternalException("iceberg_rewrite_data_files: cannot build a manifest entry for an empty group");
-	}
-
-	IcebergManifestEntry entry;
-	entry.status = IcebergManifestEntryStatusType::ADDED;
-	//! Preserve equality-delete applicability after compaction.
-	entry.SetSequenceNumber(starting_sequence_number);
-	entry.data_file.content = IcebergManifestEntryContentType::DATA;
-	entry.data_file.file_format = "parquet";
-	entry.data_file.file_path = produced_file;
-	entry.data_file.record_count = record_count;
-	entry.data_file.file_size_in_bytes = file_size_in_bytes;
-	//! The planner buckets candidates so every file in one group shares the same
-	//! partition tuple. Reuse candidate 0 instead of re-deriving it.
-	entry.data_file.partition_info = group.front().partition_info;
-	if (table_metadata.HasSortOrder()) {
-		auto &sort_order = table_metadata.GetLatestSortOrder();
-		if (sort_order.IsSorted()) {
-			entry.data_file.sort_order_id = sort_order.sort_order_id;
-		}
-	}
-	IcebergDataFileStats::PopulateFromReturnStats(context, entry.data_file, column_stats, table_metadata, table_name);
-	return entry;
-}
 
 void ValidateRewriteSnapshot(const RewritePlan &plan, const IcebergTable &table_info, const string &phase) {
 	auto snapshot = table_info.table_metadata.GetLatestSnapshot();
@@ -54,46 +16,39 @@ void ValidateRewriteSnapshot(const RewritePlan &plan, const IcebergTable &table_
 		}
 		return;
 	}
-	if (!snapshot || !snapshot->snapshot_id || *snapshot->snapshot_id != plan.starting_snapshot_id) {
+	if (!snapshot || snapshot->snapshot_id != plan.starting_snapshot_id) {
 		throw CatalogException("iceberg_rewrite_data_files: table snapshot changed between planning (%lld) and %s (%s)",
 		                       plan.starting_snapshot_id, phase,
-		                       snapshot && snapshot->snapshot_id ? std::to_string(*snapshot->snapshot_id) : "none");
+		                       snapshot ? std::to_string(snapshot->snapshot_id) : "none");
 	}
 }
 
-void CleanupRewriteFiles(ClientContext &context, const IcebergTable &table_info, const vector<string> &produced_paths) {
-	auto &fs = FileSystem::GetFileSystem(context);
-	for (auto &path : produced_paths) {
-		try {
-			fs.TryRemoveFile(path);
-		} catch (...) {
-			DUCKDB_LOG_DEBUG(context, "Failed to clean up rewrite output file '%s'", path);
-		}
+void ValidateRewriteTransaction(const IcebergTransactionData &transaction_data) {
+	bool pending = !transaction_data.alters.empty();
+	for (auto &update : transaction_data.updates) {
+		//! A format upgrade is the one change maintenance already follows.
+		pending |= update->type != IcebergTableUpdateType::UPGRADE_FORMAT_VERSION;
+	}
+	if (pending) {
+		throw NotImplementedException(
+		    "iceberg_rewrite_data_files: table '%s' has uncommitted changes in this transaction; commit them first",
+		    transaction_data.table_info.name);
 	}
 }
 
-void CommitRewrite(ClientContext &context, const RewritePlan &plan, RewriteExecutionResult &result) {
-	if (result.new_entries.empty()) {
-		return;
+void ValidateRewrittenRowCount(const RewritePlan &plan, const vector<IcebergManifestEntry> &new_entries) {
+	int64_t written = 0;
+	for (auto &entry : new_entries) {
+		written += entry.data_file.record_count;
 	}
-	if (!plan.table_info) {
-		throw InternalException("iceberg_rewrite_data_files: rewrite plan has no table information");
+	auto selected = plan.selected_record_count;
+	auto at_least = plan.max_deleted_rows ? selected - *plan.max_deleted_rows : int64_t(0);
+	if (written > selected || written < at_least) {
+		throw CatalogException("iceberg_rewrite_data_files: the rewritten files hold %lld rows, but the %llu files "
+		                       "selected hold %lld rows before deletes and at least %lld after them, so the rewrite "
+		                       "would change the table's data; nothing was committed",
+		                       written, plan.selected_candidates.size(), selected, MaxValue<int64_t>(at_least, 0));
 	}
-	auto &table_info = *plan.table_info;
-	ValidateRewriteSnapshot(plan, table_info, "commit");
-
-	auto &iceberg_transaction = IcebergTransaction::Get(context, table_info.catalog);
-	IcebergManifestDeletes deletes;
-	for (auto &cand : result.rewritten_candidates) {
-		deletes.InvalidateFile(cand.file_path);
-	}
-
-	ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTable &tbl) {
-		ValidateRewriteSnapshot(plan, tbl, "transaction commit");
-		auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
-		transaction_data.AddSnapshot(IcebergSnapshotOperationType::REPLACE, std::move(result.new_entries),
-		                             std::move(deletes));
-	});
 }
 
 } // namespace duckdb

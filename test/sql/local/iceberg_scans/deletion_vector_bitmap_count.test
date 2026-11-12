@@ -1,0 +1,25 @@
+# name: test/sql/local/iceberg_scans/deletion_vector_bitmap_count.test
+# description: a deletion vector whose bitmap count does not fit its blob is refused with an error
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+query II
+SELECT id, source FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/deletion_vector_bitmap_count/metadata/valid.metadata.json') ORDER BY id;
+----
+1	legacy
+3	legacy
+
+foreach count_case count_huge count_negative
+
+statement error
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/deletion_vector_bitmap_count/metadata/{count_case}.metadata.json');
+----
+<REGEX>:.*Invalid bitmap count \(-?[0-9]+\) in deletion vector of [0-9]+ bytes, the DeletionVector is corrupted.*
+
+endloop
+
+statement error
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/deletion_vector_bitmap_count/metadata/count_truncated.metadata.json');
+----
+<REGEX>:.*Deletion vector is truncated, the DeletionVector is corrupted.*

@@ -18,6 +18,7 @@ def arrow_column_values(table: pa.Table, name: str):
 
 
 class TestPyIcebergRead:
+    @pytest.mark.duckdb_setup_tests("catalog_interop/delete/test_spark_can_read_duckdb_table.test")
     def test_pyiceberg_read_deletes(self, rest_catalog):
         table = rest_catalog.load_table("default.duckdb_deletes_for_other_engines")
         arrow_table: pa.Table = table.scan().to_arrow()
@@ -36,6 +37,7 @@ class TestPyIcebergRead:
             {'a': 59},
         ]
 
+    @pytest.mark.duckdb_setup_tests("catalog_interop/update/test_spark_can_read_duckdb_updates.test")
     def test_pyiceberg_read_updates(self, rest_catalog):
         table = rest_catalog.load_table("default.duckdb_updates_for_other_engines")
         arrow_table: pa.Table = table.scan().to_arrow()
@@ -65,6 +67,7 @@ class TestPyIcebergRead:
         ]
 
     @pytest.mark.requires_capabilities("format_v3")
+    @pytest.mark.duckdb_setup_tests("catalog_interop/other_engines/test_spark_can_read_duckdb_timestamptz_ns.test")
     def test_pyiceberg_read_duckdb_timestamptz_ns(self, rest_catalog):
         table = rest_catalog.load_table("default.duckdb_timestamptz_ns_for_other_engines")
         arrow_table: pa.Table = table.scan().to_arrow()
@@ -75,6 +78,7 @@ class TestPyIcebergRead:
             (2, 1624200300987654321),
         ]
 
+    @pytest.mark.duckdb_setup_tests("catalog_interop/insert/test_metadata_for_pyiceberg.test")
     def test_pyiceberg_read(self, rest_catalog):
         tbl = rest_catalog.load_table("default.test_metadata_for_pyiceberg")
         scan = tbl.scan(row_filter=pyice.expressions.EqualTo("a", 350))
@@ -91,6 +95,7 @@ class TestPyIcebergRead:
         is_active_catalog('lakekeeper'),
         reason="Lakekeeper skips the bounds setup table in this suite",
     )
+    @pytest.mark.duckdb_setup_tests("catalog_interop/other_engines/test_create_bounds.test")
     def test_pyiceberg_read_duckdb_upper_lower_bounds(self, rest_catalog):
         tbl = rest_catalog.load_table("default.lower_upper_bounds_test")
         arrow_table: pa.Table = tbl.scan().to_arrow()
@@ -135,6 +140,7 @@ class TestPyIcebergRead:
             },
         ]
 
+    @pytest.mark.duckdb_setup_tests("catalog_agnostic/insert/test_write_infinity_timestamp.test")
     def test_pyiceberg_read_duckdb_infinities(self, rest_catalog):
         tbl = rest_catalog.load_table("default.test_infinities")
         arrow_table: pa.Table = tbl.scan().to_arrow()
@@ -142,6 +148,7 @@ class TestPyIcebergRead:
         assert len(res) == 2
         assert res == [{'float_type': inf, 'double_type': inf}, {'float_type': -inf, 'double_type': -inf}]
 
+    @pytest.mark.duckdb_setup_tests("catalog_agnostic/insert/test_write_upper_lower_bounds_nested_types.test")
     def test_pyiceberg_read_duckdb_nested_types(self, rest_catalog):
         tbl = rest_catalog.load_table("default.duckdb_nested_types")
         arrow_table: pa.Table = tbl.scan().to_arrow()
@@ -163,6 +170,7 @@ class TestPyIcebergRead:
 )
 class TestPyIcebergReadEqualityDeletes:
     @pytest.mark.skip(reason="PyIceberg does not support equality deletes")
+    @pytest.mark.duckdb_setup_tests("catalog_agnostic/delete/equality_deletes/test_equality_delete_reads.test")
     def test_pyiceberg_read_duckdb_equality_delete_with_deleted_column(self, rest_catalog):
         tbl = rest_catalog.load_table("default.equality_delete_table_1")
         arrow_table: pa.Table = tbl.scan().to_arrow()
@@ -195,6 +203,9 @@ class TestPyIcebergReadEqualityDeletes:
         ]
 
     @pytest.mark.skip(reason="PyIceberg does not support equality deletes")
+    @pytest.mark.duckdb_setup_tests(
+        "catalog_agnostic/delete/equality_deletes/test_equality_deletes_apply_only_to_prev_sequence_numbers.test"
+    )
     def test_pyiceberg_read_duckdb_equality_delete(self, rest_catalog):
         tbl = rest_catalog.load_table("default.equality_delete_table_test_multiple_equality_deletes")
         arrow_table: pa.Table = tbl.scan().to_arrow()

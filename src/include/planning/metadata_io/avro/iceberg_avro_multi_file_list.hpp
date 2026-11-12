@@ -2,6 +2,8 @@
 
 #include "duckdb/common/multi_file/multi_file_list.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/mutex.hpp"
+#include "duckdb/common/atomic.hpp"
 
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
@@ -72,17 +74,25 @@ public:
 	virtual ~IcebergManifestFileScanInfo();
 
 	idx_t GetManifestIndex(idx_t scan_index) const;
+	mutex &GetManifestLock(idx_t manifest_index);
 
 public:
 	vector<IcebergManifestListEntry> &manifest_files;
 	//! Maps the compact multi-file scan index to the owning manifest-list entry.
 	vector<idx_t> manifest_indexes;
+	//! A manifest Avro file can now be scanned by multiple workers, one per Avro block.
+	//! Serialize writes to each owning manifest-list entry while retaining parallelism
+	//! between different manifest files.
+	vector<unique_ptr<mutex>> manifest_locks;
 	const IcebergOptions &options;
 	FileSystem &fs;
 	string iceberg_path;
 	//! partition_field_id -> semantic column type (e.g. INTEGER for DAY)
 	map<idx_t, LogicalType> partition_field_id_to_type;
 	optional_ptr<ManifestEntryReadState> read_state;
+	//! One increment per initialized manifest / converted chunk, never per entry.
+	atomic<idx_t> manifest_parses {0};
+	atomic<idx_t> manifest_entries_converted {0};
 };
 
 class IcebergAvroMultiFileList : public SimpleMultiFileList {

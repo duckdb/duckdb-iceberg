@@ -22,8 +22,90 @@
 
 namespace duckdb {
 
+LoadTableCachePublication::~LoadTableCachePublication() {
+	if (cache) {
+		cache->Release(*this);
+	}
+}
+
+bool LoadTableCachePublication::TryPublish(shared_ptr<const rest_api_objects::LoadTableResult> result, string etag) {
+	return cache->TryPublish(*this, std::move(result), std::move(etag));
+}
+
+unique_ptr<LoadTableCachePublication> LoadTableResultCache::BeginLoad(const string &table_key) {
+	auto publication = unique_ptr<LoadTableCachePublication>(new LoadTableCachePublication(table_key));
+	annotated_lock_guard<annotated_mutex> guard(lock);
+	auto cached = tables.find(table_key);
+	if (cached != tables.end()) {
+		publication->cached_result = cached->second.load_table_result;
+		publication->etag = cached->second.etag;
+	}
+	auto &pending = pending_loads[table_key];
+	pending.latest = publication.get();
+	pending.count++;
+	publication->cache = this;
+	return publication;
+}
+
+void LoadTableResultCache::Release(LoadTableCachePublication &publication) {
+	annotated_lock_guard<annotated_mutex> guard(lock);
+	auto it = pending_loads.find(publication.table_key);
+	D_ASSERT(it != pending_loads.end() && it->second.count > 0);
+	it->second.count--;
+	if (it->second.count == 0) {
+		pending_loads.erase(it);
+	} else if (it->second.latest.get() == &publication) {
+		it->second.latest = nullptr;
+	}
+}
+
+void LoadTableResultCache::InvalidateLoads(const string &table_key) {
+	auto it = pending_loads.find(table_key);
+	if (it != pending_loads.end()) {
+		it->second.latest = nullptr;
+	}
+}
+
+bool LoadTableResultCache::TryPublish(LoadTableCachePublication &publication,
+                                      shared_ptr<const rest_api_objects::LoadTableResult> result, string etag) {
+	annotated_lock_guard<annotated_mutex> guard(lock);
+	auto it = pending_loads.find(publication.table_key);
+	if (it == pending_loads.end() || it->second.latest.get() != &publication) {
+		return false;
+	}
+	Store(publication.table_key, std::move(result), std::move(etag));
+	it->second.latest = nullptr;
+	return true;
+}
+
+void LoadTableResultCache::SetOrOverwrite(const string &table_key,
+                                          shared_ptr<const rest_api_objects::LoadTableResult> result) {
+	annotated_lock_guard<annotated_mutex> guard(lock);
+	InvalidateLoads(table_key);
+	Store(table_key, std::move(result), "");
+}
+
+void LoadTableResultCache::Store(const string &table_key, shared_ptr<const rest_api_objects::LoadTableResult> result,
+                                 string etag) {
+	// With staleness disabled, retain the payload for ETag revalidation and identity-based invalidation,
+	// but require a catalog request before reusing it.
+	system_clock::time_point expires_at;
+	if (attach_options.max_table_staleness_micros.IsValid()) {
+		expires_at =
+		    system_clock::now() + std::chrono::microseconds(attach_options.max_table_staleness_micros.GetIndex());
+	} else {
+		expires_at = system_clock::time_point::min();
+	}
+	auto epoch_micros = timestamp_t(duration_cast<microseconds>(expires_at.time_since_epoch()).count());
+	auto expire_timestamp_ms = timestamp_ms_t(Timestamp::GetEpochMs(epoch_micros));
+	tables.erase(table_key);
+	tables.emplace(table_key, MetadataCacheValue(expire_timestamp_ms, std::move(result), std::move(etag)));
+}
+
 void LoadTableResultCache::EvictIfCurrent(const IcebergTable &table) {
 	annotated_lock_guard<annotated_mutex> guard(lock);
+	// Even without a matching cached payload, a pre-write fetch must not repopulate the cache.
+	InvalidateLoads(table.GetTableKey());
 	auto it = tables.find(table.GetTableKey());
 	if (it == tables.end()) {
 		return;
@@ -36,10 +118,11 @@ void LoadTableResultCache::EvictIfCurrent(const IcebergTable &table) {
 
 IcebergCatalog::IcebergCatalog(AttachedDatabase &db_p, AccessMode access_mode,
                                unique_ptr<IcebergAuthorization> auth_handler, IcebergAttachOptions &attach_options_p,
-                               const Identifier &default_schema)
-    : Catalog(db_p), access_mode(access_mode), auth_handler(std::move(auth_handler)), uri(attach_options_p.endpoint),
-      version("v1"), attach_options(attach_options_p), default_schema(default_schema),
-      warehouse(attach_options.warehouse), schemas(*this), table_request_cache(attach_options) {
+                               const optional<Identifier> &default_schema)
+    : Catalog(db_p), access_mode(access_mode), auth_handler(std::move(auth_handler)),
+      base_uri(attach_options_p.catalog_uri), version("v1"), attach_options(attach_options_p),
+      default_schema(default_schema), attach_path(attach_options.warehouse), warehouse(attach_options.warehouse),
+      schemas(*this), table_request_cache(attach_options) {
 }
 
 IcebergCatalog::~IcebergCatalog() = default;
@@ -58,21 +141,35 @@ void IcebergCatalog::ScanSchemas(ClientContext &context, std::function<void(Sche
 optional_ptr<SchemaCatalogEntry> IcebergCatalog::LookupSchema(CatalogTransaction transaction,
                                                               const EntryLookupInfo &schema_lookup,
                                                               OnEntryNotFound if_not_found) {
-	if (schema_lookup.GetEntryName() == DEFAULT_SCHEMA && default_schema != DEFAULT_SCHEMA) {
-		// throws error if default schema is empty
-		if (default_schema.empty() && if_not_found == OnEntryNotFound::RETURN_NULL) {
-			return nullptr;
-		}
-		return GetSchema(transaction, default_schema, if_not_found);
-	}
-
-	auto &schema_name = schema_lookup.GetEntryName();
+	auto schema_name = FoldIdentifier(schema_lookup.GetEntryName());
 	auto entry = schemas.GetEntry(transaction.GetContext(), schema_name, if_not_found);
 	if (!entry && if_not_found != OnEntryNotFound::RETURN_NULL) {
 		throw CatalogException(schema_lookup.GetErrorContext(), "Schema with name \"%s\" not found", schema_name);
 	}
 
 	return reinterpret_cast<SchemaCatalogEntry *>(entry.get());
+}
+
+optional<Identifier> IcebergCatalog::GetDefaultSchema() const {
+	return default_schema;
+}
+
+string IcebergCatalog::FoldIdentifier(const string &name) const {
+	if (attach_options.identifier_case == IcebergIdentifierCase::LOWERCASE) {
+		return StringUtil::Lower(name);
+	}
+	return name;
+}
+
+QualifiedName IcebergCatalog::FoldName(const QualifiedName &name) const {
+	if (attach_options.identifier_case == IcebergIdentifierCase::PRESERVE_CASE) {
+		return name;
+	}
+	auto path = name.Path();
+	for (idx_t i = name.Catalog().empty() ? 0 : 1; i < path.size(); i++) {
+		path[i] = Identifier(FoldIdentifier(path[i].GetIdentifierName()));
+	}
+	return QualifiedName::FromPath(std::move(path));
 }
 
 optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) {
@@ -83,14 +180,12 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 	}
 
 	D_ASSERT(context);
+	info.SetQualifiedName(FoldName(info.GetQualifiedName()));
 	auto &iceberg_transaction = IcebergTransaction::Get(*context, *this);
 	auto &schema_name = info.GetQualifiedName().Schema().GetIdentifierName();
-	auto created_schema = iceberg_transaction.created_schemas.find(schema_name);
-	if (created_schema != iceberg_transaction.created_schemas.end()) {
-		if (info.on_conflict == OnCreateConflict::IGNORE_ON_CONFLICT) {
-			return created_schema->second.get();
-		}
-		throw CatalogException("Schema with name \"%s\" already exists", info.GetQualifiedName().Schema());
+	auto created_schema = iceberg_transaction.created_schemas.CheckPending(schema_name, info.on_conflict);
+	if (created_schema) {
+		return created_schema.get();
 	}
 
 	// Verify schema existence on the server first
@@ -108,21 +203,26 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 			iceberg_transaction.schemas[schema_name] = new_schema;
 			return new_schema.get();
 		}
-		throw CatalogException("Schema with name \"%s\" already exists", info.GetQualifiedName().Schema());
+		throw CatalogException("Schema with name %s already exists", info.GetQualifiedName().Schema());
 	}
 
 	// Schema does not exist - stage it locally and defer the server creation and catalog publication to commit
 	auto new_schema = make_shared_ptr<IcebergSchemaEntry>(*this, info);
 	auto result = new_schema.get();
-	iceberg_transaction.created_schemas.emplace(schema_name, std::move(new_schema));
+	iceberg_transaction.created_schemas.Add(schema_name, std::move(new_schema), info.on_conflict);
 	return result;
 }
 
 void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
-	if (info.cascade) {
+	if (info.cascade && endpoint_type != IcebergEndpointType::AWS_GLUE) {
 		throw NotImplementedException(
 		    "DROP SCHEMA <schema_name> CASCADE is not supported for Iceberg schemas currently");
 	}
+	if (!info.cascade && endpoint_type == IcebergEndpointType::AWS_GLUE) {
+		throw NotImplementedException("DROP SCHEMA without CASCADE is not supported for AWS Glue: deleting a namespace "
+		                              "also deletes its tables. Use DROP SCHEMA <schema_name> CASCADE");
+	}
+	info.SetQualifiedName(FoldName(info.GetQualifiedName()));
 
 	// Verify schema existence on the server first
 	bool schema_exists =
@@ -135,7 +235,7 @@ void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 			GetSchemas().RemoveEntry(info.GetQualifiedName().Name().GetIdentifierName());
 			return;
 		}
-		throw CatalogException("Schema with name \"%s\" does not exist", info.GetQualifiedName().Name());
+		throw CatalogException("Schema with name %s does not exist", info.GetQualifiedName().Name());
 	}
 
 	// Schema exists - defer the server deletion to commit
@@ -154,7 +254,7 @@ bool IcebergCatalog::InMemory() {
 }
 
 string IcebergCatalog::GetDBPath() {
-	return warehouse;
+	return attach_path;
 }
 
 DatabaseSize IcebergCatalog::GetDatabaseSize(ClientContext &context) {
@@ -163,11 +263,6 @@ DatabaseSize IcebergCatalog::GetDatabaseSize(ClientContext &context) {
 }
 
 ErrorData IcebergCatalog::SupportsCreateTable(BoundCreateTableInfo &info) {
-	auto &base = info.Base().Cast<CreateTableInfo>();
-	if (!base.sort_keys.empty()) {
-		return ErrorData(ExceptionType::CATALOG,
-		                 StringUtil::Format("SORTED BY is not supported for tables in a %s catalog", GetCatalogType()));
-	}
 	return ErrorData();
 }
 
@@ -177,7 +272,7 @@ ErrorData IcebergCatalog::SupportsCreateTable(BoundCreateTableInfo &info) {
 
 IRCEndpointBuilder IcebergCatalog::GetBaseUrl() const {
 	auto url_builder = IRCEndpointBuilder();
-	url_builder.SetHost(uri);
+	url_builder.SetHost(base_uri);
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent(version));
 
 	return url_builder;
@@ -186,37 +281,56 @@ IRCEndpointBuilder IcebergCatalog::GetBaseUrl() const {
 unique_ptr<SecretEntry> IcebergCatalog::GetStorageSecret(ClientContext &context, const string &secret_name) {
 	auto transaction = CatalogTransaction::GetSystemCatalogTransaction(context);
 
-	case_insensitive_set_t accepted_secret_types {"s3", "aws"};
+	vector<string> accepted_secret_types {"s3", "aws"};
 
 	if (!secret_name.empty()) {
 		auto secret_entry = context.db->GetSecretManager().GetSecretByName(transaction, secret_name);
 		if (secret_entry) {
 			auto secret_type = secret_entry->secret->GetType();
-			if (accepted_secret_types.count(secret_type.GetIdentifierName())) {
+			auto matching_secret = std::find(accepted_secret_types.begin(), accepted_secret_types.end(), secret_type);
+			if (matching_secret != accepted_secret_types.end()) {
 				return secret_entry;
 			}
 			throw InvalidConfigurationException(
 			    "Found a secret by the name of '%s', but it is not of an accepted type for a 'secret', "
-			    "accepted types are: 's3' or 'aws', found '%s'",
+			    "accepted types are: 's3' or 'aws', found %s",
 			    secret_name, secret_type);
 		}
 		throw InvalidConfigurationException(
 		    "No secret by the name of '%s' could be found, consider changing the 'secret'", secret_name);
 	}
 
-	for (auto &type : accepted_secret_types) {
-		if (secret_name.empty()) {
-			//! Lookup the default secret for this type
-			auto secret_entry =
-			    context.db->GetSecretManager().GetSecretByName(transaction, StringUtil::Format("__default_%s", type));
-			if (secret_entry) {
-				return secret_entry;
-			}
+	// Check explicit defaults of both types before considering automatic fallback credentials.
+	for (const auto &type : accepted_secret_types) {
+		auto secret_entry =
+		    context.db->GetSecretManager().GetSecretByName(transaction, StringUtil::Format("__default_%s", type));
+		if (secret_entry) {
+			return secret_entry;
 		}
+	}
+
+	SecretMatch best_match;
+	for (const auto &type : accepted_secret_types) {
 		auto secret_match = context.db->GetSecretManager().LookupSecret(transaction, type + "://", type);
-		if (secret_match.HasMatch()) {
-			return std::move(secret_match.secret_entry);
+		if (!secret_match.HasMatch()) {
+			//! Didn't result in a match at all
+			continue;
 		}
+		if (secret_match.score < best_match.score) {
+			//! Lower score, skip
+			continue;
+		}
+		if (secret_match.score != best_match.score) {
+			//! Higher score, replace the current best
+			best_match = secret_match;
+			continue;
+		}
+		if (secret_match.GetSecret().GetName() < best_match.GetSecret().GetName()) {
+			best_match = secret_match;
+		}
+	}
+	if (best_match.HasMatch()) {
+		return std::move(best_match.secret_entry);
 	}
 	throw InvalidConfigurationException("Could not find a valid storage secret (s3 or aws)");
 }
@@ -293,6 +407,7 @@ void IcebergCatalog::AddDefaultSupportedEndpoints() {
 	supported_urls.insert("POST /v1/{prefix}/tables/rename");
 	// commit updates to multiple tables in an atomic transaction
 	supported_urls.insert("POST /v1/{prefix}/transactions/commit");
+	// Views aren't in the spec defaults; catalogs that support them advertise via /v1/config
 }
 
 void IcebergCatalog::AddS3TablesEndpoints() {
@@ -348,71 +463,39 @@ void IcebergCatalog::AddGlueEndpoints() {
 }
 
 void IcebergCatalog::ParsePrefix() {
-	// save overrides and defaults.
-	// See https://iceberg.apache.org/docs/latest/configuration/#catalog-properties for sometimes used catalog
-	// properties
-	auto default_prefix_it = defaults.find("prefix");
-	auto override_prefix_it = overrides.find("prefix");
-
-	const string *prefix_property = nullptr;
-	if (default_prefix_it != defaults.end()) {
-		prefix_property = &default_prefix_it->second;
-	}
-	// Sometimes the prefix is in the overrides. Prefer the override prefix.
-	if (override_prefix_it != overrides.end()) {
-		prefix_property = &override_prefix_it->second;
-	}
-	if (!prefix_property) {
+	prefix.clear();
+	auto &prefix_property = attach_options.prefix;
+	if (prefix_property.empty()) {
 		return;
 	}
 
-	auto decoded_prefix = StringUtil::URLDecode(*prefix_property);
-	if (attach_options.encode_entire_prefix || !StringUtil::Equals(decoded_prefix, *prefix_property)) {
+	auto decoded_prefix = StringUtil::URLDecode(prefix_property);
+	if (attach_options.encode_entire_prefix || !StringUtil::Equals(decoded_prefix, prefix_property)) {
 		prefix.push_back(std::move(decoded_prefix));
 	} else {
 		prefix = StringUtil::Split(decoded_prefix, '/');
 	}
 }
 
-void IcebergCatalog::ParseNamespaceSeparator() {
-	auto default_namespace_separator_it = defaults.find("namespace-separator");
-	auto override_namespace_separator_it = overrides.find("namespace-separator");
-
-	const string *namespace_separator_property = nullptr;
-	if (default_namespace_separator_it != defaults.end()) {
-		namespace_separator_property = &default_namespace_separator_it->second;
+void IcebergCatalog::Configure(ClientContext &context, const rest_api_objects::CatalogConfig &catalog_config,
+                               IcebergEndpointType endpoint_type) {
+	this->endpoint_type = endpoint_type;
+	base_uri = attach_options.catalog_uri;
+	StringUtil::RTrim(base_uri, "/");
+	if (base_uri.empty()) {
+		throw InvalidConfigurationException("Missing 'uri' option for Iceberg attach");
 	}
-	// Sometimes the namespace_separator is in the overrides. Prefer the override namespace_separator.
-	if (override_namespace_separator_it != overrides.end()) {
-		namespace_separator_property = &override_namespace_separator_it->second;
-	}
-	if (!namespace_separator_property) {
-		return;
-	}
-	namespace_separator = *namespace_separator_property;
-}
-
-void IcebergCatalog::GetConfig(ClientContext &context, IcebergEndpointType &endpoint_type) {
-	// set the prefix to be empty. To get the config endpoint,
-	// we cannot add a default prefix.
-	D_ASSERT(prefix.empty());
-
-	// For AWS Glue, ":" means "default account catalog" — omit the warehouse param
-	string effective_warehouse = warehouse;
-	if (endpoint_type == IcebergEndpointType::AWS_GLUE && warehouse == ":") {
-		effective_warehouse = "";
-	}
-	auto catalog_config = IRCAPI::GetCatalogConfig(context, *this, effective_warehouse);
-	overrides = catalog_config.overrides;
-	defaults = catalog_config.defaults;
-	auto uri_override_it = overrides.find("uri");
-	if (uri_override_it != overrides.end()) {
-		uri = uri_override_it->second;
-		StringUtil::RTrim(uri, "/");
-	}
+	attach_options.catalog_uri = base_uri;
+	warehouse = attach_options.warehouse;
 	ParsePrefix();
-	ParseNamespaceSeparator();
+	namespace_separator = attach_options.namespace_separator;
 
+	catalog_properties = catalog_config.defaults;
+	for (auto &entry : catalog_config.overrides) {
+		catalog_properties[entry.first] = entry.second;
+	}
+
+	supported_urls.clear();
 	if (auto &endpoints = catalog_config.endpoints) {
 		for (auto &endpoint : *endpoints) {
 			supported_urls.insert(endpoint);
@@ -441,7 +524,7 @@ void IcebergCatalog::GetConfig(ClientContext &context, IcebergEndpointType &endp
 //! Streamlined initialization for recognized catalog types
 
 void IcebergCatalog::SetAttachOptions(const unordered_map<string, Value> &options) {
-	raw_attach_options.insert(options.begin(), options.end());
+	normalized_attach_options = NormalizeIcebergAttachOptions(options);
 }
 
 bool IcebergCatalog::HasConflictingAttachOptions(const string &path, const AttachOptions &options) {
@@ -449,14 +532,15 @@ bool IcebergCatalog::HasConflictingAttachOptions(const string &path, const Attac
 	if (Catalog::HasConflictingAttachOptions(path, options)) {
 		return true;
 	}
-	//! Otherwise compare the iceberg-specific attach options (endpoint, credentials, MAX_TABLE_STALENESS, ...)
+	//! Otherwise compare the iceberg-specific attach options (URI, credentials, MAX_TABLE_STALENESS, ...)
 	//! so that ATTACH OR REPLACE re-runs Attach when any of them changes.
-	if (options.options.size() != raw_attach_options.size()) {
+	auto normalized_options = NormalizeIcebergAttachOptions(options.options);
+	if (normalized_options.size() != normalized_attach_options.size()) {
 		return true;
 	}
-	for (auto &entry : options.options) {
-		auto it = raw_attach_options.find(entry.first);
-		if (it == raw_attach_options.end()) {
+	for (auto &entry : normalized_options) {
+		auto it = normalized_attach_options.find(entry.first);
+		if (it == normalized_attach_options.end()) {
 			return true;
 		}
 		if (it->second.type() != entry.second.type() || it->second.ToString() != entry.second.ToString()) {
@@ -466,14 +550,16 @@ bool IcebergCatalog::HasConflictingAttachOptions(const string &path, const Attac
 	return false;
 }
 
-string IcebergCatalog::GetOnlyMergeOnReadSupportedErrorMessage(const string &table_name, const string &property,
-                                                               const string &property_value) {
-	return StringUtil::Format("DuckDB-Iceberg only supports merge-on-read for updates/deletes. Table Property '%s' is "
-	                          "set to '%s' for table %s"
-	                          "You can modify Iceberg table properties wth the set_iceberg_table_properties() "
-	                          "function, and remove them with the remove_iceberg_table_properties() function. "
-	                          "You can view Iceberg table properties with the iceberg_table_properties() function",
-	                          property, property_value, table_name);
+void IcebergCatalog::VerifyMergeOnRead(const IcebergTableMetadata &metadata, const string &table_name,
+                                       const string &write_mode_property) {
+	if (metadata.AllowsMergeOnRead(write_mode_property)) {
+		return;
+	}
+	throw NotImplementedException(
+	    "Table property '%s' is set to '%s' for table %s, and only merge-on-read is supported for deletes, updates "
+	    "and merges. Set it with ALTER TABLE %s SET ('%s' = 'merge-on-read')",
+	    write_mode_property, metadata.GetTableProperty(write_mode_property), table_name, table_name,
+	    write_mode_property);
 }
 
 } // namespace duckdb

@@ -2,6 +2,7 @@
 
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/logging/logger.hpp"
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/main/setting_info.hpp"
 #include "duckdb/common/types/value.hpp"
@@ -16,12 +17,8 @@ namespace duckdb {
 namespace {
 
 //! Detect the scheme from a host string, defaulting to HTTPS
-Aws::Http::Scheme DetectScheme(const string &host) {
-	auto lower = StringUtil::Lower(host);
-	if (StringUtil::StartsWith(lower, "http://")) {
-		return Aws::Http::Scheme::HTTP;
-	}
-	return Aws::Http::Scheme::HTTPS;
+bool DetectHttps(const string &host) {
+	return !StringUtil::StartsWith(StringUtil::Lower(host), "http://");
 }
 
 } // namespace
@@ -62,22 +59,10 @@ unique_ptr<IcebergAuthorization> SIGV4Authorization::FromAttachOptions(AttachedD
 }
 
 AWSInput SIGV4Authorization::CreateAWSInput(ClientContext &context, const IRCEndpointBuilder &endpoint_builder) {
-	AWSInput aws_input(db);
-	aws_input.cert_path = APIUtils::GetCURLCertPath();
-
-	// Set the user Agent
-	auto &config = DBConfig::GetConfig(context);
-	aws_input.user_agent = config.UserAgent();
-	Value val;
-	auto lookup_result = context.TryGetCurrentSetting("http_timeout", val);
-	if (lookup_result.GetScope() != SettingScope::INVALID) {
-		aws_input.use_httpfs_timeout = true;
-		// http timeout is in seconds, multiply by 1000 to get ms
-		aws_input.request_timeout_in_ms = val.GetValue<idx_t>() * 1000;
-	}
+	AWSInput aws_input;
 
 	auto host = endpoint_builder.GetHost();
-	aws_input.scheme = DetectScheme(host);
+	aws_input.use_https = DetectHttps(host);
 	auto stripped_host = StripScheme(host);
 
 	// AWS service and region: use explicit overrides if provided, otherwise parse from host
@@ -181,8 +166,10 @@ void SIGV4Authorization::MaybeRefreshSecret(ClientContext &context) {
 		auto &secret_manager = context.db->GetSecretManager();
 		(void)secret_manager.CreateSecret(context, refresh_input);
 		last_refresh_time = std::chrono::steady_clock::now();
-	} catch (std::exception &) {
-		// Leave last_refresh_time alone so the next call retries
+	} catch (std::exception &ex) {
+		// Leave last_refresh_time alone so the next call retries with the same credentials.
+		DUCKDB_LOG_DEBUG(context, "Iceberg SigV4 secret '%s' was not updated, refresh failed: %s",
+		                 refresh_input.name.GetIdentifierName(), ex.what());
 	}
 }
 

@@ -14,21 +14,24 @@ enum class IcebergSnapshotOperationType : uint8_t { APPEND, REPLACE, OVERWRITE, 
 //! An Iceberg snapshot https://iceberg.apache.org/spec/#snapshots
 class IcebergSnapshot {
 public:
-	IcebergSnapshot(int32_t schema_id) : schema_id(schema_id) {
+	IcebergSnapshot(optional<int32_t> schema_id, int64_t snapshot_id) : schema_id(schema_id), snapshot_id(snapshot_id) {
 	}
 	static int64_t NewSnapshotId();
+	static int64_t NextSequenceNumber(int64_t last_sequence_number);
 	static IcebergSnapshot ParseSnapshot(const rest_api_objects::Snapshot &snapshot, IcebergTableMetadata &metadata);
-	rest_api_objects::Snapshot ToRESTObject(const IcebergTableMetadata &table_metadata) const;
+	rest_api_objects::Snapshot ToRESTObject() const;
 
 public:
+	//! Throws if the snapshot doesn't record its schema-id
 	int32_t GetSchemaId() const;
 
 private:
-	int32_t schema_id;
+	//! The schema-id is optional, so a snapshot may not record the schema it was written with
+	optional<int32_t> schema_id;
 
 public:
-	//! Snapshot metadata
-	optional<int64_t> snapshot_id;
+	//! Required in every Iceberg format version.
+	int64_t snapshot_id;
 	optional<int64_t> parent_snapshot_id;
 	optional<int64_t> sequence_number;
 	optional<int64_t> first_row_id;
@@ -39,6 +42,8 @@ public:
 	//! V1 snapshots may embed manifest file paths instead of referencing a manifest list.
 	vector<string> manifests;
 	IcebergSnapshotMetrics metrics;
+	//! The snapshot summary as read from the metadata, without 'operation'
+	case_insensitive_map_t<string> summary;
 };
 
 } // namespace duckdb

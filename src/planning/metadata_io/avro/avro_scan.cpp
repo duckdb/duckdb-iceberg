@@ -3,12 +3,15 @@
 #include "duckdb/main/extension_helper.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
 #include "duckdb/main/database.hpp"
+#include "duckdb/common/multi_file/table_function_multi_file.hpp"
 
 #include "iceberg_extension.hpp"
 #include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
 #include "planning/iceberg_multi_file_reader.hpp"
 #include "planning/metadata_io/avro/iceberg_avro_multi_file_reader.hpp"
 #include "planning/metadata_io/avro/iceberg_avro_multi_file_list.hpp"
+#include "duckdb/logging/logger.hpp"
+#include "iceberg_logging.hpp"
 
 namespace duckdb {
 
@@ -33,12 +36,12 @@ AvroScan::AvroScan(const string &path, ClientContext &context, shared_ptr<Iceber
 		throw InvalidInputException("Function with name \"read_avro\" not found!");
 	}
 	auto &avro_scan_entry = catalog_entry->Cast<TableFunctionCatalogEntry>();
-	avro_scan = avro_scan_entry.functions.functions[0];
+	avro_scan = *avro_scan_entry.functions.functions[0];
 
 	vector<Value> children;
 	children.reserve(1);
 	children.push_back(Value(path));
-	named_parameter_map_t named_params;
+	named_argument_map_t named_params;
 	vector<LogicalType> input_types;
 	vector<Identifier> input_names;
 
@@ -49,10 +52,18 @@ AvroScan::AvroScan(const string &path, ClientContext &context, shared_ptr<Iceber
 	dummy_table_function.name = Identifier(is_manifest_list ? "IcebergManifestList" : "IcebergManifest");
 	dummy_table_function.get_multi_file_reader = IcebergAvroMultiFileReader::CreateInstance;
 	dummy_table_function.function_info = avro_scan_info;
+	BoundTableFunction bound_table_function(dummy_table_function);
 
 	TableFunctionBindInput bind_input(children, named_params, input_types, input_names, nullptr, nullptr,
-	                                  dummy_table_function, empty);
-	bind_data = avro_scan->bind(context, bind_input, return_types, return_names);
+	                                  bound_table_function, empty);
+	if (avro_scan->function_info) {
+		// read_avro wraps a single-file function, which it keeps in the function info we replace above
+		auto &avro_info = avro_scan->function_info->Cast<TableFunctionMultiFileInfo>();
+		bind_data = TableFunctionMultiFileWrapper::MultiFileBindWith(context, bind_input, return_types, return_names,
+		                                                             avro_info.function, avro_info.settings);
+	} else {
+		bind_data = avro_scan->bind(context, bind_input, return_types, return_names);
+	}
 
 	for (idx_t i = 0; i < return_types.size(); i++) {
 		column_ids.push_back(i);
@@ -60,6 +71,16 @@ AvroScan::AvroScan(const string &path, ClientContext &context, shared_ptr<Iceber
 
 	TableFunctionInitInput input(bind_data.get(), column_ids, vector<idx_t>(), nullptr);
 	global_state = avro_scan->init_global(context, input);
+}
+
+AvroScan::~AvroScan() {
+	if (scan_info->type == AvroScanInfoType::MANIFEST_FILE) {
+		auto &info = scan_info->Cast<IcebergManifestFileScanInfo>();
+		DUCKDB_LOG(context, IcebergLogType,
+		           "Iceberg metadata phase=manifest_parse scope=avro_scan manifest_parses=%llu "
+		           "manifest_entries_converted=%llu",
+		           info.manifest_parses.load(), info.manifest_entries_converted.load());
+	}
 }
 
 unique_ptr<AvroScan> AvroScan::ScanManifest(const IcebergSnapshotScanInfo &snapshot_info,

@@ -21,32 +21,49 @@ struct RewriteCandidate {
 	vector<IcebergPartitionInfo> partition_info;
 };
 
+struct RewriteBucket {
+	vector<RewriteCandidate> retained;
+	//! Counted over every eligible file, so max_files_to_rewrite cannot change the gating decision below.
+	int64_t eligible_count = 0;
+	int64_t eligible_bytes = 0;
+};
+
 struct RewritePlan {
 	QualifiedName table_name;
 	int64_t starting_snapshot_id = -1;
 	int64_t starting_sequence_number = 0;
-	int64_t target_file_size_bytes = 134217728;
+	//! Iceberg spec default for write.target-file-size-bytes (same as IcebergCopyOptions::file_size_bytes).
+	int64_t target_file_size_bytes = 512LL * 1024 * 1024;
 	//! Keep the loaded metadata alive until commit.
 	shared_ptr<IcebergTable> table_info;
-	vector<RewriteCandidate> candidates;
-	//! Partition-local rewrite groups.
-	vector<vector<RewriteCandidate>> file_groups;
+	//! Files selected for rewrite after per-partition size / min_input_files gating.
+	vector<RewriteCandidate> selected_candidates;
+	//! Distinct delete-file paths whose referenced data files were all selected.
+	//! Invalidated on the same REPLACE commit as the rewritten data files.
+	vector<string> delete_files_to_remove;
+	//! The rows the selected files hold before deletes: the most the rewrite can write
+	int64_t selected_record_count = 0;
+	//! The most rows the deletes that may apply to the selected files can remove, so the rewrite writes at least
+	//! selected_record_count minus this. Capped at selected_record_count to avoid overflow. Unset when an equality
+	//! delete may apply: it can remove any number of rows.
+	optional<int64_t> max_deleted_rows = 0;
 };
 
 struct RewriteDataFilesPlanInput {
 	QualifiedName table_name;
 	optional<int64_t> target_file_size_bytes;
+	//! Optional override; defaults to 75% of the resolved target file size.
+	optional<int64_t> min_file_size_bytes;
+	//! Optional override; defaults to 180% of the resolved target file size.
+	optional<int64_t> max_file_size_bytes;
 	int64_t min_input_files = 5;
+	//! Optional upper bound on how many eligible files will be rewritten.
+	optional<int64_t> max_files_to_rewrite;
 	bool rewrite_all = false;
+	//! Spec to rewrite into. Defaults to the table's current default spec (default_spec_id).
+	optional<int32_t> output_spec_id;
 };
 
-RewritePlan PlanRewrite(ClientContext &context, const RewriteDataFilesPlanInput &input);
-
-namespace rewrite_planner_internal {
-
-//! Canonical partition key used by the bin-packer.
-string PartitionBucketKey(const vector<IcebergPartitionInfo> &partition_info);
-
-} // namespace rewrite_planner_internal
+RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input);
 
 } // namespace duckdb

@@ -11,22 +11,45 @@ namespace duckdb {
 
 namespace {
 
+static void NormalizeOptionalFilterCallbacks(Expression &expr) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		auto &func = expr.Cast<BoundFunctionExpression>();
+		optional_ptr<Expression> child_filter;
+		if (func.GetChildren().size() == 1 && func.BindInfo()) {
+			auto &type = func.GetChildren()[0]->GetReturnType();
+			if (func.Function().GetName() == OptionalFilterScalarFun::NAME) {
+				func.FunctionMutable().SetCallbacks(OptionalFilterScalarFun::GetFunction(type).GetCallbacks());
+				child_filter = func.BindInfo()->Cast<OptionalFilterFunctionData>().child_filter_expr.get();
+			} else if (func.Function().GetName() == SelectivityOptionalFilterScalarFun::NAME) {
+				func.FunctionMutable().SetCallbacks(
+				    SelectivityOptionalFilterScalarFun::GetFunction(type).GetCallbacks());
+				child_filter = func.BindInfo()->Cast<SelectivityOptionalFilterFunctionData>().child_filter_expr.get();
+			}
+		}
+		if (child_filter) {
+			NormalizeOptionalFilterCallbacks(*child_filter);
+		}
+	}
+	ExpressionIterator::EnumerateChildren(expr, [&](Expression &child) { NormalizeOptionalFilterCallbacks(child); });
+}
+
 static unique_ptr<Expression> CreateReferenceExpression(const LogicalType &type) {
 	return make_uniq<BoundReferenceExpression>(type, 0ULL);
 }
 
-static void AppendColumnPath(const ColumnIndex &column_index, vector<idx_t> &path) {
-	for (auto &child_index : column_index.GetChildIndexes()) {
-		path.push_back(child_index.GetPrimaryIndex());
-		AppendColumnPath(child_index, path);
+static bool TryGetColumnPath(const ColumnIndex &column_index, vector<idx_t> &path) {
+	// GetSourceIdMap stores successive nesting levels as a flat list of child indexes.
+	// These are a single field path, not sibling projections in DuckDB's ColumnIndex representation.
+	if (!column_index.HasPrimaryIndex()) {
+		return false;
 	}
-}
-
-static vector<idx_t> GetColumnPath(const ColumnIndex &column_index) {
-	column_index.VerifySinglePath();
-	vector<idx_t> path;
-	AppendColumnPath(column_index, path);
-	return path;
+	for (auto &child_index : column_index.GetChildIndexes()) {
+		if (!child_index.HasPrimaryIndex() || child_index.HasChildren()) {
+			return false;
+		}
+		path.push_back(child_index.GetPrimaryIndex());
+	}
+	return true;
 }
 
 static bool TryGetFilterPath(const Expression &expr, vector<idx_t> &path) {
@@ -127,27 +150,50 @@ static unique_ptr<Expression> ExtractFilterExpressionForPath(const Expression &e
 
 } // namespace
 
-unique_ptr<ExpressionFilter> IcebergTableFilters::GetFilterForColumnIndex(const ColumnIndex &column_index) const {
-	auto filter = TryGetFilterByColumnIndex(column_index);
-	if (!filter && column_index.HasChildren()) {
-		// Filters on struct fields can be registered for the top-level column. The path extraction below ensures
-		// that we only return the part of the parent filter that targets the requested field.
-		filter = TryGetFilterByColumnIndex(ColumnIndex(column_index.GetPrimaryIndex()));
+bool IcebergTableFilters::FiltersEqual(const ExpressionFilter &left, const ExpressionFilter &right) {
+	if (left.Equals(right)) {
+		return true;
 	}
-	if (!filter) {
-		return nullptr;
+	if (left.column_indexes != right.column_indexes) {
+		return false;
+	}
+	// Loadable extensions can have their own copies of DuckDB's optional-filter callbacks.
+	// Normalize only those callbacks, preserving all predicate, type, and bind-data comparisons.
+	auto left_copy = left.Copy();
+	auto right_copy = right.Copy();
+	NormalizeOptionalFilterCallbacks(*left_copy->expr);
+	NormalizeOptionalFilterCallbacks(*right_copy->expr);
+	return left_copy->Equals(*right_copy);
+}
+
+optional_ptr<const ExpressionFilter>
+IcebergTableFilters::GetFilterForColumnIndex(const ColumnIndex &column_index) const {
+	if (column_index.HasPrimaryIndex() && !column_index.HasChildren()) {
+		return TryGetFilterByColumnIndex(column_index);
+	}
+	auto cached = partition_filters.find(column_index);
+	if (cached != partition_filters.end()) {
+		return cached->second.get();
 	}
 
-	auto path = GetColumnPath(column_index);
-	if (path.empty()) {
-		return filter->Copy();
+	vector<idx_t> path;
+	unique_ptr<ExpressionFilter> result;
+	if (TryGetColumnPath(column_index, path)) {
+		auto filter = TryGetFilterByColumnIndex(column_index);
+		if (!filter) {
+			// Struct filters can be registered on the top-level column. Only extract the part targeting this path.
+			filter = TryGetFilterByColumnIndex(ColumnIndex(column_index.GetPrimaryIndex()));
+		}
+		if (filter) {
+			auto child_expr = ExtractFilterExpressionForPath(*filter->expr, path);
+			if (child_expr) {
+				result = make_uniq<ExpressionFilter>(std::move(child_expr));
+			}
+		}
 	}
-
-	auto child_expr = ExtractFilterExpressionForPath(*filter->expr, path);
-	if (!child_expr) {
-		return nullptr;
-	}
-	return make_uniq<ExpressionFilter>(std::move(child_expr));
+	// Publish only after extraction succeeds; a null result also avoids repeating an unsupported path.
+	auto inserted = partition_filters.emplace(column_index, std::move(result));
+	return inserted.first->second.get();
 }
 
 } // namespace duckdb

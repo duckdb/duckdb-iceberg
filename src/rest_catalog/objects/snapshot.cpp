@@ -12,11 +12,11 @@ namespace rest_api_objects {
 
 Snapshot::Snapshot() {
 }
-Snapshot::Object2::Object2() {
+Snapshot::Object6::Object6() {
 }
 
-Snapshot::Object2 Snapshot::Object2::FromJSON(JSONValue obj) {
-	Object2 res;
+Snapshot::Object6 Snapshot::Object6::FromJSON(JSONValue obj) {
+	Object6 res;
 	auto error = res.TryFromJSON(obj);
 	if (!error.empty()) {
 		throw InvalidInputException(error);
@@ -24,8 +24,8 @@ Snapshot::Object2 Snapshot::Object2::FromJSON(JSONValue obj) {
 	return res;
 }
 
-Snapshot::Object2 Snapshot::Object2::Copy() const {
-	Object2 res;
+Snapshot::Object6 Snapshot::Object6::Copy() const {
+	Object6 res;
 	res.operation = operation;
 	for (auto &entry : additional_properties) {
 		res.additional_properties.emplace(entry.first, entry.second);
@@ -33,16 +33,16 @@ Snapshot::Object2 Snapshot::Object2::Copy() const {
 	return res;
 }
 
-string Snapshot::Object2::TryFromJSON(JSONValue obj) {
+string Snapshot::Object6::TryFromJSON(JSONValue obj) {
 	string error;
 	auto operation_val = obj.GetMember("operation");
 	if (!operation_val.IsValid()) {
-		return "Object2 required property 'operation' is missing";
+		return "Object6 required property 'operation' is missing";
 	} else {
 		if (json_utils::IsString(operation_val)) {
 			operation = json_utils::GetString(operation_val);
 		} else {
-			return StringUtil::Format("Object2 property 'operation' is not of type 'string', found %s instead",
+			return StringUtil::Format("Object6 property 'operation' is not of type 'string', found %s instead",
 			                          json_utils::GetTypeDescription(operation_val).c_str());
 		}
 	}
@@ -58,7 +58,7 @@ string Snapshot::Object2::TryFromJSON(JSONValue obj) {
 		if (json_utils::IsString(val)) {
 			tmp = json_utils::GetString(val);
 		} else {
-			error = StringUtil::Format("Object2 property 'tmp' is not of type 'string', found %s instead",
+			error = StringUtil::Format("Object6 property 'tmp' is not of type 'string', found %s instead",
 			                           json_utils::GetTypeDescription(val).c_str());
 			return;
 		}
@@ -70,7 +70,7 @@ string Snapshot::Object2::TryFromJSON(JSONValue obj) {
 	return "";
 }
 
-void Snapshot::Object2::PopulateJSON(JSONWriter &writer, JSONMutableValue obj) const {
+void Snapshot::Object6::PopulateJSON(JSONWriter &writer, JSONMutableValue obj) const {
 	// Serialize: operation
 	auto operation_json = writer.CreateString(operation);
 	obj.Add("operation", operation_json);
@@ -82,7 +82,7 @@ void Snapshot::Object2::PopulateJSON(JSONWriter &writer, JSONMutableValue obj) c
 	}
 }
 
-JSONMutableValue Snapshot::Object2::ToJSON(JSONWriter &writer) const {
+JSONMutableValue Snapshot::Object6::ToJSON(JSONWriter &writer) const {
 	auto obj = writer.CreateObject();
 	PopulateJSON(writer, obj);
 	return obj;

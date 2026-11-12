@@ -1,0 +1,71 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_generic_function_filter_pruning_expressions.test
+# description: Generic function pruning keeps interior matches for non-monotonic expressions
+# group: [filtering]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SCAN_PLANNING_MODE client
+
+include test/sql/init_requires
+
+statement ok
+SET threads=1;
+
+statement ok
+CALL enable_logging('Iceberg');
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.function_pruning_expressions;
+
+statement ok
+CREATE TABLE my_datalake.default.function_pruning_expressions (x INTEGER);
+
+statement ok
+INSERT INTO my_datalake.default.function_pruning_expressions SELECT range FROM range(-100, 101);
+
+statement ok
+INSERT INTO my_datalake.default.function_pruning_expressions SELECT range FROM range(200, 301);
+
+statement ok
+INSERT INTO my_datalake.default.function_pruning_expressions SELECT range FROM range(400, 501);
+
+# Both endpoints of [-100, 100] have abs(x) = 100, but the file contains
+# matches. Derived statistics must include the interior minimum at zero.
+statement ok
+CALL truncate_duckdb_logs();
+
+query II
+SELECT count(*), sum(x) FROM my_datalake.default.function_pruning_expressions
+WHERE abs(x) BETWEEN 50 AND 60;
+----
+22	0
+
+query I
+SELECT count(DISTINCT message) FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE '%skipped ''data_file''%'
+	AND message LIKE '%abs(x) BETWEEN%';
+----
+2
+
+# Every file's endpoints have remainder zero, but each has interior matches.
+# No file may be pruned when the expression's statistics cannot prove a miss.
+statement ok
+CALL truncate_duckdb_logs();
+
+query II
+SELECT count(*), sum(x) FROM my_datalake.default.function_pruning_expressions
+WHERE x % 100 BETWEEN 10 AND 20;
+----
+33	7095
+
+query I
+SELECT count(DISTINCT message) FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE '%skipped ''data_file''%';
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.function_pruning_expressions;
+
+statement ok
+RESET threads;

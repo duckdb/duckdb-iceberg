@@ -3,6 +3,7 @@
 #include "core/expression/iceberg_predicate_stats.hpp"
 #include "duckdb/common/numeric_utils.hpp"
 #include "duckdb/logging/logger.hpp"
+#include "duckdb/storage/statistics/geometry_stats.hpp"
 #include "iceberg_logging.hpp"
 #include "planning/pruning/iceberg_predicate.hpp"
 #include "storage/statistics/iceberg_variant_statistics.hpp"
@@ -13,7 +14,8 @@ namespace {
 
 //! How many of a column's values in a data file are NULL, from the counts its manifest entry carries. An absent
 //! null count tells us nothing, so assume both kinds of row are present.
-void ApplyNullCounts(const IcebergDataFile &data_file, int32_t column_id, IcebergPredicateStats &stats) {
+void ApplyNullCounts(const IcebergDataFile &data_file, int32_t column_id, IcebergPredicateStats &stats,
+                     const vector<reference<const IcebergColumnDefinition>> &parents = {}) {
 	optional<int64_t> value_count;
 	optional<int64_t> null_count;
 	auto value_counts_it = data_file.value_counts.find(column_id);
@@ -31,6 +33,58 @@ void ApplyNullCounts(const IcebergDataFile &data_file, int32_t column_id, Iceber
 	} else {
 		stats.has_null = true;
 		stats.has_not_null = value_count ? *value_count > 0 : true;
+	}
+	for (auto &parent : parents) {
+		IcebergPredicateStats parent_stats;
+		ApplyNullCounts(data_file, parent.get().id, parent_stats);
+		// Container metrics can exclude NULL ancestors. A field is NULL if any ancestor is NULL, and
+		// cannot have a non-NULL value when an ancestor is entirely NULL. Do not add the counts:
+		// primitive metrics can already include these same NULLs.
+		stats.has_null |= parent_stats.has_null;
+		stats.has_not_null &= parent_stats.has_not_null;
+	}
+	if (stats.geometry_stats) {
+		stats.geometry_stats->Set(stats.has_null ? StatsInfo::CAN_HAVE_NULL_VALUES
+		                                         : StatsInfo::CANNOT_HAVE_NULL_VALUES);
+		stats.geometry_stats->Set(stats.has_not_null ? StatsInfo::CAN_HAVE_VALID_VALUES
+		                                             : StatsInfo::CANNOT_HAVE_VALID_VALUES);
+	}
+}
+
+optional_ptr<const IcebergColumnDefinition>
+ResolveStructField(const IcebergColumnDefinition &root, const ColumnIndex &column_index,
+                   vector<reference<const IcebergColumnDefinition>> &parents) {
+	optional_ptr<const IcebergColumnDefinition> column = root;
+	optional_ptr<const ColumnIndex> index = column_index;
+	while (index->HasChildren()) {
+		if (column->type.id() != LogicalTypeId::STRUCT || index->ChildIndexCount() != 1) {
+			return nullptr;
+		}
+		index = index->GetChildIndex(0);
+		if (!index->HasPrimaryIndex()) {
+			return nullptr;
+		}
+		parents.emplace_back(*column);
+		column = column->GetChild(index->GetPrimaryIndex());
+		if (!column) {
+			return nullptr;
+		}
+	}
+	// An extracted cast can change ordering or nullability. These metrics describe the stored field.
+	if (column->type != column_index.GetScanType()) {
+		return nullptr;
+	}
+	return column;
+}
+
+bool IsNaN(const Value &value) {
+	switch (value.type().id()) {
+	case LogicalTypeId::FLOAT:
+		return Value::IsNan(value.GetValue<float>());
+	case LogicalTypeId::DOUBLE:
+		return Value::IsNan(value.GetValue<double>());
+	default:
+		return false;
 	}
 }
 
@@ -50,7 +104,7 @@ bool MappingCoversFieldId(const IcebergTableMetadata &metadata, int32_t field_id
 
 //! The bounds and null counts a data file records for one column. Empty when the manifest carries nothing
 //! usable, in which case no bound-based reasoning is possible for that column.
-optional<IcebergPredicateStats> TryGetColumnBoundStats(const IcebergTableMetadata &metadata,
+optional<IcebergPredicateStats> TryGetColumnBoundStats(ClientContext &context, const IcebergTableMetadata &metadata,
                                                        const IcebergDataFile &data_file,
                                                        const IcebergColumnDefinition &column) {
 	if (data_file.content == IcebergManifestEntryContentType::POSITION_DELETES) {
@@ -68,8 +122,8 @@ optional<IcebergPredicateStats> TryGetColumnBoundStats(const IcebergTableMetadat
 	if (lower_bound_it == data_file.lower_bounds.end() || upper_bound_it == data_file.upper_bounds.end()) {
 		return {};
 	}
-	auto result = IcebergPredicateStats::DeserializeBounds(lower_bound_it->second, upper_bound_it->second, column.name,
-	                                                       column.type);
+	auto result = IcebergPredicateStats::DeserializeBounds(context, lower_bound_it->second, upper_bound_it->second,
+	                                                       column.name, column.type);
 	ApplyNullCounts(data_file, column.id, result);
 	return result;
 }
@@ -77,7 +131,7 @@ optional<IcebergPredicateStats> TryGetColumnBoundStats(const IcebergTableMetadat
 } // namespace
 
 bool IcebergFilePruner::FilePartitionMatchesFilter(const IcebergDataFile &data_file,
-                                                   const IcebergManifestFile &manifest_file) const {
+                                                   const IcebergManifest &manifest_file) const {
 	if (data_file.partition_info.empty()) {
 		return true;
 	}
@@ -97,7 +151,12 @@ bool IcebergFilePruner::FilePartitionMatchesFilter(const IcebergDataFile &data_f
 	}
 
 	for (auto &field : partition_spec.fields) {
-		const auto &column_id = source_to_column_id.at(field.source_id);
+		auto source_it = source_to_column_id.find(field.source_id);
+		if (source_it == source_to_column_id.end()) {
+			// Historical partition sources can be absent from the selected schema.
+			continue;
+		}
+		const auto &column_id = source_it->second;
 		auto table_filter = table_filters.GetFilterForColumnIndex(column_id);
 		if (!table_filter) {
 			continue;
@@ -117,7 +176,7 @@ bool IcebergFilePruner::FilePartitionMatchesFilter(const IcebergDataFile &data_f
 			stats.has_not_null = true;
 		}
 
-		auto nan_counts_it = data_file.nan_value_counts.find(column_id.GetPrimaryIndex());
+		auto nan_counts_it = data_file.nan_value_counts.find(field.source_id);
 		if (nan_counts_it != data_file.nan_value_counts.end()) {
 			stats.has_nan = nan_counts_it->second != 0;
 		}
@@ -139,7 +198,7 @@ bool IcebergFilePruner::FilePartitionMatchesFilter(const IcebergDataFile &data_f
 	return true;
 }
 
-bool IcebergFilePruner::FileMatchesFilter(const IcebergManifestFile &manifest_file,
+bool IcebergFilePruner::FileMatchesFilter(const IcebergManifest &manifest_file,
                                           const IcebergManifestEntry &manifest_entry) const {
 	D_ASSERT(table_filters.HasFilters());
 	unordered_set<int32_t> mapping_field_ids;
@@ -157,10 +216,20 @@ bool IcebergFilePruner::FileMatchesFilter(const IcebergManifestFile &manifest_fi
 	for (auto &entry : table_filters) {
 		auto &column_index = entry.first;
 		auto primary_index = column_index.GetPrimaryIndex();
-		auto &column = *schema.columns[primary_index];
+		auto &root = *schema.columns[primary_index];
+		optional_ptr<const IcebergColumnDefinition> column_p = root;
+		vector<reference<const IcebergColumnDefinition>> parents;
 
-		if (data_file.lower_bounds.empty() || data_file.upper_bounds.empty() ||
-		    data_file.content == IcebergManifestEntryContentType::POSITION_DELETES) {
+		if (column_index.IsPushdownExtract() && root.type.id() == LogicalTypeId::STRUCT) {
+			column_p = ResolveStructField(root, column_index, parents);
+			if (!column_p) {
+				continue;
+			}
+		}
+		auto &column = *column_p;
+		auto column_name = column_index.GetName(root.name);
+
+		if (data_file.content == IcebergManifestEntryContentType::POSITION_DELETES) {
 			continue;
 		}
 
@@ -185,6 +254,21 @@ bool IcebergFilePruner::FileMatchesFilter(const IcebergManifestFile &manifest_fi
 			if (lower_bound.IsNull() || upper_bound.IsNull()) {
 				return true;
 			}
+			//! A filter on an extracted field refers to that field, so compare against the field's bounds
+			vector<string> path;
+			bool path_supported = true;
+			reference<const ColumnIndex> path_index(column_index);
+			while (path_index.get().HasChildren()) {
+				if (path_index.get().ChildIndexCount() != 1 || path_index.get().GetChildIndex(0).HasPrimaryIndex()) {
+					path_supported = false;
+					break;
+				}
+				path_index = path_index.get().GetChildIndex(0);
+				path.push_back(path_index.get().GetFieldName());
+			}
+			if (!path_supported) {
+				continue;
+			}
 			Value lower_decoded;
 			Value upper_decoded;
 			Value lower_variant;
@@ -192,29 +276,36 @@ bool IcebergFilePruner::FileMatchesFilter(const IcebergManifestFile &manifest_fi
 			auto lower_blob = lower_bound.GetValueUnsafe<string_t>();
 			auto upper_blob = upper_bound.GetValueUnsafe<string_t>();
 			if (IcebergVariantBoundsReader::Deserialize(context, lower_blob, lower_decoded) &&
-			    IcebergVariantBoundsReader::RekeyBoundsVariant(lower_decoded, lower_variant)) {
+			    IcebergVariantBoundsReader::RekeyBoundsVariant(lower_decoded, path, lower_variant)) {
 				stats.SetLowerBound(lower_variant);
 			}
 			if (IcebergVariantBoundsReader::Deserialize(context, upper_blob, upper_decoded) &&
-			    IcebergVariantBoundsReader::RekeyBoundsVariant(upper_decoded, upper_variant)) {
+			    IcebergVariantBoundsReader::RekeyBoundsVariant(upper_decoded, path, upper_variant)) {
 				stats.SetUpperBound(upper_variant);
 			}
 		} else {
-			stats = IcebergPredicateStats::DeserializeBounds(lower_bound, upper_bound, column.name, column.type);
+			stats =
+			    IcebergPredicateStats::DeserializeBounds(context, lower_bound, upper_bound, column_name, column.type);
 		}
 
-		ApplyNullCounts(data_file, column_id, stats);
+		if (column.type.id() == LogicalTypeId::GEOMETRY && !stats.geometry_stats) {
+			// A missing bbox is unknown, but the null counts can still prove that no geometry matches.
+			stats.geometry_stats = make_shared_ptr<BaseStatistics>(GeometryStats::CreateUnknown(column.type));
+		}
+		ApplyNullCounts(data_file, column_id, stats, parents);
 
 		auto nan_counts_it = data_file.nan_value_counts.find(column_id);
-		stats.has_nan = nan_counts_it == data_file.nan_value_counts.end() || nan_counts_it->second > 0;
+		if (nan_counts_it != data_file.nan_value_counts.end()) {
+			stats.has_nan = nan_counts_it->second > 0;
+		}
 
 		auto &filter = *entry.second;
 		if (!IcebergPredicate::MatchBounds(context, filter, stats, IcebergTransform::Identity())) {
 			DUCKDB_LOG(context, IcebergLogType,
 			           "Iceberg Filter Pushdown, skipped 'data_file': '%s', column '%s' with "
 			           "bounds [%s, %s] did not match filter: %s",
-			           data_file.file_path, column.name, stats.lower_bound ? stats.lower_bound->ToString() : "N/A",
-			           stats.upper_bound ? stats.upper_bound->ToString() : "N/A", filter.ToString(column.name));
+			           data_file.file_path, column_name, stats.lower_bound ? stats.lower_bound->ToString() : "N/A",
+			           stats.upper_bound ? stats.upper_bound->ToString() : "N/A", filter.ToString(column_name));
 			return false;
 		}
 	}
@@ -256,7 +347,7 @@ bool IcebergFilePruner::PartitionSpecHasFieldForEveryFilterColumn(int32_t partit
 	return true;
 }
 
-bool IcebergFilePruner::FileFullyCoveredByFilter(const IcebergManifestFile &manifest_file,
+bool IcebergFilePruner::FileFullyCoveredByFilter(const IcebergManifest &manifest_file,
                                                  const IcebergManifestEntry &manifest_entry) const {
 	if (!table_filters.HasFilters()) {
 		return false;
@@ -324,7 +415,7 @@ bool IcebergFilePruner::FileFullyCoveredByFilter(const IcebergManifestFile &mani
 		}
 		auto &filter = *entry.second;
 		auto &source_column = IcebergTableSchema::GetFromColumnIndex(schema.columns, filter_column_index, 0);
-		if (auto stats = TryGetColumnBoundStats(metadata, data_file, source_column)) {
+		if (auto stats = TryGetColumnBoundStats(context, metadata, data_file, source_column)) {
 			if (IcebergPredicate::AllRowsMatchBounds(context, filter, *stats, IcebergTransform::Identity())) {
 				continue;
 			}
@@ -339,21 +430,17 @@ bool IcebergFilePruner::FileFullyCoveredByFilter(const IcebergManifestFile &mani
 	return true;
 }
 
-bool IcebergFilePruner::DeleteManifestMatchesDataFile(const IcebergManifestFile &delete_manifest,
-                                                      const IcebergManifestFile &data_manifest,
+bool IcebergFilePruner::DeleteManifestMatchesDataFile(const IcebergManifest &delete_manifest,
+                                                      const IcebergManifest &data_manifest,
                                                       const IcebergManifestEntry &data_manifest_entry) const {
-	if (!delete_manifest.sequence_number) {
-		throw InvalidConfigurationException("Delete manifest %s does not have a sequence number",
-		                                    delete_manifest.manifest_path);
-	}
-	if (*delete_manifest.sequence_number < data_manifest_entry.GetSequenceNumber(data_manifest)) {
+	if (delete_manifest.sequence_number < data_manifest_entry.GetSequenceNumber(data_manifest)) {
 		return false;
 	}
 
 	auto partition_spec_it = metadata.partition_specs.find(delete_manifest.partition_spec_id);
 	if (partition_spec_it == metadata.partition_specs.end()) {
-		throw InvalidInputException("Delete manifest %s references partition_spec_id %d which doesn't exist",
-		                            delete_manifest.manifest_path, delete_manifest.partition_spec_id);
+		throw InvalidInputException("Delete manifest references partition_spec_id %d which doesn't exist",
+		                            delete_manifest.partition_spec_id);
 	}
 	auto &delete_partition_spec = partition_spec_it->second;
 	if (delete_partition_spec.IsUnpartitioned()) {
@@ -400,9 +487,16 @@ bool IcebergFilePruner::DeleteManifestMatchesDataFile(const IcebergManifestFile 
 			return true;
 		}
 		auto partition_type = field.transform.GetSerializedType(source_column->type);
-		auto stats = IcebergPredicateStats::DeserializeBounds(field_summary.lower_bound, field_summary.upper_bound,
-		                                                      source_column->name, partition_type);
 		auto typed_partition_value = partition_value.DefaultCastAs(partition_type);
+		// The summary bounds leave NaN out, so a NaN partition is matched by contains_nan instead
+		if (IsNaN(typed_partition_value)) {
+			if (field_summary.contains_nan && !*field_summary.contains_nan) {
+				return false;
+			}
+			continue;
+		}
+		auto stats = IcebergPredicateStats::DeserializeBounds(
+		    context, field_summary.lower_bound, field_summary.upper_bound, source_column->name, partition_type);
 		if (stats.lower_bound && typed_partition_value < *stats.lower_bound) {
 			return false;
 		}
@@ -413,8 +507,8 @@ bool IcebergFilePruner::DeleteManifestMatchesDataFile(const IcebergManifestFile 
 	return true;
 }
 
-bool IcebergFilePruner::EqualityDeleteMatchesDataFile(const IcebergDataFile &delete_file,
-                                                      const IcebergDataFile &data_file) const {
+void IcebergFilePruner::InitializeEqualityDeleteBounds(const IcebergDataFile &delete_file,
+                                                       IcebergEqualityDeleteBounds &bounds) const {
 	auto &equality_ids = delete_file.equality_ids;
 
 	for (auto field_id : equality_ids) {
@@ -426,10 +520,7 @@ bool IcebergFilePruner::EqualityDeleteMatchesDataFile(const IcebergDataFile &del
 
 		auto delete_lower = delete_file.lower_bounds.find(field_id);
 		auto delete_upper = delete_file.upper_bounds.find(field_id);
-		auto data_lower = data_file.lower_bounds.find(field_id);
-		auto data_upper = data_file.upper_bounds.find(field_id);
-		if (delete_lower == delete_file.lower_bounds.end() || delete_upper == delete_file.upper_bounds.end() ||
-		    data_lower == data_file.lower_bounds.end() || data_upper == data_file.upper_bounds.end()) {
+		if (delete_lower == delete_file.lower_bounds.end() || delete_upper == delete_file.upper_bounds.end()) {
 			continue;
 		}
 
@@ -448,26 +539,53 @@ bool IcebergFilePruner::EqualityDeleteMatchesDataFile(const IcebergDataFile &del
 		}
 
 		try {
-			auto delete_stats = IcebergPredicateStats::DeserializeBounds(delete_lower->second, delete_upper->second,
-			                                                             column.name, column.type);
-			auto data_stats = IcebergPredicateStats::DeserializeBounds(data_lower->second, data_upper->second,
+			auto delete_stats = IcebergPredicateStats::DeserializeBounds(
+			    context, delete_lower->second, delete_upper->second, column.name, column.type);
+			if (!delete_stats.lower_bound || !delete_stats.upper_bound || delete_stats.lower_bound->IsNull() ||
+			    delete_stats.upper_bound->IsNull()) {
+				continue;
+			}
+			bounds.columns.push_back({column, *delete_stats.lower_bound, *delete_stats.upper_bound});
+		} catch (std::exception &e) {
+			ErrorData error(e);
+			DUCKDB_LOG_DEBUG(context,
+			                 "Bounds for equality delete file failed to deserialize in "
+			                 "InitializeEqualityDeleteBounds, ignoring error: %s",
+			                 error.Message());
+		}
+	}
+	bounds.initialized = true;
+}
+
+bool IcebergFilePruner::EqualityDeleteMatchesDataFile(const IcebergDataFile &delete_file,
+                                                      const IcebergDataFile &data_file,
+                                                      const IcebergEqualityDeleteBounds &bounds) const {
+	for (auto &delete_stats : bounds.columns) {
+		auto &column = delete_stats.column.get();
+		auto field_id = column.id;
+		auto data_lower = data_file.lower_bounds.find(field_id);
+		auto data_upper = data_file.upper_bounds.find(field_id);
+		if (data_lower == data_file.lower_bounds.end() || data_upper == data_file.upper_bounds.end()) {
+			continue;
+		}
+		try {
+			auto data_stats = IcebergPredicateStats::DeserializeBounds(context, data_lower->second, data_upper->second,
 			                                                           column.name, column.type);
-			if (!delete_stats.lower_bound || !delete_stats.upper_bound || !data_stats.lower_bound ||
-			    !data_stats.upper_bound || delete_stats.lower_bound->IsNull() || delete_stats.upper_bound->IsNull() ||
-			    data_stats.lower_bound->IsNull() || data_stats.upper_bound->IsNull()) {
+			if (!data_stats.lower_bound || !data_stats.upper_bound || data_stats.lower_bound->IsNull() ||
+			    data_stats.upper_bound->IsNull()) {
 				continue;
 			}
 			//! Test for either of these conditions:
 			//! data:                   L --------- U
 			//! delete:                               L --------- U
 			//! delete:   L --------- U
-			if (*delete_stats.upper_bound < *data_stats.lower_bound ||
-			    *delete_stats.lower_bound > *data_stats.upper_bound) {
+			if (delete_stats.upper_bound < *data_stats.lower_bound ||
+			    delete_stats.lower_bound > *data_stats.upper_bound) {
 				DUCKDB_LOG(context, IcebergLogType,
 				           "Iceberg Equality Delete Pruning, skipped 'equality_delete_file': '%s' for 'data_file': "
 				           "'%s', equality field '%s' (field id %d) has bounds [%s, %s] outside data bounds [%s, %s]",
 				           delete_file.file_path, data_file.file_path, column.name, field_id,
-				           delete_stats.lower_bound->ToString(), delete_stats.upper_bound->ToString(),
+				           delete_stats.lower_bound.ToString(), delete_stats.upper_bound.ToString(),
 				           data_stats.lower_bound->ToString(), data_stats.upper_bound->ToString());
 				return false;
 			}
@@ -491,11 +609,12 @@ partition_value_map_t IcebergFilePruner::PartitionValueMap(const IcebergDataFile
 	return result;
 }
 
-bool IcebergFilePruner::DeleteFileMatchesDataFile(const IcebergManifestFile &delete_manifest,
+bool IcebergFilePruner::DeleteFileMatchesDataFile(const IcebergManifest &delete_manifest,
                                                   const IcebergManifestEntry &delete_manifest_entry,
-                                                  const IcebergManifestFile &data_manifest,
+                                                  const IcebergManifest &data_manifest,
                                                   const IcebergManifestEntry &data_manifest_entry,
-                                                  const partition_value_map_t &data_partition_values) const {
+                                                  const partition_value_map_t &data_partition_values,
+                                                  optional_ptr<IcebergEqualityDeleteBounds> delete_bounds) const {
 	auto &delete_file = delete_manifest_entry.data_file;
 	auto &data_file = data_manifest_entry.data_file;
 	if (delete_file.referenced_data_file && *delete_file.referenced_data_file != data_file.file_path) {
@@ -519,14 +638,14 @@ bool IcebergFilePruner::DeleteFileMatchesDataFile(const IcebergManifestFile &del
 		break;
 	}
 	default:
-		throw InternalException("Unexpected manifest entry content type: %d",
-		                        static_cast<uint8_t>(delete_file.content));
+		throw InvalidConfigurationException("Unexpected manifest entry content type: %d",
+		                                    static_cast<uint8_t>(delete_file.content));
 	}
 
 	auto partition_spec_it = metadata.partition_specs.find(delete_manifest.partition_spec_id);
 	if (partition_spec_it == metadata.partition_specs.end()) {
-		throw InvalidInputException("Delete manifest %s references partition_spec_id %d which doesn't exist",
-		                            delete_manifest.manifest_path, delete_manifest.partition_spec_id);
+		throw InvalidInputException("Delete manifest references partition_spec_id %d which doesn't exist",
+		                            delete_manifest.partition_spec_id);
 	}
 	if (!partition_spec_it->second.IsUnpartitioned()) {
 		if (delete_manifest.partition_spec_id != data_manifest.partition_spec_id) {
@@ -556,17 +675,22 @@ bool IcebergFilePruner::DeleteFileMatchesDataFile(const IcebergManifestFile &del
 		}
 	}
 	if (delete_file.content == IcebergManifestEntryContentType::EQUALITY_DELETES) {
-		return EqualityDeleteMatchesDataFile(delete_file, data_file);
+		D_ASSERT(delete_bounds);
+		if (!delete_bounds->initialized) {
+			InitializeEqualityDeleteBounds(delete_file, *delete_bounds);
+		}
+		return EqualityDeleteMatchesDataFile(delete_file, data_file, *delete_bounds);
 	}
 	return true;
 }
 
-bool IcebergFilePruner::ManifestMatchesFilter(const IcebergManifestFile &manifest) const {
+bool IcebergFilePruner::ManifestMatchesFilter(const IcebergManifestListEntry &entry) const {
+	auto &manifest = entry.GetManifest();
+	auto path = entry.HasFile() ? entry.GetFile().manifest_path : "<in-memory>";
 	auto spec_id = manifest.partition_spec_id;
 	auto partition_spec_it = metadata.partition_specs.find(spec_id);
 	if (partition_spec_it == metadata.partition_specs.end()) {
-		throw InvalidInputException("Manifest %s references 'partition_spec_id' %d which doesn't exist",
-		                            manifest.manifest_path, spec_id);
+		throw InvalidInputException("Manifest %s references 'partition_spec_id' %d which doesn't exist", path, spec_id);
 	}
 	auto &partition_spec = partition_spec_it->second;
 	if (!manifest.partitions.has_partitions) {
@@ -587,7 +711,12 @@ bool IcebergFilePruner::ManifestMatchesFilter(const IcebergManifestFile &manifes
 	for (idx_t i = 0; i < field_summaries.size(); i++) {
 		auto &field_summary = field_summaries[i];
 		auto &field = partition_spec.fields[i];
-		const auto &column_id = source_to_column_id.at(field.source_id);
+		auto source_it = source_to_column_id.find(field.source_id);
+		if (source_it == source_to_column_id.end()) {
+			// Historical partition sources can be absent from the selected schema.
+			continue;
+		}
+		const auto &column_id = source_it->second;
 		auto table_filter = table_filters.GetFilterForColumnIndex(column_id);
 		if (!table_filter) {
 			continue;
@@ -595,8 +724,8 @@ bool IcebergFilePruner::ManifestMatchesFilter(const IcebergManifestFile &manifes
 
 		auto &column = IcebergTableSchema::GetFromColumnIndex(schema.columns, column_id, 0);
 		auto result_type = field.transform.GetSerializedType(column.type);
-		auto stats = IcebergPredicateStats::DeserializeBounds(field_summary.lower_bound, field_summary.upper_bound,
-		                                                      column.name, result_type);
+		auto stats = IcebergPredicateStats::DeserializeBounds(context, field_summary.lower_bound,
+		                                                      field_summary.upper_bound, column.name, result_type);
 		stats.has_nan = field_summary.contains_nan;
 		stats.has_null = field_summary.contains_null;
 		stats.has_not_null = true;
@@ -605,7 +734,7 @@ bool IcebergFilePruner::ManifestMatchesFilter(const IcebergManifestFile &manifes
 			DUCKDB_LOG(context, IcebergLogType,
 			           "Iceberg Filter Pushdown, skipped 'manifest_file': '%s', column '%s' with "
 			           "transform '%s', bounds [%s, %s] did not match filter: %s",
-			           manifest.manifest_path, column.name, field.transform.RawType(),
+			           path, column.name, field.transform.RawType(),
 			           stats.lower_bound ? stats.lower_bound->ToString() : "N/A",
 			           stats.upper_bound ? stats.upper_bound->ToString() : "N/A", table_filter->ToString(column.name));
 			return false;

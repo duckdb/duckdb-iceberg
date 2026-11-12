@@ -1,391 +1,232 @@
 #include "catalog/rest/storage/aws.hpp"
 
 #include "duckdb/common/http_util.hpp"
+#include "duckdb/common/http_transport_manager.hpp"
+#include "duckdb/common/encryption_state.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/function/scalar/strftime_format.hpp"
 #include "duckdb/main/client_data.hpp"
-#include "mbedtls_wrapper.hpp"
 
 #include "iceberg_logging.hpp"
 #include "catalog/rest/storage/iceberg_authorization.hpp"
-
-#include <aws/core/auth/AWSCredentialsProviderChain.h>
-#include <aws/core/http/HttpClient.h>
+#include "catalog/rest/api/api_utils.hpp"
 
 namespace duckdb {
 
 namespace {
 
-typedef unsigned char hash_str[64];
-typedef unsigned char hash_bytes[32];
-
-void sha256(const char *in, size_t in_len, hash_bytes &out) {
-	duckdb_mbedtls::MbedTlsWrapper::ComputeSha256Hash(in, in_len, (char *)out);
-}
-
-void hmac256(const std::string &message, const char *secret, size_t secret_len, hash_bytes &out) {
-	duckdb_mbedtls::MbedTlsWrapper::Hmac256(secret, secret_len, message.data(), message.size(), (char *)out);
-}
-
-void hmac256(std::string message, hash_bytes secret, hash_bytes &out) {
-	hmac256(message, (char *)secret, sizeof(hash_bytes), out);
-}
-
-void hex256(hash_bytes &in, hash_str &out) {
-	const char *hex = "0123456789abcdef";
-	unsigned char *pin = in;
-	unsigned char *pout = out;
-	for (; pin < in + sizeof(in); pout += 2, pin++) {
-		pout[0] = hex[(*pin >> 4) & 0xF];
-		pout[1] = hex[*pin & 0xF];
+//! The verb as it appears on the first line of the SigV4 canonical request.
+const char *MethodName(RequestType request_type) {
+	switch (request_type) {
+	case RequestType::GET_REQUEST:
+		return "GET";
+	case RequestType::PUT_REQUEST:
+		return "PUT";
+	case RequestType::HEAD_REQUEST:
+		return "HEAD";
+	case RequestType::DELETE_REQUEST:
+		return "DELETE";
+	case RequestType::POST_REQUEST:
+		return "POST";
+	default:
+		throw NotImplementedException("Cannot sign a request of type %s", EnumUtil::ToString(request_type));
 	}
 }
 
-class DuckDBSecretCredentialProvider : public Aws::Auth::AWSCredentialsProviderChain {
-public:
-	DuckDBSecretCredentialProvider(const string &key_id, const string &secret, const string &sesh_token) {
-		credentials.SetAWSAccessKeyId(key_id);
-		credentials.SetAWSSecretKey(secret);
-		credentials.SetSessionToken(sesh_token);
+//! Aws::Http::URI::AddPathSegment stripped leading and trailing slashes from every segment it
+//! was given, and kept interior ones (which is why the canonical path needs the %2F rewrite
+//! below). Segments are stored raw here, so do it on the way out.
+string NormalizeSegment(const string &segment) {
+	auto begin = segment.find_first_not_of('/');
+	if (begin == string::npos) {
+		return "";
 	}
+	auto end = segment.find_last_not_of('/');
+	return segment.substr(begin, end - begin + 1);
+}
 
-	~DuckDBSecretCredentialProvider() = default;
+//! The SDK's non-RFC path encoder (urlEncodeSegment with s_compliantRfc3986Encoding false).
+//! Unreserved characters plus the reserved set AWS chose to leave alone for compatibility.
+string WireEncodeSegment(const string &segment) {
+	static const char *HEX_DIGIT = "0123456789ABCDEF";
+	string result;
+	for (auto character : segment) {
+		auto ch = static_cast<unsigned char>(character);
+		if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) {
+			result += character;
+			continue;
+		}
+		switch (ch) {
+		// RFC 3986 unreserved
+		case '-':
+		case '_':
+		case '.':
+		case '~':
+		// Reserved, but deliberately not escaped by the SDK, to match services that never
+		// escaped them either.
+		case '$':
+		case '&':
+		case ',':
+		case ':':
+		case '=':
+		case '@':
+			result += character;
+			break;
+		default:
+			result += '%';
+			result += HEX_DIGIT[ch >> 4];
+			result += HEX_DIGIT[ch & 15];
+		}
+	}
+	return result;
+}
 
-	Aws::Auth::AWSCredentials GetAWSCredentials() override {
-		return credentials;
-	};
-
-protected:
-	Aws::Auth::AWSCredentials credentials;
-};
+//! Hex encoded SHA256 of the request body, as it appears in x-amz-content-sha256 and the canonical request.
+string GetPayloadHash(EncryptionUtil &encryption_util, const string &data) {
+	string result(CryptoHash::GetHexDigestSize(CryptoHashFunction::SHA256), '\0');
+	encryption_util.HashHex(CryptoHashFunction::SHA256, const_data_ptr_cast(data.data()), data.size(), &result[0]);
+	return result;
+}
 
 } // namespace
 
-static void InitAWSAPI() {
-	static bool loaded = false;
-	if (!loaded) {
-		Aws::SDKOptions options;
-
-		Aws::InitAPI(options); // Should only be called once.
-		loaded = true;
+string AWSInput::CanonicalPath() const {
+	if (path_segments.empty()) {
+		return "/";
 	}
-}
-
-static void LogAWSHTTPRequest(ClientContext &context, std::shared_ptr<Aws::Http::HttpRequest> &req,
-                              HTTPResponse &response, Aws::Http::HttpMethod &method) {
-	D_ASSERT(context.db);
-	auto &http_util = HTTPUtil::Get(*context.db);
-	auto aws_headers = req->GetHeaders();
-	auto http_headers = HTTPHeaders();
-	for (auto &header : aws_headers) {
-		http_headers.Insert(header.first, header.second);
-	}
-	auto params = HTTPParams(http_util);
-	auto scheme_str = req->GetUri().GetScheme() == Aws::Http::Scheme::HTTPS ? "https://" : "http://";
-	auto url = string(scheme_str) + req->GetUri().GetAuthority() + req->GetUri().GetPath();
-	const auto query_str = req->GetUri().GetQueryString();
-	if (!query_str.empty()) {
-		url += "?" + query_str;
-	}
-	RequestType type;
-	switch (method) {
-	case Aws::Http::HttpMethod::HTTP_GET:
-		type = RequestType::GET_REQUEST;
-		break;
-	case Aws::Http::HttpMethod::HTTP_HEAD:
-		type = RequestType::HEAD_REQUEST;
-		break;
-	case Aws::Http::HttpMethod::HTTP_DELETE:
-		type = RequestType::DELETE_REQUEST;
-		break;
-	case Aws::Http::HttpMethod::HTTP_POST:
-		type = RequestType::POST_REQUEST;
-		break;
-	case Aws::Http::HttpMethod::HTTP_PUT:
-		type = RequestType::PUT_REQUEST;
-		break;
-	default:
-		throw InvalidConfigurationException("Aws client cannot create request of type %s",
-		                                    Aws::Http::HttpMethodMapper::GetNameForHttpMethod(method));
-	}
-	auto request = BaseRequest(type, url, std::move(http_headers), params);
-	request.params.logger = context.logger;
-	http_util.LogRequest(request, response);
-}
-
-Aws::Client::ClientConfiguration AWSInput::BuildClientConfig() {
-	auto config = Aws::Client::ClientConfiguration();
-	if (!cert_path.empty()) {
-		config.caFile = cert_path;
-	}
-	if (use_httpfs_timeout) {
-		// requestTimeoutMS is for Windows
-		config.requestTimeoutMs = request_timeout_in_ms;
-		// httpRequestTimoutMS is for all other OS's
-		// see
-		// https://github.com/aws/aws-sdk-cpp/blob/199c0a80b29a30db35b8d23c043aacf7ccb28957/src/aws-cpp-sdk-core/include/aws/core/client/ClientConfiguration.h#L190
-		config.httpRequestTimeoutMs = request_timeout_in_ms;
-	}
-	return config;
-}
-
-Aws::Http::URI AWSInput::BuildURI() {
-	Aws::Http::URI uri;
-	uri.SetScheme(scheme);
-	uri.SetAuthority(authority);
+	string result;
 	for (auto &segment : path_segments) {
-		uri.AddPathSegment(segment);
-	}
-	for (auto &param : query_string_parameters) {
-		uri.AddQueryStringParameter(param.first.c_str(), param.second.c_str());
-	}
-	return uri;
-}
-
-static string GetPayloadHash(const char *buffer, idx_t buffer_len) {
-	if (buffer_len > 0) {
-		hash_bytes payload_hash_bytes;
-		hash_str payload_hash_str;
-		sha256(buffer, buffer_len, payload_hash_bytes);
-		hex256(payload_hash_bytes, payload_hash_str);
-		return string((char *)payload_hash_str, sizeof(payload_hash_str));
-	} else {
-		return "";
-	}
-}
-
-std::shared_ptr<Aws::Http::HttpRequest> AWSInput::CreateSignedRequest(Aws::Http::HttpMethod method,
-                                                                      const Aws::Http::URI &uri, HTTPHeaders &headers,
-                                                                      const string &body) {
-#ifndef EMSCRIPTEN
-	auto request = Aws::Http::CreateHttpRequest(uri, method, Aws::Utils::Stream::DefaultResponseStreamFactoryMethod);
-	request->SetUserAgent(user_agent);
-
-	if (!body.empty()) {
-		auto bodyStream = Aws::MakeShared<Aws::StringStream>("");
-		*bodyStream << body;
-		request->AddContentBody(bodyStream);
-		request->SetContentLength(std::to_string(body.size()));
-		if (headers.HasHeader("Content-Type")) {
-			request->SetHeaderValue("Content-Type", headers.GetHeaderValue("Content-Type"));
-		}
-	}
-
-	std::shared_ptr<Aws::Auth::AWSCredentialsProviderChain> provider;
-	provider = std::make_shared<DuckDBSecretCredentialProvider>(key_id, secret, session_token);
-	auto signer = make_uniq<Aws::Client::AWSAuthV4Signer>(provider, service.c_str(), region.c_str());
-	if (!signer->SignRequest(*request)) {
-		throw HTTPException("Failed to sign request");
-	}
-
-	return request;
-#else
-	return nullptr;
-#endif
-}
-
-unique_ptr<HTTPResponse> AWSInput::ExecuteRequestLegacy(ClientContext &context, Aws::Http::HttpMethod method,
-                                                        HTTPHeaders &headers, const string &body) {
-#ifndef EMSCRIPTEN
-	InitAWSAPI();
-	auto clientConfig = BuildClientConfig();
-	auto uri = BuildURI();
-	auto request = CreateSignedRequest(method, uri, headers, body);
-
-	auto httpClient = Aws::Http::CreateHttpClient(clientConfig);
-	auto response = httpClient->MakeRequest(request);
-	auto resCode = response->GetResponseCode();
-
-	auto result = make_uniq<HTTPResponse>(resCode == Aws::Http::HttpResponseCode::REQUEST_NOT_MADE
-	                                          ? HTTPStatusCode::INVALID
-	                                          : HTTPStatusCode(static_cast<idx_t>(resCode)));
-
-	bool throw_exception = false;
-	result->url = uri.GetURIString();
-	if (resCode == Aws::Http::HttpResponseCode::REQUEST_NOT_MADE) {
-		D_ASSERT(response->HasClientError());
-		result->reason = response->GetClientErrorMessage();
-		throw_exception = true;
-	}
-	for (auto &header : response->GetHeaders()) {
-		result->headers[header.first] = header.second;
-	}
-	Aws::StringStream resBody;
-	resBody << response->GetResponseBody().rdbuf();
-	result->body = resBody.str();
-	if (static_cast<uint16_t>(result->status) > 400) {
-		result->success = false;
-	}
-	LogAWSHTTPRequest(context, request, *result, method);
-	if (throw_exception) {
-		throw HTTPException(*result, result->reason);
+		result += "/" + StringUtil::URLEncode(NormalizeSegment(segment));
 	}
 	return result;
-#else
-	throw NotImplementedException("ExecuteRequestLegacy is not implemented in duckdb-wasm");
-#endif
 }
 
-unique_ptr<HTTPResponse> AWSInput::ExecuteRequest(ClientContext &context, Aws::Http::HttpMethod method,
-                                                  HTTPHeaders &headers, const string &body) {
-	bool use_httputils = true;
-	{
-		Value result;
-		(void)context.TryGetCurrentSetting("iceberg_via_aws_sdk_for_catalog_interactions", result);
-		if (!result.IsNull() && result.GetValue<bool>()) {
-			use_httputils = false;
-		}
+string AWSInput::WirePath() const {
+	// GetURIString appended no path at all when the segment list was empty, rather than "/".
+	string result;
+	for (auto &segment : path_segments) {
+		result += "/" + WireEncodeSegment(NormalizeSegment(segment));
 	}
-	if (!use_httputils) {
-		// Query Iceberg REST catalog via AWS's SDK
-		return ExecuteRequestLegacy(context, method, headers, body);
-	}
+	return result;
+}
 
-	auto uri = BuildURI();
+string AWSInput::QueryString() const {
+	string result;
+	for (auto &param : query_string_parameters) {
+		result += result.empty() ? "?" : "&";
+		result += StringUtil::URLEncode(param.first) + "=" + StringUtil::URLEncode(param.second);
+	}
+	return result;
+}
+
+string AWSInput::URL() const {
+	return string(use_https ? "https://" : "http://") + authority + WirePath() + QueryString();
+}
+
+HTTPHeaders AWSInput::SignRequest(RequestType request_type, ClientContext &context, HTTPHeaders &headers,
+                                  const string &data) const {
 	auto &db = DatabaseInstance::GetDatabase(context);
+	// the crypto module of httpfs if that is loaded, duckdb's own otherwise
+	auto encryption_util = db.GetEncryptionUtil(true);
 
-	HTTPHeaders res(db);
-
-	const string host = uri.GetAuthority();
-	res["host"] = host;
-	// If access key is not set, we don't set the headers at all to allow accessing public files through s3 urls
-
-	string payload_hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"; // Empty payload hash
-
-	if (!body.empty()) {
-		payload_hash = GetPayloadHash(body.c_str(), body.size());
-	}
-
-	// key_id, secret, session_token
-	// we can pass date/time but this is mostly useful in testing. normally we just get the current datetime
-	// here.
 	auto timestamp = Timestamp::GetCurrentTimestamp();
 	string date_now = StrfTimeFormat::Format(timestamp, "%Y%m%d");
 	string datetime_now = StrfTimeFormat::Format(timestamp, "%Y%m%dT%H%M%SZ");
+	auto payload_hash = GetPayloadHash(*encryption_util, data);
 
-	res["x-amz-date"] = datetime_now;
-	res["x-amz-content-sha256"] = payload_hash;
-	if (session_token.length() > 0) {
-		res["x-amz-security-token"] = session_token;
-	}
-	string content_type;
+	// The headers that are signed and sent, in the (alphabetical) order of the canonical request.
+	vector<std::pair<string, string>> signed_headers;
 	if (headers.HasHeader("Content-Type")) {
-		content_type = headers.GetHeaderValue("Content-Type");
+		auto content_type = headers.GetHeaderValue("Content-Type");
+		if (!content_type.empty()) {
+			signed_headers.emplace_back("Content-Type", std::move(content_type));
+		}
 	}
-	if (!content_type.empty()) {
-		res["Content-Type"] = content_type;
+	signed_headers.emplace_back("host", authority);
+	signed_headers.emplace_back("x-amz-content-sha256", payload_hash);
+	signed_headers.emplace_back("x-amz-date", datetime_now);
+	if (!session_token.empty()) {
+		signed_headers.emplace_back("x-amz-security-token", session_token);
 	}
-	string signed_headers = "";
-	hash_bytes canonical_request_hash;
-	hash_str canonical_request_hash_str;
-	if (content_type.length() > 0) {
-		signed_headers += "content-type;";
-		res["Content-Type"] = content_type;
-	}
-	signed_headers += "host;x-amz-content-sha256;x-amz-date";
-	if (session_token.length() > 0) {
-		signed_headers += ";x-amz-security-token";
-	}
-
-	string url_encoded_path = uri.GetURLEncodedPath();
-
-	{
-		// it's unclear to be why we need to transform %2F into %252F, see
-		// https://en.wikipedia.org/wiki/Percent-encoding#Percent_character
-		url_encoded_path = StringUtil::Replace(url_encoded_path, "%2F", "%252F");
+	if (headers.HasHeader("X-Iceberg-Access-Delegation")) {
+		auto access_delegation = headers.GetHeaderValue("X-Iceberg-Access-Delegation");
+		if (!access_delegation.empty()) {
+			signed_headers.emplace_back("X-Iceberg-Access-Delegation", std::move(access_delegation));
+		}
 	}
 
-	auto canonical_request =
-	    string(Aws::Http::HttpMethodMapper::GetNameForHttpMethod(method)) + "\n" + url_encoded_path + "\n";
-	if (uri.GetQueryString().size()) {
-		canonical_request += uri.GetQueryString().substr(1);
+	HTTPHeaders result(db);
+	string canonical_headers;
+	string signed_header_names;
+	for (auto &header : signed_headers) {
+		auto canonical_name = StringUtil::Lower(header.first);
+		canonical_headers += canonical_name + ":" + header.second + "\n";
+		if (!signed_header_names.empty()) {
+			signed_header_names += ";";
+		}
+		signed_header_names += canonical_name;
+		result[header.first] = header.second;
 	}
 
-	if (content_type.length() > 0) {
-		canonical_request += "\ncontent-type:" + content_type;
+	// it's unclear to be why we need to transform %2F into %252F, see
+	// https://en.wikipedia.org/wiki/Percent-encoding#Percent_character
+	auto canonical_path = StringUtil::Replace(CanonicalPath(), "%2F", "%252F");
+	auto query_string = QueryString();
+	auto canonical_query_string = query_string.empty() ? string() : query_string.substr(1);
+
+	SignatureV4Params signature_params;
+	signature_params.canonical_request = string(MethodName(request_type)) + "\n" + canonical_path + "\n" +
+	                                     canonical_query_string + "\n" + canonical_headers + "\n" +
+	                                     signed_header_names + "\n" + payload_hash;
+	signature_params.credential_scope = date_now + "/" + region + "/" + service + "/aws4_request";
+	signature_params.region = region;
+	signature_params.service = service;
+	signature_params.secret_access_key = secret;
+	signature_params.date_now = date_now;
+	signature_params.datetime_now = datetime_now;
+	auto signature = HTTPUtil::CreateSignatureV4(*encryption_util, signature_params);
+
+	result["Authorization"] = "AWS4-HMAC-SHA256 Credential=" + key_id + "/" + signature_params.credential_scope +
+	                          ", SignedHeaders=" + signed_header_names + ", Signature=" + signature;
+	return result;
+}
+
+unique_ptr<HTTPResponse> AWSInput::Request(RequestType request_type, ClientContext &context, HTTPHeaders &headers,
+                                           const string &data) {
+	// before signing, so the signature uses the crypto module of httpfs
+	APIUtils::LoadHttpfs(context);
+	auto &db = DatabaseInstance::GetDatabase(context);
+	auto res = SignRequest(request_type, context, headers, data);
+
+	string request_url = URL();
+	auto session = db.config.GetHTTPTransportManager().CreateSession(context, request_url);
+	auto &params = session.Parameters();
+
+	switch (request_type) {
+	case RequestType::HEAD_REQUEST: {
+		HeadRequestInfo head_request(request_url, res, params);
+		return session.Request(head_request);
 	}
-	canonical_request += "\nhost:" + host + "\nx-amz-content-sha256:" + payload_hash + "\nx-amz-date:" + datetime_now;
-	if (session_token.length() > 0) {
-		canonical_request += "\nx-amz-security-token:" + session_token;
+	case RequestType::DELETE_REQUEST: {
+		DeleteRequestInfo delete_request(request_url, res, params);
+		return session.Request(delete_request);
 	}
-	canonical_request += "\n\n" + signed_headers + "\n" + payload_hash;
-	sha256(canonical_request.c_str(), canonical_request.length(), canonical_request_hash);
-
-	hex256(canonical_request_hash, canonical_request_hash_str);
-	auto string_to_sign = "AWS4-HMAC-SHA256\n" + datetime_now + "\n" + date_now + "/" + region + "/" + service +
-	                      "/aws4_request\n" + string((char *)canonical_request_hash_str, sizeof(hash_str));
-
-	// TODO: DUCKDB_LOGS (canonical_request + string_to_sing)
-
-	// compute signature
-	hash_bytes k_date, k_region, k_service, signing_key, signature;
-	hash_str signature_str;
-	auto sign_key = "AWS4" + secret;
-	hmac256(date_now, sign_key.c_str(), sign_key.length(), k_date);
-	hmac256(region, k_date, k_region);
-	hmac256(service, k_region, k_service);
-	hmac256("aws4_request", k_service, signing_key);
-	hmac256(string_to_sign, signing_key, signature);
-	hex256(signature, signature_str);
-
-	res["Authorization"] = "AWS4-HMAC-SHA256 Credential=" + key_id + "/" + date_now + "/" + region + "/" + service +
-	                       "/aws4_request, SignedHeaders=" + signed_headers +
-	                       ", Signature=" + string((char *)signature_str, sizeof(hash_str));
-
-	auto &http_util = HTTPUtil::Get(db);
-	unique_ptr<HTTPParams> params;
-
-	string request_url = uri.GetURIString();
-
-	params = http_util.InitializeParameters(context, request_url);
-
-	auto locked_client = IcebergAuthorizationContextState::GetHTTPClient(attached_db, context);
-	auto &client = locked_client.GetClient();
-	if (client) {
-		client->Initialize(*params);
+	case RequestType::GET_REQUEST: {
+		GetRequestInfo get_request(request_url, res, params, nullptr, nullptr);
+		return session.Request(get_request);
 	}
-
-	switch (method) {
-	case Aws::Http::HttpMethod::HTTP_HEAD: {
-		HeadRequestInfo head_request(request_url, res, *params);
-		return http_util.Request(head_request, client);
-	}
-	case Aws::Http::HttpMethod::HTTP_DELETE: {
-		DeleteRequestInfo delete_request(request_url, res, *params);
-		return http_util.Request(delete_request, client);
-	}
-	case Aws::Http::HttpMethod::HTTP_GET: {
-		GetRequestInfo get_request(request_url, res, *params, nullptr, nullptr);
-		return http_util.Request(get_request, client);
-	}
-	case Aws::Http::HttpMethod::HTTP_POST: {
-		PostRequestInfo post_request(request_url, res, *params, reinterpret_cast<const_data_ptr_t>(body.c_str()),
-		                             body.size());
-		auto x = http_util.Request(post_request, client);
+	case RequestType::POST_REQUEST: {
+		PostRequestInfo post_request(request_url, res, params, reinterpret_cast<const_data_ptr_t>(data.c_str()),
+		                             data.size());
+		auto x = session.Request(post_request);
 		if (x) {
 			x->body = post_request.buffer_out;
 		}
 		return x;
 	}
-	default:
-		throw NotImplementedException("Unexpected HTTP Method requested");
-	}
-}
-
-unique_ptr<HTTPResponse> AWSInput::Request(RequestType request_type, ClientContext &context, HTTPHeaders &headers,
-                                           const string &data) {
-	switch (request_type) {
-	case RequestType::GET_REQUEST:
-		return ExecuteRequest(context, Aws::Http::HttpMethod::HTTP_GET, headers);
-	case RequestType::POST_REQUEST:
-		return ExecuteRequest(context, Aws::Http::HttpMethod::HTTP_POST, headers, data);
-	case RequestType::DELETE_REQUEST:
-		return ExecuteRequest(context, Aws::Http::HttpMethod::HTTP_DELETE, headers);
-	case RequestType::HEAD_REQUEST:
-		return ExecuteRequest(context, Aws::Http::HttpMethod::HTTP_HEAD, headers);
 	default:
 		throw NotImplementedException("Cannot make request of type %s", EnumUtil::ToString(request_type));
 	}

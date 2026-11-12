@@ -8,20 +8,9 @@ require-env AWS_ACCESS_KEY_ID
 
 require-env AWS_SECRET_ACCESS_KEY
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 require aws
-
-foreach aws_sdk_val true false
-
-statement ok
-SET iceberg_via_aws_sdk_for_catalog_interactions={aws_sdk_val};
 
 # test using keys directly
 statement ok
@@ -36,7 +25,7 @@ statement ok
 attach or replace 'arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing' as my_datalake (
 	TYPE ICEBERG,
 	AUTHORIZATION_TYPE 'sigv4',
-	ENDPOINT 's3tables.us-east-2.amazonaws.com/iceberg'
+	URI 's3tables.us-east-2.amazonaws.com/iceberg'
 );
 
 set ignore_error_messages
@@ -68,7 +57,7 @@ statement ok
 attach 'arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing' as my_datalake (
 	TYPE ICEBERG,
 	AUTHORIZATION_TYPE 'sigv4',
-	ENDPOINT 's3tables.us-east-2.amazonaws.com/iceberg'
+	URI 's3tables.us-east-2.amazonaws.com/iceberg'
 );
 
 query T nosort tables_1
@@ -95,11 +84,10 @@ statement ok
 attach 'arn:aws:s3tables:us-east-2:840140254803:bucket/iceberg-testing' as my_datalake (
 	TYPE ICEBERG,
 	AUTHORIZATION_TYPE 'sigv4',
-	ENDPOINT 's3tables.us-east-2.amazonaws.com/iceberg'
+	URI 's3tables.us-east-2.amazonaws.com/iceberg'
 );
 
 query T nosort tables_1
 show all tables;
 ----
 
-endloop

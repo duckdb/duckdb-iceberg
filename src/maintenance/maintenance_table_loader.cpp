@@ -42,8 +42,8 @@ shared_ptr<IcebergTable> ReloadIcebergTableShared(ClientContext &context, const 
 	auto &iceberg_schema = LoadIcebergSchema(context, table_name, function_name);
 	auto &tables = iceberg_schema.tables;
 	auto table_name_string = table_name.Name().GetIdentifierName();
-	auto table_info = make_shared_ptr<IcebergTable>(iceberg_schema.ParentCatalog().Cast<IcebergCatalog>(),
-	                                                iceberg_schema, table_name_string);
+	auto table_info = IcebergTable::CreatePlaceholder(iceberg_schema.ParentCatalog().Cast<IcebergCatalog>(),
+	                                                  iceberg_schema, table_name_string);
 	if (!tables.FillEntry(context, *table_info)) {
 		throw InvalidInputException("%s: table '%s' not found in schema '%s.%s'", function_name, table_name_string,
 		                            table_name.Catalog().GetIdentifierName(), table_name.Schema().GetIdentifierName());

@@ -8,13 +8,7 @@ require-env AWS_ACCESS_KEY_ID
 
 require-env AWS_SECRET_ACCESS_KEY
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 require aws
 
@@ -62,7 +56,7 @@ CREATE SECRET (
 statement error
 attach 'quickstart_catalog' as my_datalake (
     type ICEBERG,
-    ENDPOINT 'http://does_not_exist.com/api/catalog'
+    URI 'http://does_not_exist.com/api/catalog'
 )
 ----
 Invalid Configuration Error: AUTHORIZATION_TYPE is 'oauth2', yet no 'secret' was provided, and no client_id+client_secret were provided. Please provide one of the listed options or change the 'authorization_type'.

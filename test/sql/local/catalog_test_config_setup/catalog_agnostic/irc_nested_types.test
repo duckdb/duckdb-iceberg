@@ -4,14 +4,24 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
-require avro
+include test/sql/init_requires
 
-require parquet
+# Reset this small fixture for each test.
 
-require iceberg
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.nested_types;
 
-require httpfs
+statement ok
+CREATE TABLE my_datalake.default.nested_types (
+    id INTEGER, name VARCHAR, address STRUCT(street VARCHAR, city VARCHAR, zip VARCHAR),
+    phone_numbers VARCHAR[], metadata MAP(VARCHAR, VARCHAR)
+);
 
+statement ok
+INSERT INTO my_datalake.default.nested_types VALUES (
+    1, 'Alice', {'street': '123 Main St', 'city': 'Metropolis', 'zip': '12345'},
+    ['123-456-7890', '987-654-3210'], MAP {'age': '30', 'membership': 'gold'}
+);
 
 statement ok
 set enable_logging=true

@@ -11,7 +11,7 @@
 namespace duckdb {
 namespace rest_api_objects {
 
-class Expression;
+class Predicate;
 
 class FileScanTask {
 public:
@@ -36,7 +36,7 @@ public:
 public:
 	DataFile data_file;
 	optional<vector<int32_t>> delete_file_references;
-	unique_ptr<Expression> residual_filter;
+	unique_ptr<Predicate> residual_filter;
 };
 
 } // namespace rest_api_objects

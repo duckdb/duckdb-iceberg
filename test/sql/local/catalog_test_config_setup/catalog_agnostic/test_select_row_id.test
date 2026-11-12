@@ -4,14 +4,11 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
-require avro
+require-env FORMAT_V3_SUPPORT
 
-require parquet
+include test/sql/init_requires
 
-require iceberg
-
-require httpfs
-
+include test/sql/local/catalog_test_config_setup/catalog_agnostic/setup/table_unpartitioned.test_setup
 
 statement ok
 CALL enable_logging('HTTP');
@@ -19,18 +16,8 @@ CALL enable_logging('HTTP');
 statement ok
 set logging_level='debug'
 
-query I
+# table_unpartitioned is a v2 table: row lineage columns only exist from v3
+statement error
 select _row_id from my_datalake.default.table_unpartitioned order by all;
 ----
-NULL
-NULL
-NULL
-NULL
-NULL
-NULL
-NULL
-NULL
-NULL
-NULL
-NULL
-NULL
+<REGEX>:.*Referenced column "_row_id" not found.*

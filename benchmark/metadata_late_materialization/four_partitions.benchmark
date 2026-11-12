@@ -33,6 +33,8 @@ ATTACH '' AS my_datalake (
 );
 
 run
+SET debug_fs_delay_mean_ms=5;
+SET enable_external_file_cache=false;
 SELECT sum(payload)
 FROM my_datalake.default.metadata_late_materialization
 WHERE partition_id BETWEEN 252 AND 255;

@@ -66,15 +66,15 @@ jobs:
         env:
           POLARIS_SERVER_AVAILABLE: 1
         run: |
-          ./build/relassert/test/unittest --order lex "$PWD/test/*" --list-test-names-only || true
-          ./build/relassert/test/unittest --order lex "$PWD/test/*"
+          ./build/relassert/test/unittest --order lex "$PWD/test/*" "exclude:*.test_slow" --list-test-names-only || true
+          ./build/relassert/test/unittest --order lex "$PWD/test/*" "exclude:*.test_slow"
  
       - name: Run Generic IRC tests
         env:
           POLARIS_SERVER_AVAILABLE: 1
         run: |
-          ./build/relassert/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --list-test-names-only || true
-          ./build/relassert/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" --test-config test/configs/polaris.json
+          ./build/relassert/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" "exclude:*.test_slow" --list-test-names-only || true
+          ./build/relassert/test/unittest --order lex "$PWD/test/sql/local/catalog_test_config_setup/*" "exclude:*.test_slow" --test-config test/configs/polaris.json
 
       - name: Test reads with PyIceberg and Spark
         run: |

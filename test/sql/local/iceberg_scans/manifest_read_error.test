@@ -1,0 +1,104 @@
+# name: test/sql/local/iceberg_scans/manifest_read_error.test
+# description: Manifest task errors drain safely and leave subsequent scans usable
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+COPY (SELECT 42::BIGINT AS id) TO '{TEST_DIR}/manifest_read_error' (FORMAT ICEBERG);
+
+# The Avro file opens successfully, but decoding its rows fails inside a manifest read task.
+statement ok
+COPY (
+    SELECT NULL::INTEGER AS status,
+           1::BIGINT AS snapshot_id,
+           1::BIGINT AS sequence_number,
+           1::BIGINT AS file_sequence_number,
+           {
+               content: 0::INTEGER,
+               file_path: '{TEST_DIR}/unread.parquet',
+               file_format: 'PARQUET',
+               partition: {},
+               record_count: 1::BIGINT,
+               file_size_in_bytes: 1000::BIGINT
+           } AS data_file
+) TO '{TEST_DIR}/invalid_manifest.avro' (
+    FORMAT AVRO,
+    METADATA {'schema-id': '0', 'partition-spec-id': '0', 'format-version': '2', 'content': 'data'},
+    FIELD_IDS {
+        status: 0, snapshot_id: 1, sequence_number: 3, file_sequence_number: 4,
+        data_file: {
+            __duckdb_field_id: 2, content: 134, file_path: 100, file_format: 101,
+            partition: 102, record_count: 103, file_size_in_bytes: 104
+        }
+    }
+);
+
+# Complete counts defer reading until the tasks run. Multiple manifests also exercise
+# cancellation of queued tasks after the first reader reports an error.
+statement ok
+COPY (
+    SELECT '{TEST_DIR}/invalid_manifest.avro' AS manifest_path,
+           1000::BIGINT AS manifest_length,
+           0::INTEGER AS partition_spec_id,
+           0::INTEGER AS content,
+           1::BIGINT AS sequence_number,
+           1::BIGINT AS min_sequence_number,
+           1::BIGINT AS added_snapshot_id,
+           1::INTEGER AS added_files_count,
+           0::INTEGER AS existing_files_count,
+           0::INTEGER AS deleted_files_count,
+           1::BIGINT AS added_rows_count,
+           0::BIGINT AS existing_rows_count,
+           0::BIGINT AS deleted_rows_count
+    FROM range(8)
+) TO '{TEST_DIR}/invalid_manifest_list.avro' (
+    FORMAT AVRO,
+    FIELD_IDS {
+        manifest_path: 500, manifest_length: 501, partition_spec_id: 502,
+        content: 517, sequence_number: 515, min_sequence_number: 516, added_snapshot_id: 503,
+        added_files_count: 504, existing_files_count: 505, deleted_files_count: 506,
+        added_rows_count: 512, existing_rows_count: 513, deleted_rows_count: 514
+    }
+);
+
+statement ok
+COPY (
+    SELECT json_merge_patch(content::JSON, json_object(
+        'snapshots', json_array(json_merge_patch(
+            content::JSON->'snapshots'->0,
+            json_object('manifest-list', '{TEST_DIR}/invalid_manifest_list.avro')
+        ))
+    ))
+    FROM read_text('{TEST_DIR}/manifest_read_error/metadata/*.metadata.json')
+) TO '{TEST_DIR}/manifest_read_error.metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+foreach threads 1 4
+
+statement ok
+SET threads = {threads};
+
+foreach partial true false
+
+statement ok
+SET scheduler_process_partial = {partial};
+
+loop iteration 0 50
+
+statement error
+SELECT * FROM iceberg_scan('{TEST_DIR}/manifest_read_error.metadata.json');
+----
+required field 'status' is NULL!
+
+query I
+SELECT id FROM iceberg_scan('{TEST_DIR}/manifest_read_error');
+----
+42
+
+endloop
+
+endloop
+
+endloop

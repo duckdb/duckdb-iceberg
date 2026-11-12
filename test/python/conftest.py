@@ -1,6 +1,7 @@
 import importlib
 import importlib.util
 import sys
+import subprocess
 from pathlib import Path
 import pytest
 from packaging.specifiers import SpecifierSet
@@ -88,9 +89,13 @@ def _requirement_failure_message(requirement: str, catalog_profile, spark_runtim
         if "row_lineage" not in catalog_profile.capabilities:
             return [f"Catalog '{catalog_profile.name}' does not support row-lineage coverage in this suite"]
         return []
+    if requirement == "allows_cleanup":
+        if "allows_cleanup" not in catalog_profile.capabilities:
+            return [f"Catalog '{catalog_profile.name}' does not allow data cleanup"]
+        return []
     raise pytest.UsageError(
         f"Unknown test/python capability requirement '{requirement}'. "
-        "Supported requirements: format_v3, row_lineage."
+        "Supported requirements: format_v3, row_lineage, allows_cleanup."
     )
 
 
@@ -116,6 +121,11 @@ def capability_param(value, *requirements: str, id: str | None = None):
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",
+        "duckdb_setup_tests(*paths): run sqllogictests relative to test/sql/local/catalog_test_config_setup "
+        "before reading their tables with another engine; once=True reuses an immutable setup within this session",
+    )
+    config.addinivalue_line(
+        "markers",
         "requires_spark(spec): require Spark version matching spec "
         "(PEP 440 specifier, e.g. '>=3.5,<4.0', '==4.0.*')",
     )
@@ -126,7 +136,7 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "requires_capabilities(*requirements): require named catalog/runtime capabilities before test setup "
-        "(currently: 'format_v3', 'row_lineage')",
+        "(currently: 'format_v3', 'row_lineage', 'allows_cleanup')",
     )
 
 
@@ -213,19 +223,21 @@ def rest_catalog(catalog_profile):
 def _find_generator_case(table_name: str):
     matches = []
     for generator_class in IcebergTest.registry:
-        generator = generator_class()
+        # Read the directory-derived identity without running subclass setup:
+        # some constructors open DuckDB connections and generate TPC-H data.
+        generator = IcebergTest(sys.modules[generator_class.__module__].__file__)
         if generator.table == table_name or generator.qualified_name == table_name:
-            matches.append(generator)
+            matches.append((generator.qualified_name, generator_class))
 
     if not matches:
         raise ValueError(f"No data generator registered for table '{table_name}'")
     if len(matches) > 1:
-        matched_names = ", ".join(generator.qualified_name for generator in matches)
+        matched_names = ", ".join(name for name, _ in matches)
         raise ValueError(
             f"Multiple data generators match '{table_name}': {matched_names}. "
             "Use the fully qualified generator name instead."
         )
-    return matches[0]
+    return matches[0][1]()
 
 
 def _resolve_seed_table(table):
@@ -266,6 +278,46 @@ def catalog_connection(request, catalog_session_connection):
 @pytest.fixture()
 def spark_con(catalog_connection):
     return catalog_connection.con
+
+
+@pytest.fixture(scope="session")
+def completed_duckdb_setups():
+    return set()
+
+
+@pytest.fixture(autouse=True)
+def duckdb_setup_tests(request, completed_duckdb_setups):
+    marker = request.node.get_closest_marker("duckdb_setup_tests")
+    if marker is None:
+        return
+
+    # A Spark -> DuckDB -> Spark roundtrip must seed its source before DuckDB
+    # modifies it. Reuse the existing generator registry and capability checks.
+    if request.node.get_closest_marker("spark_seed_tables") is not None:
+        request.getfixturevalue("catalog_connection")
+
+    binary = Path(request.getfixturevalue("unittest_binary")).resolve()
+    test_config = request.getfixturevalue("unittest_test_config")
+    for relative_path in marker.args:
+        test_path = Path("test/sql/local/catalog_test_config_setup") / relative_path
+        once = marker.kwargs.get("once", False)
+        if once and test_path in completed_duckdb_setups:
+            continue
+        if not (REPO_ROOT / test_path).is_file():
+            raise pytest.UsageError(f"Missing DuckDB setup test: {test_path}")
+        result = subprocess.run(
+            [str(binary), "--test-config", str(test_config), str(test_path)],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        output = result.stdout + result.stderr
+        if result.returncode:
+            pytest.fail(f"DuckDB setup failed: {test_path}\n{output}")
+        if "All tests were skipped" in output:
+            pytest.skip(f"DuckDB setup unavailable for this catalog/build: {test_path}\n{output}")
+        if once:
+            completed_duckdb_setups.add(test_path)
 
 
 def pytest_report_header(config):

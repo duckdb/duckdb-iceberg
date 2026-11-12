@@ -36,7 +36,7 @@ PlanTableScanRequest PlanTableScanRequest::Copy() const {
 		}
 	}
 	if (filter != nullptr) {
-		res.filter = filter ? make_uniq<Expression>(filter->Copy()) : nullptr;
+		res.filter = filter ? make_uniq<Predicate>(filter->Copy()) : nullptr;
 	}
 	if (min_rows_requested.has_value()) {
 		res.min_rows_requested.emplace();
@@ -111,7 +111,7 @@ string PlanTableScanRequest::TryFromJSON(JSONValue obj) {
 	}
 	auto filter_val = obj.GetMember("filter");
 	if (filter_val.IsValid()) {
-		filter = make_uniq<Expression>();
+		filter = make_uniq<Predicate>();
 		error = filter->TryFromJSON(filter_val);
 		if (!error.empty()) {
 			return error;

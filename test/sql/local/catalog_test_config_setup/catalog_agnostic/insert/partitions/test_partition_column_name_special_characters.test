@@ -1,0 +1,71 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/test_partition_column_name_special_characters.test
+# description: Partition columns whose name is not a valid Avro identifier can be written to
+# group: [partitions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+create schema if not exists my_datalake.default;
+
+# The partition field name is derived from the column name, and ends up in the Avro schema of the
+# manifest, which only accepts [A-Za-z_][A-Za-z0-9_]* as a field name.
+
+statement ok
+drop table if exists my_datalake.default.test_partition_name_space_bucket;
+
+statement ok
+CREATE TABLE my_datalake.default.test_partition_name_space_bucket ("a key" varchar, val int)
+PARTITIONED BY (bucket(8, "a key"));
+
+statement ok
+insert into my_datalake.default.test_partition_name_space_bucket
+select 'key_' || range, range from range(20);
+
+query II nosort space_bucket_expected
+select 'key_' || range, range from range(20) order by range;
+----
+
+query II nosort space_bucket_expected
+select "a key", val from my_datalake.default.test_partition_name_space_bucket order by val;
+----
+
+query I
+select count(*) from my_datalake.default.test_partition_name_space_bucket where "a key" = 'key_3';
+----
+1
+
+# The same applies to an identity transform, and to characters other than a space
+
+statement ok
+drop table if exists my_datalake.default.test_partition_name_space_identity;
+
+statement ok
+CREATE TABLE my_datalake.default.test_partition_name_space_identity ("a key" varchar, "1 % col" int)
+PARTITIONED BY ("a key", "1 % col");
+
+statement ok
+insert into my_datalake.default.test_partition_name_space_identity values ('alpha', 1), ('beta', 2), ('alpha', 2);
+
+query II rowsort
+select "a key", "1 % col" from my_datalake.default.test_partition_name_space_identity;
+----
+alpha	1
+alpha	2
+beta	2
+
+query I
+select count(*) from my_datalake.default.test_partition_name_space_identity where "a key" = 'alpha';
+----
+2
+
+# Multiple inserts write multiple manifests for the same partition spec
+
+statement ok
+insert into my_datalake.default.test_partition_name_space_identity values ('gamma', 3);
+
+query I
+select count(*) from my_datalake.default.test_partition_name_space_identity;
+----
+4

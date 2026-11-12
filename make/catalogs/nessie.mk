@@ -4,6 +4,7 @@ nessie-clone:
 	@if [ ! -d ".catalogs/nessie" ]; then \
 		echo "Cloning Nessie repository..."; \
 		mkdir -p .catalogs && git clone https://github.com/projectnessie/nessie.git .catalogs/nessie; \
+		cd .catalogs/nessie && git checkout d33d8fe635b9d9b9d1a0687009092ad4d2fcd629 && git apply ../../.github/patches/nessie_docker_compose.patch; \
 	else \
 		echo "Nessie repository exists."; \
 	fi

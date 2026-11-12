@@ -1,0 +1,99 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/default/test_create_default_widened_integers.test
+# description: Widen integer defaults in CREATE TABLE, nested fields and ADD COLUMN
+# group: [default]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env COLUMN_DEFAULT_SUPPORT
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+foreach type,storage,minimum,maximum,annotation TINYINT,INTEGER,-128,127,INT_32 SMALLINT,INTEGER,-32768,32767,INT_32 UTINYINT,INTEGER,0,255,INT_32 USMALLINT,INTEGER,0,65535,INT_32 UINTEGER,BIGINT,0,4294967295,INT_64
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.widened_defaults;
+
+statement ok
+CREATE TABLE my_datalake.default.widened_defaults (
+	id INTEGER,
+	a {type} DEFAULT {minimum},
+	s STRUCT(lo {type}, hi {type}) DEFAULT {'lo': {minimum}, 'hi': {maximum}}
+) WITH ('format-version' = '3');
+
+statement ok
+INSERT INTO my_datalake.default.widened_defaults (id) VALUES (1);
+
+# Existing rows use the initial default; subsequent inserts use the write default.
+statement ok
+ALTER TABLE my_datalake.default.widened_defaults ADD COLUMN b {type} DEFAULT {maximum};
+
+statement ok
+INSERT INTO my_datalake.default.widened_defaults (id) VALUES (2);
+
+# Explicit NULLs override defaults.
+statement ok
+INSERT INTO my_datalake.default.widened_defaults (id, a, b, s) VALUES (3, NULL, NULL, {'lo': NULL, 'hi': {maximum}});
+
+query IIIII
+SELECT id,
+	a IS NOT DISTINCT FROM CASE WHEN id = 3 THEN NULL ELSE {minimum} END,
+	b IS NOT DISTINCT FROM CASE WHEN id = 3 THEN NULL ELSE {maximum} END,
+	s.lo IS NULL,
+	s.hi IS NOT DISTINCT FROM CASE WHEN id = 3 THEN {maximum} ELSE NULL END
+FROM my_datalake.default.widened_defaults ORDER BY id;
+----
+1	true	true	true	true
+2	true	true	true	true
+3	true	true	true	true
+
+statement ok
+UPDATE my_datalake.default.widened_defaults SET a = DEFAULT, b = DEFAULT WHERE id = 3;
+
+query IIIII
+SELECT id, a = {minimum}, b = {maximum}, s.lo IS NULL,
+	s.hi IS NOT DISTINCT FROM CASE WHEN id = 3 THEN {maximum} ELSE NULL END
+FROM my_datalake.default.widened_defaults ORDER BY id;
+----
+1	true	true	true	true
+2	true	true	true	true
+3	true	true	true	true
+
+query II
+SELECT column_name, column_type = CASE column_name
+	WHEN 'id' THEN 'INTEGER'
+	WHEN 's' THEN 'STRUCT(lo {storage}, hi {storage})'
+	ELSE '{storage}' END
+FROM (DESCRIBE my_datalake.default.widened_defaults);
+----
+id	true
+a	true
+s	true
+b	true
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE widened_default_files = (
+	SELECT list(file_path) FROM iceberg_metadata('my_datalake.default.widened_defaults')
+	WHERE manifest_content = 'DATA' AND status <> 'DELETED'
+);
+
+query II
+SELECT DISTINCT name, converted_type = '{annotation}' FROM parquet_schema(getvariable('widened_default_files'))
+WHERE name IN ('a', 'b', 'lo', 'hi') ORDER BY name;
+----
+a	true
+b	true
+hi	true
+lo	true
+
+statement ok
+COMMIT;
+
+statement ok
+DROP TABLE my_datalake.default.widened_defaults;
+
+endloop

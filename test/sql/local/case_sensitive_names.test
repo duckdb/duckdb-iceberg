@@ -1,13 +1,7 @@
 # name: test/sql/local/case_sensitive_names.test
 # group: [local]
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 query II
 select * from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/case_sensitive_names/default.db/case_sensitive_names/metadata/00001-a7a3a44c-4aac-4619-bebd-11be37b27351.metadata.json') order by all;

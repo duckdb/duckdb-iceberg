@@ -10,6 +10,7 @@
 #include "core/metadata/manifest/iceberg_manifest.hpp"
 #include "core/metadata/partition/iceberg_partition_spec.hpp"
 #include "core/metadata/schema/iceberg_table_schema.hpp"
+#include "core/metadata/sort/iceberg_sort_order.hpp"
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
 #include "core/metadata/snapshot/iceberg_snapshot.hpp"
 #include "common/iceberg_default.hpp"
@@ -18,7 +19,8 @@ namespace duckdb {
 
 struct IcebergCreateTableRequest {
 	IcebergCreateTableRequest(string name, shared_ptr<IcebergTableSchema> schema, IcebergPartitionSpec partition_spec,
-	                          idx_t iceberg_version, case_insensitive_map_t<string> table_properties, string location);
+	                          IcebergSortOrder sort_order, idx_t iceberg_version,
+	                          case_insensitive_map_t<string> table_properties, string location);
 
 public:
 	static unique_ptr<IcebergColumnDefinition>
@@ -35,6 +37,7 @@ private:
 	string name;
 	shared_ptr<IcebergTableSchema> schema;
 	IcebergPartitionSpec partition_spec;
+	IcebergSortOrder sort_order;
 	idx_t iceberg_version;
 	case_insensitive_map_t<string> table_properties;
 	string location;

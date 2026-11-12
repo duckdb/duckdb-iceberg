@@ -24,7 +24,7 @@ require httpfs
 # materialized; with pruning only the one belonging to the scanned partition is read.
 load
 SET enable_external_file_cache=false;
-SET unsafe_and_disabled_for_iceberg_v3_enable_equality_deletes=true;
+SET __iceberg_unsafe_enable_equality_deletes=true;
 CREATE SECRET (
     TYPE S3,
     KEY_ID 'admin',

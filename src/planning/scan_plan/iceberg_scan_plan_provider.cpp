@@ -8,6 +8,8 @@
 #include "duckdb/storage/table/row_group_reorderer.hpp"
 #include "planning/pruning/iceberg_table_filter.hpp"
 #include "planning/scan_order/iceberg_scan_order.hpp"
+#include "duckdb/logging/logger.hpp"
+#include "iceberg_logging.hpp"
 
 namespace duckdb {
 
@@ -69,7 +71,7 @@ unique_ptr<IcebergScanPlanProvider> IcebergScanPlanProvider::Create(IcebergScanP
 			request.case_sensitive = true;
 			request.use_snapshot_schema =
 			    context.snapshot.snapshot->snapshot_id != context.metadata.current_snapshot_id;
-			unique_ptr<rest_api_objects::Expression> server_side_filter;
+			unique_ptr<rest_api_objects::Predicate> server_side_filter;
 			for (auto &filter : table_filters) {
 				auto primary_index = filter.first.GetPrimaryIndex();
 				if (primary_index >= context.schema.columns.size()) {
@@ -98,12 +100,32 @@ unique_ptr<IcebergScanPlanProvider> IcebergScanPlanProvider::Create(IcebergScanP
 			}
 
 			IcebergServerSideScanPlan plan;
-			if (IcebergServerSideScanPlanning::Plan(context.context, table_info, std::move(request), plan)) {
-				if (!plan.storage_credentials.empty()) {
-					table_info.LoadCredentials(
-					    context.context, table_info.GetVendedCredentials(context.context, plan.storage_credentials));
+			try {
+				if (IcebergServerSideScanPlanning::Plan(context.context, table_info, std::move(request), plan)) {
+					if (shared_state.Configuration().row_ids_required && context.metadata.iceberg_version >= 3) {
+						// Without inspecting Parquet we cannot know whether all row IDs are
+						// materialized. Fall back rather than silently replacing inherited IDs.
+						for (auto &manifest : plan.data_manifests) {
+							for (auto &entry : manifest.GetManifestEntries()) {
+								if (!entry.data_file.HasFirstRowId()) {
+									throw InvalidInputException("Server scan plan is missing first-row-id for file "
+									                            "'%s', but this scan requires row IDs",
+									                            entry.data_file.file_path);
+								}
+							}
+						}
+					}
+					if (!plan.storage_credentials.empty()) {
+						table_info.LoadCredentials(context.context, table_info.GetVendedCredentials(
+						                                                context.context, plan.storage_credentials));
+					}
+					provider = make_uniq<ServerSideScanPlanProvider>(std::move(plan));
 				}
-				provider = make_uniq<ServerSideScanPlanProvider>(std::move(plan));
+			} catch (std::exception &ex) {
+				ErrorData error(ex);
+				DUCKDB_LOG_INFO(context.context, "Scan planning failed, Plan resulted in error: %s", error.Message());
+			} catch (...) {
+				DUCKDB_LOG_INFO(context.context, "Scan planning failed, Plan resulted in unknown error");
 			}
 		}
 	}

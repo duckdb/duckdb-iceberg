@@ -1,0 +1,44 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/capabilities/no_column_default_without_v3.test
+# description: Reject column defaults when neither defaults nor V3 are supported
+# group: [capabilities]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env-not COLUMN_DEFAULT_SUPPORT
+
+require-env-not FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+require core_functions
+
+# Expected HTTP errors must be checked, not ignored.
+set ignore_error_messages
+
+# A successful ordinary write separates capability rejection from connectivity failures.
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cap_column_default_v2;
+
+statement ok
+CREATE TABLE my_datalake.default.cap_column_default_v2 (id INTEGER) WITH ('format-version' = 2);
+
+statement ok
+INSERT INTO my_datalake.default.cap_column_default_v2 VALUES (1);
+
+query I
+SELECT id FROM my_datalake.default.cap_column_default_v2;
+----
+1
+
+statement error
+ALTER TABLE my_datalake.default.cap_column_default_v2 ADD COLUMN value INTEGER DEFAULT 42;
+----
+non-null DEFAULT values are not supported for <V3 tables
+
+query I
+SELECT id FROM my_datalake.default.cap_column_default_v2;
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.cap_column_default_v2;

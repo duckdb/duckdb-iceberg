@@ -1,11 +1,7 @@
 # name: test/sql/local/null_stats.test
 # group: [local]
 
-require avro
-
-require parquet
-
-require iceberg
+include test/sql/init_requires
 
 require icu;
 

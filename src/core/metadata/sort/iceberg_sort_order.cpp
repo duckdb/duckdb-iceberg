@@ -5,6 +5,9 @@ namespace duckdb {
 
 IcebergSortOrderField IcebergSortOrderField::ParseFromJson(const rest_api_objects::SortField &field) {
 	IcebergSortOrderField result;
+	if (field.source_id <= 0) {
+		throw InvalidConfigurationException("Invalid source id %d in Iceberg sort order", field.source_id);
+	}
 	result.source_id = field.source_id;
 	result.transform = field.transform.value;
 	result.direction = field.direction.value;
@@ -13,6 +16,9 @@ IcebergSortOrderField IcebergSortOrderField::ParseFromJson(const rest_api_object
 }
 
 IcebergSortOrder IcebergSortOrder::ParseFromJson(const rest_api_objects::SortOrder &sort_order_spec) {
+	if (sort_order_spec.order_id < 0) {
+		throw InvalidConfigurationException("Iceberg sort order must have a non-negative 'order-id'");
+	}
 	IcebergSortOrder result(sort_order_spec.order_id);
 	for (auto &field : sort_order_spec.fields) {
 		result.fields.push_back(IcebergSortOrderField::ParseFromJson(field));

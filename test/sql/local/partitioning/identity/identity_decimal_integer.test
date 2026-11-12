@@ -1,13 +1,7 @@
 # name: test/sql/local/partitioning/identity/identity_decimal_integer.test
 # group: [identity]
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 query III
 select * from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/partition_decimal_integer');

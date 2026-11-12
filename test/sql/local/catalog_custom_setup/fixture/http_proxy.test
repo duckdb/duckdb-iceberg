@@ -6,13 +6,7 @@ require-env HTTP_PROXY_PUBLIC
 
 require-env FIXTURE_SERVER_AVAILABLE
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 # override the default behaviour of skipping HTTP errors and connection failures: this test fails on connection issues
 set ignore_error_messages
@@ -27,7 +21,7 @@ set logging_level='debug';
 statement ok
 CREATE TABLE logs_tracker AS SELECT len(content) AS log_length FROM read_text('mitmproxy.log');
 
-# Extra proxy parameters neded here because of local MinIO testing
+# Extra proxy parameters needed here because of the local SeaweedFS object store
 statement ok
 CREATE SECRET (
     TYPE S3,
@@ -54,7 +48,7 @@ ATTACH '' AS my_datalake (
     TYPE ICEBERG,
     CLIENT_ID 'admin',
     CLIENT_SECRET 'password',
-    ENDPOINT 'http://127.0.0.1:8181'
+    URI 'http://127.0.0.1:8181'
 );
 
 query III

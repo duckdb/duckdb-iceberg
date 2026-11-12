@@ -1,0 +1,105 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_row_count.test
+# description: A rewrite keeps every live row, also when a column is named filename, and deleted rows may be missing
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+# A table column named filename doesn't hide the virtual column the rewrite selects its files with
+statement ok
+CREATE TABLE my_datalake.default.rewrite_row_count (id INTEGER, filename VARCHAR) WITH ('format-version' = 2);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_row_count VALUES (1, 'a'), (2, 'b');
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_row_count VALUES (3, 'c'), (4, 'd');
+
+query II
+SELECT rewritten_data_files_count, added_data_files_count FROM iceberg_rewrite_data_files('my_datalake.default.rewrite_row_count', rewrite_all := true);
+----
+2	1
+
+query IIT
+SELECT count(*), sum(id), string_agg(filename, ',' ORDER BY id) FROM my_datalake.default.rewrite_row_count;
+----
+4	10	a,b,c,d
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_row_count;
+
+# A capped rewrite must filter on the virtual path, even with a differently cased,
+# non-string user column. The untouched file and every user value must survive.
+statement ok
+CREATE TABLE my_datalake.default.rewrite_row_count_capped (id INTEGER, "FiLeNaMe" INTEGER)
+WITH ('format-version' = 2);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_row_count_capped VALUES (1, NULL), (2, 42);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_row_count_capped VALUES (3, -1), (4, 42);
+
+statement ok
+CREATE TEMP TABLE rewrite_original_paths AS
+SELECT file_path FROM iceberg_metadata(my_datalake.default.rewrite_row_count_capped)
+WHERE content = 'DATA' AND status <> 'DELETED';
+
+query II
+SELECT rewritten_data_files_count, added_data_files_count
+FROM iceberg_rewrite_data_files('my_datalake.default.rewrite_row_count_capped',
+	rewrite_all := true, max_files_to_rewrite := 1);
+----
+1	1
+
+query II rowsort
+SELECT id, "FiLeNaMe" FROM my_datalake.default.rewrite_row_count_capped;
+----
+1	NULL
+2	42
+3	-1
+4	42
+
+query II
+SELECT count(*), count(*) FILTER (WHERE file_path IN (SELECT file_path FROM rewrite_original_paths))
+FROM iceberg_metadata(my_datalake.default.rewrite_row_count_capped)
+WHERE content = 'DATA' AND status <> 'DELETED';
+----
+2	1
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_row_count_capped;
+
+statement ok
+DROP TABLE rewrite_original_paths;
+
+# Rows removed by position deletes may be missing from the rewrite, including all of them
+foreach deleted 2 4
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_row_count_deletes (id INTEGER) WITH ('format-version' = 2);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_row_count_deletes VALUES (1), (2);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_row_count_deletes VALUES (3), (4);
+
+statement ok
+DELETE FROM my_datalake.default.rewrite_row_count_deletes WHERE id <= {deleted};
+
+query I
+SELECT rewritten_data_files_count FROM iceberg_rewrite_data_files('my_datalake.default.rewrite_row_count_deletes', rewrite_all := true);
+----
+2
+
+query I
+SELECT count(*) = 4 - {deleted} FROM my_datalake.default.rewrite_row_count_deletes;
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_row_count_deletes;
+
+endloop

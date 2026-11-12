@@ -11,6 +11,7 @@
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/optional.hpp"
+#include "duckdb/common/set.hpp"
 
 namespace duckdb {
 class ClientContext;
@@ -43,6 +44,8 @@ private:
 
 	optional<string> variant_type_str;
 	vector<FieldBound> fields;
+	//! Typed containers with no nulls cover every present parent, even when an object has excess fields in value.
+	set<vector<string>> non_null_containers;
 	// path of partially shredded variant values.
 	// we do not record stats for partially shredded values since the types may be different
 	vector<vector<string>> partial_paths;
@@ -59,7 +62,7 @@ struct IcebergVariantBoundsReader {
 
 	//! Re-key a decoded bounds VARIANT (whose object keys are JSON paths like "$['age']") to the plain field
 	//! names used at the call site ("age", "person.age"), returning a VARIANT Value with the renamed keys.
-	static bool RekeyBoundsVariant(const Value &bounds_variant, Value &result);
+	static bool RekeyBoundsVariant(const Value &bounds_variant, const vector<string> &path, Value &result);
 };
 
 } // namespace duckdb

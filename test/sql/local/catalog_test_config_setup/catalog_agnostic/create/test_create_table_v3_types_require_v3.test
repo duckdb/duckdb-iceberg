@@ -1,0 +1,51 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_table_v3_types_require_v3.test
+# description: types added in format version 3 are refused on v1 and v2 tables, including inside nested types
+# group: [create]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.v3_types_on_v2;
+
+statement error
+CREATE TABLE my_datalake.default.v3_types_on_v2 (a TIMESTAMP_NS) WITH ('format-version' = '2');
+----
+<REGEX>:.*Column 'a' of type TIMESTAMP_NS requires Iceberg format-version 3, the table uses 2.*
+
+statement error
+CREATE TABLE my_datalake.default.v3_types_on_v2 (a STRUCT(b MAP(INTEGER, VARIANT))) WITH ('format-version' = '2');
+----
+<REGEX>:.*Column 'a' of type .* requires Iceberg format-version 3, the table uses 2.*
+
+statement error
+CREATE TABLE my_datalake.default.v3_types_on_v2 WITH ('format-version' = '2') AS SELECT NULL AS a;
+----
+<REGEX>:.*Column 'a' of type "NULL" requires Iceberg format-version 3, the table uses 2.*
+
+statement ok
+CREATE TABLE my_datalake.default.v3_types_on_v2 (a INTEGER, s STRUCT(x INTEGER)) WITH ('format-version' = '2');
+
+statement error
+ALTER TABLE my_datalake.default.v3_types_on_v2 ADD COLUMN b TIMESTAMPTZ_NS;
+----
+<REGEX>:.*Column 'b' of type .* requires Iceberg format-version 3, the table uses 2.*
+
+statement error
+ALTER TABLE my_datalake.default.v3_types_on_v2 ADD COLUMN s.y TIMESTAMP_NS;
+----
+<REGEX>:.*Column 'y' of type TIMESTAMP_NS requires Iceberg format-version 3, the table uses 2.*
+
+statement ok
+ALTER TABLE my_datalake.default.v3_types_on_v2 SET ('format-version' = '3');
+
+statement ok
+ALTER TABLE my_datalake.default.v3_types_on_v2 ADD COLUMN b TIMESTAMP_NS;
+
+query I
+SELECT count(*) FROM my_datalake.default.v3_types_on_v2;
+----
+0

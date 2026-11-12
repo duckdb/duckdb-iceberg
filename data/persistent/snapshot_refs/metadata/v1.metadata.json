@@ -1,0 +1,93 @@
+{
+  "format-version": 2,
+  "table-uuid": "6b2f4d1e-8a3c-4f5b-9e7d-2c1a0b9f8e7d",
+  "location": "data/persistent/snapshot_refs",
+  "last-sequence-number": 2,
+  "last-updated-ms": 1746188480005,
+  "last-column-id": 1,
+  "current-schema-id": 0,
+  "schemas": [
+    {
+      "type": "struct",
+      "schema-id": 0,
+      "fields": [
+        {
+          "id": 1,
+          "name": "id",
+          "required": false,
+          "type": "int"
+        }
+      ]
+    }
+  ],
+  "default-spec-id": 0,
+  "partition-specs": [
+    {
+      "spec-id": 0,
+      "fields": []
+    }
+  ],
+  "last-partition-id": 999,
+  "default-sort-order-id": 0,
+  "sort-orders": [
+    {
+      "order-id": 0,
+      "fields": []
+    }
+  ],
+  "properties": {},
+  "current-snapshot-id": 2,
+  "refs": {
+    "main": {
+      "snapshot-id": 2,
+      "type": "branch"
+    },
+    "dev": {
+      "snapshot-id": 1,
+      "type": "branch",
+      "min-snapshots-to-keep": 3,
+      "max-snapshot-age-ms": 172800000,
+      "max-ref-age-ms": 2592000000
+    },
+    "v1": {
+      "snapshot-id": 1,
+      "type": "tag",
+      "max-ref-age-ms": 604800000
+    }
+  },
+  "snapshots": [
+    {
+      "sequence-number": 1,
+      "snapshot-id": 1,
+      "timestamp-ms": 1746188479060,
+      "summary": {
+        "operation": "append"
+      },
+      "manifest-list": "data/persistent/snapshot_refs/metadata/snap-1.avro",
+      "schema-id": 0
+    },
+    {
+      "sequence-number": 2,
+      "snapshot-id": 2,
+      "parent-snapshot-id": 1,
+      "timestamp-ms": 1746188480005,
+      "summary": {
+        "operation": "append"
+      },
+      "manifest-list": "data/persistent/snapshot_refs/metadata/snap-2.avro",
+      "schema-id": 0
+    }
+  ],
+  "statistics": [],
+  "snapshot-log": [
+    {
+      "timestamp-ms": 1746188479060,
+      "snapshot-id": 1
+    },
+    {
+      "timestamp-ms": 1746188480005,
+      "snapshot-id": 2
+    }
+  ],
+  "metadata-log": []
+}

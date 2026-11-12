@@ -2,7 +2,15 @@
 
 #include "core/expression/iceberg_value.hpp"
 #include "duckdb/common/types/geometry.hpp"
+#include "duckdb/logging/logger.hpp"
+#include "duckdb/main/client_context.hpp"
+#include "duckdb/storage/statistics/base_statistics.hpp"
 #include "duckdb/storage/statistics/geometry_stats.hpp"
+#include "duckdb/storage/statistics/numeric_stats.hpp"
+#include "duckdb/storage/statistics/string_stats.hpp"
+#include "iceberg_logging.hpp"
+
+#include <limits>
 
 namespace duckdb {
 
@@ -16,6 +24,10 @@ void IcebergPredicateStats::SetUpperBound(const Value &new_upper_bound) {
 
 bool IcebergPredicateStats::BoundsAreNull() const {
 	return lower_bound && upper_bound && lower_bound->IsNull() && upper_bound->IsNull();
+}
+
+bool IcebergPredicateStats::HasMissingOrNullBounds() const {
+	return !lower_bound || !upper_bound || lower_bound->IsNull() || upper_bound->IsNull();
 }
 
 static shared_ptr<BaseStatistics> BuildGeometryStats(const Value &lower_bound, const Value &upper_bound,
@@ -50,8 +62,68 @@ static shared_ptr<BaseStatistics> BuildGeometryStats(const Value &lower_bound, c
 	return stats;
 }
 
-IcebergPredicateStats IcebergPredicateStats::DeserializeBounds(const Value &lower_bound, const Value &upper_bound,
-                                                               const string &name, const LogicalType &type) {
+shared_ptr<BaseStatistics> IcebergPredicateStats::BuildColumnStats(const LogicalType &type) const {
+	//! A file written before a type promotion keeps bounds of the old type, e.g. INTEGER bounds for a column that is
+	//! now BIGINT. Core reads the statistics as the column's type, so the bounds are cast to it.
+	optional<Value> lower, upper;
+	if (lower_bound && !lower_bound->IsNull()) {
+		lower = lower_bound->DefaultTryCastAs(type);
+		if (!lower) {
+			return nullptr;
+		}
+	}
+	if (upper_bound && !upper_bound->IsNull()) {
+		upper = upper_bound->DefaultTryCastAs(type);
+		if (!upper) {
+			return nullptr;
+		}
+	}
+	switch (BaseStatistics::GetStatsType(type)) {
+	case StatisticsType::NUMERIC_STATS: {
+		auto stats = NumericStats::CreateEmpty(type);
+		if (lower) {
+			NumericStats::SetMin(stats, *lower);
+		}
+		if (upper) {
+			NumericStats::SetMax(stats, *upper);
+		}
+		if (type.id() == LogicalTypeId::FLOAT || type.id() == LogicalTypeId::DOUBLE) {
+			//! Iceberg float bounds exclude NaN, which core zonemaps order as the largest value
+			if (!has_nan || *has_nan) {
+				NumericStats::SetMax(stats, type.id() == LogicalTypeId::FLOAT
+				                                ? Value::FLOAT(std::numeric_limits<float>::quiet_NaN())
+				                                : Value::DOUBLE(std::numeric_limits<double>::quiet_NaN()));
+			}
+		}
+		if (has_null) {
+			stats.SetHasNull();
+		}
+		if (has_not_null) {
+			stats.SetHasNoNull();
+		}
+		return make_shared_ptr<BaseStatistics>(std::move(stats));
+	}
+	case StatisticsType::STRING_STATS: {
+		auto stats = StringStats::CreateUnknown(type);
+		//! Iceberg string bounds may be truncated
+		if (lower) {
+			StringStats::SetMin(stats, lower->GetValueUnsafe<string_t>(), StringStatsType::TRUNCATED_STATS);
+		}
+		if (upper) {
+			StringStats::SetMax(stats, upper->GetValueUnsafe<string_t>(), StringStatsType::TRUNCATED_STATS);
+		}
+		stats.Set(has_null ? StatsInfo::CAN_HAVE_NULL_VALUES : StatsInfo::CANNOT_HAVE_NULL_VALUES);
+		stats.Set(has_not_null ? StatsInfo::CAN_HAVE_VALID_VALUES : StatsInfo::CANNOT_HAVE_VALID_VALUES);
+		return make_shared_ptr<BaseStatistics>(std::move(stats));
+	}
+	default:
+		return nullptr;
+	}
+}
+
+IcebergPredicateStats IcebergPredicateStats::DeserializeBounds(ClientContext &context, const Value &lower_bound,
+                                                               const Value &upper_bound, const string &name,
+                                                               const LogicalType &type) {
 	IcebergPredicateStats result;
 	if (type.id() == LogicalTypeId::GEOMETRY) {
 		result.geometry_stats = BuildGeometryStats(lower_bound, upper_bound, type);
@@ -64,21 +136,27 @@ IcebergPredicateStats IcebergPredicateStats::DeserializeBounds(const Value &lowe
 
 	if (!lower_bound.IsNull()) {
 		D_ASSERT(lower_bound.type().id() == LogicalTypeId::BLOB);
-		auto deserialized = IcebergValue::DeserializeValue(lower_bound.GetValueUnsafe<string_t>(), type);
+		auto deserialized =
+		    IcebergValue::DeserializeValue(lower_bound.GetValueUnsafe<string_t>(), type, SerializeBound::LOWER_BOUND);
 		if (deserialized.HasError()) {
-			throw InvalidConfigurationException("Column %s lower bound deserialization failed: %s", name,
-			                                    deserialized.GetError());
+			// Bounds are optional, so omit one that cannot be deserialized rather than failing the scan.
+			DUCKDB_LOG(context, IcebergLogType, "Omitting invalid lower bound for column '%s' of type %s", name,
+			           type.ToString());
+		} else {
+			result.SetLowerBound(deserialized.GetValue());
 		}
-		result.SetLowerBound(deserialized.GetValue());
 	}
 	if (!upper_bound.IsNull()) {
 		D_ASSERT(upper_bound.type().id() == LogicalTypeId::BLOB);
-		auto deserialized = IcebergValue::DeserializeValue(upper_bound.GetValueUnsafe<string_t>(), type);
+		auto deserialized =
+		    IcebergValue::DeserializeValue(upper_bound.GetValueUnsafe<string_t>(), type, SerializeBound::UPPER_BOUND);
 		if (deserialized.HasError()) {
-			throw InvalidConfigurationException("Column %s upper bound deserialization failed: %s", name,
-			                                    deserialized.GetError());
+			// Bounds are optional, so omit one that cannot be deserialized rather than failing the scan.
+			DUCKDB_LOG(context, IcebergLogType, "Omitting invalid upper bound for column '%s' of type %s", name,
+			           type.ToString());
+		} else {
+			result.SetUpperBound(deserialized.GetValue());
 		}
-		result.SetUpperBound(deserialized.GetValue());
 	}
 	return result;
 }

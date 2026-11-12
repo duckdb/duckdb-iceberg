@@ -3,20 +3,14 @@
 
 require-env FIXTURE_SERVER_AVAILABLE
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 statement ok
 CREATE SECRET iceberg_secret (
 	TYPE ICEBERG,
 	CLIENT_ID 'admin',
 	CLIENT_SECRET 'password',
-	ENDPOINT 'http://127.0.0.1:8181'
+	URI 'http://127.0.0.1:8181'
 );
 
 statement error

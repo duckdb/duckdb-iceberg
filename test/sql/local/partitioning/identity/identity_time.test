@@ -1,13 +1,7 @@
 # name: test/sql/local/partitioning/identity/identity_time.test
 # group: [identity]
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 query III
 select * from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/partition_time/default.db/partition_time/metadata/00001-44546aa6-1ee5-48c5-9e3b-bc6c0bc0a60c.metadata.json');

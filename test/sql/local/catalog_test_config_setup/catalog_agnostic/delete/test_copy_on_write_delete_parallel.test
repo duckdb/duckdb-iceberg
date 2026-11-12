@@ -1,0 +1,73 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_copy_on_write_delete_parallel.test
+# description: Copy-on-write deletes combine repeated matches across chunks and parallel partitions
+# group: [delete]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require core_functions
+
+foreach threads 1 4
+
+statement ok
+SET threads = {threads};
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cow_delete_parallel;
+
+statement ok
+CREATE TABLE my_datalake.default.cow_delete_parallel (id INTEGER, part INTEGER, payload VARCHAR)
+PARTITIONED BY (part) WITH ('format-version' = '2', 'write.delete.mode' = 'copy-on-write');
+
+statement ok
+INSERT INTO my_datalake.default.cow_delete_parallel
+SELECT i, i % 8, repeat(i::VARCHAR, 16) FROM range(65536) t(i);
+
+# Four matches per deleted row, spread across many input chunks.
+query I
+DELETE FROM my_datalake.default.cow_delete_parallel AS target
+USING (SELECT i % 8192 AS id FROM range(32768) t(i)) AS source
+WHERE target.id = source.id;
+----
+8192
+
+query I
+SELECT count(*) = 57344 AND count(DISTINCT id) = 57344
+   AND sum(id) = (SELECT sum(i) FROM range(8192, 65536) t(i))
+   AND bool_and(part = id % 8 AND payload = repeat(id::VARCHAR, 16))
+FROM my_datalake.default.cow_delete_parallel;
+----
+true
+
+query I
+SELECT count(*) FROM my_datalake.default.cow_delete_parallel WHERE id < 8192;
+----
+0
+
+# Another delete reads the rewritten files, removing some entire partitions.
+query I
+DELETE FROM my_datalake.default.cow_delete_parallel WHERE id % 2 = 0;
+----
+28672
+
+query I
+SELECT count(*) = 28672 AND count(DISTINCT id) = 28672
+   AND sum(id) = (SELECT sum(i) FROM range(8193, 65536, 2) t(i))
+   AND bool_and(part = id % 8 AND payload = repeat(id::VARCHAR, 16))
+FROM my_datalake.default.cow_delete_parallel;
+----
+true
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.cow_delete_parallel) WHERE content != 'DATA';
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.cow_delete_parallel;
+
+endloop
+
+statement ok
+RESET threads;
