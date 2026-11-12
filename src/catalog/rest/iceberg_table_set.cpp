@@ -125,6 +125,18 @@ void WarnTableLoadFailure(ClientContext &context, IcebergTable &table, const Err
 	                   table.GetTableKey(), error.RawMessage());
 }
 
+optional_ptr<IcebergTable> GetVisibleTable(IcebergTransaction &transaction, IcebergTable &listed_table) {
+	auto state = transaction.GetLatestTableState(listed_table.GetTableKey());
+	if (!state) {
+		return listed_table;
+	}
+	if (!state->IsAlive()) {
+		return nullptr;
+	}
+	// Match ordinary table lookup: local ALTERs and transaction-pinned schemas take precedence over the listing.
+	return state->GetInfo();
+}
+
 } // namespace
 
 void IcebergTableSet::ScanEagerEntries(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
@@ -181,7 +193,10 @@ void IcebergTableSet::ScanEagerEntries(ClientContext &context, const std::functi
 		if (entry != entries.end()) {
 			schedule_next();
 		}
-		callback(GetScanEntry(load->table));
+		auto visible_table = GetVisibleTable(transaction, load->table);
+		if (visible_table) {
+			callback(GetScanEntry(*visible_table));
+		}
 	}
 	// Join at the scan boundary. Exceptions instead cancel and drain through the executor's destructor.
 	executor.Drain();
@@ -233,7 +248,10 @@ void IcebergTableSet::Scan(ClientContext &context, const std::function<void(Cata
 	for (auto &entry : entries) {
 		auto &table = *entry.second;
 		transaction.tables[table.GetTableKey()] = entry.second;
-		callback(GetScanEntry(table));
+		auto visible_table = GetVisibleTable(transaction, table);
+		if (visible_table) {
+			callback(GetScanEntry(*visible_table));
+		}
 	}
 }
 

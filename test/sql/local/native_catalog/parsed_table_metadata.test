@@ -57,6 +57,15 @@ SELECT count(*) FROM iceberg_snapshots('my_datalake.default.parsed_metadata');
 ----
 2
 
+query ITI
+SELECT schema_id, name, is_current
+FROM iceberg_schemas('my_datalake.default.parsed_metadata')
+ORDER BY schema_id, field_id;
+----
+0	id	false
+1	id	true
+1	label	true
+
 endloop
 
 query II

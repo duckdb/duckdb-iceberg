@@ -1,0 +1,182 @@
+# name: test/sql/local/native_catalog/not_null_metadata_nested.test
+# description: Nested requiredness survives catalog loading and schema changes without making parents required
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+# DuckDB cannot declare nested NOT NULL fields. Create an external schema through
+# REST, with field IDs deliberately different from DuckDB's column positions.
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables',
+	'{"name":"not_null_nested","schema":{"type":"struct","schema-id":0,"fields":[
+		{"id":10,"name":"s","required":false,"type":{"type":"struct","fields":[
+			{"id":11,"name":"optional","required":false,"type":"int"},
+			{"id":12,"name":"required","required":true,"type":"int"},
+			{"id":13,"name":"nested","required":false,"type":{"type":"struct","fields":[
+				{"id":14,"name":"required","required":true,"type":"int"}
+			]}}
+		]}},
+		{"id":20,"name":"l","required":false,"type":{"type":"list","element-id":21,"element-required":true,"element":"int"}},
+		{"id":30,"name":"m","required":false,"type":{"type":"map","key-id":31,"key":"string","value-id":32,"value-required":true,"value":"int"}},
+		{"id":40,"name":"required_struct","required":true,"type":{"type":"struct","fields":[
+			{"id":41,"name":"optional","required":false,"type":"int"},
+			{"id":42,"name":"required","required":true,"type":"int"}
+		]}},
+		{"id":99,"name":"tail","required":true,"type":"int"}
+	]}}');
+----
+200
+
+# DESCRIBE and information_schema describe top-level columns. A required child
+# does not make its nullable struct/list/map parent required.
+query II
+SELECT column_name, "null" FROM (DESCRIBE my_datalake.default.not_null_nested);
+----
+s	YES
+l	YES
+m	YES
+required_struct	NO
+tail	NO
+
+query II
+SELECT column_name, is_nullable FROM information_schema.columns
+WHERE table_catalog = 'my_datalake' AND table_schema = 'default' AND table_name = 'not_null_nested'
+ORDER BY ordinal_position;
+----
+s	YES
+l	YES
+m	YES
+required_struct	NO
+tail	NO
+
+query III
+SELECT constraint_type, constraint_column_indexes, constraint_column_names FROM duckdb_constraints()
+WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'not_null_nested'
+ORDER BY constraint_column_indexes;
+----
+NOT NULL	[3]	[required_struct]
+NOT NULL	[4]	[tail]
+
+# A catalog entry must retain the nested Iceberg flags even though DuckDB's
+# NotNullConstraint cannot expose them.
+statement ok
+ALTER TABLE my_datalake.default.not_null_nested RENAME COLUMN s TO renamed;
+
+statement ok
+ALTER TABLE my_datalake.default.not_null_nested ADD COLUMN extra INTEGER;
+
+query IIIIIII
+SELECT
+	json_extract_string(body, '$.metadata.schemas[-1].fields[0].name'),
+	json_extract_string(body, '$.metadata.schemas[-1].fields[0].required'),
+	json_extract_string(body, '$.metadata.schemas[-1].fields[0].type.fields[1].required'),
+	json_extract_string(body, '$.metadata.schemas[-1].fields[0].type.fields[2].required'),
+	json_extract_string(body, '$.metadata.schemas[-1].fields[0].type.fields[2].type.fields[0].required'),
+	json_extract_string(body, '$.metadata.schemas[-1].fields[1].type."element-required"'),
+	json_extract_string(body, '$.metadata.schemas[-1].fields[2].type."value-required"')
+FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/not_null_nested', NULL);
+----
+renamed	false	true	false	true	true	true
+
+# Dropping a parent's constraint must not change any of its children's flags.
+statement ok
+ALTER TABLE my_datalake.default.not_null_nested ALTER COLUMN required_struct DROP NOT NULL;
+
+statement ok
+ALTER TABLE my_datalake.default.not_null_nested DROP COLUMN l;
+
+query IIIII
+SELECT
+	json_extract_string(body, '$.metadata.schemas[-1].fields[0].type.fields[1].required'),
+	json_extract_string(body, '$.metadata.schemas[-1].fields[1].type."value-required"'),
+	json_extract_string(body, '$.metadata.schemas[-1].fields[2].required'),
+	json_extract_string(body, '$.metadata.schemas[-1].fields[2].type.fields[0].required'),
+	json_extract_string(body, '$.metadata.schemas[-1].fields[2].type.fields[1].required')
+FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/not_null_nested', NULL);
+----
+true	true	false	false	true
+
+query II
+SELECT column_name, "null" FROM (DESCRIBE my_datalake.default.not_null_nested);
+----
+renamed	YES
+m	YES
+required_struct	YES
+tail	NO
+extra	YES
+
+query III
+SELECT constraint_type, constraint_column_indexes, constraint_column_names FROM duckdb_constraints()
+WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'not_null_nested';
+----
+NOT NULL	[3]	[tail]
+
+query I
+SELECT count(*) FROM duckdb_indexes()
+WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'not_null_nested';
+----
+0
+
+# Eager catalog listing must use the transaction's altered schema too.
+statement ok
+ATTACH '' AS eager_not_null (
+	TYPE ICEBERG,
+	URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none',
+	ACCESS_DELEGATION_MODE 'none',
+	TABLE_RESOLUTION 'eager'
+);
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE eager_not_null.default.not_null_nested ALTER COLUMN tail DROP NOT NULL;
+
+query I
+SELECT is_nullable FROM information_schema.columns
+WHERE table_catalog = 'eager_not_null' AND table_schema = 'default'
+	AND table_name = 'not_null_nested' AND column_name = 'tail';
+----
+YES
+
+query I
+SELECT count(*) FROM duckdb_constraints()
+WHERE database_name = 'eager_not_null' AND schema_name = 'default' AND table_name = 'not_null_nested';
+----
+0
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT is_nullable FROM information_schema.columns
+WHERE table_catalog = 'eager_not_null' AND table_schema = 'default'
+	AND table_name = 'not_null_nested' AND column_name = 'tail';
+----
+NO
+
+statement ok
+BEGIN;
+
+statement ok
+DROP TABLE eager_not_null.default.not_null_nested;
+
+query I
+SELECT count(*) FROM information_schema.columns
+WHERE table_catalog = 'eager_not_null' AND table_schema = 'default' AND table_name = 'not_null_nested';
+----
+0
+
+statement ok
+ROLLBACK;
+
+statement ok
+DETACH eager_not_null;
+
+statement ok
+DROP TABLE my_datalake.default.not_null_nested;
