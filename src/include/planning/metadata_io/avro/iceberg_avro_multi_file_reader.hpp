@@ -9,8 +9,18 @@
 #pragma once
 
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
+#include "duckdb/common/multi_file/table_function_multi_file.hpp"
 
 namespace duckdb {
+
+//! The function info of read_avro, extended with the Iceberg scan info that the multi-file reader needs
+struct IcebergAvroMultiFileInfo : public TableFunctionMultiFileInfo {
+	IcebergAvroMultiFileInfo(const TableFunctionMultiFileInfo &avro_info, shared_ptr<TableFunctionInfo> scan_info_p)
+	    : TableFunctionMultiFileInfo(avro_info.function, avro_info.settings), scan_info(std::move(scan_info_p)) {
+	}
+
+	shared_ptr<TableFunctionInfo> scan_info;
+};
 
 struct IcebergAvroMultiFileReader : public MultiFileReader {
 public:

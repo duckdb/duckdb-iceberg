@@ -23,7 +23,8 @@
 namespace duckdb {
 
 unique_ptr<MultiFileReader> IcebergAvroMultiFileReader::CreateInstance(const BoundTableFunction &table) {
-	return make_uniq<IcebergAvroMultiFileReader>(table.function_info);
+	auto &info = table.function_info->Cast<IcebergAvroMultiFileInfo>();
+	return make_uniq<IcebergAvroMultiFileReader>(info.scan_info);
 }
 
 namespace manifest_list {

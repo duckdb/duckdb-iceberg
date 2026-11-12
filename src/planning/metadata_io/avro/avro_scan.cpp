@@ -51,7 +51,12 @@ AvroScan::AvroScan(const string &path, ClientContext &context, shared_ptr<Iceber
 	TableFunction dummy_table_function;
 	dummy_table_function.name = Identifier(is_manifest_list ? "IcebergManifestList" : "IcebergManifest");
 	dummy_table_function.get_multi_file_reader = IcebergAvroMultiFileReader::CreateInstance;
-	dummy_table_function.function_info = avro_scan_info;
+	// read_avro's bind needs its own function info, so the scan info is carried alongside it
+	if (!avro_scan->function_info) {
+		throw InternalException("read_avro has no function info");
+	}
+	auto &avro_info = avro_scan->function_info->Cast<TableFunctionMultiFileInfo>();
+	dummy_table_function.function_info = make_shared_ptr<IcebergAvroMultiFileInfo>(avro_info, avro_scan_info);
 	BoundTableFunction bound_table_function(dummy_table_function);
 
 	TableFunctionBindInput bind_input(children, named_params, input_types, input_names, nullptr, nullptr,
