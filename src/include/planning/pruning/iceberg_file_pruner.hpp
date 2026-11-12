@@ -29,8 +29,15 @@ public:
 	    : context(context), metadata(metadata), schema(schema), table_filters(table_filters) {
 	}
 
-	bool ManifestMatchesFilter(const IcebergManifestListEntry &entry) const;
+	bool ManifestMatchesFilter(const IcebergManifestListEntry &manifest) const;
 	bool FileMatchesFilter(const IcebergManifest &manifest_file, const IcebergManifestEntry &manifest_entry) const;
+	//! True only when every table filter is provably satisfied by every row of the data file, proven from
+	//! partition values alone. Lets a DELETE drop the file at the metadata level instead of rewriting rows.
+	bool FileFullyCoveredByFilter(const IcebergManifest &manifest_file,
+	                              const IcebergManifestEntry &manifest_entry) const;
+	//! Necessary but not sufficient for FileFullyCoveredByFilter, which must also prove the partition value
+	//! satisfies the filter. Depends only on the spec, the schema and the filters, never on a data file.
+	bool PartitionSpecHasFieldForEveryFilterColumn(int32_t partition_spec_id) const;
 	bool DeleteManifestMatchesDataFile(const IcebergManifest &delete_manifest, const IcebergManifest &data_manifest,
 	                                   const IcebergManifestEntry &data_manifest_entry) const;
 	bool DeleteFileMatchesDataFile(const IcebergManifest &delete_manifest,

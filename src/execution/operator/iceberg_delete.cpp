@@ -91,6 +91,17 @@ optional_ptr<PhysicalTableScan> IcebergDelete::FindIcebergScan(PhysicalOperator 
 	return nullptr;
 }
 
+static bool CanUseMetadataOnlyDelete(PhysicalOperator &plan) {
+	if (plan.type == PhysicalOperatorType::TABLE_SCAN) {
+		return IsScanCreatedByDelete(plan.Cast<PhysicalTableScan>());
+	}
+	//! Only projections preserve every row selected by the scan. Joins and residual filters may reject them.
+	if (plan.type != PhysicalOperatorType::PROJECTION || plan.children.size() != 1) {
+		return false;
+	}
+	return CanUseMetadataOnlyDelete(plan.children[0]);
+}
+
 IcebergDelete::IcebergDelete(PhysicalPlan &physical_plan, IcebergTableSchemaVersion &table,
                              optional_ptr<IcebergMultiFileList> multi_file_list, PhysicalOperator &child,
                              vector<idx_t> row_id_indexes)
@@ -296,6 +307,34 @@ IcebergDeleteFileInfo IcebergDelete::WritePositionalDeleteFile(ClientContext &co
 static void PopulateAlteredManifests(IcebergManifestDeletes &out, const IcebergDeleteData &delete_data) {
 	for (auto &file : delete_data.source_files) {
 		out.InvalidateFile(file);
+	}
+}
+
+//! Remove covered data files and only the delete files or DV blobs that apply exclusively to them.
+static void DropFullyCoveredDataFiles(ClientContext &context, const IcebergMultiFileList &multi_file_list,
+                                      IcebergDeleteGlobalState &global_state) {
+	idx_t dropped_data_files = 0;
+	idx_t dropped_delete_files = 0;
+	int64_t dropped_records = 0;
+	auto &altered_manifests = global_state.write_result.altered_manifests;
+	for (auto &dropped : multi_file_list.GetScanPlanner().ResolveDroppedDataFiles()) {
+		if (altered_manifests.IsInvalidated(dropped.file_path)) {
+			continue;
+		}
+		for (auto &delete_file : dropped.superseded_delete_files) {
+			altered_manifests.InvalidateFile(delete_file);
+			dropped_delete_files++;
+		}
+		altered_manifests.InvalidateFile(dropped.file_path);
+		global_state.total_deleted_count += NumericCast<idx_t>(dropped.live_record_count);
+		dropped_data_files++;
+		dropped_records += dropped.live_record_count;
+	}
+	if (dropped_data_files) {
+		DUCKDB_LOG(context, IcebergLogType,
+		           "Iceberg metadata-only DELETE, dropped %llu data file(s) holding %lld record(s) and %llu delete "
+		           "file(s) that applied only to them, without scanning any of them",
+		           dropped_data_files, dropped_records, dropped_delete_files);
 	}
 }
 
@@ -530,6 +569,10 @@ void IcebergDelete::ScheduleDeletes(Pipeline &pipeline, Event &event, IcebergDel
 		pending_deletes = std::move(*merged_deletes);
 	}
 	if (pending_deletes.IsEmpty()) {
+		//! A metadata-only DELETE still needs a snapshot even though it emitted no rows to the sink.
+		if (stage_snapshot && !global_state.write_result.altered_manifests.IsEmpty()) {
+			AddDeleteSnapshot(event.GetClientContext(), global_state);
+		}
 		// An empty UPDATE may have no source scan after optimization.
 		return;
 	}
@@ -646,6 +689,9 @@ SinkFinalizeType IcebergDelete::Finalize(Pipeline &pipeline, Event &event, Clien
 	auto &global_state = input.global_state.Cast<IcebergDeleteGlobalState>();
 
 	if (!is_equality_delete) {
+		if (multi_file_list) {
+			DropFullyCoveredDataFiles(context, *multi_file_list, global_state);
+		}
 		ScheduleDeletes(pipeline, event, global_state, true);
 		return SinkFinalizeType::READY;
 	}
@@ -669,7 +715,7 @@ SinkFinalizeType IcebergDelete::Finalize(Pipeline &pipeline, Event &event, Clien
 void IcebergDelete::AddDeleteSnapshot(ClientContext &context, IcebergDeleteGlobalState &global_state) const {
 	auto &iceberg_transaction = IcebergTransaction::Get(context, table.catalog);
 	auto iceberg_delete_files = GenerateDeleteManifestEntries(global_state);
-	if (!global_state.write_result.written_files.empty()) {
+	if (!global_state.write_result.written_files.empty() || !global_state.write_result.altered_manifests.IsEmpty()) {
 		ApplyTableUpdate(table.table_info, iceberg_transaction, [&](IcebergTable &tbl) {
 			auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
 			transaction_data.AddDeleteSnapshot(std::move(iceberg_delete_files),
@@ -700,6 +746,9 @@ string IcebergDelete::GetName() const {
 InsertionOrderPreservingMap<string> IcebergDelete::ParamsToString() const {
 	InsertionOrderPreservingMap<string> result;
 	result["Table Name"] = table.name.GetIdentifierName();
+	if (multi_file_list && multi_file_list->GetScanPlanner().IsMetadataOnlyDeleteEnabled()) {
+		result["Metadata-Only Delete"] = "enabled";
+	}
 	return result;
 }
 
@@ -753,7 +802,13 @@ PhysicalOperator &IcebergCatalog::PlanDelete(ClientContext &context, PhysicalPla
 
 PhysicalOperator &IcebergCatalog::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
                                              PhysicalOperator &plan) {
-	return PlanDeleteOperation(context, planner, op, plan);
+	auto &iceberg_delete = PlanDeleteOperation(context, planner, op, plan).Cast<IcebergDelete>();
+	//! UPDATE and MERGE share their scans with row-producing actions and must not skip covered files.
+	if (!IcebergTransaction::Get(context, *this).planning_merge_into && iceberg_delete.multi_file_list &&
+	    !iceberg_delete.is_equality_delete && CanUseMetadataOnlyDelete(plan)) {
+		iceberg_delete.multi_file_list->GetScanPlanner().EnableMetadataOnlyDelete();
+	}
+	return iceberg_delete;
 }
 
 PhysicalOperator &IcebergCatalog::PlanDeleteOperation(ClientContext &context, PhysicalPlanGenerator &planner,

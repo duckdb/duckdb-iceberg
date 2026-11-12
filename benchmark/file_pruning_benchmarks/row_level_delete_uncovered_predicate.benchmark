@@ -1,0 +1,60 @@
+# name: benchmark/file_pruning_benchmarks/row_level_delete_uncovered_predicate.benchmark
+# description: DELETE on a non-partition column, where coverage can never be proven and the row-level path always runs
+# group: [file_pruning_benchmarks]
+
+name Row-level DELETE on an uncovered predicate
+group file_pruning_benchmarks
+subgroup metadata_only_delete
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# The control for the two metadata-only benchmarks. The same 128-partition, format-version 2 table,
+# but the timed DELETE filters on id, which no partition field covers, so the coverage proof fails
+# for all 128 manifest entries and every row is deleted through the row-level path exactly as before.
+# Every DELETE now pays for that proof attempt, and on this predicate it can only ever fail, so this
+# is where the added per-entry cost shows up undisguised by any saving. Without it, a slowdown on the
+# fallback path would be invisible in this group.
+require_reinit
+
+load
+SET enable_external_file_cache=false;
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181',
+);
+CREATE SCHEMA if not exists my_datalake.default;
+DROP TABLE IF EXISTS my_datalake.default.row_level_delete_uncovered_predicate;
+CREATE TABLE my_datalake.default.row_level_delete_uncovered_predicate (
+    id BIGINT,
+    event VARCHAR,
+    event_date DATE
+) PARTITIONED BY (day(event_date)) WITH ('format-version' = '2');
+INSERT INTO my_datalake.default.row_level_delete_uncovered_predicate
+SELECT
+    range % 1000,
+    'e' || range::VARCHAR,
+    DATE '2024-01-01' + (range // 1000)::INTEGER
+FROM range(128000);
+
+run
+DELETE FROM my_datalake.default.row_level_delete_uncovered_predicate
+WHERE id = 0;
+
+result I
+128

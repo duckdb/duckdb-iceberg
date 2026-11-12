@@ -1,0 +1,67 @@
+# name: benchmark/file_pruning_benchmarks/metadata_only_delete_partial_partition.benchmark
+# description: DELETE matching part of a day-partition that holds many data files, dropping the files whose own bounds sit entirely inside the predicate
+# group: [file_pruning_benchmarks]
+
+name Metadata-only DELETE of a partial partition
+group file_pruning_benchmarks
+subgroup metadata_only_delete
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# The other metadata-only benchmarks delete whole partitions, where the partition value alone proves
+# coverage. This one cuts inside a partition, which the partition value can never prove: all 87 files
+# here carry the same day. Only a file's own ts bounds can separate them, so this is the benchmark that
+# exercises that path, and the one that would regress if it were removed.
+#
+# One row per second of 2024-01-01, so ts and id advance together. truncate(1000, id) is the second
+# partition field purely to split the day into 87 files from a single INSERT - because ts tracks id,
+# each file covers a contiguous ~17-minute slice. The filter is on ts, whose partition field is day(ts).
+#
+# The timed DELETE cuts at 20:08:20 (72500s): 72 files end before it and are dropped at the manifest
+# level, one straddles it and takes the row-level path, and 14 start after it and are pruned by the
+# existing inclusive check. Without the bounds-based proof all 73 matched files are scanned and get a
+# positional delete file each.
+require_reinit
+
+load
+SET enable_external_file_cache=false;
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181',
+);
+CREATE SCHEMA if not exists my_datalake.default;
+DROP TABLE IF EXISTS my_datalake.default.metadata_only_delete_partial_partition;
+CREATE TABLE my_datalake.default.metadata_only_delete_partial_partition (
+    id BIGINT,
+    event VARCHAR,
+    ts TIMESTAMP
+) PARTITIONED BY (day(ts), truncate(1000, id)) WITH ('format-version' = '2');
+INSERT INTO my_datalake.default.metadata_only_delete_partial_partition
+SELECT
+    range,
+    'e' || range::VARCHAR,
+    TIMESTAMP '2024-01-01 00:00:00' + to_seconds(range)
+FROM range(86400);
+
+run
+DELETE FROM my_datalake.default.metadata_only_delete_partial_partition
+WHERE ts < TIMESTAMP '2024-01-01 20:08:20';
+
+result I
+72500

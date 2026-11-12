@@ -27,6 +27,14 @@ struct IcebergScanPlanContext;
 //! provider and manifest read state but own their pruning, ordering, and cursors.
 class IcebergScanPlanner {
 public:
+	//! A covered data file and the delete files (or individual DV blobs) superseded by its removal.
+	struct DroppedDataFile {
+		string file_path;
+		//! Deletes that cannot be attributed to this file alone are not subtracted, so this can over-report.
+		int64_t live_record_count;
+		vector<IcebergFileIdentity> superseded_delete_files;
+	};
+
 	IcebergScanPlanner(ClientContext &context, shared_ptr<IcebergScanInfo> scan_info, const string &path,
 	                   const IcebergOptions &options);
 	~IcebergScanPlanner();
@@ -40,6 +48,11 @@ public:
 	void SetScanOrder(unique_ptr<RowGroupOrderOptions> options);
 	void DisableServerSidePlanning();
 	void RequireRowIds();
+	void EnableMetadataOnlyDelete();
+	bool IsMetadataOnlyDeleteEnabled() const;
+	void SetFiltersFullyPushed(bool fully_pushed);
+	//! Resolves covered files using delete metadata without opening the data or delete files.
+	vector<DroppedDataFile> ResolveDroppedDataFiles() const;
 
 	const IcebergTableFilters &Filters() const;
 
@@ -61,6 +74,13 @@ public:
 	IcebergPartition GetPartitionForDataFile(const string &file_path) const;
 
 private:
+	struct CoveredDataFile {
+		idx_t manifest_file_idx;
+		idx_t manifest_entry_idx;
+		string file_path;
+		int64_t record_count;
+	};
+
 	explicit IcebergScanPlanner(shared_ptr<IcebergScanPlanState> shared_state);
 
 	IcebergScanPlanProvider &GetScanPlanProvider() const DUCKDB_REQUIRES(shared_state->lock);
@@ -82,12 +102,19 @@ private:
 	void FinishScanTasks(annotated_lock_guard<annotated_mutex> &guard) const DUCKDB_REQUIRES(shared_state->lock);
 	void StartDataManifestScan(annotated_lock_guard<annotated_mutex> &guard) const DUCKDB_REQUIRES(shared_state->lock);
 	vector<IcebergDeleteFile> ResolveApplicableDeleteFiles(const BoundIcebergManifestEntry &data_manifest_entry) const;
+	BoundIcebergManifestEntry BindCoveredDataFile(const CoveredDataFile &covered) const;
+	bool PartitionSpecHasFieldForEveryFilterColumn(int32_t partition_spec_id) const DUCKDB_REQUIRES(shared_state->lock);
 
 private:
 	shared_ptr<IcebergScanPlanState> shared_state;
 	ClientContext &context;
 	FileSystem &fs;
 	IcebergTableFilters table_filters;
+	//! Only a standalone DELETE with no residual filters may skip fully covered data files.
+	bool metadata_only_delete_enabled = false;
+	bool filters_fully_pushed = false;
+	mutable vector<CoveredDataFile> fully_covered_data_files DUCKDB_GUARDED_BY(shared_state->lock);
+	mutable unordered_map<int32_t, bool> spec_has_fields_for_filters DUCKDB_GUARDED_BY(shared_state->lock);
 
 	mutable bool view_initialized DUCKDB_GUARDED_BY(shared_state->lock) = false;
 	//! Written only by InitializeView under the planning lock, then immutable.

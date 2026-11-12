@@ -9,6 +9,7 @@
 #include "duckdb/planner/filter/table_filter_functions.hpp"
 #include "duckdb/transaction/meta_transaction.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "core/expression/iceberg_value.hpp"
 #include "function/scan_planning/iceberg_row_filter.hpp"
 #include "planning/iceberg_multi_file_list.hpp"
 
@@ -580,6 +581,78 @@ TEST_CASE("Iceberg indexed candidates agree with exhaustive delete applicability
 				}
 			}
 		}
+	}
+}
+
+TEST_CASE("Iceberg metadata-only file bounds account for NaNs and missing metrics", "[iceberg_planning]") {
+	for (auto type_id : {LogicalType::FLOAT, LogicalType::DOUBLE}) {
+		LogicalType type(type_id);
+		INFO(type.ToString());
+		PlanningTest test;
+		Query(test.connection, "CREATE TABLE lake.default.t (part " + type.ToString() + ", p INTEGER)");
+		auto bound = test.Bind();
+		auto &base = bound->Cast<MultiFileBindData>().file_list->Cast<IcebergMultiFileList>().GetScanPlanner();
+		auto metadata = base.GetMetadata().Copy();
+		auto &schema = base.GetSchema();
+		auto part_id = schema.columns[0]->id;
+
+		// Evolved specs may retain a void field alongside a live partition field.
+		// The void source must use file metrics, whose bounds exclude NaNs.
+		auto spec = PartitionSpec();
+		spec.fields[0].source_id = part_id;
+		spec.fields[0].transform = IcebergTransform("void");
+		auto live_field = spec.fields[0];
+		live_field.source_id = schema.columns[1]->id;
+		live_field.partition_field_id = 1001;
+		live_field.transform = IcebergTransform("identity");
+		spec.fields.push_back(live_field);
+		metadata.partition_specs.emplace(spec.spec_id, spec);
+
+		auto entry = DeleteEntry(0, Value(type));
+		auto &file = entry.data_file;
+		file.content = IcebergManifestEntryContentType::DATA;
+		file.partition_info.push_back({1001, Value::INTEGER(1)});
+		file.record_count = 2;
+		file.value_counts[part_id] = 2;
+		file.null_value_counts[part_id] = 0;
+		auto one = Value::INTEGER(1).DefaultCastAs(type);
+		file.lower_bounds[part_id] = IcebergValue::SerializeValue(one, type, SerializeBound::LOWER_BOUND).GetValue();
+		file.upper_bounds[part_id] = IcebergValue::SerializeValue(one, type, SerializeBound::UPPER_BOUND).GetValue();
+		IcebergManifest manifest(spec.spec_id, IcebergManifestContentType::DATA, 1);
+		auto filter_schema = LogicalType::STRUCT({{"part", type}, {"p", LogicalType::INTEGER}});
+		auto covered = [&](const string &predicate) {
+			auto filters = Filters(*test.connection.context, filter_schema, predicate);
+			IcebergFilePruner pruner(*test.connection.context, metadata, schema, filters);
+			REQUIRE(pruner.PartitionSpecHasFieldForEveryFilterColumn(spec.spec_id));
+			return pruner.FileFullyCoveredByFilter(manifest, entry);
+		};
+
+		for (bool known_nan_count : {false, true}) {
+			INFO(known_nan_count);
+			if (known_nan_count) {
+				file.nan_value_counts[part_id] = 1;
+			}
+			CHECK_FALSE(covered("part < 2"));
+			CHECK_FALSE(covered("part <= 1"));
+			CHECK_FALSE(covered("part = 1"));
+			CHECK_FALSE(covered("part < 'NaN'::" + type.ToString()));
+			// DuckDB orders NaN above every finite number.
+			CHECK(covered("part > 0"));
+			CHECK(covered("part >= 1"));
+			CHECK(covered("part <= 'NaN'::" + type.ToString()));
+		}
+
+		file.nan_value_counts[part_id] = 0;
+		CHECK(covered("part < 2"));
+		CHECK(covered("part <= 1"));
+		CHECK(covered("part = 1"));
+		file.null_value_counts[part_id] = 1;
+		CHECK_FALSE(covered("part < 2"));
+		file.null_value_counts.clear();
+		CHECK_FALSE(covered("part < 2"));
+		file.null_value_counts[part_id] = 0;
+		file.lower_bounds.clear();
+		CHECK_FALSE(covered("part < 2"));
 	}
 }
 

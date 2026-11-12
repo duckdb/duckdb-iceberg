@@ -1,0 +1,96 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/delete_metadata_only_with_delete_files_v2.test
+# description: A metadata-only DELETE over a v2 partition that already carries a positional delete file must invalidate that delete file alongside the data file it references, and count only the rows still live
+# group: [delete]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_metadata_only_posdel;
+
+# Default format-version (v2): a row-level delete writes a positional delete file that names the
+# data file it applies to via referenced_data_file.
+statement ok
+CREATE TABLE my_datalake.default.test_metadata_only_posdel (id INT, val VARCHAR)
+PARTITIONED BY (id);
+
+statement ok
+INSERT INTO my_datalake.default.test_metadata_only_posdel VALUES (1, 'a'), (1, 'b'), (1, 'c');
+
+statement ok
+INSERT INTO my_datalake.default.test_metadata_only_posdel VALUES (1, 'd'), (1, 'e');
+
+statement ok
+INSERT INTO my_datalake.default.test_metadata_only_posdel VALUES (2, 'z');
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_metadata_only_posdel)
+WHERE content = 'DATA' AND status != 'DELETED';
+----
+3
+
+query I
+DELETE FROM my_datalake.default.test_metadata_only_posdel WHERE id = 1 AND val = 'a';
+----
+1
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_metadata_only_posdel)
+WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+1
+
+query II
+SELECT id, val FROM my_datalake.default.test_metadata_only_posdel ORDER BY id, val;
+----
+1	b
+1	c
+1	d
+1	e
+2	z
+
+# The count reflects the rows the positional delete file had already removed.
+query I
+DELETE FROM my_datalake.default.test_metadata_only_posdel WHERE id = 1;
+----
+4
+
+query II
+SELECT id, val FROM my_datalake.default.test_metadata_only_posdel ORDER BY id, val;
+----
+2	z
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_metadata_only_posdel)
+WHERE content = 'DATA' AND status != 'DELETED';
+----
+1
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_metadata_only_posdel)
+WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+0
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_metadata_only_posdel)
+WHERE content = 'POSITION_DELETES';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.test_metadata_only_posdel;

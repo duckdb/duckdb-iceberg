@@ -1,5 +1,6 @@
 #include "planning/pruning/iceberg_predicate.hpp"
 
+#include "common/iceberg_math.hpp"
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/types/variant_iterator.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
@@ -126,6 +127,109 @@ static bool MatchBoundsConstantTemplated(const Value &constant, ExpressionType c
 		//! Conservative approach: we don't know, so we just say it's not filtered out
 		return true;
 	}
+}
+
+//! Identity keeps the source value, so the predicate applies to the bounds unchanged - no projection.
+static bool AllRowsMatchIdentityBounds(const Value &constant, ExpressionType comparison_type,
+                                       const IcebergPredicateStats &stats) {
+	//! File bounds exclude NaNs, which DuckDB orders above every other value.
+	auto type = stats.lower_bound->type().id();
+	bool may_have_nan =
+	    (type == LogicalTypeId::FLOAT || type == LogicalTypeId::DOUBLE) && (!stats.has_nan || *stats.has_nan);
+	switch (comparison_type) {
+	case ExpressionType::COMPARE_EQUAL:
+		return *stats.lower_bound == constant && *stats.upper_bound == constant && (!may_have_nan || IsNaN(constant));
+	case ExpressionType::COMPARE_GREATERTHAN:
+		return *stats.lower_bound > constant;
+	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+		return *stats.lower_bound >= constant;
+	case ExpressionType::COMPARE_LESSTHAN:
+		return !may_have_nan && *stats.upper_bound < constant;
+	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+		return *stats.upper_bound <= constant && (!may_have_nan || IsNaN(constant));
+	default:
+		return false;
+	}
+}
+
+//! Strict projection: an always-strict test on the transformed value, with the constant nudged one unit in
+//! the source domain first - `c <= T` becomes `t(c) < t(T + 1)`. Mirrors pyiceberg `_truncate_number_strict`.
+static bool AllRowsMatchProjectedBounds(const Value &constant, ExpressionType comparison_type,
+                                        const IcebergPredicateStats &stats, const IcebergTransform &transform) {
+	Value literal = constant;
+	bool test_upper_bound;
+	Value stepped;
+	switch (comparison_type) {
+	case ExpressionType::COMPARE_LESSTHAN:
+		test_upper_bound = true;
+		break;
+	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+		test_upper_bound = true;
+		//! A type with no successor (a truncated string, say) keeps the constant, which tests `t(c) < t(T)`.
+		//! That is stricter than the rule asks for, so it stays sound - see `_truncate_array_strict`.
+		if (IcebergTryIncrement(constant, stepped)) {
+			literal = std::move(stepped);
+		}
+		break;
+	case ExpressionType::COMPARE_GREATERTHAN:
+		test_upper_bound = false;
+		break;
+	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+		test_upper_bound = false;
+		if (IcebergTryDecrement(constant, stepped)) {
+			literal = std::move(stepped);
+		}
+		break;
+	default:
+		return false;
+	}
+
+	auto projected = transform.ApplyTransform(literal);
+	if (projected.IsNull()) {
+		return false;
+	}
+	return test_upper_bound ? *stats.upper_bound < projected : *stats.lower_bound > projected;
+}
+
+//! Strict counterpart to MatchBoundsConstant: true only when *every* value in [lower_bound, upper_bound]
+//! satisfies the comparison.
+static bool AllRowsMatchBoundsConstant(const Value &constant, ExpressionType comparison_type,
+                                       const IcebergPredicateStats &stats, const IcebergTransform &transform) {
+	if (constant.IsNull()) {
+		//! No ordinary comparison against NULL provably matches all rows.
+		return false;
+	}
+	if (stats.BoundsAreNull() || !stats.lower_bound || !stats.upper_bound) {
+		//! Without concrete bounds we cannot prove every row matches.
+		return false;
+	}
+	if (stats.has_null) {
+		//! A NULL row never satisfies an ordinary comparison, so not all rows match.
+		return false;
+	}
+
+	switch (transform.Type()) {
+	case IcebergTransformType::IDENTITY:
+		return AllRowsMatchIdentityBounds(constant, comparison_type, stats);
+	case IcebergTransformType::TRUNCATE:
+	case IcebergTransformType::YEAR:
+	case IcebergTransformType::MONTH:
+	case IcebergTransformType::DAY:
+	case IcebergTransformType::HOUR:
+		break;
+	default:
+		//! Bucket/void (and any transform added later) are not order-preserving, so a partition value tells
+		//! us nothing about how its source values compare - never claim full coverage.
+		return false;
+	}
+
+	if (comparison_type == ExpressionType::COMPARE_EQUAL) {
+		//! Equality is the conjunction of the two inequalities: proving both is exactly where the transform
+		//! separates the constant from its neighbours, which is what makes it one-to-one there.
+		return AllRowsMatchProjectedBounds(constant, ExpressionType::COMPARE_GREATERTHANOREQUALTO, stats, transform) &&
+		       AllRowsMatchProjectedBounds(constant, ExpressionType::COMPARE_LESSTHANOREQUALTO, stats, transform);
+	}
+	return AllRowsMatchProjectedBounds(constant, comparison_type, stats, transform);
 }
 
 static bool MatchBoundsConstant(const Value &constant, ExpressionType comparison_type,
@@ -459,6 +563,61 @@ static bool MatchBoundsExpression(ClientContext &context, const unique_ptr<Expre
 bool IcebergPredicate::MatchBounds(ClientContext &context, const ExpressionFilter &filter,
                                    const IcebergPredicateStats &stats, const IcebergTransform &transform) {
 	return MatchBoundsExpression(context, filter.expr, stats, transform);
+}
+
+static bool AllRowsMatchBoundsExpression(ClientContext &context, const unique_ptr<Expression> &expr_p,
+                                         const IcebergPredicateStats &stats, const IcebergTransform &transform) {
+	auto &expr = *expr_p;
+	if (BoundComparisonExpression::IsComparison(expr)) {
+		auto &compare_expr = expr.Cast<BoundFunctionExpression>();
+		auto comparison_type = compare_expr.GetExpressionType();
+		auto &left = BoundComparisonExpression::Left(compare_expr);
+		auto &right = BoundComparisonExpression::Right(compare_expr);
+		const bool right_is_const = right.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT;
+		const bool left_is_const = left.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT;
+		const bool left_is_ref = IsDirectReference(left);
+		const bool right_is_ref = IsDirectReference(right);
+
+		if (right_is_const && left_is_ref) {
+			return AllRowsMatchBoundsConstant(right.Cast<BoundConstantExpression>().GetValue(), comparison_type, stats,
+			                                  transform);
+		}
+		if (left_is_const && right_is_ref) {
+			return AllRowsMatchBoundsConstant(left.Cast<BoundConstantExpression>().GetValue(),
+			                                  FlipComparisonExpression(comparison_type), stats, transform);
+		}
+		//! Anything more complex than `column <cmp> constant` cannot be proven to cover every row.
+		return false;
+	}
+
+	switch (expr.GetExpressionClass()) {
+	case ExpressionClass::BOUND_CONJUNCTION: {
+		auto &conjunction = expr.Cast<BoundConjunctionExpression>();
+		if (conjunction.GetExpressionType() != ExpressionType::CONJUNCTION_AND) {
+			//! A disjunction is only ever pushed into the scan as an optional filter, with the real predicate
+			//! enforced above it, so a delete may not drop files on one - see the BOUND_FUNCTION case.
+			return false;
+		}
+		for (auto &child : conjunction.GetChildren()) {
+			if (!AllRowsMatchBoundsExpression(context, child, stats, transform)) {
+				return false;
+			}
+		}
+		return true;
+	}
+	case ExpressionClass::BOUND_FUNCTION:
+		//! Unlike the inclusive walk, never unwrap an OptionalFilter: it is a widened approximation whose real
+		//! predicate is enforced above the scan, so covering its child does not cover the original.
+		return false;
+	default:
+		//! Conservative: unknown expression shape (IS NULL, IN, ...) - do not claim full coverage.
+		return false;
+	}
+}
+
+bool IcebergPredicate::AllRowsMatchBounds(ClientContext &context, const ExpressionFilter &filter,
+                                          const IcebergPredicateStats &stats, const IcebergTransform &transform) {
+	return AllRowsMatchBoundsExpression(context, filter.expr, stats, transform);
 }
 
 } // namespace duckdb

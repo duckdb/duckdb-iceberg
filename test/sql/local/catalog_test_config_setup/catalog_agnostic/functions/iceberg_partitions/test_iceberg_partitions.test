@@ -26,8 +26,10 @@ alter table my_datalake.default.partitions_evolved SET PARTITIONED BY (a, b);
 statement ok
 insert into my_datalake.default.partitions_evolved values (1, NULL), (1, 10);
 
+# Keep this row-level: b is not a partition source in the old spec, so the test
+# still exercises positional-delete totals and their last-updated snapshot.
 statement ok
-delete from my_datalake.default.partitions_evolved where a = 2;
+delete from my_datalake.default.partitions_evolved where a = 2 and b IS NULL;
 
 # Files of different specs are different partitions, even when their values are the same
 query IIIIII

@@ -114,6 +114,29 @@ void IcebergScanPlanner::RequireRowIds() {
 	shared_state->RequireRowIds();
 }
 
+void IcebergScanPlanner::EnableMetadataOnlyDelete() {
+	metadata_only_delete_enabled = true;
+}
+
+bool IcebergScanPlanner::IsMetadataOnlyDeleteEnabled() const {
+	return metadata_only_delete_enabled;
+}
+
+void IcebergScanPlanner::SetFiltersFullyPushed(bool fully_pushed) {
+	filters_fully_pushed = fully_pushed;
+}
+
+bool IcebergScanPlanner::PartitionSpecHasFieldForEveryFilterColumn(int32_t partition_spec_id) const {
+	auto it = spec_has_fields_for_filters.find(partition_spec_id);
+	if (it != spec_has_fields_for_filters.end()) {
+		return it->second;
+	}
+	auto can_cover = IcebergFilePruner(context, GetMetadata(), GetSchema(), table_filters)
+	                     .PartitionSpecHasFieldForEveryFilterColumn(partition_spec_id);
+	spec_has_fields_for_filters[partition_spec_id] = can_cover;
+	return can_cover;
+}
+
 const IcebergTableFilters &IcebergScanPlanner::Filters() const {
 	return table_filters;
 }
@@ -226,6 +249,16 @@ IcebergScanPlanner::GetDataFile(idx_t file_id, annotated_lock_guard<annotated_mu
 				continue;
 			}
 			if (StringUtil::CIEquals(data_file.file_format, "puffin")) {
+				continue;
+			}
+			//! Record fully covered files for a manifest-level drop instead of emitting their rows.
+			if (metadata_only_delete_enabled && filters_fully_pushed && table_filters.HasFilters() &&
+			    PartitionSpecHasFieldForEveryFilterColumn(manifest_file.partition_spec_id) &&
+			    IcebergFilePruner(context, GetMetadata(), GetSchema(), table_filters)
+			        .FileFullyCoveredByFilter(manifest_file, manifest_entry)) {
+				fully_covered_data_files.push_back({batch.manifest_list_entry_idx,
+				                                    data_view_cursor.current_batch_offset, data_file.file_path,
+				                                    data_file.record_count});
 				continue;
 			}
 			data_manifest_entries.push_back(bound_entry);
@@ -355,6 +388,42 @@ IcebergPartition IcebergScanPlanner::GetPartitionForDataFile(const string &file_
 		return entry->second;
 	}
 	throw InvalidConfigurationException("Could not find data file '%s' in manifest entries", file_path);
+}
+
+BoundIcebergManifestEntry IcebergScanPlanner::BindCoveredDataFile(const CoveredDataFile &covered) const {
+	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
+	auto &manifest = data_manifests[covered.manifest_file_idx];
+	return manifest.BindEntry(manifest.entry.GetManifestEntries()[covered.manifest_entry_idx]);
+}
+
+vector<IcebergScanPlanner::DroppedDataFile> IcebergScanPlanner::ResolveDroppedDataFiles() const {
+	vector<CoveredDataFile> covered_files;
+	{
+		annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
+		covered_files = fully_covered_data_files;
+	}
+	vector<DroppedDataFile> result;
+	result.reserve(covered_files.size());
+	for (auto &covered : covered_files) {
+		DroppedDataFile dropped;
+		dropped.file_path = covered.file_path;
+		dropped.live_record_count = covered.record_count;
+		auto entry = BindCoveredDataFile(covered);
+		for (auto &delete_file : ResolveApplicableDeleteFiles(entry)) {
+			//! Table-wide equality deletes and position deletes spanning several data files must remain.
+			if (delete_file.content == IcebergManifestEntryContentType::EQUALITY_DELETES ||
+			    !delete_file.referenced_data_file || *delete_file.referenced_data_file != covered.file_path) {
+				continue;
+			}
+			dropped.superseded_delete_files.emplace_back(delete_file.file_path, delete_file.content_offset);
+			dropped.live_record_count -= delete_file.record_count;
+		}
+		if (dropped.live_record_count < 0) {
+			dropped.live_record_count = 0;
+		}
+		result.push_back(std::move(dropped));
+	}
+	return result;
 }
 
 vector<IcebergDeleteFile>

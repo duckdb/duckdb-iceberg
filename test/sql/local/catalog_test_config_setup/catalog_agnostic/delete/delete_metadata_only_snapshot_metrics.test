@@ -1,0 +1,136 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/delete_metadata_only_snapshot_metrics.test
+# description: A metadata-only DELETE accounts the files it drops in the snapshot summary - the drop happens by rewriting an existing manifest, which never passes through the added-manifest accounting
+# group: [delete]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+require json
+
+# The position-delete metrics (added-position-deletes / total-position-deletes) are intentionally
+# not asserted anywhere below: they are compiled out under ICEBERG_ENABLE_EQUALITY_DELETE_WRITES,
+# whereas every metric used here is emitted in every build.
+
+# ---- Dropping a data file only ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_metadata_only_metrics;
+
+statement ok
+CREATE TABLE my_datalake.default.test_metadata_only_metrics (id INT, val VARCHAR)
+PARTITIONED BY (id);
+
+statement ok
+INSERT INTO my_datalake.default.test_metadata_only_metrics VALUES (1, 'a'), (1, 'b'), (2, 'c');
+
+# Baseline: two data files (one per partition), three records, no delete files.
+query III
+WITH snaps AS (
+    SELECT unnest(json_extract(metadata::JSON, '$.snapshots[*]')) AS snap
+    FROM iceberg_load_table_response(my_datalake.default.test_metadata_only_metrics)
+)
+SELECT json_extract_string(snap, '$.summary."total-data-files"'),
+       json_extract_string(snap, '$.summary."total-records"'),
+       json_extract_string(snap, '$.summary."total-delete-files"')
+FROM snaps
+WHERE json_extract_string(snap, '$.summary.operation') = 'append';
+----
+2	3	0
+
+query I
+DELETE FROM my_datalake.default.test_metadata_only_metrics WHERE id = 1;
+----
+2
+
+# The dropped file is counted as deleted and removed from the totals, and no delete file was added.
+query IIIIII
+WITH snaps AS (
+    SELECT unnest(json_extract(metadata::JSON, '$.snapshots[*]')) AS snap
+    FROM iceberg_load_table_response(my_datalake.default.test_metadata_only_metrics)
+)
+SELECT json_extract_string(snap, '$.summary."total-data-files"'),
+       json_extract_string(snap, '$.summary."total-records"'),
+       json_extract_string(snap, '$.summary."deleted-data-files"'),
+       json_extract_string(snap, '$.summary."deleted-records"'),
+       coalesce(json_extract_string(snap, '$.summary."added-delete-files"'), '0'),
+       coalesce(json_extract_string(snap, '$.summary."total-delete-files"'), '0')
+FROM snaps
+WHERE json_extract_string(snap, '$.summary.operation') = 'delete';
+----
+1	1	1	2	0	0
+
+# The dropped file's bytes move from the running total into removed-files-size.
+query II
+WITH snaps AS (
+    SELECT unnest(json_extract(metadata::JSON, '$.snapshots[*]')) AS snap
+    FROM iceberg_load_table_response(my_datalake.default.test_metadata_only_metrics)
+), summary AS (
+    SELECT json_extract_string(snap, '$.summary.operation') AS operation,
+           cast(json_extract_string(snap, '$.summary."total-files-size"') AS BIGINT) AS total_files_size,
+           cast(coalesce(json_extract_string(snap, '$.summary."removed-files-size"'), '0') AS BIGINT)
+               AS removed_files_size
+    FROM snaps
+)
+SELECT (SELECT removed_files_size FROM summary WHERE operation = 'delete') > 0,
+       (SELECT total_files_size FROM summary WHERE operation = 'delete')
+           < (SELECT total_files_size FROM summary WHERE operation = 'append');
+----
+true	true
+
+statement ok
+DROP TABLE my_datalake.default.test_metadata_only_metrics;
+
+# ---- Dropping a data file together with the delete file that referenced it ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_metadata_only_metrics_delete_file;
+
+statement ok
+CREATE TABLE my_datalake.default.test_metadata_only_metrics_delete_file (id INT, val VARCHAR)
+PARTITIONED BY (id);
+
+statement ok
+INSERT INTO my_datalake.default.test_metadata_only_metrics_delete_file VALUES
+    (1, 'a'), (1, 'b'), (1, 'c'), (2, 'z');
+
+# Row-level delete: adds one delete file, leaving the data-file totals alone.
+query I
+DELETE FROM my_datalake.default.test_metadata_only_metrics_delete_file WHERE id = 1 AND val = 'a';
+----
+1
+
+# Metadata-only drop of the whole partition: the data file and the delete file that referenced it
+# are both invalidated, so total-delete-files returns to zero.
+query I
+DELETE FROM my_datalake.default.test_metadata_only_metrics_delete_file WHERE id = 1;
+----
+2
+
+query IIIIII
+WITH snaps AS (
+    SELECT unnest(json_extract(metadata::JSON, '$.snapshots[*]')) AS snap
+    FROM iceberg_load_table_response(my_datalake.default.test_metadata_only_metrics_delete_file)
+), latest AS (
+    SELECT snap FROM snaps
+    ORDER BY cast(json_extract_string(snap, '$."sequence-number"') AS BIGINT) DESC
+    LIMIT 1
+)
+SELECT json_extract_string(snap, '$.summary.operation'),
+       json_extract_string(snap, '$.summary."total-data-files"'),
+       json_extract_string(snap, '$.summary."total-records"'),
+       json_extract_string(snap, '$.summary."deleted-data-files"'),
+       json_extract_string(snap, '$.summary."removed-delete-files"'),
+       coalesce(json_extract_string(snap, '$.summary."total-delete-files"'), '0')
+FROM latest;
+----
+delete	1	1	1	1	0
+
+statement ok
+DROP TABLE my_datalake.default.test_metadata_only_metrics_delete_file;

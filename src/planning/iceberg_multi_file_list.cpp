@@ -145,12 +145,22 @@ unique_ptr<MultiFileList> IcebergMultiFileList::ComplexFilterPushdown(ClientCont
 	for (const auto &filter : filters) {
 		combiner.AddFilter(filter->Copy());
 	}
-	vector<FilterPushdownResult> unused;
-	auto filter_set = combiner.GenerateTableScanFilters(info.column_indexes, unused);
+	vector<FilterPushdownResult> pushdown_results;
+	auto filter_set = combiner.GenerateTableScanFilters(info.column_indexes, pushdown_results);
 	if (!filter_set.HasFilters()) {
 		return nullptr;
 	}
-	return PushdownInternal(filter_set, info.column_indexes);
+	//! Any residual filter can still reject rows, so its scan must keep emitting them.
+	bool filters_fully_pushed = true;
+	for (auto &result : pushdown_results) {
+		if (result != FilterPushdownResult::PUSHED_DOWN_FULLY) {
+			filters_fully_pushed = false;
+			break;
+		}
+	}
+	auto result = PushdownInternal(filter_set, info.column_indexes);
+	result->GetScanPlanner().SetFiltersFullyPushed(filters_fully_pushed);
+	return std::move(result);
 }
 
 OpenFileInfo IcebergMultiFileList::GetFileInternal(idx_t file_id) const {

@@ -1,0 +1,62 @@
+# name: benchmark/file_pruning_benchmarks/metadata_only_delete_whole_partition.benchmark
+# description: DELETE of one whole day-partition, which the plan proves fully covered and drops at the manifest level
+# group: [file_pruning_benchmarks]
+
+name Metadata-only DELETE of a whole partition
+group file_pruning_benchmarks
+subgroup metadata_only_delete
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# A day(event_date)-partitioned, format-version 2 table of 8 partitions holding 500k rows each. The
+# timed DELETE matches exactly one partition on the partition source column, so every row of that
+# partition's data file is provably deleted and the file is dropped from the manifest without being
+# read. Without the optimization the same DELETE scans the 500k-row file and writes a positional
+# delete file for it, so a regression here means the plan-time coverage proof stopped firing.
+#
+# require_reinit rebuilds the table before each timed run, so the DELETE is measured against a fresh
+# table every time. Initialize() runs outside the profiler, so the rebuild itself is not timed.
+require_reinit
+
+load
+SET enable_external_file_cache=false;
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    ENDPOINT 'http://127.0.0.1:8181',
+);
+CREATE SCHEMA if not exists my_datalake.default;
+DROP TABLE IF EXISTS my_datalake.default.metadata_only_delete_whole_partition;
+CREATE TABLE my_datalake.default.metadata_only_delete_whole_partition (
+    id BIGINT,
+    event VARCHAR,
+    event_date DATE
+) PARTITIONED BY (day(event_date)) WITH ('format-version' = '2');
+INSERT INTO my_datalake.default.metadata_only_delete_whole_partition
+SELECT
+    range % 500000,
+    'e' || range::VARCHAR,
+    DATE '2024-01-01' + (range // 500000)::INTEGER
+FROM range(4000000);
+
+run
+DELETE FROM my_datalake.default.metadata_only_delete_whole_partition
+WHERE event_date = DATE '2024-01-01';
+
+result I
+500000
