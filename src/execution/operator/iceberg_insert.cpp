@@ -622,14 +622,20 @@ static string TemporalPartitionValueToString(IcebergTransformType transform, int
 	case IcebergTransformType::MONTH:
 		return PadNumber(Date::EPOCH_YEAR + FloorDivide(value, 12), 4) + "-" +
 		       PadNumber(value - FloorDivide(value, 12) * 12 + 1, 2);
-	case IcebergTransformType::DAY:
-		if (TryFormatDay(value, result)) {
+	case IcebergTransformType::DAY: {
+		auto formatted = TryFormatDay(value, result);
+		// date_diff on a finite DATE or TIMESTAMP always gives a day within the date range
+		D_ASSERT(formatted);
+		if (formatted) {
 			return result;
 		}
 		break;
+	}
 	case IcebergTransformType::HOUR: {
 		auto days = FloorDivide(value, 24);
-		if (TryFormatDay(days, result)) {
+		auto formatted = TryFormatDay(days, result);
+		D_ASSERT(formatted);
+		if (formatted) {
 			return result + "-" + PadNumber(value - days * 24, 2);
 		}
 		break;
@@ -637,7 +643,7 @@ static string TemporalPartitionValueToString(IcebergTransformType transform, int
 	default:
 		throw InternalException("Partition transform has no temporal partition value");
 	}
-	// out of the date range: fall back to the ordinal
+	// out of the date range: fall back to the ordinal, the path is only for humans
 	return std::to_string(value);
 }
 
