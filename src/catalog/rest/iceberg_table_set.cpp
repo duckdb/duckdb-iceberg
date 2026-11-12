@@ -23,6 +23,7 @@
 #include "catalog/rest/iceberg_request_executor.hpp"
 #include "catalog/rest/iceberg_table_prefetch.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_lazy_table_entry.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/storage/authorization/sigv4.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
@@ -125,21 +126,9 @@ void WarnTableLoadFailure(ClientContext &context, IcebergTable &table, const Err
 	                   table.GetTableKey(), error.RawMessage());
 }
 
-optional_ptr<IcebergTable> GetVisibleTable(IcebergTransaction &transaction, IcebergTable &listed_table) {
-	auto state = transaction.GetLatestTableState(listed_table.GetTableKey());
-	if (!state) {
-		return listed_table;
-	}
-	if (!state->IsAlive()) {
-		return nullptr;
-	}
-	// Match ordinary table lookup: local ALTERs and transaction-pinned schemas take precedence over the listing.
-	return state->GetInfo();
-}
-
 } // namespace
 
-void IcebergTableSet::ScanEagerEntries(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
+void IcebergTableSet::ScanEagerEntries(ClientContext &context, vector<reference<CatalogEntry>> &result) {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto &transaction = IcebergTransaction::Get(context, catalog);
 	auto &scheduler = TaskScheduler::GetScheduler(context);
@@ -161,6 +150,8 @@ void IcebergTableSet::ScanEagerEntries(ClientContext &context, const std::functi
 		} catch (std::exception &ex) {
 			context.InterruptCheck();
 			WarnTableLoadFailure(context, table, ErrorData(ex));
+			// Listed without columns, rather than loaded (and warned about) again when they are read
+			GetOrCreateLazyEntry(transaction, table.name, table.GetTableKey()).SetLoadFailed();
 		}
 		if (needs_load) {
 			load->publication = ic_catalog.table_request_cache.BeginLoad(table.GetTableKey());
@@ -186,72 +177,94 @@ void IcebergTableSet::ScanEagerEntries(ClientContext &context, const std::functi
 				}
 				context.InterruptCheck();
 				WarnTableLoadFailure(context, load->table, error);
+				GetOrCreateLazyEntry(transaction, load->table.name, load->table.GetTableKey()).SetLoadFailed();
 			}
 		}
-		// Refill before invoking the callback, so requests can overlap both consumption and callback work.
+		// Refill before collecting the entry, so requests can overlap consumption.
 		// The task owns its result holder even if this window slot is released before task cleanup finishes.
 		if (entry != entries.end()) {
 			schedule_next();
 		}
-		auto visible_table = GetVisibleTable(transaction, load->table);
-		if (visible_table) {
-			callback(GetScanEntry(*visible_table));
+		auto scan_entry = GetScanEntry(transaction, load->table);
+		if (scan_entry) {
+			result.push_back(*scan_entry);
 		}
 	}
 	// Join at the scan boundary. Exceptions instead cancel and drain through the executor's destructor.
 	executor.Drain();
 }
 
-CatalogEntry &IcebergTableSet::GetScanEntry(IcebergTable &table_info) const {
-	if (!table_info.schema_versions.empty()) {
-		// Surface resolved columns, including comments, instead of a listing placeholder.
-		auto resolved = table_info.GetLatestSchema();
+optional_ptr<CatalogEntry> IcebergTableSet::GetScanEntry(IcebergTransaction &transaction, IcebergTable &listed_table) {
+	auto table_key = listed_table.GetTableKey();
+	auto state = transaction.GetLatestTableState(table_key);
+	if (state && !state->IsAlive()) {
+		// Dropped, renamed or missing in this transaction
+		return nullptr;
+	}
+	auto lazy_entry = transaction.lazy_table_entries.find(table_key);
+	if (lazy_entry != transaction.lazy_table_entries.end() && &lazy_entry->second->schema == &schema) {
+		// Keep returning the same entry once its table is resolved: SHOW ALL TABLES joins duckdb_tables and
+		// duckdb_columns on the table OID, and reading the first resolves the table before the second is scanned.
+		return *lazy_entry->second;
+	}
+	// Match ordinary table lookup: local ALTERs and transaction-pinned schemas take precedence over the listing.
+	// Only an eager listing loads the listed table itself; otherwise it may have been resolved by another transaction.
+	optional_ptr<IcebergTable> resolved_table;
+	if (state) {
+		resolved_table = state->GetInfo();
+	} else if (catalog.Cast<IcebergCatalog>().attach_options.table_resolution == IcebergTableResolution::EAGER) {
+		resolved_table = listed_table;
+	}
+	if (resolved_table && !resolved_table->schema_versions.empty()) {
+		auto resolved = resolved_table->GetLatestSchema();
 		if (resolved) {
-			D_ASSERT(&resolved->Cast<IcebergTableSchemaVersion>().table_info == &table_info);
-			return *resolved;
+			D_ASSERT(&resolved->Cast<IcebergTableSchemaVersion>().table_info == resolved_table.get());
+			return resolved;
 		}
 	}
-	return GetOrCreateDummy(table_info);
+	// Not resolved by this transaction (or an eager load failed): the table is loaded when its metadata is first read
+	return GetOrCreateLazyEntry(transaction, listed_table.name, table_key);
 }
 
-IcebergTableSchemaVersion &IcebergTableSet::GetOrCreateDummy(IcebergTable &table_info) const {
-	if (table_info.dummy_entry) {
-		return *table_info.dummy_entry;
+IcebergLazyTableEntry &IcebergTableSet::GetOrCreateLazyEntry(IcebergTransaction &transaction, const string &table_name,
+                                                             const string &table_key) {
+	auto &lazy_entry = transaction.lazy_table_entries[table_key];
+	if (!lazy_entry || &lazy_entry->schema != &schema) {
+		if (lazy_entry) {
+			// The schema entry was replaced within the transaction; the old entry may still be referenced
+			transaction.retired_lazy_table_entries.push_back(std::move(lazy_entry));
+		}
+		CreateTableInfo info(schema, Identifier(table_name));
+		lazy_entry = make_uniq<IcebergLazyTableEntry>(*this, transaction, info, table_key);
 	}
-	// create a table entry with fake schema data to avoid calling the LoadTableInformation endpoint for every
-	// table while listing schemas
-	CreateTableInfo info(schema, Identifier(table_info.name));
-	vector<ColumnDefinition> columns;
-	auto col = ColumnDefinition(Identifier("__"), LogicalType::UNKNOWN);
-	columns.push_back(std::move(col));
-	info.columns = ColumnList(std::move(columns));
-	auto table_entry = make_uniq<IcebergTableSchemaVersion>(table_info, catalog, schema, info, optional_idx());
-	if (!table_entry->internal) {
-		table_entry->internal = schema.internal;
-	}
-	auto result = table_entry.get();
-	if (result->name.empty()) {
-		throw InternalException("IcebergTableSet::CreateEntry called with empty name");
-	}
-	table_info.dummy_entry = std::move(table_entry);
-	return *table_info.dummy_entry;
+	return *lazy_entry;
 }
 
 void IcebergTableSet::Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback) {
-	annotated_lock_guard<annotated_mutex> lock(entry_lock);
-	LoadEntriesInternal(context);
-	if (catalog.Cast<IcebergCatalog>().attach_options.table_resolution == IcebergTableResolution::EAGER) {
-		ScanEagerEntries(context, callback);
-		return;
-	}
 	auto &transaction = IcebergTransaction::Get(context, catalog);
-	for (auto &entry : entries) {
-		auto &table = *entry.second;
-		transaction.tables[table.GetTableKey()] = entry.second;
-		auto visible_table = GetVisibleTable(transaction, table);
-		if (visible_table) {
-			callback(GetScanEntry(*visible_table));
+	vector<reference<CatalogEntry>> scan_entries;
+	{
+		// Taken before the entry lock, as in GetEntry. Lazy entries handed out by an earlier scan may be resolving on
+		// other threads of this transaction.
+		lock_guard<std::recursive_mutex> transaction_guard(transaction.table_lookup_lock);
+		annotated_lock_guard<annotated_mutex> lock(entry_lock);
+		LoadEntriesInternal(context);
+		if (catalog.Cast<IcebergCatalog>().attach_options.table_resolution == IcebergTableResolution::EAGER) {
+			ScanEagerEntries(context, scan_entries);
+		} else {
+			for (auto &entry : entries) {
+				auto &table = *entry.second;
+				transaction.tables[table.GetTableKey()] = entry.second;
+				auto scan_entry = GetScanEntry(transaction, table);
+				if (scan_entry) {
+					scan_entries.push_back(*scan_entry);
+				}
+			}
 		}
+	}
+	// Invoke the callbacks without holding the locks: reading the columns of a lazy entry loads its table.
+	for (auto &scan_entry : scan_entries) {
+		callback(scan_entry.get());
 	}
 }
 
@@ -515,6 +528,8 @@ static bool EntryMissingFromListing(const optional<vector<rest_api_objects::Tabl
 optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, const EntryLookupInfo &lookup) {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
+	// Listing entries resolve through this lookup on execution threads, concurrently with other lookups
+	lock_guard<std::recursive_mutex> transaction_guard(iceberg_transaction.table_lookup_lock);
 	const auto &table_name = lookup.GetEntryName();
 	// first check transaction entries
 	const auto table_key = IcebergTable::GetTableKey(ic_catalog, schema.namespace_items, table_name);

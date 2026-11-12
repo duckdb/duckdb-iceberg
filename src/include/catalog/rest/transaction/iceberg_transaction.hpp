@@ -13,6 +13,7 @@ class IcebergCatalog;
 class IcebergTablePrefetch;
 class IcebergSchemaEntry;
 class IcebergTableSchemaVersion;
+class IcebergLazyTableEntry;
 
 enum class IcebergTableStatus : uint8_t { ALIVE, DROPPED, RENAMED, MISSING };
 
@@ -176,8 +177,19 @@ public:
 	mutex lock;
 	//! Serialize rewrite finalization, including the initialization of transaction table state.
 	mutex rewrite_commit_lock;
+	//! Serializes table listings and lookups, which publish the table state above. Listing entries load their table on
+	//! the thread that first reads their columns, possibly while other pipelines list or look up tables.
+	//! Recursive: loading a table can look up the same catalog again (e.g. to refresh vended credentials).
+	std::recursive_mutex table_lookup_lock;
 
 	unordered_map<string, SchemaPropertyUpdates> schema_property_updates;
+
+	//! Entries handed out by table listings for tables the transaction had not resolved, keyed by table key. A listing
+	//! returns the same entry for the rest of the transaction, so its OID stays stable. Declared last: they reference
+	//! the schemas above.
+	unordered_map<string, unique_ptr<IcebergLazyTableEntry>> lazy_table_entries;
+	//! Lazy entries replaced because their schema entry changed, kept alive for statements that still reference them
+	vector<unique_ptr<IcebergLazyTableEntry>> retired_lazy_table_entries;
 };
 
 void ApplyTableUpdate(IcebergTable &table_info, IcebergTransaction &iceberg_transaction,

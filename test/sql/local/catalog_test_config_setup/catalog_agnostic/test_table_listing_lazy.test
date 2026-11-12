@@ -1,0 +1,128 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/test_table_listing_lazy.test
+# description: Catalog listings load tables lazily and report the schema the transaction reads, never a placeholder
+# group: [catalog_agnostic]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.listing_lazy;
+
+statement ok
+CREATE TABLE my_datalake.default.listing_lazy (id INTEGER NOT NULL, payload STRUCT(x INTEGER, labels VARCHAR[]));
+
+statement ok
+COMMENT ON COLUMN my_datalake.default.listing_lazy.id IS 'Identifier';
+
+statement ok
+BEGIN;
+
+# Comments and NOT NULL come from the table metadata, which the listing loads when the columns are read.
+# duckdb_columns() reads the constraints of a table before its columns.
+query IIII
+SELECT column_name, data_type, is_nullable, comment FROM duckdb_columns()
+WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'listing_lazy'
+ORDER BY column_index;
+----
+id	INTEGER	false	Identifier
+payload	STRUCT(x INTEGER, labels VARCHAR[])	true	NULL
+
+query II
+SELECT constraint_type, constraint_column_names FROM duckdb_constraints()
+WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'listing_lazy';
+----
+NOT NULL	[id]
+
+query I
+SELECT column_count FROM duckdb_tables()
+WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'listing_lazy';
+----
+2
+
+# Both system functions must return the same table OID, including on repeated scans.
+loop i 0 2
+
+query III
+SELECT name, column_names, column_types FROM (SHOW ALL TABLES)
+WHERE database = 'my_datalake' AND schema = 'default' AND name = 'listing_lazy';
+----
+listing_lazy	[id, payload]	[INTEGER, 'STRUCT(x INTEGER, labels VARCHAR[])']
+
+endloop
+
+# A different connection's schema change must not replace the version this transaction loaded.
+statement ok writer
+ALTER TABLE my_datalake.default.listing_lazy ADD COLUMN extra BIGINT;
+
+query I
+SELECT column_name FROM information_schema.columns
+WHERE table_catalog = 'my_datalake' AND table_schema = 'default' AND table_name = 'listing_lazy'
+ORDER BY ordinal_position;
+----
+id
+payload
+
+statement ok
+COMMIT;
+
+# A new transaction loads the table again, even though an older version is cached by the catalog.
+query I
+SELECT column_name FROM information_schema.columns
+WHERE table_catalog = 'my_datalake' AND table_schema = 'default' AND table_name = 'listing_lazy'
+ORDER BY ordinal_position;
+----
+id
+payload
+extra
+
+# Changes made by the transaction itself are visible to its listings, also through an entry listed before them.
+statement ok
+BEGIN;
+
+query I
+SELECT count(*) FROM information_schema.columns
+WHERE table_catalog = 'my_datalake' AND table_schema = 'default' AND table_name = 'listing_lazy';
+----
+3
+
+statement ok
+ALTER TABLE my_datalake.default.listing_lazy ADD COLUMN local_change BOOLEAN;
+
+query I
+SELECT column_name FROM information_schema.columns
+WHERE table_catalog = 'my_datalake' AND table_schema = 'default' AND table_name = 'listing_lazy'
+ORDER BY ordinal_position;
+----
+id
+payload
+extra
+local_change
+
+statement ok
+ROLLBACK;
+
+# A table dropped by the transaction is no longer listed, also after an earlier listing handed out its entry.
+statement ok
+BEGIN;
+
+query I
+SELECT count(*) FROM duckdb_tables()
+WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'listing_lazy';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.listing_lazy;
+
+query I
+SELECT count(*) FROM duckdb_tables()
+WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'listing_lazy';
+----
+0
+
+statement ok
+ROLLBACK;
+
+statement ok
+DROP TABLE my_datalake.default.listing_lazy;

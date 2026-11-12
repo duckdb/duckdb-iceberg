@@ -41,7 +41,7 @@ protected:
 
 public:
 	IcebergTable &table_info;
-	//! 'schema_id' used to create the entry, or invalid if this is a dummy
+	//! 'schema_id' used to create the entry
 	optional_idx schema_id;
 };
 

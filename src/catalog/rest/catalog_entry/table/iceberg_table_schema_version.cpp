@@ -67,8 +67,7 @@ TableFunction IcebergTableSchemaVersion::GetScanFunction(ClientContext &context,
 	PrepareIcebergScanFromEntry(context);
 
 	if (!schema_id.IsValid()) {
-		throw InternalException(
-		    "GetScanFunction was called with a dummy IcebergTableSchemaVersion, this should never happen");
+		throw InternalException("GetScanFunction was called on an IcebergTableSchemaVersion without a schema id");
 	}
 	const auto schema_id = this->schema_id.GetIndex();
 	const auto &metadata = table_info.GetMetadata();

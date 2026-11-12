@@ -27,6 +27,7 @@
 #include "catalog/rest/iceberg_table_prefetch.hpp"
 #include "catalog/rest/storage/iceberg_authorization.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_lazy_table_entry.hpp"
 #include "catalog/rest/api/iceberg_add_snapshot.hpp"
 #include "catalog/rest/api/iceberg_create_table_request.hpp"
 #include "catalog/rest/api/catalog_api.hpp"
