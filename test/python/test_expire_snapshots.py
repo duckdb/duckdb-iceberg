@@ -765,13 +765,22 @@ class TestExpireSnapshots:
 
         with duckdb_runner() as test:
             test.query("I", _timestamp_time_travel_query(table_name, abandoned_timestamp_ms), [(3,)])
-            test.statement_ok("BEGIN")
-            _check_expiration(test, table_name, (2, 1), "retain_last => 1", "older_than => TIMESTAMP '2999-01-01'")
-            # Truncating through the expired log entry prevents fallback to an older main state.
-            test.query("I", _timestamp_time_travel_query(table_name, abandoned_timestamp_ms), [(0,)])
-            test.query("I", _timestamp_time_travel_query(table_name, rollback_timestamp_ms), [(2,)])
-            test.statement_ok("COMMIT")
-            test.query("I", _timestamp_time_travel_query(table_name, abandoned_timestamp_ms), [(0,)])
+            for commit_expiration in (False, True):
+                test.statement_ok("BEGIN")
+                _check_expiration(test, table_name, (2, 1), "retain_last => 1", "older_than => TIMESTAMP '2999-01-01'")
+                test.query("I", f"SELECT snapshot_id FROM iceberg_history({table_name})", [(rollback_id,)])
+                test.query("I", _timestamp_time_travel_query(table_name, rollback_timestamp_ms), [(2,)])
+                if commit_expiration:
+                    test.statement_ok("COMMIT")
+                # A lookup before retained history fails instead of returning an empty table.
+                test.statement_error(
+                    _timestamp_time_travel_query(table_name, abandoned_timestamp_ms),
+                    "Could not find snapshot at or before timestamp",
+                )
+                if not commit_expiration:
+                    # The failed lookup aborts the transaction, including its staged expiration.
+                    test.statement_ok("ROLLBACK")
+                    test.query("I", _timestamp_time_travel_query(table_name, abandoned_timestamp_ms), [(3,)])
             test.query("I", _timestamp_time_travel_query(table_name, rollback_timestamp_ms), [(2,)])
             test.query("II", f"SELECT count(*), sum(id) FROM {table_name}", [(2, 3)])
 
@@ -805,32 +814,33 @@ class TestExpireSnapshots:
 
         with duckdb_runner() as test:
             test.query("I", _timestamp_time_travel_query(table_name, retained_log_timestamp_ms), [(2,)])
-            test.statement_ok("BEGIN")
-            _check_expiration(
-                test,
-                table_name,
-                (1, 2),
-                f"snapshot_ids => [{first_id}]",
-                "retain_last => 10",
-            )
-            # The last S1 occurrence is after S2, so trimming only through the
-            # first S1 would incorrectly leave a timestamp lookup across the gap.
-            test.query("I", _timestamp_time_travel_query(table_name, retained_log_timestamp_ms), [(0,)])
-            test.query(
-                "II",
-                f"SELECT count(*), sum(id) FROM {table_name} AT (VERSION => {retained_id})",
-                [(2, 3)],
-            )
-            # The local mirror is already trimmed. A repeated call is a no-op,
-            # but the first call's update remains pending and is committed.
-            _check_expiration(
-                test,
-                table_name,
-                (0, 2),
-                "retain_last => 10",
-            )
-            test.statement_ok("COMMIT")
-            test.query("I", _timestamp_time_travel_query(table_name, retained_log_timestamp_ms), [(0,)])
+            for commit_expiration in (False, True):
+                test.statement_ok("BEGIN")
+                _check_expiration(
+                    test,
+                    table_name,
+                    (1, 2),
+                    f"snapshot_ids => [{first_id}]",
+                    "retain_last => 10",
+                )
+                # The last S1 occurrence is after S2, so its removal also ends S2's timestamp history.
+                test.query("I", f"SELECT snapshot_id FROM iceberg_history({table_name})", [(current_id,)])
+                test.query(
+                    "II",
+                    f"SELECT count(*), sum(id) FROM {table_name} AT (VERSION => {retained_id})",
+                    [(2, 3)],
+                )
+                # A repeated no-op must preserve the first call's pending update.
+                _check_expiration(test, table_name, (0, 2), "retain_last => 10")
+                if commit_expiration:
+                    test.statement_ok("COMMIT")
+                test.statement_error(
+                    _timestamp_time_travel_query(table_name, retained_log_timestamp_ms),
+                    "Could not find snapshot at or before timestamp",
+                )
+                if not commit_expiration:
+                    test.statement_ok("ROLLBACK")
+                    test.query("I", _timestamp_time_travel_query(table_name, retained_log_timestamp_ms), [(2,)])
             test.query(
                 "II",
                 f"SELECT count(*), sum(id) FROM {table_name} AT (VERSION => {retained_id})",
@@ -851,20 +861,27 @@ class TestExpireSnapshots:
         assert missing_timestamp_ms < snapshots[2].timestamp_ms
 
         with duckdb_runner() as test:
-            test.statement_ok("BEGIN")
-            _check_expiration(
-                test,
-                table_name,
-                (1, 2),
-                f"snapshot_ids => [{missing_id}]",
-                "retain_last => 3",
-            )
-            # S2 is the newest log entry at this timestamp. Its absence is a
-            # boundary; timestamp lookup must not cross the gap and return S1.
-            test.query("I", _timestamp_time_travel_query(table_name, missing_timestamp_ms), [(0,)])
-            test.query("II", f"SELECT count(*), sum(id) FROM {table_name} AT (VERSION => {first_id})", [(1, 1)])
-            test.statement_ok("COMMIT")
-            test.query("I", _timestamp_time_travel_query(table_name, missing_timestamp_ms), [(0,)])
+            for commit_expiration in (False, True):
+                test.statement_ok("BEGIN")
+                _check_expiration(
+                    test,
+                    table_name,
+                    (1, 2),
+                    f"snapshot_ids => [{missing_id}]",
+                    "retain_last => 3",
+                )
+                test.query("I", f"SELECT snapshot_id FROM iceberg_history({table_name})", [(current_id,)])
+                test.query("II", f"SELECT count(*), sum(id) FROM {table_name} AT (VERSION => {first_id})", [(1, 1)])
+                if commit_expiration:
+                    test.statement_ok("COMMIT")
+                # S2's absence is a boundary; timestamp lookup must not cross the gap and return S1.
+                test.statement_error(
+                    _timestamp_time_travel_query(table_name, missing_timestamp_ms),
+                    "Could not find snapshot at or before timestamp",
+                )
+                if not commit_expiration:
+                    test.statement_ok("ROLLBACK")
+                    test.query("I", _timestamp_time_travel_query(table_name, missing_timestamp_ms), [(2,)])
             test.query("II", f"SELECT count(*), sum(id) FROM {table_name} AT (VERSION => {first_id})", [(1, 1)])
 
         table.refresh()
