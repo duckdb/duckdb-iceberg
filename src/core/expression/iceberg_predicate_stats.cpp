@@ -63,14 +63,29 @@ static shared_ptr<BaseStatistics> BuildGeometryStats(const Value &lower_bound, c
 }
 
 shared_ptr<BaseStatistics> IcebergPredicateStats::BuildColumnStats(const LogicalType &type) const {
+	//! A file written before a type promotion keeps bounds of the old type, e.g. INTEGER bounds for a column that is
+	//! now BIGINT. Core reads the statistics as the column's type, so the bounds are cast to it.
+	optional<Value> lower, upper;
+	if (lower_bound && !lower_bound->IsNull()) {
+		lower = lower_bound->DefaultTryCastAs(type);
+		if (!lower) {
+			return nullptr;
+		}
+	}
+	if (upper_bound && !upper_bound->IsNull()) {
+		upper = upper_bound->DefaultTryCastAs(type);
+		if (!upper) {
+			return nullptr;
+		}
+	}
 	switch (BaseStatistics::GetStatsType(type)) {
 	case StatisticsType::NUMERIC_STATS: {
 		auto stats = NumericStats::CreateEmpty(type);
-		if (lower_bound && !lower_bound->IsNull()) {
-			NumericStats::SetMin(stats, *lower_bound);
+		if (lower) {
+			NumericStats::SetMin(stats, *lower);
 		}
-		if (upper_bound && !upper_bound->IsNull()) {
-			NumericStats::SetMax(stats, *upper_bound);
+		if (upper) {
+			NumericStats::SetMax(stats, *upper);
 		}
 		if (type.id() == LogicalTypeId::FLOAT || type.id() == LogicalTypeId::DOUBLE) {
 			//! Iceberg float bounds exclude NaN, which core zonemaps order as the largest value
@@ -91,11 +106,11 @@ shared_ptr<BaseStatistics> IcebergPredicateStats::BuildColumnStats(const Logical
 	case StatisticsType::STRING_STATS: {
 		auto stats = StringStats::CreateUnknown(type);
 		//! Iceberg string bounds may be truncated
-		if (lower_bound && !lower_bound->IsNull()) {
-			StringStats::SetMin(stats, lower_bound->GetValueUnsafe<string_t>(), StringStatsType::TRUNCATED_STATS);
+		if (lower) {
+			StringStats::SetMin(stats, lower->GetValueUnsafe<string_t>(), StringStatsType::TRUNCATED_STATS);
 		}
-		if (upper_bound && !upper_bound->IsNull()) {
-			StringStats::SetMax(stats, upper_bound->GetValueUnsafe<string_t>(), StringStatsType::TRUNCATED_STATS);
+		if (upper) {
+			StringStats::SetMax(stats, upper->GetValueUnsafe<string_t>(), StringStatsType::TRUNCATED_STATS);
 		}
 		stats.Set(has_null ? StatsInfo::CAN_HAVE_NULL_VALUES : StatsInfo::CANNOT_HAVE_NULL_VALUES);
 		stats.Set(has_not_null ? StatsInfo::CAN_HAVE_VALID_VALUES : StatsInfo::CANNOT_HAVE_VALID_VALUES);
