@@ -112,13 +112,13 @@ SELECT count(*) FROM single_day_reads;
 
 # if the file is not in the partition we are not reading it
 query I
-SELECT count(*) FROM single_day_reads WHERE not contains(referenced_data_file, 'day_event_date_3='||date_diff('day', '1970-01-01'::DATE, '2026-07-19'::DATE)::VARCHAR);
+SELECT count(*) FROM single_day_reads WHERE not contains(referenced_data_file, 'day_event_date_3=2026-07-19');
 ----
 0
 
 # Exactly one read delete file references 2026-07-19's data file -- that is the only one worth reading.
 query I
-SELECT count(*) FROM single_day_reads WHERE contains(referenced_data_file, 'day_event_date_3='||date_diff('day', '1970-01-01'::DATE, '2026-07-19'::DATE)::VARCHAR);
+SELECT count(*) FROM single_day_reads WHERE contains(referenced_data_file, 'day_event_date_3=2026-07-19');
 ----
 1
 

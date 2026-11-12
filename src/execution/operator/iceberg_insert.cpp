@@ -14,6 +14,7 @@
 #include "duckdb/execution/operator/scan/physical_table_scan.hpp"
 #include "duckdb/function/cast/cast_function_set.hpp"
 #include "duckdb/function/function_binder.hpp"
+#include "duckdb/function/scalar/string_functions.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
@@ -567,6 +568,125 @@ static unique_ptr<Expression> GetTransformExpression(ClientContext &context, con
 	}
 }
 
+//===--------------------------------------------------------------------===//
+// Partition directories
+//===--------------------------------------------------------------------===//
+
+//! Division rounding towards negative infinity, e.g. FloorDivide(-1, 12) = -1 where -1 / 12 = 0
+static int64_t FloorDivide(int64_t value, int64_t divisor) {
+	D_ASSERT(divisor != 0);
+	auto quotient = value / divisor;
+	auto remainder = value % divisor;
+	// C++ rounds towards zero, which rounds up when the exact result is negative
+	if (remainder != 0 && (remainder < 0) != (divisor < 0)) {
+		quotient--;
+	}
+	return quotient;
+}
+
+//! e.g. PadNumber(5, 2) = "05", PadNumber(-5, 4) = "-005", like printf's "%0*d"
+//! The width is a minimum: longer numbers are not cut, e.g. PadNumber(12345, 4) = "12345"
+static string PadNumber(int64_t value, idx_t width) {
+	// unsigned, so that negating the minimum int64_t does not overflow
+	uint64_t magnitude = value < 0 ? 0 - static_cast<uint64_t>(value) : static_cast<uint64_t>(value);
+	auto digits = std::to_string(magnitude);
+	idx_t sign_width = value < 0 ? 1 : 0;
+	if (digits.size() + sign_width < width) {
+		digits.insert(0, width - sign_width - digits.size(), '0');
+	}
+	return value < 0 ? "-" + digits : digits;
+}
+
+//! yyyy-MM-dd of a day ordinal (days since 1970-01-01)
+static bool TryFormatDay(int64_t days, string &result) {
+	if (days < NumericLimits<int32_t>::Minimum() || days > NumericLimits<int32_t>::Maximum()) {
+		return false;
+	}
+	date_t date(static_cast<int32_t>(days));
+	if (!date.IsFinite()) {
+		return false;
+	}
+	int32_t year, month, day;
+	Date::Convert(date, year, month, day);
+	result = PadNumber(year, 4) + "-" + PadNumber(month, 2) + "-" + PadNumber(day, 2);
+	return true;
+}
+
+//! The human readable form of a temporal partition value, as Iceberg's Transform::toHumanString writes it into
+//! partition paths: year "2026", month "2026-11", day "2026-11-12", hour "2026-11-12-10".
+static string TemporalPartitionValueToString(IcebergTransformType transform, int64_t value) {
+	string result;
+	switch (transform) {
+	case IcebergTransformType::YEAR:
+		return PadNumber(Date::EPOCH_YEAR + value, 4);
+	case IcebergTransformType::MONTH:
+		return PadNumber(Date::EPOCH_YEAR + FloorDivide(value, 12), 4) + "-" +
+		       PadNumber(value - FloorDivide(value, 12) * 12 + 1, 2);
+	case IcebergTransformType::DAY: {
+		auto formatted = TryFormatDay(value, result);
+		// date_diff on a finite DATE or TIMESTAMP always gives a day within the date range
+		D_ASSERT(formatted);
+		if (formatted) {
+			return result;
+		}
+		break;
+	}
+	case IcebergTransformType::HOUR: {
+		auto days = FloorDivide(value, 24);
+		auto formatted = TryFormatDay(days, result);
+		D_ASSERT(formatted);
+		if (formatted) {
+			return result + "-" + PadNumber(value - days * 24, 2);
+		}
+		break;
+	}
+	default:
+		throw InternalException("Partition transform has no temporal partition value");
+	}
+	// out of the date range: fall back to the ordinal, the path is only for humans
+	return std::to_string(value);
+}
+
+template <IcebergTransformType TRANSFORM>
+static void TemporalPartitionValueFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	UnaryExecutor::Execute<int64_t, string_t>(args.data[0], result, args.size(), [&](int64_t value) {
+		return StringVector::AddString(result, TemporalPartitionValueToString(TRANSFORM, value));
+	});
+}
+
+static bool IsTemporalTransform(IcebergTransformType transform) {
+	switch (transform) {
+	case IcebergTransformType::YEAR:
+	case IcebergTransformType::MONTH:
+	case IcebergTransformType::DAY:
+	case IcebergTransformType::HOUR:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static ScalarFunction GetTemporalPartitionValueFunction(IcebergTransformType transform) {
+	scalar_function_t function;
+	switch (transform) {
+	case IcebergTransformType::YEAR:
+		function = TemporalPartitionValueFunction<IcebergTransformType::YEAR>;
+		break;
+	case IcebergTransformType::MONTH:
+		function = TemporalPartitionValueFunction<IcebergTransformType::MONTH>;
+		break;
+	case IcebergTransformType::DAY:
+		function = TemporalPartitionValueFunction<IcebergTransformType::DAY>;
+		break;
+	case IcebergTransformType::HOUR:
+		function = TemporalPartitionValueFunction<IcebergTransformType::HOUR>;
+		break;
+	default:
+		throw InternalException("Partition transform has no temporal partition value");
+	}
+	return ScalarFunction("iceberg_temporal_partition_value", {LogicalType::BIGINT}, LogicalType::VARCHAR, function);
+}
+
 static OrderType GetDuckDBOrderType(const string &direction) {
 	if (StringUtil::CIEquals(direction, "asc")) {
 		return OrderType::ASCENDING;
@@ -620,6 +740,8 @@ struct IcebergWriteColumn {
 	optional<Value> field_id;
 	//! Added only to route rows by a transformed partition value (e.g. day(ts)); not written to the file.
 	bool is_computed_partition_value = false;
+	//! The transform producing a computed partition value.
+	IcebergTransformType transform = IcebergTransformType::INVALID;
 };
 
 //! The layout of the chunk that reaches the copy operator. Built once, so that the copy bind
@@ -761,10 +883,43 @@ static IcebergWriteLayout BuildWriteLayout(ClientContext &context, const Iceberg
 		    GetTransformExpression(context, copy_input, field.source_id, field.transform, "partitioning");
 		write_column.type = write_column.source->GetReturnType();
 		write_column.is_computed_partition_value = true;
+		write_column.transform = field.transform.Type();
 		layout.partition_columns.push_back(layout.columns.size());
 		layout.columns.push_back(std::move(write_column));
 	}
 	return layout;
+}
+
+//! The hive layout of the partition directories, with temporal values in their human readable form as other Iceberg
+//! writers name them, e.g. year_ts=2026 instead of year_ts=56. Null when the default hive layout already matches.
+static unique_ptr<Expression> GetPartitionPathExpression(ClientContext &context, const IcebergWriteLayout &layout) {
+	bool has_temporal_transform = false;
+	for (auto &col_idx : layout.partition_columns) {
+		has_temporal_transform |= IsTemporalTransform(layout.columns[col_idx].transform);
+	}
+	if (!has_temporal_transform) {
+		return nullptr;
+	}
+	FunctionBinder function_binder(context);
+	vector<unique_ptr<Expression>> components;
+	for (idx_t i = 0; i < layout.partition_columns.size(); i++) {
+		auto &column = layout.columns[layout.partition_columns[i]];
+		// the path is evaluated over a chunk holding only the partition values, in partition column order
+		unique_ptr<Expression> value = make_uniq<BoundReferenceExpression>(column.type, i);
+		if (IsTemporalTransform(column.transform)) {
+			value = BoundCastExpression::AddCastToType(context, std::move(value), LogicalType::BIGINT);
+			vector<unique_ptr<Expression>> children;
+			children.push_back(std::move(value));
+			value = function_binder.BindScalarFunction(GetTemporalPartitionValueFunction(column.transform),
+			                                           std::move(children));
+		}
+		vector<unique_ptr<Expression>> children;
+		children.push_back(make_uniq<BoundConstantExpression>(Value(column.name)));
+		children.push_back(std::move(value));
+		components.push_back(
+		    function_binder.BindScalarFunction(HivePartitionComponentFun::GetFunction(), std::move(children)));
+	}
+	return function_binder.BindScalarFunction(PathJoinFun::GetFunction(), std::move(components));
 }
 
 vector<IcebergManifestEntry> IcebergInsert::GetInsertManifestEntries(IcebergInsertGlobalState &global_state) {
@@ -925,13 +1080,16 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, const I
 	result.overwrite_mode = CopyOverwriteMode::COPY_OVERWRITE_OR_IGNORE;
 	result.per_thread_output = false;
 	result.write_partition_columns = layout.WritePartitionColumns();
-	result.partition_columns = std::move(layout.partition_columns);
+	result.partition_columns = layout.partition_columns;
 	result.return_type = CopyFunctionReturnType::WRITTEN_FILE_STATISTICS;
 
 	auto partitioned_paths = table_properties.find("write.object-storage.partitioned-paths");
 	if (partitioned_paths != table_properties.end()) {
 		result.partitioned_paths =
 		    Value(partitioned_paths->second).DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
+	}
+	if (result.partition_output && result.partitioned_paths) {
+		result.partition_path_expression = GetPartitionPathExpression(context, layout);
 	}
 
 	auto function_data =
