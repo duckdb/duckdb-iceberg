@@ -92,13 +92,17 @@ const IcebergTableSchema &IcebergTableMetadata::GetSchemaFromId(int32_t schema_i
 
 optional_ptr<const IcebergPartitionSpec> IcebergTableMetadata::FindPartitionSpecById(int32_t spec_id) const {
 	auto it = partition_specs.find(spec_id);
-	D_ASSERT(it != partition_specs.end());
+	if (it == partition_specs.end()) {
+		return nullptr;
+	}
 	return it->second;
 }
 
 optional_ptr<const IcebergSortOrder> IcebergTableMetadata::FindSortOrderById(int32_t sort_id) const {
 	auto it = sort_specs.find(sort_id);
-	D_ASSERT(it != sort_specs.end());
+	if (it == sort_specs.end()) {
+		return nullptr;
+	}
 	return it->second;
 }
 
@@ -128,7 +132,9 @@ bool IcebergTableMetadata::HasPartitionSpec() const {
 
 const IcebergPartitionSpec &IcebergTableMetadata::GetLatestPartitionSpec() const {
 	auto res = FindPartitionSpecById(default_spec_id);
-	D_ASSERT(res);
+	if (!res) {
+		throw InvalidConfigurationException("Partition spec id %d not found in Iceberg metadata", default_spec_id);
+	}
 	return *res;
 }
 
@@ -137,10 +143,14 @@ bool IcebergTableMetadata::HasSortOrder() const {
 }
 
 const IcebergSortOrder &IcebergTableMetadata::GetLatestSortOrder() const {
-	D_ASSERT(HasSortOrder());
+	if (!HasSortOrder()) {
+		throw InvalidConfigurationException("Iceberg metadata has no default sort order");
+	}
 	auto sort_order_id = default_sort_order_id.GetIndex();
 	auto res = FindSortOrderById(sort_order_id);
-	D_ASSERT(res);
+	if (!res) {
+		throw InvalidConfigurationException("Sort order id %d not found in Iceberg metadata", sort_order_id);
+	}
 	return *res;
 }
 
@@ -312,6 +322,9 @@ bool IcebergTableMetadata::HasLastColumnId() const {
 }
 
 idx_t IcebergTableMetadata::GetLastColumnId() const {
+	if (!HasLastColumnId()) {
+		throw InvalidConfigurationException("Iceberg metadata is missing 'last-column-id'");
+	}
 	return last_column_id.GetIndex();
 }
 
@@ -323,7 +336,7 @@ int32_t IcebergTableMetadata::GetCurrentSchemaId() const {
 	return current_schema_id;
 }
 
-IcebergTableSchema &IcebergTableMetadataSchemas::AddSchemaOrGetExisting(shared_ptr<IcebergTableSchema> schema) {
+const IcebergTableSchema &IcebergTableMetadataSchemas::AddSchemaOrGetExisting(shared_ptr<IcebergTableSchema> schema) {
 	if (!schema) {
 		throw InternalException("Can't add NULL schema");
 	}
@@ -334,7 +347,7 @@ IcebergTableSchema &IcebergTableMetadataSchemas::AddSchemaOrGetExisting(shared_p
 		}
 	}
 	auto new_schema_id = schema->schema_id;
-	auto res = schemas.emplace(new_schema_id, std::move(schema));
+	auto res = schemas.emplace(new_schema_id, schema->Copy());
 	if (!res.second) {
 		throw InvalidConfigurationException("Attempted to add schema with id %d, but this already exists in the table!",
 		                                    new_schema_id);
@@ -359,19 +372,21 @@ bool IcebergTableMetadata::HasLastPartitionId() const {
 }
 
 int32_t IcebergTableMetadata::GetLastPartitionFieldId() const {
-	D_ASSERT(HasLastPartitionId());
+	if (!HasLastPartitionId()) {
+		throw InvalidConfigurationException("Iceberg metadata is missing 'last-partition-id'");
+	}
 	return static_cast<int32_t>(last_partition_field_id.GetIndex());
 }
 
 //! ----------- Parse the Metadata JSON -----------
 
-rest_api_objects::TableMetadata IcebergTableMetadata::Parse(const string &path, FileSystem &fs,
+rest_api_objects::TableMetadata IcebergTableMetadata::Parse(const OpenFileInfo &file, FileSystem &fs,
                                                             const string &metadata_compression_codec) {
 	string json_content;
-	if (metadata_compression_codec == "gzip" || StringUtil::EndsWith(path, "gz.metadata.json")) {
-		json_content = IcebergUtils::GzFileToString(path, fs);
+	if (metadata_compression_codec == "gzip" || StringUtil::EndsWith(file.path, "gz.metadata.json")) {
+		json_content = IcebergUtils::GzFileToString(file, fs);
 	} else {
-		json_content = IcebergUtils::FileToString(path, fs);
+		json_content = IcebergUtils::FileToString(file, fs);
 	}
 	auto doc = JSONDocument::Parse(json_content.c_str(), json_content.size());
 	return rest_api_objects::TableMetadata::FromJSON(doc->GetRoot());
@@ -397,7 +412,7 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 	if (table_metadata.encryption_keys && !table_metadata.encryption_keys->empty()) {
 		throw NotImplementedException("Iceberg table encryption is not supported (encryption-keys is not empty)");
 	}
-	unordered_map<int32_t, shared_ptr<IcebergTableSchema>> schemas;
+	unordered_map<int32_t, shared_ptr<const IcebergTableSchema>> schemas;
 	if (table_metadata.schemas) {
 		for (auto &schema : *table_metadata.schemas) {
 			if (!schema.object_1.schema_id) {
@@ -479,6 +494,9 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 	}
 
 	if (table_metadata.last_sequence_number) {
+		if (*table_metadata.last_sequence_number < 0) {
+			throw InvalidConfigurationException("Iceberg metadata has a negative 'last-sequence-number'");
+		}
 		res.last_sequence_number = *table_metadata.last_sequence_number;
 	} else {
 		//! SPEC: Table metadata field last-sequence-number must default to 0
@@ -493,6 +511,9 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 		throw InvalidConfigurationException("'default-spec-id' field is missing from the metadata.json file");
 	}
 	if (table_metadata.default_sort_order_id) {
+		if (*table_metadata.default_sort_order_id < 0) {
+			throw InvalidConfigurationException("Iceberg metadata has a negative 'default-sort-order-id'");
+		}
 		res.default_sort_order_id = *table_metadata.default_sort_order_id;
 	}
 
@@ -510,10 +531,16 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 	}
 
 	if (table_metadata.last_column_id) {
+		if (*table_metadata.last_column_id < 0) {
+			throw InvalidConfigurationException("Iceberg metadata has a negative 'last-column-id'");
+		}
 		res.last_column_id = *table_metadata.last_column_id;
 	}
 
 	if (table_metadata.last_partition_id) {
+		if (*table_metadata.last_partition_id < 0) {
+			throw InvalidConfigurationException("Iceberg metadata has a negative 'last-partition-id'");
+		}
 		res.last_partition_field_id = *table_metadata.last_partition_id;
 	}
 
@@ -521,6 +548,12 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 		for (auto &item : table_metadata.metadata_log->value) {
 			res.metadata_log.emplace_back(item.metadata_file, timestamp_ms_t(item.timestamp_ms));
 		}
+	}
+	// Validate default references before a scan or writer can consume the metadata.
+	res.GetLatestSchema();
+	res.GetLatestPartitionSpec();
+	if (res.HasSortOrder()) {
+		res.GetLatestSortOrder();
 	}
 	return res;
 }
@@ -610,6 +643,19 @@ string IcebergTableMetadata::GetTableProperty(string property_string) const {
 	return "";
 }
 
+bool IcebergTableMetadata::UsesCopyOnWrite(const string &write_mode_property) const {
+	return StringUtil::CIEquals(GetTableProperty(write_mode_property), "copy-on-write");
+}
+
+string IcebergTableMetadata::GetDeleteCompressionCodec() const {
+	// The delete file codec defaults to the data file codec
+	auto codec = GetTableProperty(WRITE_DELETE_PARQUET_COMPRESSION_CODEC);
+	if (codec.empty()) {
+		codec = GetTableProperty(WRITE_PARQUET_COMPRESSION_CODEC);
+	}
+	return codec;
+}
+
 bool IcebergTableMetadata::AllowsMergeOnRead(const string &write_mode_property) const {
 	auto mode = GetTableProperty(write_mode_property);
 	// if unset or merge-on-read, it supports positional deletes
@@ -673,7 +719,7 @@ JSONMutableValue IcebergTableMetadata::SnapshotsToJSON(JSONWriter &writer) const
 	auto snapshots_array = writer.CreateArray();
 	for (auto &it : snapshots) {
 		auto &snapshot = it.second;
-		auto snapshot_rest_object = snapshot.ToRESTObject(*this);
+		auto snapshot_rest_object = snapshot.ToRESTObject();
 		snapshots_array.Append(snapshot_rest_object.ToJSON(writer));
 	}
 	return snapshots_array;

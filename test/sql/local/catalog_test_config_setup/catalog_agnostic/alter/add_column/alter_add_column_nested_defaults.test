@@ -1,0 +1,145 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/add_column/alter_add_column_nested_defaults.test
+# description: Nested ADD COLUMN respects NULL containers, child defaults and unsupported collection defaults
+# group: [add_column]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env COLUMN_DEFAULT_SUPPORT
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.nested_add_defaults;
+
+statement ok
+CREATE TABLE my_datalake.default.nested_add_defaults (id INTEGER) WITH ('format-version' = '3');
+
+statement ok
+INSERT INTO my_datalake.default.nested_add_defaults VALUES (1);
+
+# IF NOT EXISTS avoids DuckDB's rewrite of a compound DEFAULT into ALTER + UPDATE + SET DEFAULT.
+# This exercises metadata-only ADD COLUMN: child defaults do not populate an absent whole STRUCT.
+statement ok
+ALTER TABLE my_datalake.default.nested_add_defaults
+ADD COLUMN IF NOT EXISTS s STRUCT(a INTEGER, b STRUCT(c INTEGER)) DEFAULT {'a': 7, 'b': {'c': 8}};
+
+statement ok
+ALTER TABLE my_datalake.default.nested_add_defaults ADD COLUMN l INTEGER[] DEFAULT NULL;
+
+statement ok
+ALTER TABLE my_datalake.default.nested_add_defaults ADD COLUMN m MAP(VARCHAR, INTEGER) DEFAULT NULL;
+
+statement ok
+INSERT INTO my_datalake.default.nested_add_defaults (id) VALUES (2);
+
+statement ok
+INSERT INTO my_datalake.default.nested_add_defaults VALUES (3, {'b': {'c': 9}}, [], MAP {});
+
+statement ok
+INSERT INTO my_datalake.default.nested_add_defaults VALUES
+	(4, NULL, NULL, NULL),
+	(5, {'a': NULL, 'b': NULL}, [NULL, 1], MAP {'k': NULL});
+
+query IIIIIII fresh
+SELECT id, s IS NULL, s.a, s.b IS NULL, s.b.c, len(l), cardinality(m)
+FROM my_datalake.default.nested_add_defaults ORDER BY id;
+----
+1	true	NULL	true	NULL	NULL	NULL
+2	true	NULL	true	NULL	NULL	NULL
+3	false	7	false	9	0	0
+4	true	NULL	true	NULL	NULL	NULL
+5	false	NULL	true	NULL	2	1
+
+query I fresh
+SELECT id FROM my_datalake.default.nested_add_defaults WHERE s.a = 7 ORDER BY id;
+----
+3
+
+query I fresh
+SELECT id FROM my_datalake.default.nested_add_defaults WHERE s IS NULL ORDER BY id;
+----
+1
+2
+4
+
+query I fresh
+SELECT id FROM my_datalake.default.nested_add_defaults WHERE s.b.c IS NULL ORDER BY id;
+----
+1
+2
+4
+5
+
+# Non-NULL LIST/MAP defaults are unsupported, including empty collections.
+foreach default [] [1]
+
+statement error
+ALTER TABLE my_datalake.default.nested_add_defaults ADD COLUMN IF NOT EXISTS bad_list INTEGER[] DEFAULT {default};
+----
+DEFAULT values for nested types (like INTEGER[]) not implemented
+
+endloop
+
+foreach default MAP{} MAP{'k':1}
+
+statement error
+ALTER TABLE my_datalake.default.nested_add_defaults ADD COLUMN IF NOT EXISTS bad_map MAP(VARCHAR, INTEGER) DEFAULT {default};
+----
+DEFAULT values for nested types (like MAP(VARCHAR, INTEGER)) not implemented
+
+endloop
+
+statement error
+ALTER TABLE my_datalake.default.nested_add_defaults ADD COLUMN IF NOT EXISTS bad_struct STRUCT(n INTEGER) DEFAULT {'n': 'not an integer'};
+----
+Could not convert string 'not an integer' to INT32
+
+# Failed additions must not publish columns or damage existing rows.
+query TT
+SELECT column_name, column_type FROM (DESCRIBE my_datalake.default.nested_add_defaults) ORDER BY column_name;
+----
+id	INTEGER
+l	INTEGER[]
+m	MAP(VARCHAR, INTEGER)
+s	STRUCT(a INTEGER, b STRUCT(c INTEGER))
+
+query IIIIIII fresh
+SELECT id, s IS NULL, s.a, s.b IS NULL, s.b.c, len(l), cardinality(m)
+FROM my_datalake.default.nested_add_defaults ORDER BY id;
+----
+1	true	NULL	true	NULL	NULL	NULL
+2	true	NULL	true	NULL	NULL	NULL
+3	false	7	false	9	0	0
+4	true	NULL	true	NULL	NULL	NULL
+5	false	NULL	true	NULL	2	1
+
+statement ok
+DROP TABLE my_datalake.default.nested_add_defaults;
+
+# Without IF NOT EXISTS, DuckDB materializes the compound default into the existing rows.
+statement ok
+CREATE TABLE my_datalake.default.nested_add_materialized (id INTEGER) WITH ('format-version' = '3');
+
+statement ok
+INSERT INTO my_datalake.default.nested_add_materialized VALUES (1);
+
+statement ok
+ALTER TABLE my_datalake.default.nested_add_materialized ADD COLUMN s STRUCT(a INTEGER) DEFAULT {'a': 7};
+
+statement ok
+INSERT INTO my_datalake.default.nested_add_materialized (id) VALUES (2);
+
+statement ok
+INSERT INTO my_datalake.default.nested_add_materialized VALUES (3, NULL);
+
+query III fresh
+SELECT id, s IS NULL, s.a FROM my_datalake.default.nested_add_materialized ORDER BY id;
+----
+1	false	7
+2	true	NULL
+3	true	NULL
+
+statement ok
+DROP TABLE my_datalake.default.nested_add_materialized;

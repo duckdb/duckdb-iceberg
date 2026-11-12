@@ -1,0 +1,4 @@
+interface:
+  display_name: "Bump DuckDB"
+  short_description: "Bump DuckDB and check changed core tests on fixture"
+  default_prompt: "Use $bump-duckdb to bump DuckDB in this Iceberg checkout, run added and changed core SQL tests against fixture, and update justified skips."

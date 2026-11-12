@@ -1,0 +1,190 @@
+# name: test/sql/local/late_materialization_topn_boundaries.test
+# description: TopN offsets, query shapes, prepared limits and planning gates preserve Iceberg results
+# group: [local]
+
+require avro
+
+require parquet
+
+require iceberg
+
+statement ok
+CREATE VIEW lm_boundary_input AS
+SELECT *
+FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/null_stats/default/test_nulls',
+                  version='00003-9d6a621e-8a72-4190-a880-f6ca02e32b86');
+
+# Independent oracle for the nine rows in three files in this snapshot.
+statement ok
+CREATE TABLE lm_boundary_expected AS
+SELECT i::INTEGER AS id, chr((96 + i)::INTEGER) AS name
+FROM range(1, 10) r(i);
+
+statement ok
+SET late_materialization_max_rows = 2;
+
+statement ok
+SET explain_output = 'optimized_only';
+
+foreach threads 1 4
+
+statement ok
+SET threads = {threads};
+
+foreach mode off on
+
+onlyif mode==off
+statement ok
+SET disabled_optimizers = 'late_materialization';
+
+onlyif mode==on
+statement ok
+SET disabled_optimizers = '';
+
+# LIMIT, rather than LIMIT + OFFSET, controls late-materialization admission.
+# The compound order crosses files with overlapping physical row positions.
+onlyif mode==on
+query II
+EXPLAIN (FORMAT JSON)
+SELECT name FROM lm_boundary_input ORDER BY id % 3, id DESC LIMIT 2 OFFSET 2;
+----
+logical_opt	<REGEX>:(?s).*COMPARISON_JOIN.*TOP_N.*
+
+foreach offset 0 2 8 9 100
+
+query T nosort lm_offset
+SELECT name FROM lm_boundary_expected ORDER BY id % 3, id DESC LIMIT 2 OFFSET {offset};
+
+query T nosort lm_offset
+SELECT name FROM lm_boundary_input ORDER BY id % 3, id DESC LIMIT 2 OFFSET {offset};
+
+reset label lm_offset
+
+endloop
+
+# An outer projection and LIMIT can still fetch payloads from the ordered scan.
+onlyif mode==on
+query II
+EXPLAIN (FORMAT JSON)
+SELECT name FROM (SELECT name FROM lm_boundary_input ORDER BY id DESC) LIMIT 2 OFFSET 2;
+----
+logical_opt	<REGEX>:(?s).*COMPARISON_JOIN.*TOP_N.*
+
+query T
+SELECT name FROM (SELECT name FROM lm_boundary_input ORDER BY id DESC) LIMIT 2 OFFSET 2;
+----
+g
+f
+
+# Aggregate rows do not identify individual input rows for payload fetching.
+query II
+EXPLAIN (FORMAT JSON)
+SELECT id % 3 AS remainder, max(name)
+FROM lm_boundary_input GROUP BY remainder ORDER BY remainder LIMIT 2;
+----
+logical_opt	<!REGEX>:(?s).*COMPARISON_JOIN.*
+
+query IT
+SELECT id % 3 AS remainder, max(name)
+FROM lm_boundary_input GROUP BY remainder ORDER BY remainder LIMIT 2;
+----
+0	i
+1	g
+
+# Rebinding a parameterized LIMIT must update eligibility and preserve OFFSET.
+statement ok
+PREPARE lm_boundary_prepared AS
+SELECT name FROM lm_boundary_input ORDER BY id DESC LIMIT $1 OFFSET $2;
+
+foreach limit 0 1 2 3 100
+
+query T nosort lm_prepared_boundary
+SELECT name FROM lm_boundary_expected ORDER BY id DESC LIMIT {limit} OFFSET 2;
+
+query T nosort lm_prepared_boundary
+EXECUTE lm_boundary_prepared({limit}, 2);
+
+query T nosort lm_prepared_boundary
+EXECUTE lm_boundary_prepared({limit}, 2);
+
+reset label lm_prepared_boundary
+
+endloop
+
+onlyif mode==on
+query II
+EXPLAIN (FORMAT JSON) EXECUTE lm_boundary_prepared(2, 2);
+----
+logical_opt	<REGEX>:(?s).*COMPARISON_JOIN.*TOP_N.*
+
+query II
+EXPLAIN (FORMAT JSON) EXECUTE lm_boundary_prepared(3, 2);
+----
+logical_opt	<!REGEX>:(?s).*COMPARISON_JOIN.*
+
+statement ok
+DEALLOCATE lm_boundary_prepared;
+
+# An empty candidate scan must not return rows from the independent payload scan.
+query T
+SELECT name FROM lm_boundary_input WHERE id > 100 ORDER BY id LIMIT 2;
+----
+
+endloop
+
+endloop
+
+# The session setting is a conservative gate, including standalone file scans.
+statement ok
+SET disabled_optimizers = '';
+
+statement ok
+SET iceberg_use_server_side_scan_planning = true;
+
+query II
+EXPLAIN (FORMAT JSON)
+SELECT name FROM lm_boundary_input ORDER BY id DESC LIMIT 2;
+----
+logical_opt	<!REGEX>:(?s).*COMPARISON_JOIN.*
+
+query T
+SELECT name FROM lm_boundary_input ORDER BY id DESC LIMIT 2;
+----
+i
+h
+
+statement ok
+SET iceberg_use_server_side_scan_planning = false;
+
+query II
+EXPLAIN (FORMAT JSON)
+SELECT name FROM lm_boundary_input ORDER BY id DESC LIMIT 2;
+----
+logical_opt	<REGEX>:(?s).*COMPARISON_JOIN.*TOP_N.*
+
+query T
+SELECT name FROM lm_boundary_input ORDER BY id DESC LIMIT 2;
+----
+i
+h
+
+statement ok
+RESET iceberg_use_server_side_scan_planning;
+
+statement ok
+RESET disabled_optimizers;
+
+statement ok
+RESET late_materialization_max_rows;
+
+statement ok
+RESET explain_output;
+
+statement ok
+RESET threads;
+
+statement ok
+DROP VIEW lm_boundary_input;
+
+statement ok
+DROP TABLE lm_boundary_expected;

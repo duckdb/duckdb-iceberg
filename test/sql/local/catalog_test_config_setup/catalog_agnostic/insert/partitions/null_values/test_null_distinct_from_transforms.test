@@ -1,0 +1,177 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/null_values/test_null_distinct_from_transforms.test
+# description: NULL-safe comparisons preserve NULL partitions and collisions in lossy transforms
+# group: [null_values]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SCAN_PLANNING_MODE client
+
+include test/sql/init_requires
+
+statement ok
+SET threads=1;
+
+statement ok
+CALL enable_logging('Iceberg');
+
+statement ok
+SET VARIABLE null_integer = NULL::INTEGER;
+
+statement ok
+SET VARIABLE null_timestamp = NULL::TIMESTAMP;
+
+# These values share a partition for every lossy transform below.
+foreach partition v bucket(1,v) truncate(10,v)
+
+statement ok
+CREATE TABLE my_datalake.default.null_distinct_transform (id INTEGER, v INTEGER)
+PARTITIONED BY ({partition});
+
+statement ok
+INSERT INTO my_datalake.default.null_distinct_transform VALUES (1, NULL), (2, 1), (3, 2);
+
+# getvariable binds a typed NULL without a cast. Disabling the expression
+# rewriter exposes the comparison itself instead of an IS [NOT] NULL rewrite.
+foreach optimizer '' 'expression_rewriter'
+
+statement ok
+SET disabled_optimizers={optimizer};
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.null_distinct_transform
+WHERE v IS DISTINCT FROM 1;
+----
+[1, 3]
+
+query I
+SELECT count(*) FROM duckdb_logs() WHERE type = 'Iceberg' AND message LIKE '%skipped%data_file%';
+----
+0
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.null_distinct_transform
+WHERE v IS NOT DISTINCT FROM getvariable('null_integer');
+----
+[1]
+
+query I
+SELECT count(*) = CASE WHEN '{partition}' = 'v' THEN 2 ELSE 1 END FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE '%skipped%data_file%';
+----
+true
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.null_distinct_transform
+WHERE getvariable('null_integer') IS DISTINCT FROM v;
+----
+[2, 3]
+
+query I
+SELECT count(*) FROM duckdb_logs() WHERE type = 'Iceberg' AND message LIKE '%skipped%data_file%';
+----
+1
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.null_distinct_transform
+WHERE 1 IS NOT DISTINCT FROM v;
+----
+[2]
+
+endloop
+
+statement ok
+RESET disabled_optimizers;
+
+statement ok
+DROP TABLE my_datalake.default.null_distinct_transform;
+
+endloop
+
+foreach partition v year(v) month(v) day(v) hour(v)
+
+statement ok
+CREATE TABLE my_datalake.default.null_distinct_temporal (id INTEGER, v TIMESTAMP)
+PARTITIONED BY ({partition});
+
+statement ok
+INSERT INTO my_datalake.default.null_distinct_temporal VALUES
+	(1, NULL), (2, '2020-01-01 00:00:00'), (3, '2020-01-01 00:00:01');
+
+foreach optimizer '' 'expression_rewriter'
+
+statement ok
+SET disabled_optimizers={optimizer};
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.null_distinct_temporal
+WHERE v IS DISTINCT FROM TIMESTAMP '2020-01-01 00:00:00';
+----
+[1, 3]
+
+query I
+SELECT count(*) FROM duckdb_logs() WHERE type = 'Iceberg' AND message LIKE '%skipped%data_file%';
+----
+0
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.null_distinct_temporal
+WHERE getvariable('null_timestamp') IS NOT DISTINCT FROM v;
+----
+[1]
+
+query I
+SELECT count(*) = CASE WHEN '{partition}' = 'v' THEN 2 ELSE 1 END FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE '%skipped%data_file%';
+----
+true
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.null_distinct_temporal
+WHERE v IS DISTINCT FROM getvariable('null_timestamp');
+----
+[2, 3]
+
+query I
+SELECT count(*) FROM duckdb_logs() WHERE type = 'Iceberg' AND message LIKE '%skipped%data_file%';
+----
+1
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.null_distinct_temporal
+WHERE v IS NOT DISTINCT FROM TIMESTAMP '2020-01-01 00:00:00';
+----
+[2]
+
+endloop
+
+statement ok
+RESET disabled_optimizers;
+
+statement ok
+DROP TABLE my_datalake.default.null_distinct_temporal;
+
+endloop
+
+statement ok
+CALL disable_logging();
+
+statement ok
+RESET threads;

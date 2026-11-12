@@ -1,7 +1,16 @@
+#include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
+#include "duckdb/common/serializer/deserializer.hpp"
+#include "duckdb/common/serializer/serializer.hpp"
+#include "duckdb/common/multi_file/multi_file_reader.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/common/enums/join_type.hpp"
+#include "duckdb/parser/qualified_name.hpp"
 #include "duckdb/parser/query_node/select_node.hpp"
+#include "duckdb/planner/filter/expression_filter.hpp"
+#include "duckdb/planner/table_filter.hpp"
+#include "duckdb/planner/tableref/bound_at_clause.hpp"
 #include "duckdb/parser/tableref/joinref.hpp"
 #include "duckdb/common/enums/joinref_type.hpp"
 #include "duckdb/common/enums/tableref_type.hpp"
@@ -21,11 +30,18 @@
 #include "duckdb/common/file_opener.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
+#include "duckdb/transaction/meta_transaction.hpp"
 
 #include "common/iceberg_utils.hpp"
+#include "iceberg_options.hpp"
 #include "planning/iceberg_multi_file_reader.hpp"
+#include "planning/iceberg_optimizer.hpp"
 #include "function/iceberg_functions.hpp"
+#include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/rest/transaction/iceberg_transaction.hpp"
 
 #include "duckdb/common/multi_file/multi_file_states.hpp"
 #include "duckdb/function/partition_stats.hpp"
@@ -57,12 +73,177 @@ virtual_column_map_t IcebergVirtualColumns(ClientContext &context, optional_ptr<
 	return result;
 }
 
+static bool IcebergScanSerializationEnabled(ClientContext &context) {
+	Value setting;
+	if (context.TryGetCurrentSetting(ENABLE_SCAN_SERIALIZATION_CONFIG_VARIABLE, setting) && !setting.IsNull()) {
+		return setting.GetValue<bool>();
+	}
+	return DEFAULT_ENABLE_SCAN_SERIALIZATION;
+}
+
 static void IcebergScanSerialize(Serializer &serializer, const optional_ptr<FunctionData> bind_data,
                                  const BoundTableFunction &function) {
-	throw NotImplementedException("IcebergScan serialization not implemented");
+	if (!bind_data || !function.function_info) {
+		throw NotImplementedException("IcebergScan serialization requires bound scan state");
+	}
+	auto &multi_file_data = bind_data->Cast<MultiFileBindData>();
+	if (!multi_file_data.file_list) {
+		throw NotImplementedException("IcebergScan serialization requires a bound file list");
+	}
+	auto &file_list = multi_file_data.file_list->Cast<IcebergMultiFileList>();
+	auto table = file_list.GetTable();
+	if (!table) {
+		throw NotImplementedException("IcebergScan serialization is only supported for catalog tables");
+	}
+	auto &scan_info = function.function_info->Cast<IcebergScanInfo>();
+	auto &context = file_list.GetScanPlanner().GetContext();
+	if (!IcebergScanSerializationEnabled(context)) {
+		throw NotImplementedException("IcebergScan serialization is disabled by %s",
+		                              ENABLE_SCAN_SERIALIZATION_CONFIG_VARIABLE);
+	}
+	if (!scan_info.serialization_query_id.IsValid() ||
+	    scan_info.serialization_query_id.GetIndex() == MAXIMUM_QUERY_ID || !context.HasActiveTransaction() ||
+	    scan_info.serialization_query_id.GetIndex() != context.ActiveTransaction().active_query.load()) {
+		throw NotImplementedException(
+		    "IcebergScan serialization is only supported within the statement that bound the scan");
+	}
+	auto &table_info = table->table_info;
+	auto qualified_name =
+	    QualifiedName(table_info.catalog.GetName(), table_info.schema.name, Identifier(table_info.name));
+	serializer.WriteProperty(100, "qualified_name", qualified_name);
+	serializer.WriteProperty(101, "schema_id", scan_info.snapshot_info.schema_id);
+	const bool has_snapshot = scan_info.snapshot_info.snapshot != nullptr;
+	serializer.WriteProperty(102, "has_snapshot", has_snapshot);
+	if (has_snapshot) {
+		serializer.WriteProperty(103, "snapshot_id", scan_info.snapshot_info.snapshot->snapshot_id);
+	}
+	serializer.WritePropertyWithDefault<string>(104, "table_uuid", scan_info.metadata.table_uuid);
+	serializer.WriteProperty(105, "metadata_path", scan_info.metadata_path);
+	serializer.WriteProperty(106, "has_transaction_data", scan_info.transaction_data != nullptr);
+
+	// Filters pushed into the planner by complex filter pushdown. A copy made after filter pushdown restores them so
+	// that its file pruning, and the cardinality the optimizer derives from it, match the original scan.
+	vector<reference<const IcebergTableFilters::filter_set_t::value_type>> planner_filters;
+	for (auto &entry : file_list.GetScanPlanner().Filters()) {
+		planner_filters.emplace_back(entry);
+	}
+	serializer.WriteList(107, "planner_filters", planner_filters.size(), [&](Serializer::List &list, idx_t i) {
+		auto &entry = planner_filters[i].get();
+		list.WriteObject([&](Serializer &object) {
+			object.WriteProperty(100, "column_index", entry.first);
+			object.WriteProperty(101, "filter", entry.second);
+		});
+	});
+	serializer.WriteProperty(108, "transaction_id", scan_info.serialization_transaction_id);
+	serializer.WriteProperty(109, "query_id", scan_info.serialization_query_id);
+	serializer.WriteProperty(110, "late_materialization", function.late_materialization);
 }
+
+//! Plan-copying optimizers such as CTE inlining and partitioned execution only fall back to the original, uncopied
+//! plan on NotImplementedException. A scan that cannot be rebound faithfully must therefore throw that type, not fail
+//! a query that can still run without the copy.
+[[noreturn]] static void ThrowCannotCopyScan(const QualifiedName &qualified_name, const string &reason) {
+	throw NotImplementedException("Cannot copy the Iceberg scan of %s: %s", qualified_name.ToString(), reason);
+}
+
 static unique_ptr<FunctionData> IcebergScanDeserialize(Deserializer &deserializer, BoundTableFunction &function) {
-	throw NotImplementedException("IcebergScan deserialization not implemented");
+	auto &context = deserializer.Get<ClientContext &>();
+	auto qualified_name = deserializer.ReadProperty<QualifiedName>(100, "qualified_name");
+	if (!IcebergScanSerializationEnabled(context)) {
+		ThrowCannotCopyScan(qualified_name,
+		                    StringUtil::Format("disabled by %s", ENABLE_SCAN_SERIALIZATION_CONFIG_VARIABLE));
+	}
+	auto schema_id = deserializer.ReadProperty<int32_t>(101, "schema_id");
+	const bool has_snapshot = deserializer.ReadProperty<bool>(102, "has_snapshot");
+	optional<int64_t> snapshot_id;
+	if (has_snapshot) {
+		snapshot_id = deserializer.ReadProperty<int64_t>(103, "snapshot_id");
+	}
+	auto table_uuid = deserializer.ReadPropertyWithDefault<string>(104, "table_uuid");
+	auto metadata_path = deserializer.ReadProperty<string>(105, "metadata_path");
+	const bool has_transaction_data = deserializer.ReadProperty<bool>(106, "has_transaction_data");
+	IcebergTableFilters planner_filters;
+	deserializer.ReadList(107, "planner_filters", [&](Deserializer::List &list, idx_t) {
+		list.ReadObject([&](Deserializer &object) {
+			auto column_index = object.ReadProperty<ColumnIndex>(100, "column_index");
+			auto filter = object.ReadProperty<unique_ptr<TableFilter>>(101, "filter");
+			if (!filter || filter->filter_type != TableFilterType::EXPRESSION_FILTER) {
+				throw SerializationException("IcebergScan planner filters must be expression filters");
+			}
+			planner_filters.PushFilter(column_index, unique_ptr_cast<TableFilter, ExpressionFilter>(std::move(filter)));
+		});
+	});
+	auto transaction_id = deserializer.ReadPropertyWithExplicitDefault<hugeint_t>(108, "transaction_id", hugeint_t(0));
+	auto query_id = deserializer.ReadPropertyWithDefault<optional_idx>(109, "query_id");
+	auto late_materialization = deserializer.ReadPropertyWithDefault<bool>(110, "late_materialization");
+
+	// Snapshot/schema IDs do not identify transaction-local writes, credentials, or attachment options.
+	// Reject delayed and cross-connection replay before resolving any table state.
+	if (!context.HasActiveTransaction() || !query_id.IsValid() || query_id.GetIndex() == MAXIMUM_QUERY_ID ||
+	    query_id.GetIndex() != context.ActiveTransaction().active_query.load()) {
+		ThrowCannotCopyScan(qualified_name, "serialization is only supported within the statement that bound the scan");
+	}
+	auto catalog = Catalog::GetCatalogEntry(context, qualified_name.Catalog());
+	if (!catalog || catalog->GetCatalogType() != "iceberg") {
+		ThrowCannotCopyScan(qualified_name, "the Iceberg catalog is no longer attached");
+	}
+	auto &transaction = IcebergTransaction::Get(context, *catalog);
+	if (transaction.scan_serialization_id != transaction_id) {
+		ThrowCannotCopyScan(qualified_name, "serialization is only supported within the statement that bound the scan");
+	}
+
+	EntryLookupInfo current_lookup(CatalogType::TABLE_ENTRY, qualified_name);
+	auto catalog_entry = Catalog::GetEntry(context, current_lookup, OnEntryNotFound::RETURN_NULL);
+	if (!catalog_entry || catalog_entry->type != CatalogType::TABLE_ENTRY ||
+	    catalog_entry->ParentCatalog().GetCatalogType() != "iceberg") {
+		ThrowCannotCopyScan(qualified_name, "the table is no longer an Iceberg catalog table");
+	}
+	auto &table = catalog_entry->Cast<IcebergTableSchemaVersion>().table_info;
+	if ((!table_uuid.empty() && table.GetMetadata().table_uuid != table_uuid) ||
+	    (table_uuid.empty() &&
+	     table.GetMetadata().GetMetadataPath(FileSystem::GetFileSystem(context)) != metadata_path)) {
+		ThrowCannotCopyScan(qualified_name, "the table changed after the scan was bound");
+	}
+
+	auto schema_entry = table.schema_versions.find(schema_id);
+	if (schema_entry == table.schema_versions.end()) {
+		ThrowCannotCopyScan(qualified_name, StringUtil::Format("schema id %d is no longer available", schema_id));
+	}
+	if (snapshot_id && !table.GetMetadata().FindSnapshotByIdInternal(*snapshot_id)) {
+		ThrowCannotCopyScan(qualified_name,
+		                    StringUtil::Format("snapshot id %lld is no longer available", *snapshot_id));
+	}
+
+	unique_ptr<BoundAtClause> at_clause;
+	if (snapshot_id && !has_transaction_data) {
+		at_clause = make_uniq<BoundAtClause>("version", Value::BIGINT(*snapshot_id));
+	}
+	EntryLookupInfo scan_lookup(CatalogType::TABLE_ENTRY, qualified_name, at_clause.get(), QueryErrorContext());
+	unique_ptr<FunctionData> bind_data;
+	auto rebound = schema_entry->second->GetScanFunction(context, bind_data, scan_lookup);
+	if (!bind_data || !rebound.function_info) {
+		ThrowCannotCopyScan(qualified_name, "the table could not be rebound");
+	}
+	auto &scan_info = rebound.function_info->Cast<IcebergScanInfo>();
+	if (scan_info.snapshot_info.schema_id != schema_id ||
+	    (scan_info.transaction_data != nullptr) != has_transaction_data ||
+	    (scan_info.snapshot_info.snapshot != nullptr) != has_snapshot ||
+	    (snapshot_id && scan_info.snapshot_info.snapshot->snapshot_id != *snapshot_id)) {
+		ThrowCannotCopyScan(qualified_name, "the rebound scan does not match the bound snapshot and schema");
+	}
+	if (planner_filters.HasFilters()) {
+		// Same replacement MultiFileComplexFilterPushdown performs when pushdown prunes the file list
+		auto &multi_file_data = bind_data->Cast<MultiFileBindData>();
+		auto &file_list = multi_file_data.file_list->Cast<IcebergMultiFileList>();
+		multi_file_data.file_list = file_list.WithPlannerFilters(std::move(planner_filters));
+		MultiFileReader::PruneReaders(multi_file_data, *multi_file_data.file_list);
+	}
+	function.function_info = std::move(rebound.function_info);
+	if (late_materialization) {
+		// Optimizer copies must retain post-bind eligibility and its virtual-column filter guard.
+		IcebergOptimizer::EnableLateMaterialization(function);
+	}
+	return bind_data;
 }
 
 static optional_ptr<TableCatalogEntry> IcebergGetTableEntry(optional_ptr<const FunctionData> bind_data) {
@@ -99,6 +280,13 @@ static void IcebergSetScanOrder(unique_ptr<RowGroupOrderOptions> order_options, 
 	file_list.GetScanPlanner().SetScanOrder(std::move(order_options));
 }
 
+static vector<column_t> IcebergGetRowIdColumns(ClientContext &, optional_ptr<FunctionData>) {
+	vector<column_t> result;
+	result.push_back(MultiFileReader::COLUMN_IDENTIFIER_FILENAME);
+	result.push_back(MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER);
+	return result;
+}
+
 //! FIXME: needs v1.5.1, causes a crash on v1.5.0
 // static bool IcebergScanSupportsPushdownType(const FunctionData &bind_data_p, idx_t column_id) {
 //	// Don't push down filters on the _row_id virtual column
@@ -121,14 +309,17 @@ TableFunctionSet IcebergFunctions::GetIcebergScanFunction(ExtensionLoader &loade
 		// Register the MultiFileReader as the driver for reads
 		function.get_multi_file_reader = IcebergMultiFileReader::CreateInstance;
 		function.late_materialization = false;
+		function.get_row_id_columns = IcebergGetRowIdColumns;
 
-		// Unset all of these: they are either broken, very inefficient.
-		// TODO: implement/fix these
+		// Catalog-backed scans serialize by rebinding the table; path-based scans throw NotImplementedException
 		function.serialize = IcebergScanSerialize;
 		function.deserialize = IcebergScanDeserialize;
 
+		// Unset these: they are either broken or very inefficient.
+		// TODO: implement/fix these
 		function.statistics = nullptr;
 		function.table_scan_progress = nullptr;
+
 		function.get_bind_info = IcebergBindInfo;
 		function.get_table_entry = IcebergGetTableEntry;
 		function.get_virtual_columns = IcebergVirtualColumns;

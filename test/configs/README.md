@@ -70,6 +70,7 @@ certification was performed.
 | `CASE_SENSITIVE_TABLE_NAMES_SUPPORT` | Support distinct table names differing only in case. |
 | `VIEW_SUPPORT` | Expose the Iceberg REST view endpoints, so views can be created and loaded. Omitted for S3 Tables, whose endpoint set has none. |
 | `ATOMIC_COMMIT_CONFLICT_SUPPORT` | Reject concurrent commits with stale parent state so retries preserve every successful write. Declared for Lakekeeper and S3 Tables; omitted for the standard fixture, which lacks support, and for the other configurations pending validation. |
+| `ETAG_SUPPORT` | Return a nonempty HTTP `ETag` on LoadTable, honor `If-None-Match` with HTTP 304 for unchanged metadata, and change the validator when table metadata changes. Independent of scan-planning mode. |
 | `SCAN_PLANNING_MODE` | `client` or `server`. Tests asserting client pruning logs or request counts require `client`; fixture-latest uses `server`. |
 
 Transaction-start reconstruction can require both `METADATA_LOG_SUPPORT` and
@@ -105,6 +106,20 @@ asserting that a race must lose data would make a flaky negative test. The
 existing concurrent commit test validates the positive guarantee. Catalogs
 currently marked unverified need a controlled REST-level race before this
 capability can be declared or its absence reproducibly tested.
+
+`iceberg_catalog_etag.test` checks the `ETAG_SUPPORT` guarantee, including the
+unchanged-table log and fresh metadata after a write. `capabilities/no_etag.test`
+checks that configurations without the flag return full LoadTable responses
+without ETags. Both filter HTTP logs to the table's LoadTable endpoint, excluding
+storage and scan-planning requests. The native `load_table_etag.test` supplies
+scripted response headers itself, so it does not require the configured catalog
+to advertise `ETAG_SUPPORT`.
+
+The ETag assessment verified support for fixture-latest, Gravitino, Lakekeeper,
+and Polaris. The standard fixture (also used by `fixture_duckdb_tests.json`),
+Nessie, and both mock backends return no ETags. S3 Tables remains undeclared
+pending validation. These results apply to the versions and modes selected by
+the current make targets and configs.
 
 ## Maintaining the declarations
 

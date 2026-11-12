@@ -10,6 +10,7 @@
 
 namespace duckdb {
 class IcebergCatalog;
+class IcebergTablePrefetch;
 class IcebergSchemaEntry;
 class IcebergTableSchemaVersion;
 
@@ -89,6 +90,9 @@ public:
 	void DoViewDeletes(ClientContext &context);
 	void InvalidateViewEntry(const string &view_key);
 	IcebergCatalog &GetCatalog();
+	//! LoadTable requests scheduled ahead of binding for the tables a query references, created on first use
+	IcebergTablePrefetch &GetTablePrefetch(ClientContext &context);
+	optional_ptr<IcebergTablePrefetch> TryGetTablePrefetch();
 	void DoMultiTableCommitUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
 	void DoSingleTableCommitUpdates(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
 	optional_ptr<IcebergTransactionTableState> GetLatestTableState(const string &table_key);
@@ -127,9 +131,13 @@ private:
 private:
 	DatabaseInstance &db;
 	IcebergCatalog &catalog;
+	unique_ptr<IcebergTablePrefetch> table_prefetch;
 	AccessMode access_mode;
 
 public:
+	//! Process-independent identity for rejecting scan copies outside their originating transaction.
+	const hugeint_t scan_serialization_id;
+
 	//! Schemas referenced by this transaction that have to stay alive for the duration of the transaction.
 	unordered_map<string, shared_ptr<IcebergSchemaEntry>> schemas;
 	//! Schemas staged by this transaction. These are separate from catalog-referenced schemas so both generations stay
@@ -166,6 +174,8 @@ public:
 
 	unordered_set<string> looked_up_entries;
 	mutex lock;
+	//! Serialize rewrite finalization, including the initialization of transaction table state.
+	mutex rewrite_commit_lock;
 
 	unordered_map<string, SchemaPropertyUpdates> schema_property_updates;
 };

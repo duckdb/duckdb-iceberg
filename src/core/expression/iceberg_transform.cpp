@@ -1,12 +1,15 @@
 #include "core/expression/iceberg_transform.hpp"
 
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/expression/operator_expression.hpp"
 
 #include "utf8proc_wrapper.hpp"
+#include "common/iceberg_fixed_type.hpp"
+#include "common/iceberg_geography_type.hpp"
 #include "core/expression/iceberg_hash.hpp"
 #include "core/metadata/schema/iceberg_table_schema.hpp"
 #include "core/metadata/schema/iceberg_column_definition.hpp"
@@ -99,7 +102,7 @@ IcebergTransform IcebergTransform::FromExpression(const ParsedExpression &expr, 
 			if (!const_literal.TryGetInt64(raw_val)) {
 				throw InvalidInputException("%s first argument must be a constant integer", transform);
 			}
-			if (raw_val <= 0) {
+			if (raw_val <= 0 || raw_val > NumericLimits<int32_t>::Maximum()) {
 				throw InvalidInputException("%s requires a positive integer argument, got %d", transform, raw_val);
 			}
 			constant_value = NumericCast<idx_t>(raw_val);
@@ -130,25 +133,30 @@ IcebergTransform IcebergTransform::FromExpression(const ParsedExpression &expr, 
 	throw NotImplementedException("Unsupported partition key type: %s", expr.ToString());
 }
 
+static int32_t ParseTransformParameter(const string &transform, const string &name) {
+	const auto prefix = name + "[";
+	if (!StringUtil::StartsWith(transform, prefix) || transform.size() <= prefix.size() + 1 ||
+	    transform.back() != ']') {
+		throw InvalidConfigurationException("Invalid Iceberg transform: %s", transform);
+	}
+	auto digits = transform.substr(prefix.size(), transform.size() - prefix.size() - 1);
+	int32_t value;
+	if (!TryCast::Operation<string_t, int32_t>(string_t(digits), value, true) || value <= 0) {
+		throw InvalidConfigurationException("Invalid Iceberg transform: %s (expected a positive 32-bit integer)",
+		                                    transform);
+	}
+	return value;
+}
+
 IcebergTransform::IcebergTransform(const string &transform) : raw_transform(transform) {
 	if (transform == "identity") {
 		type = IcebergTransformType::IDENTITY;
 	} else if (StringUtil::StartsWith(transform, "bucket")) {
 		type = IcebergTransformType::BUCKET;
-		D_ASSERT(transform[6] == '[');
-		D_ASSERT(transform.back() == ']');
-		auto start = transform.find('[');
-		auto end = transform.rfind(']');
-		auto digits = transform.substr(start + 1, end - start);
-		modulo = std::stoi(digits);
+		modulo = ParseTransformParameter(transform, "bucket");
 	} else if (StringUtil::StartsWith(transform, "truncate")) {
 		type = IcebergTransformType::TRUNCATE;
-		D_ASSERT(transform[8] == '[');
-		D_ASSERT(transform.back() == ']');
-		auto start = transform.find('[');
-		auto end = transform.rfind(']');
-		auto digits = transform.substr(start + 1, end - start);
-		width = std::stoi(digits);
+		width = ParseTransformParameter(transform, "truncate");
 	} else if (transform == "year") {
 		type = IcebergTransformType::YEAR;
 	} else if (transform == "month") {
@@ -158,9 +166,78 @@ IcebergTransform::IcebergTransform(const string &transform) : raw_transform(tran
 	} else if (transform == "hour") {
 		type = IcebergTransformType::HOUR;
 	} else if (transform == "void") {
-		type = IcebergTransformType::VOID;
+		type = IcebergTransformType::VOID_TRANSFORM;
 	} else {
 		throw NotImplementedException("Unrecognized transform ('%s')", transform);
+	}
+}
+
+//! The source types each transform accepts, as listed in the spec's partition transforms table
+bool IcebergTransform::CanTransform(const LogicalType &source) const {
+	switch (type) {
+	case IcebergTransformType::IDENTITY:
+		return !source.IsNested() && source.id() != LogicalTypeId::GEOMETRY &&
+		       !IcebergGeographyType::IsGeography(source);
+	case IcebergTransformType::BUCKET:
+		switch (source.id()) {
+		case LogicalTypeId::INTEGER:
+		case LogicalTypeId::BIGINT:
+		case LogicalTypeId::DECIMAL:
+		case LogicalTypeId::DATE:
+		case LogicalTypeId::TIME:
+		case LogicalTypeId::TIMESTAMP:
+		case LogicalTypeId::TIMESTAMP_TZ:
+		case LogicalTypeId::TIMESTAMP_NS:
+		case LogicalTypeId::TIMESTAMP_TZ_NS:
+		case LogicalTypeId::VARCHAR:
+		case LogicalTypeId::UUID:
+			return true;
+		case LogicalTypeId::BLOB:
+			// binary and fixed
+			return !IcebergGeographyType::IsGeography(source);
+		default:
+			return false;
+		}
+	case IcebergTransformType::TRUNCATE:
+		switch (source.id()) {
+		case LogicalTypeId::INTEGER:
+		case LogicalTypeId::BIGINT:
+		case LogicalTypeId::DECIMAL:
+		case LogicalTypeId::VARCHAR:
+			return true;
+		case LogicalTypeId::BLOB:
+			// binary only
+			return !IcebergFixedType::IsFixed(source) && !IcebergGeographyType::IsGeography(source);
+		default:
+			return false;
+		}
+	case IcebergTransformType::YEAR:
+	case IcebergTransformType::MONTH:
+	case IcebergTransformType::DAY:
+		switch (source.id()) {
+		case LogicalTypeId::DATE:
+		case LogicalTypeId::TIMESTAMP:
+		case LogicalTypeId::TIMESTAMP_TZ:
+		case LogicalTypeId::TIMESTAMP_NS:
+		case LogicalTypeId::TIMESTAMP_TZ_NS:
+			return true;
+		default:
+			return false;
+		}
+	case IcebergTransformType::HOUR:
+		switch (source.id()) {
+		case LogicalTypeId::TIMESTAMP:
+		case LogicalTypeId::TIMESTAMP_TZ:
+		case LogicalTypeId::TIMESTAMP_NS:
+		case LogicalTypeId::TIMESTAMP_TZ_NS:
+			return true;
+		default:
+			return false;
+		}
+	case IcebergTransformType::VOID_TRANSFORM:
+		return true;
+	default:
+		return false;
 	}
 }
 
@@ -180,7 +257,7 @@ LogicalType IcebergTransform::GetBoundsType(const LogicalType &input) const {
 	case IcebergTransformType::MONTH:
 	case IcebergTransformType::HOUR:
 		return LogicalType::INTEGER;
-	case IcebergTransformType::VOID:
+	case IcebergTransformType::VOID_TRANSFORM:
 		return input;
 	default:
 		throw InvalidConfigurationException("Can't produce a result type for transform %s and input type %s",
@@ -208,7 +285,7 @@ LogicalType IcebergTransform::GetSerializedType(const LogicalType &input) const 
 	case IcebergTransformType::HOUR:
 	case IcebergTransformType::DAY:
 		return LogicalType::INTEGER;
-	case IcebergTransformType::VOID:
+	case IcebergTransformType::VOID_TRANSFORM:
 		return input;
 	default:
 		throw InvalidConfigurationException("Can't produce a result type for transform %s and input type %s",
@@ -236,7 +313,7 @@ Value IcebergTransform::ApplyTransform(const Value &value) const {
 		return DayTransform::ApplyTransform(value, *this);
 	case IcebergTransformType::HOUR:
 		return HourTransform::ApplyTransform(value, *this);
-	case IcebergTransformType::VOID:
+	case IcebergTransformType::VOID_TRANSFORM:
 		return Value(GetSerializedType(value.type()));
 	default:
 		throw InvalidConfigurationException("Transform '%s' not implemented", RawType());

@@ -138,6 +138,9 @@ static DeserializeResult DeserializeDecimal(const string_t &blob, const LogicalT
 	}
 
 	auto physical_type = type.InternalType();
+	if (blob.GetSize() == 0 || blob.GetSize() > GetTypeIdSize(physical_type)) {
+		return DeserializeError(blob, type);
+	}
 	switch (physical_type) {
 	case PhysicalType::INT16: {
 		return DeserializeDecimalTemplated<int16_t>(blob, width, scale);

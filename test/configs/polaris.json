@@ -15,6 +15,10 @@
 			"env_value": "polaris"
 		},
 		{
+			"env_name": "ETAG_SUPPORT",
+			"env_value": "true"
+		},
+		{
 			"env_name": "FORMAT_V3_SUPPORT",
 			"env_value": "true"
 		},
@@ -106,8 +110,7 @@
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/test_requests_to_partitioned_table.test",
 				"test/sql/local/catalog_test_config_setup/catalog_interop/reads/read_mor_delete_partition_evolution.test",
 				"test/sql/local/catalog_test_config_setup/catalog_interop/irc_catalog_read_deletes.test",
-				"test/sql/local/catalog_test_config_setup/catalog_interop/insert/test_read_upper_and_lower_bounds.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/iceberg_catalog_eager_refresh.test"
+				"test/sql/local/catalog_test_config_setup/catalog_interop/insert/test_read_upper_and_lower_bounds.test"
 			]
 		},
 		{

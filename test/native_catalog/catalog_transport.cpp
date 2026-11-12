@@ -1,6 +1,7 @@
 #include "catalog_model.hpp"
 #include "duckdb/common/http_transport_manager.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/unordered_set.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/client_context_file_opener.hpp"
@@ -17,7 +18,8 @@ static constexpr const char *PROVIDER_NAME = "IcebergTestHTTPUtil";
 
 class IcebergTestHTTPClient : public HTTPClient {
 public:
-	explicit IcebergTestHTTPClient(shared_ptr<Catalog> catalog_p) : HTTPClient(ORIGIN), catalog(std::move(catalog_p)) {
+	IcebergTestHTTPClient(shared_ptr<Catalog> catalog_p, const string &origin)
+	    : HTTPClient(origin), catalog(std::move(catalog_p)) {
 	}
 	void Initialize(HTTPParams &) override {
 	}
@@ -53,8 +55,8 @@ public:
 
 private:
 	unique_ptr<HTTPResponse> Request(const string &method, BaseRequest &info, const string &body) {
-		if (info.proto_host_port != ORIGIN) {
-			throw InvalidInputException("Native Iceberg test catalog only accepts '%s'", ORIGIN);
+		if (info.proto_host_port != GetBaseUrl()) {
+			throw InvalidInputException("Native Iceberg test catalog client only accepts '%s'", GetBaseUrl());
 		}
 		auto result = catalog->Request(method, info.path, body);
 		result->url = info.url;
@@ -89,31 +91,46 @@ public:
 		throw InvalidInputException("Native Iceberg test catalog does not support HTTP filesystem I/O");
 	}
 	unique_ptr<HTTPClient> InitializeClient(HTTPParams &, const string &origin) override {
-		if (origin != ORIGIN) {
-			throw InvalidInputException("Native Iceberg test catalog only accepts '%s'", ORIGIN);
-		}
-		return make_uniq<IcebergTestHTTPClient>(catalog);
+		CheckRegisteredOrigin(origin);
+		return make_uniq<IcebergTestHTTPClient>(catalog, origin);
 	}
 	const string &Root() const {
 		return catalog->root;
 	}
+	void AddOrigins(const vector<string> &additional_origins) {
+		for (auto &origin : additional_origins) {
+			string path;
+			string parsed_origin;
+			HTTPUtil::DecomposeURL(origin + "/", path, parsed_origin);
+			if (origin != parsed_origin || path != "/" || origin.find_first_of("?#") != string::npos) {
+				throw InvalidInputException("Native catalog origin must contain only scheme, host and optional port");
+			}
+			origins.insert(origin);
+		}
+	}
 
 private:
-	static void CheckOrigin(const string &url) {
+	void CheckOrigin(const string &url) const {
 		string path;
 		string origin;
 		HTTPUtil::DecomposeURL(url, path, origin);
-		if (origin != ORIGIN) {
-			throw InvalidInputException("Native Iceberg test catalog only accepts '%s'", ORIGIN);
+		CheckRegisteredOrigin(origin);
+	}
+	void CheckRegisteredOrigin(const string &origin) const {
+		if (!origins.count(origin)) {
+			throw InvalidInputException("Native Iceberg test catalog only accepts registered origins, got '%s'",
+			                            origin);
 		}
 	}
 
 	shared_ptr<Catalog> catalog;
+	unordered_set<string> origins {ORIGIN};
 };
 
 struct TestCatalogBindData : public TableFunctionData {
 	bool initialize;
 	vector<string> arguments;
+	vector<string> origins;
 };
 
 struct TestCatalogGlobalState : public GlobalTableFunctionState {
@@ -134,6 +151,18 @@ static unique_ptr<FunctionData> Bind(ClientContext &, TableFunctionBindInput &in
 		result->arguments.push_back(input.inputs[i].IsNull() ? "" : input.inputs[i].GetValue<string>());
 	}
 	if (result->initialize) {
+		auto origins = input.named_parameters.find("origins");
+		if (origins != input.named_parameters.end()) {
+			if (origins->second.IsNull()) {
+				throw InvalidInputException("Native catalog origins cannot be NULL");
+			}
+			for (auto &origin : ListValue::GetChildren(origins->second)) {
+				if (origin.IsNull()) {
+					throw InvalidInputException("Native catalog origin cannot be NULL");
+				}
+				result->origins.push_back(origin.GetValue<string>());
+			}
+		}
 		types = {LogicalType::BOOLEAN};
 		names = {"Success"};
 	} else {
@@ -143,7 +172,7 @@ static unique_ptr<FunctionData> Bind(ClientContext &, TableFunctionBindInput &in
 	return std::move(result);
 }
 
-static void InitializeCatalog(ClientContext &context, const string &input_root) {
+static void InitializeCatalog(ClientContext &context, const string &input_root, const vector<string> &origins) {
 	if (input_root.empty() || FileSystem::IsRemoteFile(input_root)) {
 		throw InvalidInputException("Native catalog requires a nonempty local directory");
 	}
@@ -158,6 +187,7 @@ static void InitializeCatalog(ClientContext &context, const string &input_root) 
 		if (config.GetHTTPUtil().Cast<IcebergTestHTTPUtil>().Root() != root) {
 			throw InvalidInputException("Native Iceberg test catalog is already initialized with another root");
 		}
+		config.GetHTTPUtil().Cast<IcebergTestHTTPUtil>().AddOrigins(origins);
 		return;
 	}
 	// HTTPFS publishes its HTTP provider during loading. Install ours afterwards.
@@ -167,7 +197,9 @@ static void InitializeCatalog(ClientContext &context, const string &input_root) 
 	}
 	// The provider outlives individual connections; do not retain a ClientFileSystem.
 	auto catalog = make_shared_ptr<Catalog>(db.GetFileSystem(), root);
-	config.SetHTTPUtil(make_shared_ptr<IcebergTestHTTPUtil>(std::move(catalog)));
+	auto provider = make_shared_ptr<IcebergTestHTTPUtil>(std::move(catalog));
+	provider->AddOrigins(origins);
+	config.SetHTTPUtil(std::move(provider));
 }
 
 static unique_ptr<HTTPResponse> ProtocolRequest(ClientContext &context, const vector<string> &arguments) {
@@ -230,7 +262,7 @@ static void Execute(ClientContext &context, TableFunctionInput &input, DataChunk
 	state.finished = true;
 	auto &data = input.bind_data->Cast<TestCatalogBindData>();
 	if (data.initialize) {
-		InitializeCatalog(context, data.arguments[0]);
+		InitializeCatalog(context, data.arguments[0], data.origins);
 		output.data[0].Append(Value::BOOLEAN(true));
 	} else {
 		auto response = ProtocolRequest(context, data.arguments);
@@ -246,8 +278,11 @@ static void Execute(ClientContext &context, TableFunctionInput &input, DataChunk
 extern "C" {
 DUCKDB_CPP_EXTENSION_ENTRY(iceberg_mock, loader) {
 	using namespace duckdb;
-	loader.RegisterFunction(TableFunction("iceberg_test_catalog_init", {LogicalType::VARCHAR}, iceberg_test::Execute,
-	                                      iceberg_test::Bind, iceberg_test::TestCatalogGlobalState::Init));
+	TableFunction initialize("iceberg_test_catalog_init", {LogicalType::VARCHAR}, iceberg_test::Execute,
+	                         iceberg_test::Bind, iceberg_test::TestCatalogGlobalState::Init);
+	initialize.GetSignature().WithTypedKwargs(
+	    "options", [](TypedKwargs &options) { options.Add("origins", LogicalType::LIST(LogicalType::VARCHAR)); });
+	loader.RegisterFunction(initialize);
 	loader.RegisterFunction(TableFunction(
 	    "iceberg_test_catalog_request", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
 	    iceberg_test::Execute, iceberg_test::Bind, iceberg_test::TestCatalogGlobalState::Init));

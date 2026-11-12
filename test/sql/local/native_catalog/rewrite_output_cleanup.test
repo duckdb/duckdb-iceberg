@@ -1,0 +1,104 @@
+# name: test/sql/local/native_catalog/rewrite_output_cleanup.test
+# description: Failed CoW and maintenance rewrites clean up unstaged and staged output files
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+require-env FILE_CLEANUP_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_cleanup (id INTEGER)
+WITH ('format-version' = '2', 'write.delete.mode' = 'copy-on-write');
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_cleanup VALUES (1), (2);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_cleanup VALUES (3), (4);
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE rewrite_cleanup_glob = (
+    SELECT parse_dirpath(file_path) || '/*.parquet'
+    FROM iceberg_metadata(my_datalake.default.rewrite_cleanup)
+    WHERE content = 'DATA' AND status <> 'DELETED' LIMIT 1
+);
+
+statement ok
+SET VARIABLE rewrite_cleanup_before = (
+    SELECT list(file ORDER BY file) FROM glob(getvariable('rewrite_cleanup_glob'))
+);
+
+statement ok
+COMMIT;
+
+statement ok
+BEGIN;
+
+query II
+SELECT rewritten_data_files_count, added_data_files_count
+FROM iceberg_rewrite_data_files('my_datalake.default.rewrite_cleanup', rewrite_all = true);
+----
+2	1
+
+# The local warehouse contains the original files and the staged maintenance output.
+# Resolve paths and inspect files in the same transaction as the metadata lookup.
+statement ok
+SET VARIABLE rewrite_cleanup_glob = (
+    SELECT parse_dirpath(file_path) || '/*.parquet'
+    FROM iceberg_metadata(my_datalake.default.rewrite_cleanup)
+    WHERE content = 'DATA' AND status <> 'DELETED' LIMIT 1
+);
+
+query I
+SELECT count(*) FROM glob(getvariable('rewrite_cleanup_glob'));
+----
+3
+
+# CoW produces a replacement file before staging discovers the maintenance restriction.
+# The sink cleans its rejected output; rollback cleans the staged maintenance output.
+# Neither kind of replacement may be left behind, and the original files must survive.
+statement error
+DELETE FROM my_datalake.default.rewrite_cleanup WHERE id = 1;
+----
+after rewriting its data files in the same transaction
+
+statement ok
+COMMIT;
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE rewrite_cleanup_glob = (
+    SELECT parse_dirpath(file_path) || '/*.parquet'
+    FROM iceberg_metadata(my_datalake.default.rewrite_cleanup)
+    WHERE content = 'DATA' AND status <> 'DELETED' LIMIT 1
+);
+
+query I
+SELECT list(file ORDER BY file) = getvariable('rewrite_cleanup_before')
+FROM glob(getvariable('rewrite_cleanup_glob'));
+----
+true
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.rewrite_cleanup;
+----
+[1, 2, 3, 4]
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.rewrite_cleanup)
+WHERE content = 'DATA' AND status <> 'DELETED';
+----
+2
+
+statement ok
+COMMIT;
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_cleanup;

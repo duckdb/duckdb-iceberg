@@ -1,5 +1,7 @@
 #include "core/metadata/schema/iceberg_column_definition.hpp"
 #include "duckdb/common/types.hpp"
+#include "duckdb/common/operator/cast_operators.hpp"
+#include "duckdb/common/types/decimal.hpp"
 #include "common/iceberg_constants.hpp"
 #include "duckdb/common/value_operations/value_operations.hpp"
 #include "duckdb/parser/column_definition.hpp"
@@ -20,6 +22,11 @@ static string AddEscapesToBlob(const string &hexadecimal_string) {
 	if (hexadecimal_string.size() % 2 != 0) {
 		throw InvalidConfigurationException("Invalid hexadecimal default: expected an even number of digits");
 	}
+	for (auto c : hexadecimal_string) {
+		if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
+			throw InvalidConfigurationException("Invalid hexadecimal default: expected hexadecimal digits");
+		}
+	}
 	for (idx_t i = 0; i < hexadecimal_string.size() / 2; i++) {
 		result += "\\x";
 		result += hexadecimal_string.substr(i * 2, 2);
@@ -38,23 +45,33 @@ Value IcebergColumnDefinition::ParsePrimitiveValue(const LogicalType &type,
 
 	switch (type.id()) {
 	case LogicalTypeId::BOOLEAN: {
-		D_ASSERT(default_value.boolean_type_value);
+		if (!default_value.boolean_type_value) {
+			break;
+		}
 		return Value::BOOLEAN(default_value.boolean_type_value->value);
 	}
 	case LogicalTypeId::INTEGER: {
-		D_ASSERT(default_value.integer_type_value);
+		if (!default_value.integer_type_value) {
+			break;
+		}
 		return Value::INTEGER(default_value.integer_type_value->value);
 	}
 	case LogicalTypeId::BIGINT: {
-		D_ASSERT(default_value.long_type_value);
+		if (!default_value.long_type_value) {
+			break;
+		}
 		return Value::BIGINT(default_value.long_type_value->value);
 	}
 	case LogicalTypeId::FLOAT: {
-		D_ASSERT(default_value.float_type_value);
+		if (!default_value.float_type_value) {
+			break;
+		}
 		return Value::FLOAT(default_value.float_type_value->value);
 	}
 	case LogicalTypeId::DOUBLE: {
-		D_ASSERT(default_value.double_type_value);
+		if (!default_value.double_type_value) {
+			break;
+		}
 		return Value::DOUBLE(default_value.double_type_value->value);
 	}
 	case LogicalTypeId::DECIMAL:
@@ -66,11 +83,20 @@ Value IcebergColumnDefinition::ParsePrimitiveValue(const LogicalType &type,
 	case LogicalTypeId::TIMESTAMP_TZ_NS:
 	case LogicalTypeId::VARCHAR:
 	case LogicalTypeId::UUID: {
-		D_ASSERT(default_value.string_type_value);
-		return Value(default_value.string_type_value->value).DefaultCastAs(type);
+		if (!default_value.string_type_value) {
+			break;
+		}
+		string error;
+		auto value = Value(default_value.string_type_value->value).DefaultTryCastAs(type, &error, true);
+		if (!value) {
+			throw InvalidConfigurationException("Invalid default value for %s: %s", type.ToString(), error);
+		}
+		return std::move(*value);
 	}
 	case LogicalTypeId::BLOB: {
-		D_ASSERT(default_value.fixed_type_value || default_value.binary_type_value);
+		if (!default_value.fixed_type_value && !default_value.binary_type_value) {
+			break;
+		}
 		auto &hex = default_value.fixed_type_value ? default_value.fixed_type_value->value
 		                                           : default_value.binary_type_value->value;
 		auto value = Value::BLOB(AddEscapesToBlob(hex));
@@ -83,6 +109,7 @@ Value IcebergColumnDefinition::ParsePrimitiveValue(const LogicalType &type,
 	default:
 		throw NotImplementedException("ParsePrimitiveValue not implemented for type: %s", type.ToString());
 	}
+	throw InvalidConfigurationException("Invalid JSON default value for %s", type.ToString());
 }
 
 LogicalType IcebergColumnDefinition::ParsePrimitiveType(const rest_api_objects::PrimitiveType &type) {
@@ -137,17 +164,29 @@ LogicalType IcebergColumnDefinition::ParsePrimitiveTypeString(const string &type
 		return LogicalType::BLOB;
 	}
 	if (StringUtil::StartsWith(type_str, "decimal")) {
-		D_ASSERT(type_str[7] == '(');
-		D_ASSERT(type_str.back() == ')');
-		auto start = type_str.find('(');
-		auto end = type_str.rfind(')');
-		auto raw_digits = type_str.substr(start + 1, end - start);
-		auto digits = StringUtil::Split(raw_digits, ',');
-		D_ASSERT(digits.size() == 2);
-
-		auto width = std::stoi(digits[0]);
-		auto scale = std::stoi(digits[1]);
-		return LogicalType::DECIMAL(width, scale);
+		if (!StringUtil::StartsWith(type_str, "decimal(") || type_str.size() < 10 || type_str.back() != ')') {
+			throw InvalidConfigurationException("Invalid decimal type \"%s\" - expected decimal(precision, scale)",
+			                                    type_str);
+		}
+		auto digits = StringUtil::Split(type_str.substr(8, type_str.size() - 9), ',');
+		if (digits.size() != 2) {
+			throw InvalidConfigurationException("Invalid decimal type \"%s\" - expected decimal(precision, scale)",
+			                                    type_str);
+		}
+		int64_t width;
+		int64_t scale;
+		if (!TryCast::Operation<string_t, int64_t>(string_t(digits[0]), width, true) ||
+		    !TryCast::Operation<string_t, int64_t>(string_t(digits[1]), scale, true)) {
+			throw InvalidConfigurationException("Invalid decimal type \"%s\" - precision and scale must be numbers",
+			                                    type_str);
+		}
+		if (width < 1 || width > Decimal::MAX_WIDTH_DECIMAL || scale < 0 || scale > width) {
+			throw InvalidConfigurationException(
+			    "Invalid decimal type \"%s\" - precision must be between 1 and %d and scale between 0 and the "
+			    "precision",
+			    type_str, Decimal::MAX_WIDTH_DECIMAL);
+		}
+		return LogicalType::DECIMAL(NumericCast<uint8_t>(width), NumericCast<uint8_t>(scale));
 	}
 	if (type_str == "variant") {
 		return LogicalType::VARIANT();
@@ -200,6 +239,9 @@ CreateStructField(const string &name, int32_t field_id, bool required, const res
 
 unique_ptr<IcebergColumnDefinition>
 IcebergColumnDefinition::ParseStructField(const rest_api_objects::StructField &field) {
+	if (field.id <= 0) {
+		throw InvalidConfigurationException("Invalid field id %d for column '%s'", field.id, field.name);
+	}
 	auto res = make_uniq<IcebergColumnDefinition>();
 	res->id = field.id;
 	res->required = field.required;

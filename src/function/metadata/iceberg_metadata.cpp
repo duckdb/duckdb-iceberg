@@ -102,11 +102,21 @@ static unique_ptr<FunctionData> IcebergMetaDataBind(ClientContext &context, Tabl
 	auto input_string = input.inputs[0].ToString();
 	auto resolved_metadata = IcebergUtils::ResolveTableMetadata(context, input_string, options);
 
-	auto snapshot_to_scan = resolved_metadata.metadata.GetSnapshot(*options.snapshot_lookup);
+	auto expected_table_uuid = input.named_parameters.find("expected_table_uuid");
+	if (expected_table_uuid != input.named_parameters.end()) {
+		auto expected = expected_table_uuid->second.ToString();
+		auto &table_uuid = resolved_metadata.metadata->table_uuid;
+		if (!StringUtil::CIEquals(expected, table_uuid)) {
+			throw InvalidInputException("Table UUID mismatch: expected '%s', found '%s'", expected, table_uuid);
+		}
+	}
+
+	auto snapshot_to_scan = resolved_metadata.metadata->GetSnapshot(*options.snapshot_lookup);
 
 	if (snapshot_to_scan.snapshot) {
-		ret->iceberg_table = IcebergManifestList::Load(resolved_metadata.table_location, resolved_metadata.metadata,
-		                                               snapshot_to_scan, context, options);
+		ret->iceberg_table =
+		    IcebergManifestList::Load(resolved_metadata.table_location, *resolved_metadata.metadata, snapshot_to_scan,
+		                              context, options, resolved_metadata.file_secret);
 	}
 
 	auto manifest_types = IcebergManifestTypes();
@@ -172,8 +182,19 @@ static void IcebergMetaDataFunction(ClientContext &context, TableFunctionInput &
 			AddString(output.data[6], out, string_t(data_file.file_format));
 			//! record_count
 			FlatVector::GetDataMutable<int64_t>(output.data[7])[out] = data_file.record_count;
-			FlatVector::GetDataMutable<int64_t>(output.data[8])[out] = manifest_entry.GetSequenceNumber(manifest);
-			FlatVector::GetDataMutable<int64_t>(output.data[9])[out] = manifest_entry.GetFileSequenceNumber(manifest);
+			//! data_sequence_number / file_sequence_number: NULL when an EXISTING/DELETED entry has none
+			auto data_sequence_number = manifest_entry.TryGetSequenceNumber(manifest);
+			if (data_sequence_number) {
+				FlatVector::GetDataMutable<int64_t>(output.data[8])[out] = *data_sequence_number;
+			} else {
+				FlatVector::SetNull(output.data[8], out, true);
+			}
+			auto file_sequence_number = manifest_entry.TryGetFileSequenceNumber(manifest);
+			if (file_sequence_number) {
+				FlatVector::GetDataMutable<int64_t>(output.data[9])[out] = *file_sequence_number;
+			} else {
+				FlatVector::SetNull(output.data[9], out, true);
+			}
 			out++;
 		}
 		global_state.current_manifest_entry_idx = 0;
@@ -193,7 +214,8 @@ TableFunctionSet IcebergFunctions::GetIcebergMetadataFunction() {
 		    .Add("version", LogicalType::ANY)
 		    .Add("version_name_format", LogicalType::VARCHAR)
 		    .Add("snapshot_from_timestamp", LogicalType::ANY)
-		    .Add("snapshot_from_id", LogicalType::UBIGINT);
+		    .Add("snapshot_from_id", LogicalType::UBIGINT)
+		    .Add("expected_table_uuid", LogicalType::VARCHAR);
 	});
 	function_set.AddFunction(fun);
 

@@ -113,7 +113,11 @@ static void CopyCountMap(const optional<rest_api_objects::CountMap> &source, uno
 		throw InvalidInputException("Iceberg server-side scan-planning returned a malformed CountMap");
 	}
 	for (idx_t i = 0; i < source->keys->size(); i++) {
-		target[(*source->keys)[i].value] = (*source->values)[i].value;
+		auto value = (*source->values)[i].value;
+		if (value < 0) {
+			throw InvalidConfigurationException("Iceberg server-side scan-planning returned a negative count");
+		}
+		target[(*source->keys)[i].value] = value;
 	}
 }
 
@@ -168,6 +172,13 @@ static void CopyValueMap(const optional<rest_api_objects::ValueMap> &source, con
 static IcebergDataFile ConvertContentFile(const rest_api_objects::ContentFile &source,
                                           const IcebergTableMetadata &metadata,
                                           IcebergManifestEntryContentType content) {
+	if (source.file_path.empty()) {
+		throw InvalidConfigurationException("Iceberg server-side scan-planning returned an empty file path");
+	}
+	if (source.record_count < 0 || source.file_size_in_bytes < 0) {
+		throw InvalidConfigurationException(
+		    "Iceberg server-side scan-planning returned a negative record count or file size");
+	}
 	IcebergDataFile result;
 	result.content = content;
 	result.file_path = source.file_path;
@@ -317,7 +328,7 @@ static void FetchPlanTasks(ClientContext &context, IcebergTable &table_info, Pla
 		}
 		auto response_doc = ICUtils::APIResultToDoc(response->body);
 		auto tasks = rest_api_objects::FetchScanTasksResult::FromJSON(response_doc->GetRoot()).scan_tasks;
-		AppendTasks(std::move(tasks), table_info.table_metadata, accumulator);
+		AppendTasks(std::move(tasks), table_info.GetMetadata(), accumulator);
 	}
 }
 
@@ -438,7 +449,7 @@ bool IcebergServerSideScanPlanning::Plan(ClientContext &context, IcebergTable &t
 			auto status = GetRequiredString(root, "status");
 			if (status == "completed") {
 				auto completed = rest_api_objects::CompletedPlanningResult::FromJSON(root);
-				AppendTasks(std::move(completed.scan_tasks), table_info.table_metadata, accumulator);
+				AppendTasks(std::move(completed.scan_tasks), table_info.GetMetadata(), accumulator);
 				if (completed.object_10.storage_credentials) {
 					result.storage_credentials = std::move(*completed.object_10.storage_credentials);
 				}
@@ -502,8 +513,8 @@ bool IcebergServerSideScanPlanning::Plan(ClientContext &context, IcebergTable &t
 		}
 
 		result.data_manifests =
-		    MakeManifests(table_info.table_metadata, std::move(data_files), IcebergManifestContentType::DATA, 0);
-		result.delete_manifests = MakeManifests(table_info.table_metadata, std::move(accumulator.delete_files),
+		    MakeManifests(table_info.GetMetadata(), std::move(data_files), IcebergManifestContentType::DATA, 0);
+		result.delete_manifests = MakeManifests(table_info.GetMetadata(), std::move(accumulator.delete_files),
 		                                        IcebergManifestContentType::DELETE, 1);
 		return true;
 	} catch (...) {

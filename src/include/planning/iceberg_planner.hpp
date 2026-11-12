@@ -14,7 +14,7 @@ namespace duckdb {
 
 class IcebergPlannerRoutine {
 public:
-	void VisitOperator(LogicalOperator &op);
+	void VisitOperator(ClientContext &context, LogicalOperator &op);
 
 private:
 	void VisitScan(LogicalOperator &op);
@@ -23,6 +23,7 @@ private:
 class IcebergPlanner {
 public:
 	static PlannerExtension Create();
+	static void PreBind(PlannerExtensionInput &input, SQLStatement &statement);
 	static void PostBind(PlannerExtensionInput &input, BoundStatement &statement);
 };
 

@@ -15,24 +15,28 @@
 
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
+#include "planning/iceberg_file_secret.hpp"
 
 namespace duckdb {
 
 struct IcebergResolvedMetadata {
-	IcebergResolvedMetadata(string table_location_p, IcebergTableMetadata metadata_p)
-	    : table_location(std::move(table_location_p)), metadata(std::move(metadata_p)) {
+	IcebergResolvedMetadata(string table_location_p, shared_ptr<const IcebergTableMetadata> metadata_p,
+	                        IcebergFileSecret file_secret_p = {})
+	    : table_location(std::move(table_location_p)), metadata(std::move(metadata_p)),
+	      file_secret(std::move(file_secret_p)) {
 	}
 
 	string table_location;
-	IcebergTableMetadata metadata;
+	shared_ptr<const IcebergTableMetadata> metadata;
+	IcebergFileSecret file_secret;
 };
 
 class IcebergUtils {
 public:
 	//! Downloads a file fully into a string
-	static string FileToString(const string &path, FileSystem &fs);
+	static string FileToString(const OpenFileInfo &file, FileSystem &fs);
 	//! Downloads a gz file fully into a string
-	static string GzFileToString(const string &path, FileSystem &fs);
+	static string GzFileToString(const OpenFileInfo &file, FileSystem &fs);
 	//! Somewhat hacky function that allows relative paths in iceberg tables to be resolved,
 	//! used for the allow_moved_paths debug option which allows us to test with iceberg tables that
 	//! were moved without their paths updated

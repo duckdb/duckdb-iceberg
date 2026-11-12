@@ -4,6 +4,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "duckdb/common/types/timestamp.hpp"
+#include "duckdb/common/types/uuid.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "duckdb/catalog/catalog_entry/index_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
@@ -23,6 +24,7 @@
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/api/iceberg_retry.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/rest/iceberg_table_prefetch.hpp"
 #include "catalog/rest/storage/iceberg_authorization.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "catalog/rest/api/iceberg_add_snapshot.hpp"
@@ -50,7 +52,7 @@ IcebergTransactionTableState::IcebergTransactionTableState(shared_ptr<IcebergTab
 
 IcebergTransactionTableState::IcebergTransactionTableState(IcebergTable &&transaction_table_p)
     : transaction_table(make_uniq<IcebergTable>(std::move(transaction_table_p))), status(IcebergTableStatus::ALIVE) {
-	if (!transaction_table->table_metadata.GetSchemas().IsEmpty()) {
+	if (!transaction_table->GetMetadata().GetSchemas().IsEmpty()) {
 		transaction_table->InitSchemaVersions();
 	}
 }
@@ -72,7 +74,8 @@ IcebergTable &IcebergTransactionTableState::GetOrCreateTransactionInfo(IcebergTr
 }
 
 IcebergTransaction::IcebergTransaction(IcebergCatalog &ic_catalog, TransactionManager &manager, ClientContext &context)
-    : Transaction(manager, context), db(*context.db), catalog(ic_catalog), access_mode(ic_catalog.access_mode) {
+    : Transaction(manager, context), db(*context.db), catalog(ic_catalog), access_mode(ic_catalog.access_mode),
+      scan_serialization_id(UUID::GenerateRandomUUID()) {
 }
 
 IcebergTransaction::~IcebergTransaction() = default;
@@ -82,6 +85,17 @@ void IcebergTransaction::Start() {
 
 IcebergCatalog &IcebergTransaction::GetCatalog() {
 	return catalog;
+}
+
+IcebergTablePrefetch &IcebergTransaction::GetTablePrefetch(ClientContext &context) {
+	if (!table_prefetch) {
+		table_prefetch = make_uniq<IcebergTablePrefetch>(context, catalog);
+	}
+	return *table_prefetch;
+}
+
+optional_ptr<IcebergTablePrefetch> IcebergTransaction::TryGetTablePrefetch() {
+	return table_prefetch.get();
 }
 
 template <class RESTObject>
@@ -262,9 +276,9 @@ static void VerifyDeleteRetryability(const IcebergTable &table_info,
 	//! other isolation - unset (Iceberg's default is 'serializable') or an explicit 'serializable' - must
 	//! abort, since a concurrent append can add rows matching the delete predicate that a silent re-apply
 	//! would leave behind.
-	auto isolation_level = table_info.table_metadata.GetTableProperty(WRITE_DELETE_ISOLATION_LEVEL);
+	auto isolation_level = table_info.GetMetadata().GetTableProperty(WRITE_DELETE_ISOLATION_LEVEL);
 	if (StringUtil::CIEquals(isolation_level, "snapshot") &&
-	    DeleteCanReapply(table_info.table_metadata, scan_snapshot_id, tip_snapshot_id)) {
+	    DeleteCanReapply(table_info.GetMetadata(), scan_snapshot_id, tip_snapshot_id)) {
 		return;
 	}
 	throw TransactionException(
@@ -283,7 +297,7 @@ static SingleTableStagedCommit StageSingleTableCommit(DatabaseInstance &db, Iceb
 	table_change.identifier->_namespace.value = schema.namespace_items;
 	table_change.identifier->name = table_info.name;
 
-	auto &metadata = commit_state.table_info.table_metadata;
+	auto &metadata = commit_state.table_info.GetMetadata();
 	auto current_snapshot = metadata.GetLatestSnapshot();
 	auto &transaction_data = *commit_state.table_info.transaction_data;
 	transaction_data.VerifyMergeDeletesComplete();
@@ -909,6 +923,7 @@ void IcebergTransaction::CleanupFiles() {
 			//! Batched per table: the keys PrepareIcebergScanFromEntry registers below belong to this table, so
 			//! the files have to be deleted before moving on to the next one.
 			vector<string> data_files;
+			unordered_set<string> seen_paths;
 			for (auto &update : transaction_data->updates) {
 				if (update->type != IcebergTableUpdateType::ADD_SNAPSHOT) {
 					continue;
@@ -920,7 +935,11 @@ void IcebergTransaction::CleanupFiles() {
 				auto &add_snapshot = update->Cast<IcebergAddSnapshot>();
 				for (const auto &manifest : add_snapshot.GetPendingManifests()) {
 					for (const auto &manifest_entry : manifest.GetEntries()) {
-						data_files.push_back(manifest_entry.data_file.file_path);
+						// Several deletion-vector entries can reference the same physical Puffin file.
+						const auto &path = manifest_entry.data_file.file_path;
+						if (seen_paths.insert(path).second) {
+							data_files.push_back(path);
+						}
 					}
 				}
 			}

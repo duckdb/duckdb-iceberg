@@ -176,7 +176,7 @@ IcebergManifestListEntry IcebergManifestMerge::ScanManifestEntries(const Iceberg
                                                                    int32_t schema_id) {
 	vector<IcebergManifestListEntry> manifest_files;
 	manifest_files.push_back(list_entry);
-	manifest_files[0].manifest_entries.reset();
+	manifest_files[0].ResetManifestEntries();
 
 	IcebergOptions options;
 	auto &fs = FileSystem::GetFileSystem(commit_state.context);
@@ -192,6 +192,7 @@ IcebergManifestListEntry IcebergManifestMerge::ScanManifestEntries(const Iceberg
 	while (!reader->Finished()) {
 		reader->Read();
 	}
+	manifest_scan->Complete();
 	auto result = std::move(manifest_files[0]);
 	result.GetManifest().SetCountsFromEntries(result.GetManifestEntries());
 	return result;
@@ -228,7 +229,7 @@ optional<IcebergManifestListEntry> MergeBin(const vector<IcebergManifestListEntr
 		auto loaded = member.HasManifestEntries()
 		                  ? member
 		                  : IcebergManifestMerge::ScanManifestEntries(member, commit_state, schema_id);
-		auto prepared = loaded.GetFile().PrepareEntriesForRewrite(std::move(loaded.GetManifestEntries()));
+		auto prepared = loaded.GetFile().PrepareEntriesForRewrite(loaded.TakeManifestEntries());
 		for (auto &entry : prepared) {
 			merged_entries.push_back(std::move(entry));
 		}
@@ -260,6 +261,26 @@ IcebergManifestMerge::MergeManifests(vector<IcebergManifestListEntry> &&input, I
                                      IcebergCommitState &commit_state, int32_t current_schema_id) {
 	vector<IcebergManifestListEntry> result;
 	if (!config.enabled || input.size() <= 1) {
+		for (auto &member : input) {
+			result.push_back(std::move(member));
+		}
+		return result;
+	}
+
+	//! Bins never span partition specs and are merged only once they hold `min_count_to_merge` manifests,
+	//! so unless one spec has that many, nothing can merge: skip loading the entries, one GET per manifest.
+	map<int32_t, idx_t> manifests_per_spec;
+	bool can_merge = false;
+	for (auto &member : input) {
+		auto spec_id = member.GetFile().partition_spec_id;
+		auto &manifest_count = manifests_per_spec[spec_id];
+		manifest_count++;
+		if (manifest_count >= config.min_count_to_merge) {
+			can_merge = true;
+			break;
+		}
+	}
+	if (!can_merge) {
 		for (auto &member : input) {
 			result.push_back(std::move(member));
 		}

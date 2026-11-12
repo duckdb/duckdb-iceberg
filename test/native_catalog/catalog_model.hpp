@@ -14,6 +14,7 @@ using Identifier = std::pair<Namespace, string>;
 struct Reply {
 	int status;
 	Json body;
+	HTTPHeaders headers;
 };
 
 class Catalog {

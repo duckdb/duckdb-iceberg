@@ -34,27 +34,35 @@ bool IcebergDeletePlanner::DeleteEntryMatchesFilters(const IcebergDeletePlanning
 	if (!context.table_filters.HasFilters()) {
 		return true;
 	}
+	// Coverage is irrelevant for delete files; only a proven non-match can exclude one.
 	return IcebergFilePruner(context.context, context.metadata, context.schema, context.table_filters)
-	    .FileMatchesFilter(context.delete_manifests[delete_manifest_idx].entry.GetManifest(), delete_manifest_entry);
+	           .FileMatchesFilter(context.delete_manifests[delete_manifest_idx].entry.GetManifest(),
+	                              delete_manifest_entry) != IcebergMetricsMatch::ROWS_CANNOT_MATCH;
+}
+
+bool IcebergDeletePlanner::DeleteEntryMatchesDataFileReference(const IcebergDeletePlanningContext &context,
+                                                               const IcebergManifestEntry &delete_manifest_entry,
+                                                               const BoundIcebergManifestEntry &data_manifest_entry) {
+	auto &delete_file = delete_manifest_entry.data_file;
+	auto &data_file = data_manifest_entry.entry.data_file;
+	if (delete_file.referenced_data_file && *delete_file.referenced_data_file != data_file.file_path) {
+		return false;
+	}
+	return context.provider.DeleteFileAppliesToDataFile(data_file.file_path,
+	                                                    {delete_file.file_path, delete_file.content_offset});
 }
 
 bool IcebergDeletePlanner::DeleteEntryAppliesToDataFile(const IcebergDeletePlanningContext &context,
                                                         idx_t delete_manifest_idx,
                                                         const IcebergManifestEntry &delete_manifest_entry,
                                                         const BoundIcebergManifestEntry &data_manifest_entry,
-                                                        const partition_value_map_t &data_partition_values) {
-	auto &delete_file = delete_manifest_entry.data_file;
-	auto &data_file = data_manifest_entry.entry.data_file;
-	if (!context.provider.DeleteFileAppliesToDataFile(data_file.file_path,
-	                                                  {delete_file.file_path, delete_file.content_offset})) {
-		return false;
-	}
-
+                                                        const partition_value_map_t &data_partition_values,
+                                                        optional_ptr<IcebergEqualityDeleteBounds> delete_bounds) {
 	auto &delete_manifest = context.delete_manifests[delete_manifest_idx].entry.GetManifest();
 	auto &data_manifest = context.data_manifests[data_manifest_entry.manifest_file_idx].entry.GetManifest();
 	return IcebergFilePruner(context.context, context.metadata, context.schema, context.table_filters)
 	    .DeleteFileMatchesDataFile(delete_manifest, delete_manifest_entry, data_manifest, data_manifest_entry.entry,
-	                               data_partition_values);
+	                               data_partition_values, delete_bounds);
 }
 
 } // namespace duckdb

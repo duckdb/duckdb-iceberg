@@ -1,0 +1,174 @@
+# name: test/sql/local/native_catalog/load_table_etag_transactions.test
+# description: Writes after ETag revalidation preserve transaction state and invalidate the right cached response
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+require-env STAGED_CREATE_SUPPORT
+
+include test/sql/init_requires
+
+require json
+
+# Zero staleness still enables write/conflict cache eviction. Cross the expiry
+# millisecond before each transaction that must contact the catalog.
+statement ok
+ATTACH OR REPLACE '' AS my_datalake (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none', STAGE_CREATE_TABLES true,
+	MAX_TABLE_STALENESS '0 seconds');
+
+statement ok
+CREATE MACRO etag_write_response(payload, tag, status_code := 200) AS TABLE
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	json_object('method', 'GET', 'path', '/v1/namespaces/default/tables/etag_write',
+		'status', status_code, 'body', payload::JSON, 'headers', json_object('ETag', tag))::VARCHAR);
+
+statement ok
+CALL enable_logging('HTTP', storage='memory');
+
+statement ok
+SET redact_http_logs = false;
+
+foreach completion commit rollback conflict
+
+statement ok
+CREATE TABLE my_datalake.default.etag_write (id INTEGER) WITH ('commit.retry.num-retries' = '0');
+
+statement ok
+INSERT INTO my_datalake.default.etag_write VALUES (1);
+
+statement ok
+SET VARIABLE original_response = (
+	SELECT body::JSON FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/etag_write', NULL)
+);
+
+query I
+SELECT * FROM etag_write_response(getvariable('original_response'), '"before-write"');
+----
+204
+
+sleep 1 milliseconds
+
+query I
+SELECT id FROM my_datalake.default.etag_write;
+----
+1
+
+query I
+SELECT * FROM etag_write_response(NULL, '"before-write"', status_code := 304);
+----
+204
+
+statement ok
+CALL truncate_duckdb_logs();
+
+sleep 1 milliseconds
+
+statement ok
+BEGIN;
+
+query I
+SELECT id FROM my_datalake.default.etag_write;
+----
+1
+
+statement ok
+INSERT INTO my_datalake.default.etag_write VALUES (2);
+
+# Reading our writes must use transaction-local state, not the shared 304 payload.
+query I
+SELECT id FROM my_datalake.default.etag_write ORDER BY id;
+----
+1
+2
+
+query II
+SELECT request.headers['If-None-Match'], response.status
+FROM duckdb_logs_parsed('HTTP')
+WHERE request.type = 'GET' AND request.url LIKE '%/tables/etag_write';
+----
+"before-write"	NotModified_304
+
+# The native catalog advertises atomic multi-table commits.
+onlyif completion=conflict
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	'{"method":"POST","path":"/v1/transactions/commit","status":409,"body":{"error":{"message":"ETag write conflict","type":"CommitFailedException","code":409}}}');
+----
+204
+
+onlyif completion=commit
+statement ok
+COMMIT;
+
+onlyif completion=rollback
+statement ok
+ROLLBACK;
+
+onlyif completion=conflict
+statement error
+COMMIT;
+----
+ETag write conflict
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+# Obtain the actual committed state. The rollback and failed-commit cases never
+# publish the inserted row to the server.
+statement ok
+SET VARIABLE final_response = (
+	SELECT body::JSON FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/etag_write', NULL)
+);
+
+query I
+SELECT * FROM etag_write_response(getvariable('final_response'), '"after-write"');
+----
+204
+
+statement ok
+CALL truncate_duckdb_logs();
+
+sleep 1 milliseconds
+
+query I
+SELECT count(*) = CASE WHEN '{completion}' = 'commit' THEN 2 ELSE 1 END
+FROM my_datalake.default.etag_write;
+----
+true
+
+# Both a successful write and a failed commit evict the validated payload.
+# A rollback leaves the unchanged server response available for revalidation.
+query I
+SELECT CASE WHEN '{completion}' = 'rollback'
+	THEN request.headers['If-None-Match'] = '"before-write"'
+	ELSE request.headers['If-None-Match'] IS NULL END
+FROM duckdb_logs_parsed('HTTP')
+WHERE request.type = 'GET' AND request.url LIKE '%/tables/etag_write';
+----
+true
+
+query I
+SELECT * FROM etag_write_response(NULL, '"after-write"', status_code := 304);
+----
+204
+
+sleep 1 milliseconds
+
+query I
+SELECT count(*) = CASE WHEN '{completion}' = 'commit' THEN 2 ELSE 1 END
+FROM my_datalake.default.etag_write;
+----
+true
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+statement ok
+DROP TABLE my_datalake.default.etag_write;
+
+endloop

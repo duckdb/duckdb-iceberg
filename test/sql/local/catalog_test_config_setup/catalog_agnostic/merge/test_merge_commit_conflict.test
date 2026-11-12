@@ -1,0 +1,103 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/merge/test_merge_commit_conflict.test
+# description: A MERGE that loses a commit race fails instead of being re-applied to the new snapshot
+# group: [merge]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+# Do not ignore 'HTTP' / conflict error messages!
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.merge_conflict;
+
+statement ok
+CREATE TABLE my_datalake.default.merge_conflict (k VARCHAR, v INTEGER);
+
+statement ok
+INSERT INTO my_datalake.default.merge_conflict VALUES ('other', 0);
+
+# Both MERGEs read the table before either commits, so neither sees key K
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+MERGE INTO my_datalake.default.merge_conflict t USING (SELECT 'K' AS k, 1 AS v) s ON t.k = s.k
+WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.v);
+
+statement ok con2
+MERGE INTO my_datalake.default.merge_conflict t USING (SELECT 'K' AS k, 2 AS v) s ON t.k = s.k
+WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.v);
+
+statement ok con2
+COMMIT
+
+# Re-applying con1's insert on top of con2's commit would add K a second time
+statement error con1
+COMMIT
+----
+<REGEX>:.*(Conflict|conflict|409).*
+
+query II
+SELECT k, v FROM my_datalake.default.merge_conflict ORDER BY k;
+----
+K	2
+other	0
+
+# The same with a WHEN MATCHED clause that matches nothing
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+MERGE INTO my_datalake.default.merge_conflict t USING (SELECT 'L' AS k, 1 AS v) s ON t.k = s.k
+WHEN MATCHED THEN UPDATE SET v = s.v WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.v);
+
+statement ok con2
+MERGE INTO my_datalake.default.merge_conflict t USING (SELECT 'L' AS k, 2 AS v) s ON t.k = s.k
+WHEN MATCHED THEN UPDATE SET v = s.v WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.v);
+
+statement ok con2
+COMMIT
+
+statement error con1
+COMMIT
+----
+<REGEX>:.*(Conflict|conflict|409).*
+
+query I
+SELECT count(*) FROM my_datalake.default.merge_conflict WHERE k = 'L';
+----
+1
+
+# Concurrent plain INSERTs are still retried
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+INSERT INTO my_datalake.default.merge_conflict VALUES ('M', 1);
+
+statement ok con2
+INSERT INTO my_datalake.default.merge_conflict VALUES ('M', 2);
+
+statement ok con2
+COMMIT
+
+statement ok con1
+COMMIT
+
+query I
+SELECT count(*) FROM my_datalake.default.merge_conflict WHERE k = 'M';
+----
+2
+
+statement ok
+DROP TABLE my_datalake.default.merge_conflict;

@@ -27,7 +27,7 @@ static void LoadMissingManifestCounts(ClientContext &context, const IcebergTable
 	}
 	vector<IcebergManifestListEntry> manifest_files;
 	manifest_files.push_back(manifest_list_entry);
-	manifest_files[0].manifest_entries.reset();
+	manifest_files[0].ResetManifestEntries();
 
 	IcebergOptions options;
 	auto &fs = FileSystem::GetFileSystem(context);
@@ -36,6 +36,7 @@ static void LoadMissingManifestCounts(ClientContext &context, const IcebergTable
 	while (!reader->Finished()) {
 		reader->Read();
 	}
+	scan->Complete();
 
 	manifest_list_entry = std::move(manifest_files[0]);
 	manifest_list_entry.GetManifest().SetCountsFromEntries(manifest_list_entry.GetManifestEntries());
@@ -82,19 +83,19 @@ static optional<int64_t> LoadExistingManifestList(ClientContext &context, const 
 IcebergTransactionData::IcebergTransactionData(ClientContext &context, IcebergTransaction &transaction,
                                                const IcebergTable &table_info)
     : context(context), transaction(transaction), table_info(table_info) {
-	initial_table_uuid = table_info.table_metadata.table_uuid;
-	initial_format_version = table_info.table_metadata.iceberg_version;
-	initial_schema_id = table_info.table_metadata.GetCurrentSchemaId();
-	initial_default_spec_id = table_info.table_metadata.default_spec_id;
-	if (table_info.table_metadata.HasSortOrder()) {
-		initial_default_sort_order_id = table_info.table_metadata.default_sort_order_id;
+	initial_table_uuid = table_info.GetMetadata().table_uuid;
+	initial_format_version = table_info.GetMetadata().iceberg_version;
+	initial_schema_id = table_info.GetMetadata().GetCurrentSchemaId();
+	initial_default_spec_id = table_info.GetMetadata().default_spec_id;
+	if (table_info.GetMetadata().HasSortOrder()) {
+		initial_default_sort_order_id = table_info.GetMetadata().default_sort_order_id;
 	}
 }
 
 int64_t IcebergTransactionData::GetCommitRetryCount() const {
 	static constexpr const int64_t DEFAULT_RETRY_COUNT = 4;
-	auto it = table_info.table_metadata.table_properties.find("commit.retry.num-retries");
-	if (it == table_info.table_metadata.table_properties.end()) {
+	auto it = table_info.GetMetadata().table_properties.find("commit.retry.num-retries");
+	if (it == table_info.GetMetadata().table_properties.end()) {
 		return DEFAULT_RETRY_COUNT;
 	}
 	int64_t result;
@@ -130,7 +131,13 @@ bool IcebergTransactionData::ContainsDelete() const {
 }
 
 bool IcebergTransactionData::IsFileInvalidated(const IcebergFileIdentity &file) const {
+	lock_guard<mutex> guard(lock);
 	return manifest_deletes.IsInvalidated(file);
+}
+
+bool IcebergTransactionData::HasInvalidatedFiles() const {
+	lock_guard<mutex> guard(lock);
+	return !manifest_deletes.IsEmpty();
 }
 
 shared_ptr<IcebergMergeDeleteCollector> IcebergTransactionData::GetMergeDeleteCollector(idx_t action_count) {
@@ -156,6 +163,11 @@ bool IcebergTransactionData::SupportsAppendRetry() const {
 	if (!requirements.empty()) {
 		return false;
 	}
+	//! A MERGE that only inserts commits a plain append, but its WHEN NOT MATCHED rows were chosen against the
+	//! snapshot it read. Re-applying them on top of a concurrent commit could insert rows that now match.
+	if (contains_merge) {
+		return false;
+	}
 	if (updates.empty()) {
 		return false;
 	}
@@ -168,20 +180,20 @@ bool IcebergTransactionData::SupportsAppendRetry() const {
 }
 
 bool IcebergTransactionData::RetryStateMatches(const IcebergTable &table) const {
-	if (table.table_metadata.table_uuid != initial_table_uuid) {
+	if (table.GetMetadata().table_uuid != initial_table_uuid) {
 		return false;
 	}
-	if (table.table_metadata.GetCurrentSchemaId() != initial_schema_id) {
+	if (table.GetMetadata().GetCurrentSchemaId() != initial_schema_id) {
 		return false;
 	}
-	if (table.table_metadata.default_spec_id != initial_default_spec_id) {
+	if (table.GetMetadata().default_spec_id != initial_default_spec_id) {
 		return false;
 	}
-	if (table.table_metadata.HasSortOrder() != initial_default_sort_order_id.IsValid()) {
+	if (table.GetMetadata().HasSortOrder() != initial_default_sort_order_id.IsValid()) {
 		return false;
 	}
-	if (table.table_metadata.HasSortOrder() &&
-	    table.table_metadata.default_sort_order_id.GetIndex() != initial_default_sort_order_id.GetIndex()) {
+	if (table.GetMetadata().HasSortOrder() &&
+	    table.GetMetadata().default_sort_order_id.GetIndex() != initial_default_sort_order_id.GetIndex()) {
 		return false;
 	}
 	return true;
@@ -192,7 +204,7 @@ void IcebergTransactionData::CacheExistingManifestList(lock_guard<mutex> &guard,
 		return;
 	}
 	base_snapshot_id = LoadExistingManifestList(context, metadata, existing_manifest_list);
-	scan_sequence_number = metadata.last_sequence_number + 1;
+	scan_sequence_number = IcebergSnapshot::NextSequenceNumber(metadata.last_sequence_number);
 }
 
 void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
@@ -201,13 +213,14 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 	//! Serialize snapshot operations so transaction scans retain their insertion order.
 	lock_guard<mutex> guard(lock);
 
-	auto &table_metadata = table_info.table_metadata;
+	auto &table_metadata = table_info.GetMetadata();
 	CacheExistingManifestList(guard, table_metadata);
 
 	IcebergManifestContentType manifest_content_type;
 	switch (operation) {
 	case IcebergSnapshotOperationType::APPEND:
 	case IcebergSnapshotOperationType::REPLACE:
+	case IcebergSnapshotOperationType::OVERWRITE:
 		//! This helper currently writes DATA manifest entries; REPLACE itself is not limited to data files.
 		manifest_content_type = IcebergManifestContentType::DATA;
 		break;
@@ -218,7 +231,10 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 
 	auto manifest_metadata = IcebergManifestMetadata::FromTableMetadata(table_metadata, manifest_content_type);
 	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info, operation);
-	add_snapshot->AddPendingManifest(IcebergPendingManifest(manifest_metadata, std::move(data_files)));
+	//! A REPLACE may only remove fully deleted input files, without adding any data files.
+	if (!data_files.empty()) {
+		add_snapshot->AddPendingManifest(IcebergPendingManifest(manifest_metadata, std::move(data_files)));
+	}
 	// make sure we are still inserting into the current schema
 	if (table_metadata.current_snapshot_id) {
 		TableAddAssertCurrentSchemaId();
@@ -228,7 +244,7 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
 
 void IcebergTransactionData::AddPendingDeleteManifests(IcebergAddSnapshot &add_snapshot,
                                                        partitioned_manifest_entry_map_t &&delete_files) {
-	auto &table_metadata = table_info.table_metadata;
+	auto &table_metadata = table_info.GetMetadata();
 	//! One manifest per partition spec: a manifest declares a single spec, and the entries it holds carry
 	//! partition values in that spec.
 	for (auto &entry : delete_files) {
@@ -238,12 +254,21 @@ void IcebergTransactionData::AddPendingDeleteManifests(IcebergAddSnapshot &add_s
 	}
 }
 
-void IcebergTransactionData::AddSnapshotUpdate(unique_ptr<IcebergAddSnapshot> add_snapshot,
-                                               IcebergManifestDeletes &&altered_manifests, bool merge_action) {
+void IcebergTransactionData::VerifyCanAddSnapshot() const {
 	if (rolls_back) {
 		throw InvalidInputException("Cannot change table \"%s\" after rolling it back in the same transaction",
 		                            table_info.name);
 	}
+	if (has_maintenance_rewrite) {
+		throw InvalidInputException("Cannot change table \"%s\" after rewriting its data files in the same transaction",
+		                            table_info.name);
+	}
+}
+
+void IcebergTransactionData::AddSnapshotUpdate(unique_ptr<IcebergAddSnapshot> add_snapshot,
+                                               IcebergManifestDeletes &&altered_manifests, bool merge_action) {
+	VerifyCanAddSnapshot();
+	contains_merge |= merge_action;
 	// All action sinks share this execution's query ID; a later statement gets a different ID.
 	auto query_id = transaction.active_query.load();
 	if (merge_action && merge_query_id && *merge_query_id == query_id) {
@@ -276,7 +301,7 @@ void IcebergTransactionData::AddDeleteSnapshot(partitioned_manifest_entry_map_t 
 	//! Serialize snapshot operations so transaction scans retain their insertion order.
 	lock_guard<mutex> guard(lock);
 
-	auto &table_metadata = table_info.table_metadata;
+	auto &table_metadata = table_info.GetMetadata();
 	CacheExistingManifestList(guard, table_metadata);
 
 	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info, IcebergSnapshotOperationType::DELETE);
@@ -294,7 +319,7 @@ void IcebergTransactionData::AddUpdateSnapshot(partitioned_manifest_entry_map_t 
 	//! Serialize snapshot operations so transaction scans retain their insertion order.
 	lock_guard<mutex> guard(lock);
 
-	auto &table_metadata = table_info.table_metadata;
+	auto &table_metadata = table_info.GetMetadata();
 
 	CacheExistingManifestList(guard, table_metadata);
 
@@ -308,8 +333,8 @@ void IcebergTransactionData::AddUpdateSnapshot(partitioned_manifest_entry_map_t 
 }
 
 void IcebergTransactionData::TableAddSchema(int32_t schema_id) {
-	auto &schema = table_info.table_metadata.GetSchemaFromId(schema_id);
-	auto add_schema_update = make_uniq<AddSchemaUpdate>(schema.Copy(), table_info.table_metadata.last_column_id);
+	auto &schema = table_info.GetMetadata().GetSchemaFromId(schema_id);
+	auto add_schema_update = make_uniq<AddSchemaUpdate>(schema.Copy(), table_info.GetMetadata().last_column_id);
 	updates.push_back(std::move(add_schema_update));
 	assert_schema_id = true;
 	TableSetCurrentSchema(schema_id);
@@ -321,7 +346,7 @@ void IcebergTransactionData::TableSetCurrentSchema(int32_t schema_id) {
 }
 
 void IcebergTransactionData::TableAssignUUID() {
-	updates.push_back(make_uniq<AssignUUIDUpdate>(table_info.table_metadata.table_uuid));
+	updates.push_back(make_uniq<AssignUUIDUpdate>(table_info.GetMetadata().table_uuid));
 }
 
 void IcebergTransactionData::TableAddAssertCreate() {
@@ -333,7 +358,7 @@ void IcebergTransactionData::TableAddAssertCreate() {
 }
 
 void IcebergTransactionData::TableAddAssertUUID() {
-	requirements.push_back(make_uniq<AssertTableUUIDRequirement>(table_info.table_metadata.table_uuid));
+	requirements.push_back(make_uniq<AssertTableUUIDRequirement>(table_info.GetMetadata().table_uuid));
 }
 
 void IcebergTransactionData::TableAddAssertCurrentSchemaId() {
@@ -341,42 +366,42 @@ void IcebergTransactionData::TableAddAssertCurrentSchemaId() {
 }
 
 void IcebergTransactionData::TableAddAssertLastAssignedFieldId() {
-	D_ASSERT(table_info.table_metadata.HasLastColumnId());
+	D_ASSERT(table_info.GetMetadata().HasLastColumnId());
 	requirements.push_back(make_uniq<AssertLastAssignedFieldIdRequirement>(
-	    static_cast<int32_t>(table_info.table_metadata.GetLastColumnId())));
+	    static_cast<int32_t>(table_info.GetMetadata().GetLastColumnId())));
 }
 
 void IcebergTransactionData::TableAddAssertLastAssignedPartitionId() {
 	int32_t last_assigned_partition_id = 999;
-	if (table_info.table_metadata.HasLastPartitionId()) {
-		last_assigned_partition_id = table_info.table_metadata.GetLastPartitionFieldId();
+	if (table_info.GetMetadata().HasLastPartitionId()) {
+		last_assigned_partition_id = table_info.GetMetadata().GetLastPartitionFieldId();
 	}
 	requirements.push_back(make_uniq<AssertLastAssignedPartitionIdRequirement>(last_assigned_partition_id));
 }
 
 void IcebergTransactionData::TableAddAssertDefaultSpecId() {
-	requirements.push_back(make_uniq<AssertDefaultSpecIdRequirement>(table_info.table_metadata.default_spec_id));
+	requirements.push_back(make_uniq<AssertDefaultSpecIdRequirement>(table_info.GetMetadata().default_spec_id));
 }
 
 void IcebergTransactionData::TableAddUpradeFormatVersion() {
-	updates.push_back(make_uniq<UpgradeFormatVersion>(table_info.table_metadata.iceberg_version));
+	updates.push_back(make_uniq<UpgradeFormatVersion>(table_info.GetMetadata().iceberg_version));
 }
 
 void IcebergTransactionData::TableAddPartitionSpec() {
-	updates.push_back(make_uniq<AddPartitionSpec>(table_info.table_metadata.GetLatestPartitionSpec()));
+	updates.push_back(make_uniq<AddPartitionSpec>(table_info.GetMetadata().GetLatestPartitionSpec()));
 }
 
 void IcebergTransactionData::TableAddSortOrder() {
-	updates.push_back(make_uniq<AddSortOrder>(table_info.table_metadata.GetLatestSortOrder()));
+	updates.push_back(make_uniq<AddSortOrder>(table_info.GetMetadata().GetLatestSortOrder()));
 }
 
 void IcebergTransactionData::TableSetDefaultSortOrder() {
-	D_ASSERT(table_info.table_metadata.HasSortOrder());
-	updates.push_back(make_uniq<SetDefaultSortOrder>(table_info.table_metadata.GetLatestSortOrder().sort_order_id));
+	D_ASSERT(table_info.GetMetadata().HasSortOrder());
+	updates.push_back(make_uniq<SetDefaultSortOrder>(table_info.GetMetadata().GetLatestSortOrder().sort_order_id));
 }
 
 void IcebergTransactionData::TableSetDefaultSpec() {
-	updates.push_back(make_uniq<SetDefaultSpec>(table_info.table_metadata.default_spec_id));
+	updates.push_back(make_uniq<SetDefaultSpec>(table_info.GetMetadata().default_spec_id));
 }
 
 void IcebergTransactionData::TableSetProperties(const case_insensitive_map_t<string> &properties) {
@@ -391,7 +416,7 @@ void IcebergTransactionData::TableRemoveProperties(const vector<string> &propert
 }
 
 void IcebergTransactionData::TableSetLocation() {
-	updates.push_back(make_uniq<SetLocation>(table_info.table_metadata.location));
+	updates.push_back(make_uniq<SetLocation>(table_info.GetMetadata().location));
 }
 
 static bool IsAncestorOfCurrentSnapshot(const IcebergTableMetadata &metadata, int64_t target_snapshot_id,
@@ -419,7 +444,7 @@ void IcebergTransactionData::TableRollbackToSnapshot(int64_t snapshot_id) {
 		throw InvalidInputException("Cannot roll back table \"%s\": it was already changed in this transaction",
 		                            table_info.name);
 	}
-	auto &metadata = table_info.table_metadata;
+	auto &metadata = table_info.GetMetadata();
 	auto target = metadata.FindSnapshotByIdInternal(snapshot_id);
 	if (!target) {
 		throw InvalidInputException("Cannot roll back to unknown snapshot id: %lld", snapshot_id);

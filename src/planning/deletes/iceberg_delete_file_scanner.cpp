@@ -66,7 +66,9 @@ static void ScanPuffinFile(const IcebergDeleteExecutionContext &context, const I
 
 	FileOpenFlags flags = FileFlags::FILE_FLAGS_READ;
 	flags.SetCachingMode(CachingMode::CACHE_REMOTE_ONLY);
-	auto file_handle = context.fs.OpenFile(puffin_path, flags);
+	auto puffin_file = OpenFileInfo(puffin_path);
+	context.file_secret.Apply(puffin_file);
+	auto file_handle = context.fs.OpenFile(puffin_file, flags);
 	if (!data_file.content_offset) {
 		throw InvalidConfigurationException("Puffin delete file is missing 'content_offset");
 	}
@@ -101,16 +103,20 @@ static void ScanPuffinFile(const IcebergDeleteExecutionContext &context, const I
 	    {data_file.file_path, data_file.content_offset}, local_buffer.get(), length);
 }
 
-static optional_ptr<IcebergPositionalDeleteData>
-TryGetOrCreatePositionDeletes(position_delete_map_t &deletes, const string &source_file, const string &file_path) {
+static optional_ptr<IcebergPositionalDeleteData> TryGetOrCreatePositionDeletes(position_delete_map_t &deletes,
+                                                                               const IcebergDeleteFile &delete_file,
+                                                                               const string &file_path) {
 	auto it = deletes.find(file_path);
 	if (it == deletes.end()) {
-		it = deletes.emplace(file_path, make_shared_ptr<IcebergPositionalDeleteData>(source_file)).first;
-	} else if (it->second->type == IcebergDeleteType::POSITIONAL_DELETE) {
-		it->second->source_files.push_back(source_file);
+		it = deletes.emplace(file_path, make_shared_ptr<IcebergPositionalDeleteData>()).first;
 	}
 	if (it->second->type != IcebergDeleteType::POSITIONAL_DELETE) {
 		return nullptr;
+	}
+	// A deletion vector written for this data file supersedes a file-scoped delete file. A partition-scoped one
+	// (no referenced_data_file) may still apply to other data files and stays live.
+	if (delete_file.referenced_data_file) {
+		it->second->source_files.push_back(delete_file.file_path);
 	}
 	return reinterpret_cast<IcebergPositionalDeleteData &>(*it->second);
 }
@@ -127,7 +133,7 @@ static void ScanPositionalDeleteFile(const IcebergDeleteExecutionContext &contex
 	reference<const string_t> current_file_path = names[0];
 	auto initial_key = current_file_path.get().GetString();
 	auto &positional_delete_data = scan_entry.load->positional_deletes;
-	auto deletes = TryGetOrCreatePositionDeletes(positional_delete_data, data_file.file_path, initial_key);
+	auto deletes = TryGetOrCreatePositionDeletes(positional_delete_data, data_file, initial_key);
 	DUCKDB_LOG(context.context, IcebergLogType,
 	           "Iceberg Delete Scan, read 'positional_delete_file': '%s', referencing 'data_file': '%s'",
 	           data_file.file_path, initial_key);
@@ -140,7 +146,7 @@ static void ScanPositionalDeleteFile(const IcebergDeleteExecutionContext &contex
 			DUCKDB_LOG(context.context, IcebergLogType,
 			           "Iceberg Delete Scan, read 'positional_delete_file': '%s', referencing 'data_file': '%s'",
 			           data_file.file_path, key);
-			deletes = TryGetOrCreatePositionDeletes(positional_delete_data, data_file.file_path, key);
+			deletes = TryGetOrCreatePositionDeletes(positional_delete_data, data_file, key);
 		}
 		if (deletes) {
 			deletes->AddRow(row_ids[i]);
@@ -278,6 +284,7 @@ static void ScanParquetDeleteFiles(const IcebergDeleteExecutionContext &context,
 		delete_file_infos.emplace_back(delete_file_path);
 		auto &file_info = delete_file_infos.back();
 		file_info.extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
+		context.file_secret.Apply(file_info);
 		file_info.extended_info->options["file_size"] = Value::UBIGINT(data_file.file_size_in_bytes);
 		file_info.extended_info->options["validate_external_file_cache"] = Value::BOOLEAN(false);
 		file_info.extended_info->options["etag"] = Value("");
@@ -492,11 +499,29 @@ IcebergDeletePlan IcebergDeleteExecutionState::ProcessDeletes(const IcebergDelet
 			assembled = position;
 		}
 	}
-	if (!assembled && positions.size() == 1) {
+	if (assembled) {
+		// Older writers may have left file-scoped position deletes live alongside the vector.
+		// The vector remains authoritative for rows, but its replacement also supersedes those files.
+		// Copy only when adding sources: descriptor loads are immutable and may be shared by scan tasks.
+		shared_ptr<IcebergDeletionVectorData> combined;
+		for (auto &position : positions) {
+			if (position->type != IcebergDeleteType::POSITIONAL_DELETE || position->source_files.empty()) {
+				continue;
+			}
+			if (!combined) {
+				combined = make_shared_ptr<IcebergDeletionVectorData>(
+				    static_cast<const IcebergDeletionVectorData &>(*assembled));
+			}
+			combined->source_files.insert(combined->source_files.end(), position->source_files.begin(),
+			                              position->source_files.end());
+		}
+		if (combined) {
+			assembled = std::move(combined);
+		}
+	} else if (positions.size() == 1) {
 		assembled = positions[0];
-	} else if (!assembled && !positions.empty()) {
-		auto combined = make_shared_ptr<IcebergPositionalDeleteData>(positions[0]->source_files[0]);
-		combined->source_files.clear();
+	} else if (!positions.empty()) {
+		auto combined = make_shared_ptr<IcebergPositionalDeleteData>();
 		for (auto &position : positions) {
 			auto &source = static_cast<const IcebergPositionalDeleteData &>(*position);
 			combined->MergeRows(source);

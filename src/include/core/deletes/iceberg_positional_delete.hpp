@@ -8,8 +8,8 @@ namespace duckdb {
 
 struct IcebergPositionalDeleteData : public enable_shared_from_this<IcebergPositionalDeleteData>, IcebergDeleteData {
 public:
-	IcebergPositionalDeleteData(const IcebergFileIdentity &file)
-	    : IcebergDeleteData(IcebergDeleteType::POSITIONAL_DELETE, file),
+	IcebergPositionalDeleteData()
+	    : IcebergDeleteData(IcebergDeleteType::POSITIONAL_DELETE),
 	      invalid_rows(roaring::api::roaring64_bitmap_create(), roaring::api::roaring64_bitmap_free) {
 		if (!invalid_rows) {
 			throw OutOfMemoryException("Failed to allocate Iceberg positional delete bitmap");

@@ -55,7 +55,7 @@ Invalid default length
 
 endloop
 
-# A zero or negative length is well-formed but rejected by the type itself.
+# Invalid lengths in metadata must not surface as errors in the SQL type constructor.
 foreach fixed_type fixed[0] fixed[-1]
 
 statement ok
@@ -67,6 +67,6 @@ COPY (
 statement error
 SELECT * FROM iceberg_scan('{TEST_DIR}/invalid_fixed.metadata.json');
 ----
-length must be a positive integer
+Invalid Configuration Error: Invalid fixed type length
 
 endloop

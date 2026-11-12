@@ -123,7 +123,18 @@ static vector<idx_t> GetColumnPath(const ColumnIndex &column_index) {
 static ColumnIndex GetColumnIndexBySourceId(const IcebergTableSchema &schema, idx_t source_id) {
 	auto column_index = schema.TryGetColumnIndexByFieldId(source_id);
 	if (!column_index) {
-		throw InvalidInputException("Partition source column with id %d not found in schema", source_id);
+		throw InvalidConfigurationException("Partition/sort source column with id %d not found in schema", source_id);
+	}
+	const auto *column = schema.columns[column_index->GetPrimaryIndex()].get();
+	for (auto &child_index : column_index->GetChildIndexes()) {
+		if (column->type.id() != LogicalTypeId::STRUCT) {
+			throw InvalidConfigurationException("Partition/sort source id %d is nested inside a list or map",
+			                                    source_id);
+		}
+		column = column->GetChild(child_index.GetPrimaryIndex()).get();
+	}
+	if (column->type.IsNested()) {
+		throw InvalidConfigurationException("Partition/sort source id %d must refer to a primitive column", source_id);
 	}
 	return *column_index;
 }
@@ -207,7 +218,7 @@ static Value GetWrittenFieldIdValue(const IcebergColumnDefinition &column) {
 //! computed partition value instead.
 static bool CanWriteIdentityPartitionsDirectly(const IcebergPartitionSpec &spec, const IcebergTableSchema &schema) {
 	for (auto &field : spec.fields) {
-		if (field.transform.Type() == IcebergTransformType::VOID) {
+		if (field.transform.Type() == IcebergTransformType::VOID_TRANSFORM) {
 			continue;
 		}
 		if (field.transform.Type() != IcebergTransformType::IDENTITY) {
@@ -315,7 +326,7 @@ void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, Data
                                     optional_ptr<TableCatalogEntry> table) {
 	D_ASSERT(table);
 	auto &ic_table = table->Cast<IcebergTableSchemaVersion>();
-	auto &table_metadata = ic_table.table_info.table_metadata;
+	auto &table_metadata = ic_table.table_info.GetMetadata();
 	global_state.AddFiles(chunk, ic_table.name.GetIdentifierName(), table_metadata);
 }
 
@@ -349,8 +360,7 @@ SinkResultType IcebergInsert::Sink(ExecutionContext &context, DataChunk &chunk, 
 SourceResultType IcebergInsert::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
                                                 OperatorSourceInput &input) const {
 	auto &global_state = sink_state->Cast<IcebergInsertGlobalState>();
-	auto value = Value::BIGINT(global_state.insert_count);
-	chunk.data[0].Append(value);
+	chunk.data[0].Append(Value::BIGINT(global_state.insert_count));
 	chunk.SetChildCardinality(1);
 	return SourceResultType::FINISHED;
 }
@@ -392,7 +402,7 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 		}
 		if (delete_global_state.merge_deletes) {
 			// Replacement files are now staged; even an empty UPDATE must complete its collector participant.
-			update_delete_op->Cast<IcebergDelete>().FinalizeMergeDeletes(context, delete_global_state);
+			update_delete_op->Cast<IcebergDelete>().ScheduleDeletes(pipeline, event, delete_global_state, true);
 		}
 	} else {
 		// Stage an INSERT statement or a MERGE insert action; the latter may join an overwrite snapshot.
@@ -547,7 +557,7 @@ static unique_ptr<Expression> GetTransformExpression(ClientContext &context, con
 		return GetBucketExpression(context, copy_input, source_id, transform);
 	case IcebergTransformType::TRUNCATE:
 		return GetTruncateExpression(context, copy_input, source_id, transform);
-	case IcebergTransformType::VOID:
+	case IcebergTransformType::VOID_TRANSFORM:
 		throw InvalidInputException("VOID partition transform should not be used for %s", usage);
 	default:
 		throw NotImplementedException("Unsupported %s transform type", usage);
@@ -727,7 +737,7 @@ static IcebergWriteLayout BuildWriteLayout(ClientContext &context, const Iceberg
 	if (CanWriteIdentityPartitionsDirectly(spec, schema)) {
 		// All transforms are identity: partition on the written columns themselves.
 		for (auto &field : spec.fields) {
-			if (field.transform.Type() == IcebergTransformType::VOID) {
+			if (field.transform.Type() == IcebergTransformType::VOID_TRANSFORM) {
 				continue;
 			}
 			auto schema_idx = GetColumnIndexBySourceId(schema, field.source_id).GetPrimaryIndex();
@@ -739,7 +749,7 @@ static IcebergWriteLayout BuildWriteLayout(ClientContext &context, const Iceberg
 	// Otherwise every field, identity included, becomes a computed column at the end of the chunk: the copy
 	// operator routes rows by it and strips it before writing.
 	for (auto &field : spec.fields) {
-		if (field.transform.Type() == IcebergTransformType::VOID) {
+		if (field.transform.Type() == IcebergTransformType::VOID_TRANSFORM) {
 			continue;
 		}
 		IcebergWriteColumn write_column;
@@ -1109,7 +1119,7 @@ PhysicalOperator &IcebergCatalog::PlanInsert(ClientContext &context, PhysicalPla
 
 	auto &alter = irc_transaction.GetOrCreateAlter();
 	auto &updated_table = alter.GetOrInitializeTable(table_entry.table_info);
-	auto &table_metadata = updated_table.table_metadata;
+	auto &table_metadata = updated_table.GetMetadata();
 	if (table_metadata.iceberg_version < 2) {
 		throw NotImplementedException("Insert into Iceberg V%d tables", table_metadata.iceberg_version);
 	}

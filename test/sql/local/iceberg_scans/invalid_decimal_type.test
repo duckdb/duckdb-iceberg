@@ -1,0 +1,33 @@
+# name: test/sql/local/iceberg_scans/invalid_decimal_type.test
+# description: a malformed decimal type string in the metadata.json is refused with an error
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+foreach invalid_case decimal_missing_scale decimal_not_numeric
+
+statement error
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/invalid_decimal_type/metadata/{invalid_case}.metadata.json');
+----
+<REGEX>:.*Invalid decimal type "decimal\(.*\)" - (expected decimal\(precision, scale\)|precision and scale must be numbers).*
+
+endloop
+
+foreach invalid_case decimal_too_wide decimal_zero_precision decimal_scale_exceeds_precision
+
+statement error
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/invalid_decimal_type/metadata/{invalid_case}.metadata.json');
+----
+<REGEX>:.*Invalid decimal type "decimal\(.*\)" - precision must be between 1 and 38 and scale between 0 and the precision.*
+
+statement error
+SELECT * FROM iceberg_metadata('{WORKING_DIRECTORY}/data/persistent/invalid_decimal_type/metadata/{invalid_case}.metadata.json');
+----
+<REGEX>:.*Invalid decimal type "decimal\(.*\)" - precision must be between 1 and 38.*
+
+endloop
+
+query I
+SELECT typeof(d) FROM (SELECT d FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/invalid_decimal_type/metadata/decimal_max_precision.metadata.json') UNION ALL SELECT NULL) LIMIT 1;
+----
+DECIMAL(38,38)
