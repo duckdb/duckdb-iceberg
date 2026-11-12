@@ -1,0 +1,90 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/partitioning/partition_field_names_evolution.test
+# description: Name validation uses recycled partition fields after schema evolution
+# group: [partitioning]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.partition_names_evolution;
+
+statement ok
+CREATE TABLE my_datalake.default.partition_names_evolution (
+	ts TIMESTAMP, renamed_day INTEGER
+) PARTITIONED BY (day(ts)) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.partition_names_evolution VALUES (TIMESTAMP '2024-01-02 03:00:00', 7);
+
+statement ok
+ALTER TABLE my_datalake.default.partition_names_evolution RENAME COLUMN ts TO renamed;
+
+# The generated name renamed_day conflicts with a column, but the recycled name
+# ts_day does not. Validate the names that will actually be committed.
+statement ok
+ALTER TABLE my_datalake.default.partition_names_evolution
+SET PARTITIONED BY (day(renamed), renamed_day);
+
+query ITT
+SELECT field_id, name, transform FROM iceberg_partition_specs(my_datalake.default.partition_names_evolution)
+WHERE is_default ORDER BY field_id;
+----
+1000	ts_day	day
+1001	renamed_day	identity
+
+statement ok
+INSERT INTO my_datalake.default.partition_names_evolution VALUES (TIMESTAMP '2024-02-03 04:00:00', 8);
+
+query TI
+SELECT renamed, renamed_day FROM my_datalake.default.partition_names_evolution ORDER BY renamed;
+----
+2024-01-02 03:00:00	7
+2024-02-03 04:00:00	8
+
+query TII
+SELECT partition.ts_day, partition.renamed_day, record_count
+FROM iceberg_partitions(my_datalake.default.partition_names_evolution) ORDER BY partition.ts_day;
+----
+2024-01-02	NULL	1
+2024-02-03	8	1
+
+# A rejected duplicate must preserve the published spec and its field IDs.
+statement error
+ALTER TABLE my_datalake.default.partition_names_evolution
+SET PARTITIONED BY (day(renamed), day(renamed));
+----
+Cannot use partition name more than once: ts_day
+
+query IT
+SELECT field_id, name FROM iceberg_partition_specs(my_datalake.default.partition_names_evolution)
+WHERE is_default ORDER BY field_id;
+----
+1000	ts_day
+1001	renamed_day
+
+# Recycling an inactive field must follow the same validation order.
+statement ok
+ALTER TABLE my_datalake.default.partition_names_evolution RESET PARTITIONED BY;
+
+statement ok
+ALTER TABLE my_datalake.default.partition_names_evolution SET PARTITIONED BY (day(renamed));
+
+query IIT
+SELECT spec_id, field_id, name FROM iceberg_partition_specs(my_datalake.default.partition_names_evolution)
+WHERE is_default;
+----
+0	1000	ts_day
+
+statement ok
+INSERT INTO my_datalake.default.partition_names_evolution VALUES (TIMESTAMP '2024-03-04 05:00:00', 9);
+
+query TI
+SELECT renamed, renamed_day FROM my_datalake.default.partition_names_evolution ORDER BY renamed;
+----
+2024-01-02 03:00:00	7
+2024-02-03 04:00:00	8
+2024-03-04 05:00:00	9
+
+statement ok
+DROP TABLE my_datalake.default.partition_names_evolution;

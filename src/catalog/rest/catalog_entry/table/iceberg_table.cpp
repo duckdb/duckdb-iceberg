@@ -519,9 +519,9 @@ static void VerifyTransformSource(const ParsedExpression &key, const IcebergTran
 	}
 }
 
-IcebergPartitionSpec IcebergTable::BuildPartitionSpec(const vector<unique_ptr<ParsedExpression>> &partition_keys,
-                                                      const IcebergTableSchema &schema, int32_t spec_id,
-                                                      idx_t base_partition_field_id) {
+static IcebergPartitionSpec BuildPartitionSpecFields(const vector<unique_ptr<ParsedExpression>> &partition_keys,
+                                                     const IcebergTableSchema &schema, int32_t spec_id,
+                                                     idx_t base_partition_field_id) {
 	IcebergPartitionSpec new_spec(spec_id);
 
 	for (auto &key : partition_keys) {
@@ -540,6 +540,13 @@ IcebergPartitionSpec IcebergTable::BuildPartitionSpec(const vector<unique_ptr<Pa
 		field.SetPartitionSpecFieldName(schema.GetFullColumnName(source_id));
 		new_spec.fields.push_back(std::move(field));
 	}
+	return new_spec;
+}
+
+IcebergPartitionSpec IcebergTable::BuildPartitionSpec(const vector<unique_ptr<ParsedExpression>> &partition_keys,
+                                                      const IcebergTableSchema &schema, int32_t spec_id,
+                                                      idx_t base_partition_field_id) {
+	auto new_spec = BuildPartitionSpecFields(partition_keys, schema, spec_id, base_partition_field_id);
 	new_spec.VerifyFieldNames(schema);
 
 	return new_spec;
@@ -590,7 +597,7 @@ void IcebergTable::SetPartitionedBy(IcebergTransaction &transaction,
 	auto base_partition_field_id = GetNextPartitionFieldId();
 	auto new_spec_id = static_cast<int32_t>(GetNextPartitionSpecId());
 
-	auto new_spec = BuildPartitionSpec(partition_keys, schema, new_spec_id, base_partition_field_id);
+	auto new_spec = BuildPartitionSpecFields(partition_keys, schema, new_spec_id, base_partition_field_id);
 	// V2+ tracks partition field IDs across specs, allowing equivalent historical fields to reuse IDs.
 	// V1 did not require explicit field IDs: they were assigned by position starting at 1000 in each spec.
 	// Its evolution rules preserve positions (using void transforms for removed fields), so the reference
@@ -622,9 +629,9 @@ void IcebergTable::SetPartitionedBy(IcebergTransaction &transaction,
 				field.partition_field_id = base_partition_field_id++;
 			}
 		}
-		// A recycled field brings its historical name
-		new_spec.VerifyFieldNames(schema);
 	}
+	// Validate only the final names: recycled fields keep their historical names after a source rename.
+	new_spec.VerifyFieldNames(schema);
 
 	// if spec definition already exists in a previous spec definition, set it to that spec id
 	// (some catalog may allow duplicate definitions, others not)

@@ -2,7 +2,6 @@
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "core/metadata/schema/iceberg_table_schema.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
-#include "duckdb/common/identifier.hpp"
 #include "duckdb/common/string_util.hpp"
 
 namespace duckdb {
@@ -141,20 +140,24 @@ void IcebergPartitionSpecField::SetPartitionSpecFieldName(const string &column_n
 }
 
 void IcebergPartitionSpec::VerifyFieldNames(const IcebergTableSchema &schema) const {
+	case_insensitive_map_t<int32_t> schema_field_ids;
+	for (auto &field : schema.GetFullNames()) {
+		schema_field_ids.emplace(field.second, field.first);
+	}
 	case_insensitive_set_t names;
 	for (auto &field : fields) {
 		auto &name = field.GetPartitionSpecFieldName();
 		if (!names.insert(name).second) {
 			throw InvalidInputException("Cannot use partition name more than once: %s", name);
 		}
-		auto column = schema.GetFromPath(StringsToIdentifiers(StringUtil::Split(name, ".")), nullptr);
-		if (!column) {
+		auto column = schema_field_ids.find(name);
+		if (column == schema_field_ids.end()) {
 			continue;
 		}
 		if (field.transform.Type() != IcebergTransformType::IDENTITY) {
 			throw InvalidInputException("Cannot create partition from name that exists in schema: %s", name);
 		}
-		if (static_cast<uint64_t>(column->id) != field.source_id) {
+		if (static_cast<uint64_t>(column->second) != field.source_id) {
 			throw InvalidInputException("Cannot create identity partition sourced from different field in schema: %s",
 			                            name);
 		}

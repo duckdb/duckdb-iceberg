@@ -1,0 +1,153 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/partitioning/partition_field_names_quoted.test
+# description: Partition names preserve quoted and nested source names and reject schema name collisions
+# group: [partitioning]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.partition_names_quoted;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.partition_names_collision;
+
+# The full source name distinguishes equal leaf names in different structs.
+# Spaces, leading digits and literal dots must survive both writes and metadata reads.
+statement ok
+CREATE TABLE my_datalake.default.partition_names_quoted (
+	"1 key" INTEGER, "tag.value" INTEGER, lhs STRUCT(id INTEGER), rhs STRUCT(id INTEGER)
+) PARTITIONED BY ("1 key", bucket(4, "tag.value"), lhs.id, rhs.id);
+
+query TT
+SELECT name, transform FROM iceberg_partition_specs(my_datalake.default.partition_names_quoted) ORDER BY field_id;
+----
+1 key	identity
+tag.value_bucket_4	bucket[4]
+lhs.id	identity
+rhs.id	identity
+
+statement ok
+INSERT INTO my_datalake.default.partition_names_quoted VALUES
+	(1, 2, {'id': 3}, {'id': 4}), (NULL, NULL, NULL, {'id': NULL});
+
+query IIII
+SELECT "1 key", "tag.value", lhs.id, rhs.id
+FROM my_datalake.default.partition_names_quoted ORDER BY "1 key" NULLS LAST;
+----
+1	2	3	4
+NULL	NULL	NULL	NULL
+
+query IIII
+SELECT partition."1 key", partition."lhs.id", partition."rhs.id", record_count
+FROM iceberg_partitions(my_datalake.default.partition_names_quoted)
+ORDER BY partition."1 key" NULLS LAST;
+----
+1	3	4	1
+NULL	NULL	NULL	1
+
+# These are complete schema names, not paths that can be split on dots.
+statement error
+CREATE TABLE my_datalake.default.partition_names_collision (
+	"event.ts" TIMESTAMP, "event.ts_day" INTEGER
+) PARTITIONED BY (day("event.ts"));
+----
+Cannot create partition from name that exists in schema: event.ts_day
+
+statement error
+CREATE TABLE my_datalake.default.partition_names_collision (
+	"event.data" STRUCT(ts TIMESTAMP, ts_day INTEGER)
+) PARTITIONED BY (day("event.data".ts));
+----
+Cannot create partition from name that exists in schema: event.data.ts_day
+
+# CTAS validates its placeholder spec before planning a write.
+statement error
+CREATE TABLE my_datalake.default.partition_names_collision PARTITIONED BY (day("event.ts")) AS
+SELECT TIMESTAMP '2024-01-02 03:00:00' AS "event.ts", 7 AS "event.ts_day";
+----
+Cannot create partition from name that exists in schema: event.ts_day
+
+statement ok
+CREATE TABLE my_datalake.default.partition_names_collision (
+	"event.ts" TIMESTAMP, "event.ts_day" INTEGER
+);
+
+statement error
+ALTER TABLE my_datalake.default.partition_names_collision SET PARTITIONED BY (day("event.ts"));
+----
+Cannot create partition from name that exists in schema: event.ts_day
+
+query I
+SELECT count(field_id) FROM iceberg_partition_specs(my_datalake.default.partition_names_collision) WHERE is_default;
+----
+0
+
+# Identity is allowed to have its own source's full name.
+statement ok
+ALTER TABLE my_datalake.default.partition_names_collision
+SET PARTITIONED BY ("event.ts_day", hour("event.ts"));
+
+query TT
+SELECT name, transform FROM iceberg_partition_specs(my_datalake.default.partition_names_collision)
+WHERE is_default ORDER BY field_id;
+----
+event.ts_day	identity
+event.ts_hour	hour
+
+statement ok
+INSERT INTO my_datalake.default.partition_names_collision VALUES (TIMESTAMP '2024-01-02 03:00:00', 7);
+
+query TI
+SELECT "event.ts", "event.ts_day" FROM my_datalake.default.partition_names_collision;
+----
+2024-01-02 03:00:00	7
+
+statement ok
+DROP TABLE my_datalake.default.partition_names_quoted;
+
+statement ok
+DROP TABLE my_datalake.default.partition_names_collision;
+
+# A recycled identity name may belong to a different source after a rename.
+# Stage the conflicting schema in a transaction and roll it back after rejection.
+statement ok
+CREATE TABLE my_datalake.default.partition_names_collision (
+	"original.name" INTEGER, replacement INTEGER
+) PARTITIONED BY ("original.name") WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.partition_names_collision VALUES (42, 99);
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.partition_names_collision RESET PARTITIONED BY;
+
+statement ok
+ALTER TABLE my_datalake.default.partition_names_collision RENAME COLUMN "original.name" TO renamed;
+
+statement ok
+ALTER TABLE my_datalake.default.partition_names_collision RENAME COLUMN replacement TO "original.name";
+
+statement error
+ALTER TABLE my_datalake.default.partition_names_collision SET PARTITIONED BY (renamed);
+----
+Cannot create identity partition sourced from different field in schema: original.name
+
+statement ok
+ROLLBACK;
+
+query IT
+SELECT field_id, name FROM iceberg_partition_specs(my_datalake.default.partition_names_collision) WHERE is_default;
+----
+1000	original.name
+
+query II
+SELECT "original.name", replacement FROM my_datalake.default.partition_names_collision;
+----
+42	99
+
+statement ok
+DROP TABLE my_datalake.default.partition_names_collision;
