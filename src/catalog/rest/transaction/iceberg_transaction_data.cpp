@@ -27,7 +27,7 @@ static void LoadMissingManifestCounts(ClientContext &context, const IcebergTable
 	}
 	vector<IcebergManifestListEntry> manifest_files;
 	manifest_files.push_back(manifest_list_entry);
-	manifest_files[0].manifest_entries.reset();
+	manifest_files[0].ResetManifestEntries();
 
 	IcebergOptions options;
 	auto &fs = FileSystem::GetFileSystem(context);
@@ -36,6 +36,7 @@ static void LoadMissingManifestCounts(ClientContext &context, const IcebergTable
 	while (!reader->Finished()) {
 		reader->Read();
 	}
+	scan->Complete();
 
 	manifest_list_entry = std::move(manifest_files[0]);
 	manifest_list_entry.GetManifest().SetCountsFromEntries(manifest_list_entry.GetManifestEntries());

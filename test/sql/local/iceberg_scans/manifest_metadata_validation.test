@@ -6,6 +6,10 @@ include test/sql/init_requires
 
 require json
 
+# This corruption fixture deliberately overwrites the same immutable manifest path.
+statement ok
+SET iceberg_enable_manifest_cache=false;
+
 statement ok
 COPY (SELECT 1 AS id, -1::DECIMAL(4,0) AS d4, -1::DECIMAL(9,0) AS d9,
 	-1::DECIMAL(18,0) AS d18, -1::DECIMAL(38,0) AS d38)

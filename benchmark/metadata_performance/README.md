@@ -2,8 +2,10 @@
 
 These workloads measure the implementation of issues
 [#1654](https://github.com/duckdb/duckdb-iceberg/issues/1654) and
-[#1721](https://github.com/duckdb/duckdb-iceberg/issues/1721). They do not implement
-predicate reuse, a delete index, or parsed metadata/manifest caches.
+[#1721](https://github.com/duckdb/duckdb-iceberg/issues/1721), including predicate
+reuse, delete candidate indexes, and parsed metadata/manifest caches.
+The wide-manifest workload also preserves the statistics-heavy case from
+[#1500](https://github.com/duckdb/duckdb-iceberg/pull/1500).
 
 The [delete candidate index results](delete-candidate-index-2026-11-11.md)
 record step 3's candidate counts, cold/repeated timings, and validation.
@@ -11,6 +13,10 @@ The [native partition grouping follow-up](partition-delete-index-2026-11-11.md)
 compares the composite-key map with `GroupedAggregateHashTable`.
 The [parsed table metadata results](parsed-table-metadata-2026-11-11.md)
 record step 4's retained-snapshot scaling, ownership rules, and validation.
+The [parsed manifest results](parsed-manifest-cache-2026-11-12.md)
+record step 5's cache identity, publication, eviction, and cold/warm comparisons.
+The [manifest copy follow-up](manifest-copy-followup-2026-11-12.md) records
+#1500's remaining construction/partition-map improvements and wide-table measurements.
 
 ## Local baseline runner
 
@@ -35,9 +41,14 @@ remain under the new output directory. Output directories must not already exist
 Run processes serially; the runner compares `--threads 1 8` sequentially.
 
 Select a named case with `--case narrow_padded_in`, a workload with
-`--workload delete|manifest|snapshots`, and modes with `--modes staleness etag`.
+`--workload delete|manifest|snapshots|small-manifests|wide-manifest`, and modes with `--modes staleness etag`.
 Each selected case is independently initialized. `--case` filters measurement,
 not data generation. `--build build/release` selects another built CLI.
+Use `--manifest-cache off` to compare against repeated decoding on the same
+build; the default is `on`. Setup always disables the parsed manifest cache.
+`--source <previous-output>` reuses that run's immutable cases and layout,
+instead of generating a workload, so two builds or settings can read exactly
+the same files. Keep the source directory until both runs finish.
 
 For unreferenced partitioned deletes, use the separate runner below. It requires
 `fastavro` from `scripts/requirements.txt` in addition to the CLI. It generates
@@ -70,9 +81,12 @@ profiles and diagnostic logs, and prints wall-time medians.
 “Fresh” always means a new database here, never a second connection to an
 existing database. OS page caches are uncontrolled in every mode; `cold` does
 not claim a cold disk. Enabling the byte cache is not evidence of a parsed
-manifest cache. Staleness and ETag reads now share parsed table metadata; they
-still parse manifests. An ordinary HTTP 200 creates a new parsed metadata
-generation. Normal native mock responses have no ETag: the harness explicitly
+manifest cache. Staleness and ETag reads share parsed table metadata. With
+`iceberg_enable_manifest_cache=true` (the default), all three repeated modes also
+reuse compatible parsed manifest content and completed delete indexes.
+An ordinary HTTP 200 creates a new parsed table metadata generation without
+invalidating unchanged manifest identities. Normal native mock responses have
+no ETag: the harness explicitly
 scripts one and leaves the native
 provider available for every 304. A separate diagnostic query verifies the
 expected GET/200/304 behavior without enabling logging in timing samples.
@@ -108,6 +122,33 @@ provided by scripted native LoadTable responses, not thousands of commits.
 Synthetic snapshots retain the required operation summary but omit repeated
 writer summary metrics, keeping requests within the native helper's 16 MiB limit.
 
+The explicit `small-manifests` workload reproduces
+`benchmark/metadata_late_materialization` with native transport: 256 manifests,
+one 4,096-row file per partition, one/four-partition queries, and a 5 ms debug
+filesystem delay. It keeps byte caching disabled in every mode and checks the
+same sums. It is not included in `all`; run it separately to measure parsed
+reuse while preserving the existing benchmark's I/O conditions.
+
+The explicit `wide-manifest` workload adapts #1500: one manifest, 101 columns
+(`p` plus 100 BIGINT columns), and 100 rows per partition/file. The `reduced`,
+`regression`, and `full` sizes have 32, 1,000, and 5,000 files respectively.
+The filter `c1 < 0` cannot prune the manifest through its partition summary,
+but the file bounds reject every data file. Setup verifies both bound maps
+contain 101 fields in every entry. Each sample must return count zero and read
+zero data files; diagnostics must report zero scan tasks and either one complete
+manifest parse or one parsed hit with zero conversions. It is not included in
+`all`.
+
+Use the same immutable files to distinguish cold parsing, repeated decoding
+from cached bytes, and parsed reuse:
+
+```sh
+python3 scripts/metadata_performance/run.py --workload wide-manifest --size regression \
+  --manifest-cache off --modes cold warm --samples 5 --output .catalogs/wide-manifest-off
+python3 scripts/metadata_performance/run.py --source .catalogs/wide-manifest-off \
+  --manifest-cache on --modes cold warm --samples 5 --output .catalogs/wide-manifest-on
+```
+
 ## Diagnostics and artifacts
 
 Enable the existing logger with `CALL enable_logging('Iceberg', storage='memory')`
@@ -118,8 +159,9 @@ destroyed. Prepared statements or other owners can extend that lifetime. Filter
 | Phase / scope | Counters | Meaning |
 |---|---|---|
 | `delete_planning` / `planner_view` | `scan_tasks`, `delete_candidate_visits`, `delete_predicate_evaluations` | One lifetime total per filtered planner view that produces tasks. Repeated visits count again. Predicate evaluations exclude the helper's no-filter fast return. Views sharing a provider keep separate totals. |
-| `delete_candidate_index` / `manifest_load` or `server_provider` | `delete_index_builds` | Completed indexes published for selected delete manifests. Includes transaction-local manifests; excludes manifests rejected before loading. Views sharing a provider reuse these indexes. No cross-query index cache is implied. |
+| `delete_candidate_index` / `manifest_cache`, `manifest_load`, or `server_provider` | `delete_index_builds` | Completed indexes built for selected delete manifests. `manifest_cache` counts construction with newly cached immutable content; `manifest_load` includes private/transaction-local indexes. A cache hit does not build another index. |
 | `manifest_parse` / `avro_scan` | `manifest_parses`, `manifest_entries_converted` | One lifetime total per Avro manifest scan. Parses count initialized manifest readers; entries count successfully decoded chunks before pruning, including deleted entries. Data/delete and eager scans can emit separate events. In-memory transaction entries and manifest lists are excluded. Partial/failed scans can emit partial work. |
+| `manifest_cache` / `avro_scan` | `parsed_manifest_hits`, `parsed_manifest_misses` | Lookups for selected manifest files when parsed caching is enabled. Hits reuse complete content, not filtered rows or snapshot completeness. Misses count attempted lookups, including loads that subsequently fail. Both counters are zero when disabled. |
 | `table_metadata_conversion` / `catalog_initialization` | `table_metadata_conversions`, `snapshots_converted` | One event after successful `FromTableMetadata` during catalog response initialization, including metadata-location overrides. This excludes standalone path reads, create-table constructors, and metadata-history reconstruction. |
 | `table_metadata_cache` / `catalog_initialization` | `parsed_metadata_hits` | Reuse of the immutable payload belonging to the validated LoadTable response generation, through staleness or HTTP 304. Emits zero conversions. |
 | `table_metadata_copy` / `table_mutation` | `table_metadata_copies`, `snapshots_copied` | A transaction writer detaches from immutable metadata or an outstanding scan owner. Ordinary reads, scan credentials, and transaction copies share owners instead. Commit-specific format copies are outside this counter. |
@@ -130,9 +172,12 @@ atomically once per data-file lookup; predicates count successful initialization
 of per-view cache entries. Parsing uses one atomic addition per manifest/chunk.
 Index builds, candidate visits and predicates measure separate work. Data-file
 and manifest pruning still run even when a lookup finds no delete candidates.
-There is no new public telemetry API or per-entry logging. Parsed manifests and
-delete indexes remain scoped to their existing query owners; parsed table
-metadata is shared across queries as described above.
+There is no new public telemetry API or per-entry logging. Parsed manifest
+entries and their immutable delete indexes use the database's memory-accounted
+ObjectCache. Manifest descriptors, inherited IDs, execution delete contents,
+transaction overlays and predicate results remain local to their scan/view.
+The runner checks zero parses, conversions and index builds plus positive
+parsed hits in repeated cache-on modes; cold/cache-off runs must still parse.
 
 Every output directory contains:
 
