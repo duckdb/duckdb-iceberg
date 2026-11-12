@@ -35,6 +35,7 @@
 #include "common/iceberg_utils.hpp"
 #include "iceberg_options.hpp"
 #include "planning/iceberg_multi_file_reader.hpp"
+#include "planning/iceberg_optimizer.hpp"
 #include "function/iceberg_functions.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
@@ -135,6 +136,7 @@ static void IcebergScanSerialize(Serializer &serializer, const optional_ptr<Func
 	});
 	serializer.WriteProperty(108, "transaction_id", scan_info.serialization_transaction_id);
 	serializer.WriteProperty(109, "query_id", scan_info.serialization_query_id);
+	serializer.WriteProperty(110, "late_materialization", function.late_materialization);
 }
 
 //! Plan-copying optimizers such as CTE inlining and partitioned execution only fall back to the original, uncopied
@@ -173,6 +175,7 @@ static unique_ptr<FunctionData> IcebergScanDeserialize(Deserializer &deserialize
 	});
 	auto transaction_id = deserializer.ReadPropertyWithExplicitDefault<hugeint_t>(108, "transaction_id", hugeint_t(0));
 	auto query_id = deserializer.ReadPropertyWithDefault<optional_idx>(109, "query_id");
+	auto late_materialization = deserializer.ReadPropertyWithDefault<bool>(110, "late_materialization");
 
 	// Snapshot/schema IDs do not identify transaction-local writes, credentials, or attachment options.
 	// Reject delayed and cross-connection replay before resolving any table state.
@@ -236,6 +239,10 @@ static unique_ptr<FunctionData> IcebergScanDeserialize(Deserializer &deserialize
 		MultiFileReader::PruneReaders(multi_file_data, *multi_file_data.file_list);
 	}
 	function.function_info = std::move(rebound.function_info);
+	if (late_materialization) {
+		// Optimizer copies must retain post-bind eligibility and its virtual-column filter guard.
+		IcebergOptimizer::EnableLateMaterialization(function);
+	}
 	return bind_data;
 }
 
@@ -273,6 +280,13 @@ static void IcebergSetScanOrder(unique_ptr<RowGroupOrderOptions> order_options, 
 	file_list.GetScanPlanner().SetScanOrder(std::move(order_options));
 }
 
+static vector<column_t> IcebergGetRowIdColumns(ClientContext &, optional_ptr<FunctionData>) {
+	vector<column_t> result;
+	result.push_back(MultiFileReader::COLUMN_IDENTIFIER_FILENAME);
+	result.push_back(MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER);
+	return result;
+}
+
 //! FIXME: needs v1.5.1, causes a crash on v1.5.0
 // static bool IcebergScanSupportsPushdownType(const FunctionData &bind_data_p, idx_t column_id) {
 //	// Don't push down filters on the _row_id virtual column
@@ -295,6 +309,7 @@ TableFunctionSet IcebergFunctions::GetIcebergScanFunction(ExtensionLoader &loade
 		// Register the MultiFileReader as the driver for reads
 		function.get_multi_file_reader = IcebergMultiFileReader::CreateInstance;
 		function.late_materialization = false;
+		function.get_row_id_columns = IcebergGetRowIdColumns;
 
 		// Catalog-backed scans serialize by rebinding the table; path-based scans throw NotImplementedException
 		function.serialize = IcebergScanSerialize;

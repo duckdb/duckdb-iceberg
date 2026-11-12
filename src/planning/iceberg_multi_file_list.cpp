@@ -35,6 +35,20 @@ const IcebergScanPlanner &IcebergMultiFileList::GetScanPlanner() const {
 	return *planner;
 }
 
+bool IcebergMultiFileList::SupportsLateMaterialization() const {
+	return planner->GetMetadata().iceberg_version == 2;
+}
+
+unique_ptr<MultiFileList> IcebergMultiFileList::Copy() const {
+	// The view already shares the table and snapshot in its immutable configuration.
+	auto result = unique_ptr<IcebergMultiFileList>(
+	    new IcebergMultiFileList(planner->CreateView(IcebergTableFilters()), delete_execution));
+	result->have_bound = have_bound;
+	result->names = names;
+	result->types = types;
+	return std::move(result);
+}
+
 IcebergDeleteExecutionState &IcebergMultiFileList::GetDeleteReader() const {
 	return *delete_execution;
 }
