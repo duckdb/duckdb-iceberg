@@ -1,6 +1,6 @@
 # Metadata performance baselines
 
-These workloads measure the existing implementation of issues
+These workloads measure the implementation of issues
 [#1654](https://github.com/duckdb/duckdb-iceberg/issues/1654) and
 [#1721](https://github.com/duckdb/duckdb-iceberg/issues/1721). They do not implement
 predicate reuse, a delete index, or parsed metadata/manifest caches.
@@ -9,6 +9,8 @@ The [delete candidate index results](delete-candidate-index-2026-11-11.md)
 record step 3's candidate counts, cold/repeated timings, and validation.
 The [native partition grouping follow-up](partition-delete-index-2026-11-11.md)
 compares the composite-key map with `GroupedAggregateHashTable`.
+The [parsed table metadata results](parsed-table-metadata-2026-11-11.md)
+record step 4's retained-snapshot scaling, ownership rules, and validation.
 
 ## Local baseline runner
 
@@ -68,9 +70,10 @@ profiles and diagnostic logs, and prints wall-time medians.
 “Fresh” always means a new database here, never a second connection to an
 existing database. OS page caches are uncontrolled in every mode; `cold` does
 not claim a cold disk. Enabling the byte cache is not evidence of a parsed
-manifest cache. The current implementation still reconstructs table metadata
-and parses manifests in the staleness and ETag modes. Normal native mock
-responses have no ETag: the harness explicitly scripts one and leaves the native
+manifest cache. Staleness and ETag reads now share parsed table metadata; they
+still parse manifests. An ordinary HTTP 200 creates a new parsed metadata
+generation. Normal native mock responses have no ETag: the harness explicitly
+scripts one and leaves the native
 provider available for every 304. A separate diagnostic query verifies the
 expected GET/200/304 behavior without enabling logging in timing samples.
 
@@ -118,6 +121,8 @@ destroyed. Prepared statements or other owners can extend that lifetime. Filter
 | `delete_candidate_index` / `manifest_load` or `server_provider` | `delete_index_builds` | Completed indexes published for selected delete manifests. Includes transaction-local manifests; excludes manifests rejected before loading. Views sharing a provider reuse these indexes. No cross-query index cache is implied. |
 | `manifest_parse` / `avro_scan` | `manifest_parses`, `manifest_entries_converted` | One lifetime total per Avro manifest scan. Parses count initialized manifest readers; entries count successfully decoded chunks before pruning, including deleted entries. Data/delete and eager scans can emit separate events. In-memory transaction entries and manifest lists are excluded. Partial/failed scans can emit partial work. |
 | `table_metadata_conversion` / `catalog_initialization` | `table_metadata_conversions`, `snapshots_converted` | One event after successful `FromTableMetadata` during catalog response initialization, including metadata-location overrides. This excludes standalone path reads, create-table constructors, and metadata-history reconstruction. |
+| `table_metadata_cache` / `catalog_initialization` | `parsed_metadata_hits` | Reuse of the immutable payload belonging to the validated LoadTable response generation, through staleness or HTTP 304. Emits zero conversions. |
+| `table_metadata_copy` / `table_mutation` | `table_metadata_copies`, `snapshots_copied` | A transaction writer detaches from immutable metadata or an outstanding scan owner. Ordinary reads, scan credentials, and transaction copies share owners instead. Commit-specific format copies are outside this counter. |
 
 Candidate totals now count the path/partition buckets visited before provider,
 transaction, sequence, predicate and bounds checks. The planner adds them
@@ -125,7 +130,9 @@ atomically once per data-file lookup; predicates count successful initialization
 of per-view cache entries. Parsing uses one atomic addition per manifest/chunk.
 Index builds, candidate visits and predicates measure separate work. Data-file
 and manifest pruning still run even when a lookup finds no delete candidates.
-There is no new public telemetry API, per-entry logging, or cross-query cache.
+There is no new public telemetry API or per-entry logging. Parsed manifests and
+delete indexes remain scoped to their existing query owners; parsed table
+metadata is shared across queries as described above.
 
 Every output directory contains:
 

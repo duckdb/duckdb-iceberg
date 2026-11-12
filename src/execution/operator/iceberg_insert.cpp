@@ -330,7 +330,7 @@ void IcebergInsert::AddWrittenFiles(IcebergInsertGlobalState &global_state, Data
                                     optional_ptr<TableCatalogEntry> table) {
 	D_ASSERT(table);
 	auto &ic_table = table->Cast<IcebergTableSchemaVersion>();
-	auto &table_metadata = ic_table.table_info.table_metadata;
+	auto &table_metadata = ic_table.table_info.GetMetadata();
 	global_state.AddFiles(chunk, ic_table.name.GetIdentifierName(), table_metadata);
 }
 
@@ -1124,7 +1124,7 @@ PhysicalOperator &IcebergCatalog::PlanInsert(ClientContext &context, PhysicalPla
 
 	auto &alter = irc_transaction.GetOrCreateAlter();
 	auto &updated_table = alter.GetOrInitializeTable(table_entry.table_info);
-	auto &table_metadata = updated_table.table_metadata;
+	auto &table_metadata = updated_table.GetMetadata();
 	if (table_metadata.iceberg_version < 2) {
 		throw NotImplementedException("Insert into Iceberg V%d tables", table_metadata.iceberg_version);
 	}
@@ -1159,7 +1159,7 @@ static unique_ptr<IcebergTableMetadata> BuildPlaceholderMetadata(ClientContext &
 		auto name = catalog.FoldName(create_info.GetQualifiedName());
 		auto entry = schema_entry.GetEntry(transaction, CatalogType::TABLE_ENTRY, name.Name());
 		if (entry && entry->type == CatalogType::TABLE_ENTRY) {
-			auto &existing = entry->Cast<IcebergTableSchemaVersion>().table_info.table_metadata;
+			auto &existing = entry->Cast<IcebergTableSchemaVersion>().table_info.GetMetadata();
 			replacement_metadata = existing;
 			metadata->iceberg_version = existing.iceberg_version;
 			metadata->table_properties = existing.table_properties;

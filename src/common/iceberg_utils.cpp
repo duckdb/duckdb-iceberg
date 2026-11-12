@@ -260,7 +260,7 @@ string IcebergUtils::GetStorageLocation(ClientContext &context, const string &in
 				throw InvalidInputException("Table %s is not an Iceberg table", input);
 			}
 			auto &table_entry = catalog_entry->Cast<IcebergTableSchemaVersion>();
-			storage_location = table_entry.table_info.table_metadata.GetLocation();
+			storage_location = table_entry.table_info.GetMetadata().GetLocation();
 			// Prepare Iceberg Scan from entry will create the secret needed to access the table
 			table_entry.PrepareIcebergScanFromEntry(context);
 			break;
@@ -281,10 +281,10 @@ IcebergResolvedMetadata IcebergUtils::ResolveTableMetadata(ClientContext &contex
 
 			auto &iceberg_table = catalog_entry->Cast<IcebergTableSchemaVersion>();
 			iceberg_table.PrepareIcebergScanFromEntry(context);
-			auto &metadata = iceberg_table.table_info.table_metadata;
-			auto copy = metadata.Copy();
-			copy.SetFileSecret(IcebergFileCredentialsCallback::Get(context, iceberg_table.table_info));
-			return IcebergResolvedMetadata(metadata.GetLocation(), std::move(copy));
+			auto &metadata = iceberg_table.table_info.GetMetadata();
+			return IcebergResolvedMetadata(
+			    metadata.GetLocation(), iceberg_table.table_info.GetMetadataOwner(),
+			    IcebergFileSecret(IcebergFileCredentialsCallback::Get(context, iceberg_table.table_info)));
 		}
 	}
 
@@ -293,7 +293,9 @@ IcebergResolvedMetadata IcebergUtils::ResolveTableMetadata(ClientContext &contex
 	auto caching_fs = make_shared_ptr<CachingFileSystemWrapper>(fs, *context.db);
 	auto metadata_path = IcebergTableMetadata::GetMetaDataPath(context, table_location, fs, options);
 	auto table_metadata = IcebergTableMetadata::Parse(metadata_path, *caching_fs, options.metadata_compression_codec);
-	return IcebergResolvedMetadata(std::move(table_location), IcebergTableMetadata::FromTableMetadata(table_metadata));
+	return IcebergResolvedMetadata(
+	    std::move(table_location),
+	    make_shared_ptr<const IcebergTableMetadata>(IcebergTableMetadata::FromTableMetadata(table_metadata)));
 }
 
 // Function to decompress a gz file content string

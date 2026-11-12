@@ -236,7 +236,7 @@ void IcebergTablePrefetch::ScheduleTables(ClientContext &context, IcebergCatalog
 			continue;
 		}
 		if (catalog.attach_options.max_table_staleness_micros.IsValid() &&
-		    catalog.table_request_cache.Get(context, table_key, [](const rest_api_objects::LoadTableResult &) {})) {
+		    catalog.table_request_cache.Get(context, table_key, [](shared_ptr<const IcebergLoadTableResponse>) {})) {
 			continue;
 		}
 		auto &prefetch = transaction.GetTablePrefetch(context);

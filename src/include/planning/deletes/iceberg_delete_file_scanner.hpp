@@ -1,5 +1,7 @@
 #pragma once
 
+#include "planning/iceberg_file_secret.hpp"
+
 #include "core/deletes/iceberg_delete_data.hpp"
 #include "core/deletes/iceberg_equality_delete.hpp"
 #include "core/deletes/iceberg_delete_file.hpp"
@@ -23,6 +25,7 @@ struct IcebergDeleteExecutionContext {
 	const string &table_path;
 	const IcebergOptions &options;
 	const IcebergTableMetadata &metadata;
+	IcebergFileSecret file_secret;
 };
 
 //! Contents are immutable after publication through complete under lock.

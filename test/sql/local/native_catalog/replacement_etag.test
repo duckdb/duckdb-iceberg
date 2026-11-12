@@ -51,6 +51,16 @@ SELECT * FROM cor_etag_response(NULL, 304);
 ----
 204
 
+# Pin the same cached metadata generation in another transaction. Replacement
+# must detach its writable metadata without changing this reader's schema or rows.
+statement ok reader
+BEGIN;
+
+query I reader
+SELECT a FROM my_datalake.default.cor_etag;
+----
+1
+
 statement ok
 CALL truncate_duckdb_logs();
 
@@ -73,8 +83,21 @@ WHERE request.type = 'GET' AND request.url LIKE '%/tables/cor_etag';
 ----
 "before-replace"	NotModified_304
 
+query I reader
+SELECT a FROM my_datalake.default.cor_etag;
+----
+1
+
 statement ok
 {completion};
+
+query I reader
+SELECT a FROM my_datalake.default.cor_etag;
+----
+1
+
+statement ok reader
+COMMIT;
 
 query I
 SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);

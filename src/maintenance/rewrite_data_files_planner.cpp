@@ -531,7 +531,7 @@ RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input)
 	auto table_info_ptr = ReloadIcebergTableShared(context, input.table_name, "iceberg_rewrite_data_files");
 	auto &table_info = *table_info_ptr;
 	ThrowIfTableHasPendingChanges(context, table_info);
-	auto &table_metadata = table_info.table_metadata;
+	auto &table_metadata = table_info.GetMetadata();
 	if (table_metadata.iceberg_version < 2) {
 		throw NotImplementedException("iceberg_rewrite_data_files on Iceberg V%d tables",
 		                              table_metadata.iceberg_version);

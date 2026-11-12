@@ -14,6 +14,7 @@ struct IcebergScanPlanContext {
 	const IcebergTableMetadata &metadata;
 	const IcebergTableSchema &schema;
 	optional_ptr<const IcebergTransactionData> transaction_data;
+	IcebergFileSecret file_secret;
 };
 
 } // namespace duckdb

@@ -28,7 +28,7 @@ LoadTableCachePublication::~LoadTableCachePublication() {
 	}
 }
 
-bool LoadTableCachePublication::TryPublish(shared_ptr<const rest_api_objects::LoadTableResult> result, string etag) {
+bool LoadTableCachePublication::TryPublish(shared_ptr<const IcebergLoadTableResponse> result, string etag) {
 	return cache->TryPublish(*this, std::move(result), std::move(etag));
 }
 
@@ -67,7 +67,7 @@ void LoadTableResultCache::InvalidateLoads(const string &table_key) {
 }
 
 bool LoadTableResultCache::TryPublish(LoadTableCachePublication &publication,
-                                      shared_ptr<const rest_api_objects::LoadTableResult> result, string etag) {
+                                      shared_ptr<const IcebergLoadTableResponse> result, string etag) {
 	annotated_lock_guard<annotated_mutex> guard(lock);
 	auto it = pending_loads.find(publication.table_key);
 	if (it == pending_loads.end() || it->second.latest.get() != &publication) {
@@ -78,14 +78,13 @@ bool LoadTableResultCache::TryPublish(LoadTableCachePublication &publication,
 	return true;
 }
 
-void LoadTableResultCache::SetOrOverwrite(const string &table_key,
-                                          shared_ptr<const rest_api_objects::LoadTableResult> result) {
+void LoadTableResultCache::SetOrOverwrite(const string &table_key, shared_ptr<const IcebergLoadTableResponse> result) {
 	annotated_lock_guard<annotated_mutex> guard(lock);
 	InvalidateLoads(table_key);
 	Store(table_key, std::move(result), "");
 }
 
-void LoadTableResultCache::Store(const string &table_key, shared_ptr<const rest_api_objects::LoadTableResult> result,
+void LoadTableResultCache::Store(const string &table_key, shared_ptr<const IcebergLoadTableResponse> result,
                                  string etag) {
 	// With staleness disabled, retain the payload for ETag revalidation and identity-based invalidation,
 	// but require a catalog request before reusing it.

@@ -47,14 +47,14 @@ static vector<IcebergSchemaFieldEntry> GetSchemaFields(const IcebergTableMetadat
 
 struct IcebergSchemasBindData : public TableFunctionData {
 	IcebergSchemasBindData() {};
-	IcebergTableMetadata metadata {IcebergTableMetadataSchemas {}};
+	shared_ptr<const IcebergTableMetadata> metadata;
 };
 
 struct IcebergSchemasGlobalState : public GlobalTableFunctionState {
 	static unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionInitInput &input) {
 		auto &bind_data = input.bind_data->Cast<IcebergSchemasBindData>();
 		auto global_state = make_uniq<IcebergSchemasGlobalState>();
-		global_state->fields = GetSchemaFields(bind_data.metadata);
+		global_state->fields = GetSchemaFields(*bind_data.metadata);
 		return std::move(global_state);
 	}
 
