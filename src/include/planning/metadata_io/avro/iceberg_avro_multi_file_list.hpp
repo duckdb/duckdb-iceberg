@@ -3,6 +3,7 @@
 #include "duckdb/common/multi_file/multi_file_list.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/mutex.hpp"
+#include "duckdb/common/atomic.hpp"
 
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
@@ -89,6 +90,9 @@ public:
 	//! partition_field_id -> semantic column type (e.g. INTEGER for DAY)
 	map<idx_t, LogicalType> partition_field_id_to_type;
 	optional_ptr<ManifestEntryReadState> read_state;
+	//! One increment per initialized manifest / converted chunk, never per entry.
+	atomic<idx_t> manifest_parses {0};
+	atomic<idx_t> manifest_entries_converted {0};
 };
 
 class IcebergAvroMultiFileList : public SimpleMultiFileList {

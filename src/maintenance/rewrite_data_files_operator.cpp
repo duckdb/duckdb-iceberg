@@ -116,6 +116,8 @@ void PhysicalRewriteDataFiles::StageRewrite(IcebergTransactionData &transaction_
                                             vector<IcebergManifestEntry> &&new_entries,
                                             IcebergManifestDeletes &&replaced_files) const {
 	auto &plan = state.Cast<RewriteDataFilesGlobalState>().plan;
+	//! Only replace the selected files after verifying that their live rows were preserved.
+	ValidateRewrittenRowCount(plan, new_entries);
 	ValidateRewriteSnapshot(plan, state.table_info, "commit");
 	ValidateRewriteSnapshot(plan, transaction_data.table_info, "transaction commit");
 	{

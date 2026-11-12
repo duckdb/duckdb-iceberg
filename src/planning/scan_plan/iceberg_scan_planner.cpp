@@ -9,6 +9,8 @@
 #include "planning/scan_plan/iceberg_scan_plan_provider.hpp"
 #include "planning/scan_plan/iceberg_scan_statistics.hpp"
 #include "duckdb/storage/table/row_group_reorderer.hpp"
+#include "duckdb/logging/logger.hpp"
+#include "iceberg_logging.hpp"
 
 namespace duckdb {
 
@@ -23,6 +25,12 @@ IcebergScanPlanner::IcebergScanPlanner(shared_ptr<IcebergScanPlanState> shared_s
 }
 
 IcebergScanPlanner::~IcebergScanPlanner() {
+	if (scan_tasks) {
+		DUCKDB_LOG(context, IcebergLogType,
+		           "Iceberg metadata phase=delete_planning scope=planner_view scan_tasks=%llu "
+		           "delete_candidate_visits=%llu delete_predicate_evaluations=%llu",
+		           scan_tasks, delete_candidate_visits, delete_predicate_evaluations);
+	}
 }
 
 unique_ptr<IcebergScanPlanner> IcebergScanPlanner::CreateView(IcebergTableFilters filters) const {
@@ -287,6 +295,7 @@ optional<IcebergFileScanTask> IcebergScanPlanner::GetScanTask(idx_t file_id) con
 		task = IcebergFileScanTask(CreateDataFileDescriptor(*entry));
 		task.partition_constants = IcebergPartitionConstants::Resolve(
 		    task.partition_spec_id, entry->entry.data_file.partition_info, GetMetadata(), GetSchema());
+		scan_tasks++;
 	}
 	// Delete manifest I/O must run without the shared planning lock.
 	task.delete_files = ResolveApplicableDeleteFiles(*entry);
@@ -375,7 +384,9 @@ IcebergScanPlanner::ResolveApplicableDeleteFiles(const BoundIcebergManifestEntry
 	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
 	auto delete_context = GetDeletePlanningContext();
 	auto partition_values = IcebergFilePruner::PartitionValueMap(data_manifest_entry.entry.data_file);
-	for (auto delete_file : provider->GetDeleteFiles(manifest_indexes)) {
+	auto delete_files = provider->GetDeleteFiles(manifest_indexes);
+	delete_candidate_visits += delete_files.size();
+	for (auto delete_file : delete_files) {
 		if (delete_file.manifest_idx >= delete_manifests.size()) {
 			throw InternalException("Delete manifest index %llu is out of bounds for %llu manifests",
 			                        delete_file.manifest_idx, delete_manifests.size());
@@ -386,8 +397,22 @@ IcebergScanPlanner::ResolveApplicableDeleteFiles(const BoundIcebergManifestEntry
 			                        delete_file.entry_idx, delete_file.manifest_idx);
 		}
 		auto &delete_entry = entries[delete_file.entry_idx];
-		if (!IcebergDeletePlanner::DeleteEntryMatchesFilters(delete_context, delete_file.manifest_idx, delete_entry)) {
+		if (!IcebergDeletePlanner::DeleteEntryMatchesDataFileReference(delete_context, delete_entry,
+		                                                               data_manifest_entry)) {
 			continue;
+		}
+		if (table_filters.HasFilters()) {
+			auto &manifest_matches = delete_entry_matches[delete_file.manifest_idx];
+			auto cached = manifest_matches.find(delete_file.entry_idx);
+			if (cached == manifest_matches.end()) {
+				delete_predicate_evaluations++;
+				auto matches = IcebergDeletePlanner::DeleteEntryMatchesFilters(delete_context, delete_file.manifest_idx,
+				                                                               delete_entry);
+				cached = manifest_matches.emplace(delete_file.entry_idx, matches).first;
+			}
+			if (!cached->second) {
+				continue;
+			}
 		}
 		optional_ptr<IcebergEqualityDeleteBounds> delete_bounds;
 		if (delete_entry.data_file.content == IcebergManifestEntryContentType::EQUALITY_DELETES) {

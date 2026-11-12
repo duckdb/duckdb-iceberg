@@ -89,12 +89,20 @@ private:
 	mutable bool view_initialized DUCKDB_GUARDED_BY(shared_state->lock) = false;
 	mutable vector<BoundIcebergManifestListEntry> delete_manifests DUCKDB_GUARDED_BY(shared_state->lock);
 	mutable vector<bool> delete_manifest_matches DUCKDB_GUARDED_BY(shared_state->lock);
+	//! Lazy per-view predicate answers keyed by stable manifest and entry indexes.
+	//! Absence means uncomputed; both true and false are cached after successful evaluation.
+	mutable unordered_map<idx_t, unordered_map<idx_t, bool>> delete_entry_matches DUCKDB_GUARDED_BY(shared_state->lock);
 	mutable atomic<bool> has_matching_delete_manifests {true};
 	mutable IcebergDataViewCursor data_view_cursor DUCKDB_GUARDED_BY(shared_state->lock);
 	mutable vector<BoundIcebergManifestEntry> data_manifest_entries DUCKDB_GUARDED_BY(shared_state->lock);
 	mutable vector<BoundIcebergManifestListEntry> data_manifests DUCKDB_GUARDED_BY(shared_state->lock);
 	mutable vector<bool> data_manifest_matches DUCKDB_GUARDED_BY(shared_state->lock);
 	mutable IcebergScanOrder scan_order DUCKDB_GUARDED_BY(shared_state->lock);
+	//! Lifetime totals for this filtered planner view, emitted once on destruction.
+	//! Updated under the existing planning lock; no per-entry logging or atomics.
+	mutable idx_t scan_tasks DUCKDB_GUARDED_BY(shared_state->lock) = 0;
+	mutable idx_t delete_candidate_visits DUCKDB_GUARDED_BY(shared_state->lock) = 0;
+	mutable idx_t delete_predicate_evaluations DUCKDB_GUARDED_BY(shared_state->lock) = 0;
 };
 
 } // namespace duckdb

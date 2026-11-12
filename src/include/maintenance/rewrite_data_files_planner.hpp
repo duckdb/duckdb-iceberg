@@ -41,6 +41,12 @@ struct RewritePlan {
 	//! Distinct delete-file paths whose referenced data files were all selected.
 	//! Invalidated on the same REPLACE commit as the rewritten data files.
 	vector<string> delete_files_to_remove;
+	//! The rows the selected files hold before deletes: the most the rewrite can write
+	int64_t selected_record_count = 0;
+	//! The most rows the deletes that may apply to the selected files can remove, so the rewrite writes at least
+	//! selected_record_count minus this. Capped at selected_record_count to avoid overflow. Unset when an equality
+	//! delete may apply: it can remove any number of rows.
+	optional<int64_t> max_deleted_rows = 0;
 };
 
 struct RewriteDataFilesPlanInput {

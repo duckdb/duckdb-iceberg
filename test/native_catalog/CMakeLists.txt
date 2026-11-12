@@ -56,3 +56,20 @@ duckdb_link_extensions(
   iceberg
   httpfs
   iceberg_mock)
+
+add_executable(unittest_iceberg_planning test_scan_planning.cpp)
+target_include_directories(
+  unittest_iceberg_planning PRIVATE ${CMAKE_SOURCE_DIR}/third_party/catch
+                                    ${CMAKE_CURRENT_LIST_DIR}/../../src/include)
+set_target_properties(
+  unittest_iceberg_planning PROPERTIES RUNTIME_OUTPUT_DIRECTORY
+                                       ${CMAKE_BINARY_DIR}/test)
+target_link_libraries(unittest_iceberg_planning duckdb_static)
+duckdb_link_extensions(
+  unittest_iceberg_planning
+  avro
+  parquet
+  json
+  iceberg
+  httpfs
+  iceberg_mock)
