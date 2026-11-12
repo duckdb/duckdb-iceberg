@@ -1,8 +1,46 @@
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "duckdb/common/operator/cast_operators.hpp"
+#include "duckdb/logging/logger.hpp"
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
+#include "iceberg_logging.hpp"
 
 namespace duckdb {
+
+rest_api_objects::LoadTableResult ICUtils::ParseLoadTableResult(JSONValue root) {
+	auto restrictions = root.GetMember("read-restrictions");
+	auto row_filter = restrictions.GetMember("required-row-filter");
+	auto projections = restrictions.GetMember("required-column-projections");
+	bool has_projections = false;
+	if (projections.IsArray()) {
+		projections.IterateArray([&](JSONValue) { has_projections = true; });
+	}
+	// Check the raw response so unknown predicates and actions also fail before
+	// the generated parser attempts to interpret them.
+	if (has_projections || (row_filter.IsValid() && !row_filter.IsNull())) {
+		throw NotImplementedException("Iceberg read-restrictions are not supported");
+	}
+	return rest_api_objects::LoadTableResult::FromJSON(root);
+}
+
+void ICUtils::LogPostBody(ClientContext &context, const IRCEndpointBuilder &url_builder, const string &body) {
+	if (!Logger::Get(context).ShouldLog(IcebergLogType::NAME, IcebergLogType::LEVEL)) {
+		return;
+	}
+	idx_t truncate_limit = 10000;
+	Value limit_value;
+	if (context.TryGetCurrentSetting("iceberg_logging_post_body_truncate_limit", limit_value)) {
+		truncate_limit = limit_value.GetValue<idx_t>();
+	}
+	string body_to_log;
+	if (truncate_limit == 0) {
+		body_to_log = "<body omitted>";
+	} else if (body.size() > truncate_limit) {
+		body_to_log = body.substr(0, truncate_limit) + "... (truncated)";
+	} else {
+		body_to_log = body;
+	}
+	DUCKDB_LOG(context, IcebergLogType, "POST %s body=%s", url_builder.GetURLEncoded(), body_to_log);
+}
 
 JSONValue ICUtils::GetErrorMessage(const string &api_result, unique_ptr<JSONDocument> &out_doc) {
 	JSONParseError parse_error;

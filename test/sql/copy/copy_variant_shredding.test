@@ -1,0 +1,54 @@
+# name: test/sql/copy/copy_variant_shredding.test
+# description: COPY to Iceberg honors write.parquet.shred-variants
+# group: [copy]
+
+include test/sql/init_requires
+
+require json
+
+foreach shred false true
+
+statement ok
+COPY (
+	SELECT * FROM (VALUES (1, 1::VARIANT), (2, 'x'::VARIANT), (3, NULL::VARIANT)) t(id, v)
+) TO '{TEST_DIR}/copy_variant_{shred}' (
+	FORMAT ICEBERG, "format-version" 3, "write.parquet.shred-variants" '{shred}'
+);
+
+query II
+SELECT id, v FROM iceberg_scan('{TEST_DIR}/copy_variant_{shred}') ORDER BY id;
+----
+1	1
+2	x
+3	NULL
+
+query I
+SELECT (content::JSON->'properties'->>'write.parquet.shred-variants') = '{shred}'
+FROM read_text('{TEST_DIR}/copy_variant_{shred}/metadata/*.metadata.json');
+----
+true
+
+query I
+SELECT (count(*) > 0) = '{shred}'::BOOLEAN
+FROM parquet_schema('{TEST_DIR}/copy_variant_{shred}/data/*.parquet')
+WHERE name = 'typed_value';
+----
+true
+
+endloop
+
+# COPY creates a table with shredding explicitly enabled unless overridden.
+statement ok
+COPY (SELECT 1::VARIANT AS v) TO '{TEST_DIR}/copy_variant_default' (FORMAT ICEBERG, "format-version" 3);
+
+query I
+SELECT content::JSON->'properties'->>'write.parquet.shred-variants'
+FROM read_text('{TEST_DIR}/copy_variant_default/metadata/*.metadata.json');
+----
+true
+
+query I
+SELECT count(*) FROM parquet_schema('{TEST_DIR}/copy_variant_default/data/*.parquet')
+WHERE name = 'typed_value';
+----
+1

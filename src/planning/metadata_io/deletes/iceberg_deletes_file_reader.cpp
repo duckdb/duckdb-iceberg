@@ -6,23 +6,15 @@
 #include "duckdb/main/database.hpp"
 
 #include "function/iceberg_functions.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 
 namespace duckdb {
 
-static virtual_column_map_t IcebergDeleteVirtualColumns(ClientContext &context,
-                                                        optional_ptr<FunctionData> bind_data_p) {
-	auto &bind_data = bind_data_p->Cast<MultiFileBindData>();
-	auto result = IcebergTableSchemaVersion::VirtualColumns();
-	bind_data.virtual_columns = result;
-	return result;
-}
-
 static void IcebergDeletesScanSerialize(Serializer &serializer, const optional_ptr<FunctionData> bind_data,
-                                        const TableFunction &function) {
+                                        const BoundTableFunction &function) {
 	throw NotImplementedException("IcebergDeletesScan serialization not implemented");
 }
-static unique_ptr<FunctionData> IcebergDeletesScanDeserialize(Deserializer &deserializer, TableFunction &function) {
+static unique_ptr<FunctionData> IcebergDeletesScanDeserialize(Deserializer &deserializer,
+                                                              BoundTableFunction &function) {
 	throw NotImplementedException("IcebergDeletesScan deserialization not implemented");
 }
 
@@ -55,10 +47,22 @@ TableFunctionSet IcebergFunctions::GetIcebergDeletesScanFunction(ClientContext &
 		function.statistics = nullptr;
 		function.table_scan_progress = nullptr;
 		function.get_bind_info = nullptr;
-		function.get_virtual_columns = IcebergDeleteVirtualColumns;
 
-		// Schema param is just confusing here
-		function.named_parameters.erase("schema");
+		// Schema param is just confusing here, so the options are rebuilt without it
+		auto &signature = function.GetSignature();
+		signature.ExtendTypedKwargs([](TypedKwargs &options) {
+			TypedKwargs without_schema;
+			for (auto &option : options.GetOptions()) {
+				if (option.name == "schema") {
+					continue;
+				}
+				without_schema.Add(option.name, option.type);
+				for (auto &alias : option.aliases) {
+					without_schema.Alias(alias);
+				}
+			}
+			options = std::move(without_schema);
+		});
 		function.SetName("iceberg_deletes_scan");
 	});
 
@@ -70,7 +74,7 @@ IcebergDeleteFileReader::IcebergDeleteFileReader(shared_ptr<TableFunctionInfo> f
     : function_info(function_info) {
 }
 
-unique_ptr<MultiFileReader> IcebergDeleteFileReader::CreateInstance(const TableFunction &table) {
+unique_ptr<MultiFileReader> IcebergDeleteFileReader::CreateInstance(const BoundTableFunction &table) {
 	return make_uniq<IcebergDeleteFileReader>(table.function_info);
 }
 

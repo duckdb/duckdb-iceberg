@@ -1,0 +1,6 @@
+services:
+  polaris:
+    environment:
+      # Polaris defaults to purging view metadata, but disables purge operations.
+      # Keep ordinary DROP VIEW available without enabling destructive purges.
+      polaris.features."PURGE_VIEW_METADATA_ON_DROP": "false"

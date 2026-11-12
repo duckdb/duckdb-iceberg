@@ -4,13 +4,7 @@
 
 require-env FIXTURE_SERVER_AVAILABLE
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 # Do not ignore 'HTTP' error messages!
 set ignore_error_messages
@@ -23,6 +17,10 @@ set logging_level='debug';
 
 statement ok
 CALL enable_logging('HTTP');
+
+# Inspect custom header values and Bearer tokens in the logged requests.
+statement ok
+SET redact_http_logs=false
 
 statement ok
 CREATE SECRET (
@@ -54,7 +52,9 @@ select split(request.url, 'v1')[2] from duckdb_logs_parsed('HTTP') order by all;
 /config
 /namespaces
 /namespaces/default/tables
+/namespaces/default/views
 /namespaces/level1/tables
+/namespaces/level1/views
 /oauth/tokens
 
 statement ok
@@ -97,7 +97,7 @@ commit;
 query I
 select count(*) from duckdb_logs_parsed('HTTP');
 ----
-3
+5
 
 statement ok
 call truncate_duckdb_logs();

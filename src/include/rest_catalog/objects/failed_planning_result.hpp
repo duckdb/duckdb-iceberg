@@ -19,21 +19,21 @@ public:
 	FailedPlanningResult &operator=(const FailedPlanningResult &) = delete;
 	FailedPlanningResult(FailedPlanningResult &&) = default;
 	FailedPlanningResult &operator=(FailedPlanningResult &&) = default;
-	class Object7 {
+	class Object12 {
 	public:
-		Object7();
-		Object7(const Object7 &) = delete;
-		Object7 &operator=(const Object7 &) = delete;
-		Object7(Object7 &&) = default;
-		Object7 &operator=(Object7 &&) = default;
+		Object12();
+		Object12(const Object12 &) = delete;
+		Object12 &operator=(const Object12 &) = delete;
+		Object12(Object12 &&) = default;
+		Object12 &operator=(Object12 &&) = default;
 
 	public:
 		// Deserialization
-		static Object7 FromJSON(JSONValue obj);
+		static Object12 FromJSON(JSONValue obj);
 		string TryFromJSON(JSONValue obj);
 
 		// Copy
-		Object7 Copy() const;
+		Object12 Copy() const;
 
 		// Serialization
 		void PopulateJSON(JSONWriter &writer, JSONMutableValue obj) const;
@@ -57,7 +57,7 @@ public:
 
 public:
 	IcebergErrorResponse iceberg_error_response;
-	Object7 object_7;
+	Object12 object_12;
 };
 
 } // namespace rest_api_objects

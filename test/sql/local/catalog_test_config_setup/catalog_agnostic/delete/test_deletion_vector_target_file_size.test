@@ -1,0 +1,185 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_deletion_vector_target_file_size.test
+# description: Puffin packing honors the delete file size target while keeping per-file vectors intact
+# group: [delete]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+foreach threads 1 4
+
+statement ok
+SET threads = {threads};
+
+# Granularity applies to logical deletes. Both settings permit sharing a Puffin container.
+foreach granularity file partition
+
+statement ok
+CREATE TABLE my_datalake.default.sized_dvs (p INT, id INT)
+PARTITIONED BY (p) WITH (
+    'format-version' = 3,
+    'write.delete.granularity' = '{granularity}',
+    'write.delete.target-file-size-bytes' = '2048'
+);
+
+statement ok
+INSERT INTO my_datalake.default.sized_dvs SELECT i % 24, i FROM range(2400) t(i);
+
+query I
+DELETE FROM my_datalake.default.sized_dvs WHERE id < 24;
+----
+24
+
+query II
+SELECT count(*), count(DISTINCT file_path) BETWEEN 2 AND 23
+FROM iceberg_metadata(my_datalake.default.sized_dvs) WHERE content = 'POSITION_DELETES';
+----
+24	true
+
+# The target includes the entire physical file, not just its DV payloads.
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE sized_dv_manifests = (
+    SELECT list(DISTINCT manifest_path) FROM iceberg_metadata(my_datalake.default.sized_dvs)
+    WHERE content = 'POSITION_DELETES'
+);
+
+statement ok
+SET VARIABLE sized_dv_paths = (
+    SELECT list(DISTINCT data_file.file_path) FROM read_avro(getvariable('sized_dv_manifests')) WHERE status != 2
+);
+
+query I
+SELECT bool_and(size <= 2048) FROM read_blob(getvariable('sized_dv_paths'));
+----
+true
+
+statement ok
+COMMIT;
+
+# Each replacement must keep the previous deletes. A single oversized DV cannot be split.
+statement ok
+ALTER TABLE my_datalake.default.sized_dvs SET ('write.delete.target-file-size-bytes' = '1');
+
+query I
+DELETE FROM my_datalake.default.sized_dvs WHERE id >= 24 AND id < 48;
+----
+24
+
+query III
+SELECT count(*), count(DISTINCT file_path), sum(record_count)
+FROM iceberg_metadata(my_datalake.default.sized_dvs)
+WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+24	24	48
+
+# Raising the target packs the replacement vectors back into one file.
+statement ok
+ALTER TABLE my_datalake.default.sized_dvs SET ('write.delete.target-file-size-bytes' = '67108864');
+
+query I
+DELETE FROM my_datalake.default.sized_dvs WHERE id >= 48 AND id < 72;
+----
+24
+
+query III
+SELECT count(*), count(DISTINCT file_path), sum(record_count)
+FROM iceberg_metadata(my_datalake.default.sized_dvs)
+WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+24	1	72
+
+query III
+SELECT count(*), min(id), sum(id) FROM my_datalake.default.sized_dvs;
+----
+2328	72	2876244
+
+statement ok
+DROP TABLE my_datalake.default.sized_dvs;
+
+endloop
+
+endloop
+
+statement ok
+RESET threads;
+
+# Measure a two-vector file, then repeat with equally sized file paths at the exact size boundary.
+statement ok
+CREATE TABLE my_datalake.default.dv_size_boundary (p INT, id INT)
+PARTITIONED BY (p) WITH ('format-version' = 3);
+
+statement ok
+INSERT INTO my_datalake.default.dv_size_boundary VALUES (0, 0), (1, 1), (0, 2), (1, 3);
+
+statement ok
+DELETE FROM my_datalake.default.dv_size_boundary WHERE id < 2;
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE boundary_dv_paths = (
+    SELECT list(DISTINCT file_path) FROM iceberg_metadata(my_datalake.default.dv_size_boundary)
+    WHERE content = 'POSITION_DELETES' AND status != 'DELETED'
+);
+
+statement ok
+SET VARIABLE boundary_dv_size = (SELECT size FROM read_blob(getvariable('boundary_dv_paths')));
+
+statement ok
+COMMIT;
+
+foreach delta 0 1
+
+statement ok
+DROP TABLE my_datalake.default.dv_size_boundary;
+
+statement ok
+CREATE TABLE my_datalake.default.dv_size_boundary (p INT, id INT)
+PARTITIONED BY (p) WITH ('format-version' = 3);
+
+statement ok
+INSERT INTO my_datalake.default.dv_size_boundary VALUES (0, 0), (1, 1), (0, 2), (1, 3);
+
+statement ok
+ALTER TABLE my_datalake.default.dv_size_boundary
+SET ('write.delete.target-file-size-bytes' = (getvariable('boundary_dv_size') - {delta})::VARCHAR);
+
+statement ok
+DELETE FROM my_datalake.default.dv_size_boundary WHERE id < 2;
+
+query II
+SELECT count(*), count(DISTINCT file_path) = 1 + {delta}
+FROM iceberg_metadata(my_datalake.default.dv_size_boundary)
+WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+2	true
+
+endloop
+
+# Reject unusable targets before materializing any deletes.
+foreach invalid_target 0 -1 invalid 1.5 9223372036854775808
+
+statement ok
+ALTER TABLE my_datalake.default.dv_size_boundary
+SET ('write.delete.target-file-size-bytes' = '{invalid_target}');
+
+statement error
+DELETE FROM my_datalake.default.dv_size_boundary WHERE id = 2;
+----
+write.delete.target-file-size-bytes' must be a positive integer number of bytes
+
+query I
+SELECT count(*) FROM my_datalake.default.dv_size_boundary;
+----
+2
+
+endloop
+
+statement ok
+DROP TABLE my_datalake.default.dv_size_boundary;

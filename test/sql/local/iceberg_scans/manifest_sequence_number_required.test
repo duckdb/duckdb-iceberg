@@ -1,0 +1,50 @@
+# name: test/sql/local/iceberg_scans/manifest_sequence_number_required.test
+# description: A V2 manifest sequence number must be present before constructing the manifest.
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+COPY (SELECT 1 AS id) TO '{TEST_DIR}/sequence_required' (FORMAT ICEBERG);
+
+# Keep the field in the Avro schema but make its value NULL. The reader must
+# reject it instead of supplying the zero default reserved for V1 manifests.
+statement ok
+COPY (
+    SELECT '{TEST_DIR}/unread_manifest.avro' AS manifest_path,
+           0::BIGINT AS manifest_length,
+           0::INTEGER AS partition_spec_id,
+           0::INTEGER AS content,
+           NULL::BIGINT AS sequence_number,
+           1::BIGINT AS min_sequence_number,
+           1::BIGINT AS added_snapshot_id
+) TO '{TEST_DIR}/null_sequence.avro' (
+    FORMAT AVRO,
+    FIELD_IDS {
+        manifest_path: 500, manifest_length: 501, partition_spec_id: 502,
+        content: 517, sequence_number: 515, min_sequence_number: 516, added_snapshot_id: 503
+    }
+);
+
+statement ok
+COPY (
+    SELECT json_merge_patch(content::JSON, json_object(
+        'snapshots', json_array(json_merge_patch(
+            content::JSON->'snapshots'->0,
+            json_object('manifest-list', '{TEST_DIR}/null_sequence.avro')
+        ))
+    ))
+    FROM read_text('{TEST_DIR}/sequence_required/metadata/*.metadata.json')
+) TO '{TEST_DIR}/null_sequence.metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+statement error
+SELECT * FROM iceberg_scan('{TEST_DIR}/null_sequence.metadata.json');
+----
+required field 'sequence_number' is NULL!
+
+query I
+SELECT 42;
+----
+42

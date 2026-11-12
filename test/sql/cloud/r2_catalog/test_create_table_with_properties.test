@@ -6,13 +6,7 @@ require-env ICEBERG_AWS_REMOTE_AVAILABLE
 
 require-env R2_TOKEN
 
-require httpfs
-
-require avro
-
-require parquet
-
-require iceberg
+include test/sql/init_requires
 
 require aws
 
@@ -64,5 +58,5 @@ WITH (
     'property2'='value2'
 );
 ----
-<REGEX>:.*Invalid format version specified in table_properties.*
+<REGEX>:.*The highest supported iceberg version is 3.*
 

@@ -4,13 +4,11 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
-require avro
+require-env COLUMN_DEFAULT_SUPPORT
 
-require parquet
+require-env FORMAT_V3_SUPPORT
 
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 
 statement ok
@@ -87,7 +85,14 @@ WHERE id = 3;
 query III
 select * from my_datalake.default.tbl where id = 3
 ----
-3	{'a': test, 'b': NULL, 'c': \xAA\xFF\xAA}	NULL
+3	{'a': test, 'b': NULL, 'c': '\\xAA\\xFF\\xAA'}	NULL
+
+# Nested display escaping must not change the updated BLOB.
+query TIT
+select typeof(col.c), octet_length(col.c), hex(col.c)
+from my_datalake.default.tbl where id = 3;
+----
+BLOB	3	AAFFAA
 
 statement ok
 RESET __iceberg_unsafe_struct_null_default_interp;

@@ -33,7 +33,7 @@ FileScanTask FileScanTask::Copy() const {
 		}
 	}
 	if (residual_filter != nullptr) {
-		res.residual_filter = residual_filter ? make_uniq<Expression>(residual_filter->Copy()) : nullptr;
+		res.residual_filter = residual_filter ? make_uniq<Predicate>(residual_filter->Copy()) : nullptr;
 	}
 	return res;
 }
@@ -81,7 +81,7 @@ string FileScanTask::TryFromJSON(JSONValue obj) {
 	}
 	auto residual_filter_val = obj.GetMember("residual-filter");
 	if (residual_filter_val.IsValid()) {
-		residual_filter = make_uniq<Expression>();
+		residual_filter = make_uniq<Predicate>();
 		error = residual_filter->TryFromJSON(residual_filter_val);
 		if (!error.empty()) {
 			return error;

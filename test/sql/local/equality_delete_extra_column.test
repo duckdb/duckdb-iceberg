@@ -2,13 +2,7 @@
 # description: Equality-delete on a transform-partitioned table
 # group: [local]
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 # id=2 is removed by an equality delete; the table is partitioned by bucket(val).
 query IT

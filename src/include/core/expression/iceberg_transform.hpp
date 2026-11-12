@@ -10,7 +10,17 @@ namespace duckdb {
 class IcebergTableSchema;
 struct IcebergColumnDefinition;
 
-enum class IcebergTransformType : uint8_t { IDENTITY, BUCKET, TRUNCATE, YEAR, MONTH, DAY, HOUR, VOID, INVALID };
+enum class IcebergTransformType : uint8_t {
+	IDENTITY,
+	BUCKET,
+	TRUNCATE,
+	YEAR,
+	MONTH,
+	DAY,
+	HOUR,
+	VOID_TRANSFORM,
+	INVALID
+};
 
 struct IcebergTransform {
 public:
@@ -48,8 +58,10 @@ public:
 	                                       vector<reference<const IcebergColumnDefinition>> &source_columns);
 
 	static bool TransformFunctionSupported(const string &transform_name);
+	bool CanTransform(const LogicalType &source) const;
 	LogicalType GetSerializedType(const LogicalType &input) const;
 	LogicalType GetBoundsType(const LogicalType &input) const;
+	LogicalType GetResultType(const LogicalType &input) const;
 	Value ApplyTransform(const Value &value) const;
 	string PartitionValueToString(const Value &partition_value) const;
 	void SetBucketOrTruncateValue(idx_t value);

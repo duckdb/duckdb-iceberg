@@ -4,13 +4,7 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 require icu
 
@@ -123,12 +117,13 @@ ORDER BY ALL;
 statement ok
 commit
 
-# nan_value_counts not yet written by DuckDB parquet writer (see iceberg_insert.cpp TODO)
-query I
-SELECT count(*) FROM iceberg_column_stats(my_datalake.default.value_counts_all_nan)
-WHERE nan_value_count IS NOT NULL;
+# every value is NaN, so each column's nan_value_count is the row count
+query II
+SELECT column_name, nan_value_count FROM iceberg_column_stats(my_datalake.default.value_counts_all_nan)
+ORDER BY ALL;
 ----
-0
+double_type	100
+float_type	100
 
 # --- Nested types from test_all_types (3 rows) ---
 statement ok
@@ -153,24 +148,26 @@ SET VARIABLE manifest_nested = (
 	ORDER BY manifest_sequence_number DESC LIMIT 1
 );
 
-# Leaf fields get value_counts; container columns do not
+# Both leaf fields and containers get value_counts. Each top-level container has 3 rows.
 query II
 SELECT column_name, value_count
 FROM iceberg_column_stats(my_datalake.default.value_counts_nested)
-WHERE column_name IN ('a', 'b', 'element', 'key', 'value')
 ORDER BY column_name, value_count;
 ----
 a	3
 b	3
 element	6
 element	7
+int_array	3
 key	4
+map	3
+struct	3
 value	4
+varchar_array	3
 
 # Manifest avro: Iceberg field ids are assigned by the catalog (Nessie vs fixture use
-# different ids for nested columns), but value_counts values are stable. For example
-# test_all_types nested leaf fields are 5->3,6->3,7->7,... on fixture but
-# 2->3,3->3,5->7,... on Nessie — same multiset [3,3,4,4,6,7], different keys.
+# different ids for nested columns), but value_counts values are stable.
+# Include the four container counts alongside the six leaf counts.
 # Assert on the value_count multiset, not field_id pairs.
 query I
 SELECT count(*) FROM (
@@ -178,10 +175,10 @@ SELECT count(*) FROM (
 	FROM (SELECT unnest(data_file) FROM read_avro(getvariable('manifest_nested')))
 );
 ----
-6
+10
 
 query I
-SELECT list_sort(list(value_count::BIGINT)) = [3, 3, 4, 4, 6, 7]::BIGINT[] FROM (
+SELECT list_sort(list(value_count::BIGINT)) = [3, 3, 3, 3, 3, 3, 4, 4, 6, 7]::BIGINT[] FROM (
 	SELECT unnest(map_values(value_counts)) AS value_count
 	FROM (SELECT unnest(data_file) FROM read_avro(getvariable('manifest_nested')))
 );
@@ -209,17 +206,21 @@ SET VARIABLE manifest_struct_of_arrays = (
 	ORDER BY manifest_sequence_number DESC LIMIT 1
 );
 
+# Child containers exclude the absent parent struct, but include their own NULLs.
 query IIII
 SELECT column_name, column_type, value_count, null_value_count
 FROM iceberg_column_stats(my_datalake.default.value_counts_struct_of_arrays)
 WHERE value_count IS NOT NULL
 ORDER BY column_name, column_type;
 ----
+a	INTEGER[]	2	1
+b	VARCHAR[]	2	1
 element	INTEGER	7	4
 element	VARCHAR	6	3
+struct_of_arrays	STRUCT(a INTEGER[], b VARCHAR[])	3	1
 
 query I
-SELECT list_sort(list(value_count::BIGINT)) = [6, 7]::BIGINT[] FROM (
+SELECT list_sort(list(value_count::BIGINT)) = [2, 2, 3, 6, 7]::BIGINT[] FROM (
 	SELECT unnest(map_values(value_counts)) AS value_count
 	FROM (SELECT unnest(data_file) FROM read_avro(getvariable('manifest_struct_of_arrays')))
 );
@@ -254,9 +255,11 @@ WHERE value_count IS NOT NULL
 ORDER BY column_name, column_type;
 ----
 element	INTEGER	15	9
+element	INTEGER[]	5	1
+nested_int_array	INTEGER[][]	3	1
 
 query I
-SELECT list_sort(list(value_count::BIGINT)) = [15]::BIGINT[] FROM (
+SELECT list_sort(list(value_count::BIGINT)) = [3, 5, 15]::BIGINT[] FROM (
 	SELECT unnest(map_values(value_counts)) AS value_count
 	FROM (SELECT unnest(data_file) FROM read_avro(getvariable('manifest_nested_int_array')))
 );
@@ -290,11 +293,13 @@ FROM iceberg_column_stats(my_datalake.default.value_counts_array_of_structs)
 WHERE value_count IS NOT NULL
 ORDER BY column_name, column_type;
 ----
-a	INTEGER	5	5
-b	VARCHAR	5	5
+a	INTEGER	5	4
+array_of_structs	STRUCT(a INTEGER, b VARCHAR)[]	3	1
+b	VARCHAR	5	4
+element	STRUCT(a INTEGER, b VARCHAR)	3	1
 
 query I
-SELECT list_sort(list(value_count::BIGINT)) = [5, 5]::BIGINT[] FROM (
+SELECT list_sort(list(value_count::BIGINT)) = [3, 3, 5, 5]::BIGINT[] FROM (
 	SELECT unnest(map_values(value_counts)) AS value_count
 	FROM (SELECT unnest(data_file) FROM read_avro(getvariable('manifest_array_of_structs')))
 );
@@ -328,10 +333,11 @@ FROM iceberg_column_stats(my_datalake.default.value_counts_double_array)
 WHERE value_count IS NOT NULL
 ORDER BY column_name, column_type;
 ----
+double_array	DOUBLE[]	3	1
 element	DOUBLE	8	3
 
 query I
-SELECT list_sort(list(value_count::BIGINT)) = [8]::BIGINT[] FROM (
+SELECT list_sort(list(value_count::BIGINT)) = [3, 8]::BIGINT[] FROM (
 	SELECT unnest(map_values(value_counts)) AS value_count
 	FROM (SELECT unnest(data_file) FROM read_avro(getvariable('manifest_double_array')))
 );
@@ -368,9 +374,11 @@ ORDER BY column_name, column_type;
 ----
 a	INTEGER	7	4
 b	VARCHAR	7	4
+element	STRUCT(a INTEGER, b VARCHAR)	6	0
+fixed_struct_array	STRUCT(a INTEGER, b VARCHAR)[]	3	1
 
 query I
-SELECT list_sort(list(value_count::BIGINT)) = [7, 7]::BIGINT[] FROM (
+SELECT list_sort(list(value_count::BIGINT)) = [3, 6, 7, 7]::BIGINT[] FROM (
 	SELECT unnest(map_values(value_counts)) AS value_count
 	FROM (SELECT unnest(data_file) FROM read_avro(getvariable('manifest_fixed_struct_array')))
 );
@@ -405,11 +413,14 @@ FROM iceberg_column_stats(my_datalake.default.value_counts_struct_of_fixed_array
 WHERE value_count IS NOT NULL
 ORDER BY column_name, column_type;
 ----
+a	INTEGER[]	2	0
+b	VARCHAR[]	2	0
 element	INTEGER	7	2
 element	VARCHAR	7	2
+struct_of_fixed_array	STRUCT(a INTEGER[], b VARCHAR[])	3	1
 
 query I
-SELECT list_sort(list(value_count::BIGINT)) = [7, 7]::BIGINT[] FROM (
+SELECT list_sort(list(value_count::BIGINT)) = [2, 2, 3, 7, 7]::BIGINT[] FROM (
 	SELECT unnest(map_values(value_counts)) AS value_count
 	FROM (SELECT unnest(data_file) FROM read_avro(getvariable('manifest_struct_of_fixed_array')))
 );
@@ -445,9 +456,11 @@ WHERE value_count IS NOT NULL
 ORDER BY column_name, column_type;
 ----
 element	INTEGER	19	10
+element	INTEGER[]	6	0
+fixed_array_of_int_list	INTEGER[][]	3	1
 
 query I
-SELECT list_sort(list(value_count::BIGINT)) = [19]::BIGINT[] FROM (
+SELECT list_sort(list(value_count::BIGINT)) = [3, 6, 19]::BIGINT[] FROM (
 	SELECT unnest(map_values(value_counts)) AS value_count
 	FROM (SELECT unnest(data_file) FROM read_avro(getvariable('manifest_fixed_array_of_int_list')))
 );
@@ -483,9 +496,11 @@ WHERE value_count IS NOT NULL
 ORDER BY column_name, column_type;
 ----
 element	INTEGER	19	4
+element	INTEGER[]	6	0
+list_of_fixed_int_array	INTEGER[][]	3	1
 
 query I
-SELECT list_sort(list(value_count::BIGINT)) = [19]::BIGINT[] FROM (
+SELECT list_sort(list(value_count::BIGINT)) = [3, 6, 19]::BIGINT[] FROM (
 	SELECT unnest(map_values(value_counts)) AS value_count
 	FROM (SELECT unnest(data_file) FROM read_avro(getvariable('manifest_list_of_fixed_int_array')))
 );
@@ -521,9 +536,10 @@ WHERE value_count IS NOT NULL
 ORDER BY column_name, column_type;
 ----
 element	INTEGER	7	2
+fixed_int_array	INTEGER[]	3	1
 
 query I
-SELECT list_sort(list(value_count::BIGINT)) = [7]::BIGINT[] FROM (
+SELECT list_sort(list(value_count::BIGINT)) = [3, 7]::BIGINT[] FROM (
 	SELECT unnest(map_values(value_counts)) AS value_count
 	FROM (SELECT unnest(data_file) FROM read_avro(getvariable('manifest_fixed_int_array')))
 );
@@ -596,14 +612,16 @@ INSERT INTO my_datalake.default.duckdb_nested_types VALUES (
 query II
 SELECT column_name, value_count
 FROM iceberg_column_stats(my_datalake.default.duckdb_nested_types)
-WHERE column_name IN ('id', 'name', 'street', 'city', 'zip', 'element', 'key', 'value')
 ORDER BY column_name;
 ----
+address	1
 city	1
 element	2
 id	1
 key	2
+metadata	1
 name	1
+phone_numbers	1
 street	1
 value	2
 zip	1
@@ -626,10 +644,10 @@ SELECT count(*) FROM (
 	FROM (SELECT unnest(data_file) FROM read_avro(getvariable('avro_file')))
 );
 ----
-8
+11
 
 query I
-SELECT list_sort(list(value_count::BIGINT)) = [1, 1, 1, 1, 1, 2, 2, 2]::BIGINT[] FROM (
+SELECT list_sort(list(value_count::BIGINT)) = [1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2]::BIGINT[] FROM (
 	SELECT unnest(map_values(value_counts)) AS value_count
 	FROM (SELECT unnest(data_file) FROM read_avro(getvariable('avro_file')))
 );
@@ -664,11 +682,14 @@ FROM iceberg_column_stats(my_datalake.default.duckdb_nested_types_multi)
 WHERE value_count IS NOT NULL
 ORDER BY column_name, column_type, value_count;
 ----
+address	STRUCT(street VARCHAR, city VARCHAR, zip VARCHAR)	3	1
 city	VARCHAR	3	1
 element	VARCHAR	4	1
 id	INTEGER	3	0
 key	VARCHAR	4	0
+metadata	MAP(VARCHAR, VARCHAR)	3	0
 name	VARCHAR	3	0
+phone_numbers	VARCHAR[]	3	0
 street	VARCHAR	3	1
 value	VARCHAR	4	0
 zip	VARCHAR	3	1
@@ -689,10 +710,10 @@ SELECT count(*) FROM (
 	FROM (SELECT unnest(data_file) FROM read_avro(getvariable('manifest_nested_multi')))
 );
 ----
-8
+11
 
 query I
-SELECT list_sort(list(value_count::BIGINT)) = [3, 3, 3, 3, 3, 4, 4, 4]::BIGINT[] FROM (
+SELECT list_sort(list(value_count::BIGINT)) = [3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4]::BIGINT[] FROM (
 	SELECT unnest(map_values(value_counts)) AS value_count
 	FROM (SELECT unnest(data_file) FROM read_avro(getvariable('manifest_nested_multi')))
 );

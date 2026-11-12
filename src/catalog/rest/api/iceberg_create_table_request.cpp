@@ -22,12 +22,13 @@
 namespace duckdb {
 
 IcebergCreateTableRequest::IcebergCreateTableRequest(string name_p, shared_ptr<IcebergTableSchema> schema_p,
-                                                     IcebergPartitionSpec partition_spec_p, idx_t iceberg_version_p,
+                                                     IcebergPartitionSpec partition_spec_p,
+                                                     IcebergSortOrder sort_order_p, idx_t iceberg_version_p,
                                                      case_insensitive_map_t<string> table_properties_p,
                                                      string location_p)
     : name(std::move(name_p)), schema(std::move(schema_p)), partition_spec(std::move(partition_spec_p)),
-      iceberg_version(iceberg_version_p), table_properties(std::move(table_properties_p)),
-      location(std::move(location_p)) {
+      sort_order(std::move(sort_order_p)), iceberg_version(iceberg_version_p),
+      table_properties(std::move(table_properties_p)), location(std::move(location_p)) {
 }
 
 static void AddUnnamedField(JSONWriter &writer, JSONMutableValue field_obj, const IcebergColumnDefinition &column);
@@ -93,7 +94,7 @@ static void AddUnnamedField(JSONWriter &writer, JSONMutableValue field_obj, cons
 			field_obj.Add("element", list_type_obj);
 			AddUnnamedField(writer, list_type_obj, *list_type);
 		}
-		field_obj.Add("element-required", writer.CreateBoolean(false));
+		field_obj.Add("element-required", writer.CreateBoolean(list_type->required));
 		return;
 	}
 	case LogicalTypeId::MAP: {
@@ -117,7 +118,7 @@ static void AddUnnamedField(JSONWriter &writer, JSONMutableValue field_obj, cons
 			AddUnnamedField(writer, val_obj, *val_child);
 		}
 		field_obj.Add("value-id", writer.CreateUnsignedInteger(val_child->id));
-		field_obj.Add("value-required", writer.CreateBoolean(false));
+		field_obj.Add("value-required", writer.CreateBoolean(val_child->required));
 		break;
 	}
 	default:
@@ -131,6 +132,12 @@ IcebergCreateTableRequest::CreateIcebergColumn(const ColumnDefinition &column_de
                                                idx_t iceberg_version) {
 	const auto &name = column_def.Name();
 	const auto &logical_type = column_def.GetType();
+	auto minimum_version = IcebergTypeHelper::MinimumFormatVersion(logical_type);
+	if (static_cast<idx_t>(minimum_version) > iceberg_version) {
+		throw InvalidInputException("Column '%s' of type %s requires Iceberg format-version %d, the table uses %d",
+		                            name.GetIdentifierName(), logical_type.ToString(), minimum_version,
+		                            iceberg_version);
+	}
 
 	Value default_value;
 	if (column_def.HasDefaultValue()) {
@@ -246,10 +253,7 @@ string IcebergCreateTableRequest::CreateTableToJSON(bool stage_create) const {
 		field_obj.Add("field-id", writer.CreateSignedInteger(field.partition_field_id));
 	}
 
-	auto write_order = writer.CreateObject();
-	root_object.Add("write-order", write_order);
-	write_order.Add("order-id", writer.CreateUnsignedInteger(0));
-	write_order.Add("fields", writer.CreateArray());
+	root_object.Add("write-order", sort_order.ToJSON(writer));
 
 	auto properties = writer.CreateObject();
 	root_object.Add("properties", properties);

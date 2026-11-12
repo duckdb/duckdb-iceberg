@@ -1,0 +1,7 @@
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs

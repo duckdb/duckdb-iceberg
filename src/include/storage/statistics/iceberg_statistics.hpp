@@ -31,6 +31,7 @@ struct IcebergColumnStats {
 	optional<idx_t> num_values;
 	optional<idx_t> column_size_bytes;
 	optional<bool> contains_nan;
+	optional<idx_t> nan_count;
 	bool any_valid = true;
 
 	// Geometry bounding-box stats produced by the parquet writer's RETURN_STATS.

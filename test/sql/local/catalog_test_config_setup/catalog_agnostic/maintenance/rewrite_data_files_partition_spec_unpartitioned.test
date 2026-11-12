@@ -1,0 +1,195 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_partition_spec_unpartitioned.test
+# description: Rewrite data across partitioned and unpartitioned specs
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.rewrite_spec_remove_partition;
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_spec_remove_partition (a INTEGER, payload INTEGER)
+PARTITIONED BY (a);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_spec_remove_partition VALUES (1, 10), (2, 20);
+
+statement ok
+ALTER TABLE my_datalake.default.rewrite_spec_remove_partition RESET PARTITIONED BY;
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_spec_remove_partition VALUES (3, 30);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_spec_remove_partition VALUES (4, 40);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_spec_remove_partition VALUES (5, 50);
+
+query I
+SELECT count(*) FROM iceberg_metadata('my_datalake.default.rewrite_spec_remove_partition')
+WHERE content = 'DATA' AND status <> 'DELETED';
+----
+5
+
+# Neither spec has five files on its own. With an unpartitioned output,
+# they must qualify as one group, even when fewer than five files are retained.
+query IIIII
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_spec_remove_partition', max_files_to_rewrite => 3);
+----
+3	1	<REGEX>:[1-9][0-9]*	0	0
+
+query I
+SELECT count(*) FROM iceberg_metadata('my_datalake.default.rewrite_spec_remove_partition')
+WHERE content = 'DATA' AND status <> 'DELETED';
+----
+3
+
+query II
+SELECT count(*), sum(payload) FROM my_datalake.default.rewrite_spec_remove_partition;
+----
+5	150
+
+query IIIII
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_spec_remove_partition', rewrite_all => true);
+----
+3	1	<REGEX>:[1-9][0-9]*	0	0
+
+query II
+SELECT s.partition_spec_id, count(*)
+FROM iceberg_metadata('my_datalake.default.rewrite_spec_remove_partition') m
+JOIN iceberg_manifests('my_datalake.default.rewrite_spec_remove_partition') s ON m.manifest_path = s.path
+WHERE m.content = 'DATA' AND m.status <> 'DELETED'
+GROUP BY s.partition_spec_id;
+----
+1	1
+
+query II
+SELECT a, payload FROM my_datalake.default.rewrite_spec_remove_partition ORDER BY a;
+----
+1	10
+2	20
+3	30
+4	40
+5	50
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_spec_remove_partition;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.rewrite_spec_add_partition;
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_spec_add_partition (a INTEGER, b INTEGER);
+
+# Validate output_spec_id even when there is no snapshot.
+query IIIII
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_spec_add_partition', output_spec_id => 0);
+----
+0	0	0	0	0
+
+statement error
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_spec_add_partition', output_spec_id => -1);
+----
+does not exist in the table partition specs
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_spec_add_partition VALUES (1, 10), (2, NULL);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_spec_add_partition VALUES (3, 10), (4, 30);
+
+statement ok
+ALTER TABLE my_datalake.default.rewrite_spec_add_partition SET PARTITIONED BY (b);
+
+# Two historical files do not meet the default count or byte threshold.
+query IIIII
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_spec_add_partition');
+----
+0	0	0	0	0
+
+# The byte threshold can qualify the historical group independently of file count.
+# Passing the current spec explicitly must work for a non-empty rewrite.
+query IIIII
+CALL iceberg_rewrite_data_files(
+    'my_datalake.default.rewrite_spec_add_partition',
+    target_file_size_bytes => 100,
+    min_input_files => 10,
+    output_spec_id => 1
+);
+----
+2	3	<REGEX>:[1-9][0-9]*	0	0
+
+query II
+SELECT s.partition_spec_id, count(*)
+FROM iceberg_metadata('my_datalake.default.rewrite_spec_add_partition') m
+JOIN iceberg_manifests('my_datalake.default.rewrite_spec_add_partition') s ON m.manifest_path = s.path
+WHERE m.content = 'DATA' AND m.status <> 'DELETED'
+GROUP BY s.partition_spec_id;
+----
+1	3
+
+query I
+SELECT a FROM my_datalake.default.rewrite_spec_add_partition WHERE b = 10 ORDER BY a;
+----
+1
+3
+
+query I
+SELECT a FROM my_datalake.default.rewrite_spec_add_partition WHERE b IS NULL;
+----
+2
+
+query I
+SELECT a FROM my_datalake.default.rewrite_spec_add_partition WHERE b = 30;
+----
+4
+
+# Count NULL as a distinct partition value too.
+query I
+SELECT count(*) FROM (
+    SELECT filename FROM my_datalake.default.rewrite_spec_add_partition
+    GROUP BY filename
+    HAVING count(DISTINCT b) + bool_or(b IS NULL)::INTEGER > 1
+);
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_spec_add_partition;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.rewrite_spec_dropped_source;
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_spec_dropped_source (p INTEGER, payload INTEGER)
+PARTITIONED BY (p);
+
+statement ok
+ALTER TABLE my_datalake.default.rewrite_spec_dropped_source ALTER COLUMN p TYPE BIGINT;
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_spec_dropped_source VALUES (2147483648, 10), (2147483649, 20);
+
+statement ok
+ALTER TABLE my_datalake.default.rewrite_spec_dropped_source RESET PARTITIONED BY;
+
+statement ok
+ALTER TABLE my_datalake.default.rewrite_spec_dropped_source DROP COLUMN p;
+
+# Historical partition values retain their original schema even when their source is gone.
+query IIIII
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_spec_dropped_source', min_input_files => 2);
+----
+2	1	<REGEX>:[1-9][0-9]*	0	0
+
+query I
+SELECT payload FROM my_datalake.default.rewrite_spec_dropped_source ORDER BY payload;
+----
+10
+20
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_spec_dropped_source;

@@ -3,13 +3,7 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP fixture
 
-require httpfs
-
-require avro
-
-require parquet
-
-require iceberg
+include test/sql/init_requires
 
 statement ok
 set enable_logging=true

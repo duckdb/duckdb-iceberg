@@ -145,6 +145,11 @@ void IcebergVariantBounds::AddStatsEntry(const vector<string> &full_path, idx_t 
 		return;
 	}
 
+	//! Even-length suffixes identify wrapper groups named after object fields or list elements.
+	if ((full_path.size() - variant_field_start) % 2 == 0) {
+		return;
+	}
+
 	// check leafs have values. That means path is not fully shredded
 	if (leaf == "value") {
 		optional<idx_t> null_count, num_values;
@@ -157,18 +162,21 @@ void IcebergVariantBounds::AddStatsEntry(const vector<string> &full_path, idx_t 
 				num_values = StringUtil::ToUnsigned(StringValue::Get(child_children[1]));
 			}
 		}
-		if (!num_values || !null_count || (*num_values - *null_count) > 0) {
+		if (!num_values || !null_count || *num_values != *null_count) {
 			// be conservative: missing counts OR any non-null -> treat as partial
 			partial_paths.push_back(ExtractVariantFieldNames(full_path, variant_field_start));
 		}
 	}
-	// only "typed_value" leaves carry shredded bounds; ignore untyped "value" leaves for now
+	//! Typed entries carry either container counts or primitive bounds.
 	if (leaf != "typed_value") {
 		return;
 	}
 
 	FieldBound bound;
 	bound.field_names = ExtractVariantFieldNames(full_path, variant_field_start);
+	optional<idx_t> null_count;
+	optional<idx_t> num_values;
+	bool is_leaf = false;
 	for (auto &stat : col_stats) {
 		auto &stat_children = StructValue::GetChildren(stat);
 		auto &name = StringValue::Get(stat_children[0]);
@@ -176,7 +184,17 @@ void IcebergVariantBounds::AddStatsEntry(const vector<string> &full_path, idx_t 
 			bound.min_value = StringValue::Get(stat_children[1]);
 		} else if (name == "max") {
 			bound.max_value = StringValue::Get(stat_children[1]);
+		} else if (name == "null_count") {
+			null_count = StringUtil::ToUnsigned(StringValue::Get(stat_children[1]));
+		} else if (name == "num_values") {
+			num_values = StringUtil::ToUnsigned(StringValue::Get(stat_children[1]));
+		} else if (name == "column_size_bytes") {
+			is_leaf = true;
 		}
+	}
+	//! Containers have no physical column size, and their counts exclude absent parents.
+	if (!is_leaf && num_values && null_count && *null_count == 0) {
+		non_null_containers.insert(bound.field_names);
 	}
 	if (bound.min_value || bound.max_value) {
 		fields.push_back(std::move(bound));
@@ -203,19 +221,22 @@ bool IcebergVariantBounds::Finalize(ClientContext &context, optional<string> &lo
 	child_list_t<Value> lower_children;
 	child_list_t<Value> upper_children;
 	for (auto &field : fields) {
-		bool drop_field = !partial_paths.empty();
+		bool drop_field = false;
 		for (auto &partial_path : partial_paths) {
+			//! A present typed container can have unshredded object fields without invalidating its children.
+			if (non_null_containers.count(partial_path) || partial_path.size() > field.field_names.size()) {
+				continue;
+			}
+			bool is_prefix = true;
 			for (idx_t i = 0; i < partial_path.size(); i++) {
-				if (i >= field.field_names.size()) {
-					// the partial path of an unshredded field is longer.
-					// i.e a.b.c.d (unshredded) is longer than a.b which is not possible
-					throw InternalException("Partial path length longer than field path length");
-				}
 				if (partial_path[i] != field.field_names[i]) {
-					// the paths deviate
-					drop_field = false;
+					is_prefix = false;
 					break;
 				}
+			}
+			if (is_prefix) {
+				drop_field = true;
+				break;
 			}
 		}
 		if (drop_field) {
@@ -345,7 +366,8 @@ Value NodeToValue(const BoundNode &node) {
 
 } // namespace
 
-bool IcebergVariantBoundsReader::RekeyBoundsVariant(const Value &bounds_variant, Value &result) {
+bool IcebergVariantBoundsReader::RekeyBoundsVariant(const Value &bounds_variant, const vector<string> &path,
+                                                    Value &result) {
 	if (bounds_variant.IsNull() || bounds_variant.type().id() != LogicalTypeId::VARIANT) {
 		return false;
 	}
@@ -379,8 +401,23 @@ bool IcebergVariantBoundsReader::RekeyBoundsVariant(const Value &bounds_variant,
 	if (root.children.empty()) {
 		return false;
 	}
+	//! The bounds of the requested path; a path without bounds means nothing is known about it
+	const BoundNode *node = &root;
+	for (auto &segment : path) {
+		const BoundNode *child = nullptr;
+		for (auto &entry : node->children) {
+			if (entry.first == segment) {
+				child = entry.second.get();
+				break;
+			}
+		}
+		if (!child) {
+			return false;
+		}
+		node = child;
+	}
 
-	Value nested_struct = NodeToValue(root);
+	Value nested_struct = NodeToValue(*node);
 	auto variant_result = nested_struct.DefaultTryCastAs(LogicalType::VARIANT());
 	if (!variant_result) {
 		return false;

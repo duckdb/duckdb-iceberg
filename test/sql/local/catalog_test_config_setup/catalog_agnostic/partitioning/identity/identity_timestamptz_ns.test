@@ -1,0 +1,129 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/partitioning/identity/identity_timestamptz_ns.test
+# description: Preserve nanoseconds and UTC semantics in identity partition manifests
+# group: [identity]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+require-env TIMESTAMP_NS_SUPPORT
+
+include test/sql/init_requires
+
+require icu
+
+require json
+
+statement ok
+SET TimeZone='UTC';
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.partition_identity_timestamptz_ns;
+
+statement ok
+CREATE TABLE my_datalake.default.partition_identity_timestamptz_ns (
+	id INT,
+	ts TIMESTAMPTZ_NS
+) PARTITIONED BY (ts) WITH ('format-version' = '3');
+
+statement ok
+INSERT INTO my_datalake.default.partition_identity_timestamptz_ns VALUES
+	(1, '2026-10-09 10:00:00.123456789+00'::TIMESTAMPTZ_NS),
+	(2, '2026-10-09 12:00:00.123456790+02'::TIMESTAMPTZ_NS),
+	(3, '1969-12-31 23:59:59.999999999+00'::TIMESTAMPTZ_NS),
+	(4, '1970-01-01 00:00:00+00'::TIMESTAMPTZ_NS),
+	(5, NULL);
+
+query II
+SELECT id, epoch_ns(ts) FROM my_datalake.default.partition_identity_timestamptz_ns ORDER BY id;
+----
+1	1791540000123456789
+2	1791540000123456790
+3	-1
+4	0
+5	NULL
+
+# A second commit must also read the previous manifests.
+statement ok
+INSERT INTO my_datalake.default.partition_identity_timestamptz_ns VALUES
+	(6, '2026-10-09 11:00:00.000000001+00'::TIMESTAMPTZ_NS);
+
+query I
+SELECT id FROM my_datalake.default.partition_identity_timestamptz_ns
+WHERE ts = '2026-10-09 10:00:00.123456789+00'::TIMESTAMPTZ_NS;
+----
+1
+
+query I
+SELECT id FROM my_datalake.default.partition_identity_timestamptz_ns
+WHERE ts = '2026-10-09 12:00:00.123456790+02'::TIMESTAMPTZ_NS;
+----
+2
+
+query I
+SELECT id FROM my_datalake.default.partition_identity_timestamptz_ns
+WHERE ts < '1970-01-01 00:00:00+00'::TIMESTAMPTZ_NS;
+----
+3
+
+query I
+SELECT id FROM my_datalake.default.partition_identity_timestamptz_ns WHERE ts IS NULL;
+----
+5
+
+# Keep catalog-vended credentials alive for the direct manifest reads.
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE tsns_manifests = (
+	SELECT list(DISTINCT manifest_path)
+	FROM iceberg_metadata(my_datalake.default.partition_identity_timestamptz_ns)
+);
+
+# Inspect the serialized partition values, including nulls and adjacent nanoseconds.
+query TI
+SELECT typeof(data_file.partition.identity_ts_2), epoch_ns(data_file.partition.identity_ts_2)
+FROM read_avro(getvariable('tsns_manifests'))
+ORDER BY data_file.partition.identity_ts_2 NULLS LAST;
+----
+TIMESTAMPTZ_NS	-1
+TIMESTAMPTZ_NS	0
+TIMESTAMPTZ_NS	1791540000123456789
+TIMESTAMPTZ_NS	1791540000123456790
+TIMESTAMPTZ_NS	1791543600000000001
+TIMESTAMPTZ_NS	NULL
+
+statement ok
+SET VARIABLE tsns_manifest = getvariable('tsns_manifests')[1];
+
+# A read/write round trip alone cannot establish interoperability with Java.
+query TTT
+WITH fields AS (
+	SELECT unnest((value::JSON)->'$.fields[*]') AS field
+	FROM avro_metadata(getvariable('tsns_manifest')) WHERE key = 'avro.schema'
+), data_fields AS (
+	SELECT unnest(field->'$.type.fields[*]') AS field
+	FROM fields WHERE field->>'$.name' = 'data_file'
+), partition_fields AS (
+	SELECT unnest(field->'$.type.fields[*]') AS field
+	FROM data_fields WHERE field->>'$.name' = 'partition'
+)
+SELECT field->>'$.type[1].type', field->>'$.type[1].logicalType', field->>'$.type[1].adjust-to-utc'
+FROM partition_fields WHERE field->>'$.field-id' = '1000';
+----
+long	timestamp-nanos	true
+
+statement ok
+COMMIT;
+
+statement ok
+SET TimeZone='Europe/Amsterdam';
+
+query T
+SELECT ts FROM my_datalake.default.partition_identity_timestamptz_ns WHERE id = 6;
+----
+2026-10-09 13:00:00.000000001+02
+
+statement ok
+DROP TABLE my_datalake.default.partition_identity_timestamptz_ns;

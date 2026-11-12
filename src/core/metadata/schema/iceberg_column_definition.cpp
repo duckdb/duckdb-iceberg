@@ -1,12 +1,16 @@
 #include "core/metadata/schema/iceberg_column_definition.hpp"
 #include "duckdb/common/types.hpp"
+#include "duckdb/common/operator/cast_operators.hpp"
+#include "duckdb/common/types/decimal.hpp"
 #include "common/iceberg_constants.hpp"
 #include "duckdb/common/value_operations/value_operations.hpp"
 #include "duckdb/parser/column_definition.hpp"
 #include "duckdb/common/multi_file/multi_file_data.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
-#include "duckdb/function/scalar/generic_functions.hpp"
+#include "duckdb/function/scalar/struct_functions.hpp"
 #include "common/iceberg_default.hpp"
+#include "common/iceberg_fixed_type.hpp"
+#include "common/iceberg_geography_type.hpp"
 
 namespace duckdb {
 
@@ -15,7 +19,14 @@ namespace duckdb {
 //! Hexadecimal values are given without the proper escape sequences, so we add them, for simplicity of conversion
 static string AddEscapesToBlob(const string &hexadecimal_string) {
 	string result;
-	D_ASSERT(hexadecimal_string.size() % 2 == 0);
+	if (hexadecimal_string.size() % 2 != 0) {
+		throw InvalidConfigurationException("Invalid hexadecimal default: expected an even number of digits");
+	}
+	for (auto c : hexadecimal_string) {
+		if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
+			throw InvalidConfigurationException("Invalid hexadecimal default: expected hexadecimal digits");
+		}
+	}
 	for (idx_t i = 0; i < hexadecimal_string.size() / 2; i++) {
 		result += "\\x";
 		result += hexadecimal_string.substr(i * 2, 2);
@@ -34,23 +45,33 @@ Value IcebergColumnDefinition::ParsePrimitiveValue(const LogicalType &type,
 
 	switch (type.id()) {
 	case LogicalTypeId::BOOLEAN: {
-		D_ASSERT(default_value.boolean_type_value);
+		if (!default_value.boolean_type_value) {
+			break;
+		}
 		return Value::BOOLEAN(default_value.boolean_type_value->value);
 	}
 	case LogicalTypeId::INTEGER: {
-		D_ASSERT(default_value.integer_type_value);
+		if (!default_value.integer_type_value) {
+			break;
+		}
 		return Value::INTEGER(default_value.integer_type_value->value);
 	}
 	case LogicalTypeId::BIGINT: {
-		D_ASSERT(default_value.long_type_value);
+		if (!default_value.long_type_value) {
+			break;
+		}
 		return Value::BIGINT(default_value.long_type_value->value);
 	}
 	case LogicalTypeId::FLOAT: {
-		D_ASSERT(default_value.float_type_value);
+		if (!default_value.float_type_value) {
+			break;
+		}
 		return Value::FLOAT(default_value.float_type_value->value);
 	}
 	case LogicalTypeId::DOUBLE: {
-		D_ASSERT(default_value.double_type_value);
+		if (!default_value.double_type_value) {
+			break;
+		}
 		return Value::DOUBLE(default_value.double_type_value->value);
 	}
 	case LogicalTypeId::DECIMAL:
@@ -62,16 +83,33 @@ Value IcebergColumnDefinition::ParsePrimitiveValue(const LogicalType &type,
 	case LogicalTypeId::TIMESTAMP_TZ_NS:
 	case LogicalTypeId::VARCHAR:
 	case LogicalTypeId::UUID: {
-		D_ASSERT(default_value.string_type_value);
-		return Value(default_value.string_type_value->value).DefaultCastAs(type);
+		if (!default_value.string_type_value) {
+			break;
+		}
+		string error;
+		auto value = Value(default_value.string_type_value->value).DefaultTryCastAs(type, &error, true);
+		if (!value) {
+			throw InvalidConfigurationException("Invalid default value for %s: %s", type.ToString(), error);
+		}
+		return std::move(*value);
 	}
 	case LogicalTypeId::BLOB: {
-		D_ASSERT(default_value.binary_type_value);
-		return Value::BLOB(AddEscapesToBlob(default_value.binary_type_value->value));
+		if (!default_value.fixed_type_value && !default_value.binary_type_value) {
+			break;
+		}
+		auto &hex = default_value.fixed_type_value ? default_value.fixed_type_value->value
+		                                           : default_value.binary_type_value->value;
+		auto value = Value::BLOB(AddEscapesToBlob(hex));
+		if (IcebergFixedType::IsFixed(type) &&
+		    value.GetValueUnsafe<string_t>().GetSize() != NumericCast<idx_t>(IcebergFixedType::GetLength(type))) {
+			throw InvalidConfigurationException("Invalid default length for %s", type.ToString());
+		}
+		return value.WithType(type);
 	}
 	default:
 		throw NotImplementedException("ParsePrimitiveValue not implemented for type: %s", type.ToString());
 	}
+	throw InvalidConfigurationException("Invalid JSON default value for %s", type.ToString());
 }
 
 LogicalType IcebergColumnDefinition::ParsePrimitiveType(const rest_api_objects::PrimitiveType &type) {
@@ -120,24 +158,35 @@ LogicalType IcebergColumnDefinition::ParsePrimitiveTypeString(const string &type
 		return LogicalType::UUID;
 	}
 	if (StringUtil::StartsWith(type_str, "fixed")) {
-		// FIXME: use fixed size type in DuckDB
-		return LogicalType::BLOB;
+		return IcebergFixedType::Parse(type_str);
 	}
 	if (type_str == "binary") {
 		return LogicalType::BLOB;
 	}
 	if (StringUtil::StartsWith(type_str, "decimal")) {
-		D_ASSERT(type_str[7] == '(');
-		D_ASSERT(type_str.back() == ')');
-		auto start = type_str.find('(');
-		auto end = type_str.rfind(')');
-		auto raw_digits = type_str.substr(start + 1, end - start);
-		auto digits = StringUtil::Split(raw_digits, ',');
-		D_ASSERT(digits.size() == 2);
-
-		auto width = std::stoi(digits[0]);
-		auto scale = std::stoi(digits[1]);
-		return LogicalType::DECIMAL(width, scale);
+		if (!StringUtil::StartsWith(type_str, "decimal(") || type_str.size() < 10 || type_str.back() != ')') {
+			throw InvalidConfigurationException("Invalid decimal type \"%s\" - expected decimal(precision, scale)",
+			                                    type_str);
+		}
+		auto digits = StringUtil::Split(type_str.substr(8, type_str.size() - 9), ',');
+		if (digits.size() != 2) {
+			throw InvalidConfigurationException("Invalid decimal type \"%s\" - expected decimal(precision, scale)",
+			                                    type_str);
+		}
+		int64_t width;
+		int64_t scale;
+		if (!TryCast::Operation<string_t, int64_t>(string_t(digits[0]), width, true) ||
+		    !TryCast::Operation<string_t, int64_t>(string_t(digits[1]), scale, true)) {
+			throw InvalidConfigurationException("Invalid decimal type \"%s\" - precision and scale must be numbers",
+			                                    type_str);
+		}
+		if (width < 1 || width > Decimal::MAX_WIDTH_DECIMAL || scale < 0 || scale > width) {
+			throw InvalidConfigurationException(
+			    "Invalid decimal type \"%s\" - precision must be between 1 and %d and scale between 0 and the "
+			    "precision",
+			    type_str, Decimal::MAX_WIDTH_DECIMAL);
+		}
+		return LogicalType::DECIMAL(NumericCast<uint8_t>(width), NumericCast<uint8_t>(scale));
 	}
 	if (type_str == "variant") {
 		return LogicalType::VARIANT();
@@ -149,19 +198,21 @@ LogicalType IcebergColumnDefinition::ParsePrimitiveTypeString(const string &type
 		// Geometry is an Iceberg v3 type stored as WKB binary in parquet.
 		// The type string may include a CRS parameter: geometry(<crs>)
 		if (type_str == "geometry") {
-			// If we use IcebergConstants::DefaultGeometryCRS, file pruning does not work as well
-			// since LogicalType::Geometry(<crs>) != LogicalType::Geometry(), so casts get introduced
-			// on Iceberg predicates.
-			return LogicalType::GEOMETRY();
+			// An omitted Iceberg CRS means OGC:CRS84, not DuckDB's unspecified CRS.
+			return LogicalType::GEOMETRY(IcebergConstants::DefaultGeometryCRS);
 		}
 		if (type_str.size() > 9 && type_str[8] == '(' && type_str.back() == ')') {
 			auto crs_str = type_str.substr(9, type_str.size() - 10);
+			// Catalogs can serialize the default CRS as either geometry or geometry(ogc:crs84).
+			if (StringUtil::CIEquals(crs_str, IcebergConstants::DefaultGeometryCRS)) {
+				return LogicalType::GEOMETRY(IcebergConstants::DefaultGeometryCRS);
+			}
 			return LogicalType::GEOMETRY(crs_str);
 		}
 		throw InvalidConfigurationException("Invalid geometry type format: %s", type_str);
 	}
 	if (StringUtil::StartsWith(type_str, "geography")) {
-		throw NotImplementedException("Geography support");
+		return IcebergGeographyType::Get(type_str);
 	}
 	throw InvalidConfigurationException("Unrecognized primitive type: %s", type_str);
 }
@@ -188,6 +239,9 @@ CreateStructField(const string &name, int32_t field_id, bool required, const res
 
 unique_ptr<IcebergColumnDefinition>
 IcebergColumnDefinition::ParseStructField(const rest_api_objects::StructField &field) {
+	if (field.id <= 0) {
+		throw InvalidConfigurationException("Invalid field id %d for column '%s'", field.id, field.name);
+	}
 	auto res = make_uniq<IcebergColumnDefinition>();
 	res->id = field.id;
 	res->required = field.required;
@@ -197,7 +251,9 @@ IcebergColumnDefinition::ParseStructField(const rest_api_objects::StructField &f
 	}
 
 	auto &type = *field.type;
-	if (type.primitive_type) {
+	if (type.variant_type) {
+		res->type = LogicalType::VARIANT();
+	} else if (type.primitive_type) {
 		res->type = ParsePrimitiveType(*type.primitive_type);
 	} else if (type.struct_type) {
 		auto &struct_type = *type.struct_type;
@@ -262,6 +318,7 @@ bool IcebergColumnDefinition::IsIcebergPrimitiveType() const {
 	case LogicalTypeId::TIMESTAMP_TZ_NS:
 	case LogicalTypeId::VARIANT:
 	case LogicalTypeId::GEOMETRY:
+	case LogicalTypeId::SQLNULL:
 		return true;
 	default:
 		return false;
@@ -290,10 +347,13 @@ unique_ptr<IcebergColumnDefinition> IcebergColumnDefinition::Copy() const {
 
 MultiFileColumnDefinition IcebergColumnDefinition::GetMultiFileColumnDefinition() const {
 	MultiFileColumnDefinition column(name, type);
-	column.default_expression = make_uniq<ConstantExpression>(GetInitialDefault());
+	column.default_expression = ConstantExpression::FromValue(GetInitialDefault());
 	column.identifier = Value::INTEGER(id);
 	for (auto &child : children) {
 		column.children.push_back(child->GetMultiFileColumnDefinition());
+	}
+	if (type.id() == LogicalTypeId::MAP) {
+		column.children[0].default_expression.reset();
 	}
 	return column;
 }
@@ -312,15 +372,8 @@ Value IcebergColumnDefinition::GetInitialDefault() const {
 }
 
 Value IcebergColumnDefinition::GetWriteDefault() const {
-	optional_ptr<Value> default_to_use;
-	if (write_default) {
-		//! Use write-default if it's set
-		default_to_use = write_default.get();
-	} else if (initial_default) {
-		//! If it's not set, use the initial-default (if that *is* set)
-		default_to_use = initial_default.get();
-	}
-	Value result = default_to_use ? *default_to_use : Value(type);
+	//! An omitted write-default is null - the initial-default only applies to rows written before the field existed
+	Value result = write_default ? *write_default : Value(type);
 	if (type.id() != LogicalTypeId::STRUCT || !result.IsNull() || !IcebergDefault::InterpretStructNullAsEmpty()) {
 		return result;
 	}
@@ -357,30 +410,21 @@ ColumnDefinition IcebergColumnDefinition::GetColumnDefinition() const {
 	auto res = ColumnDefinition(Identifier(name), type);
 
 	auto write_default = GetWriteDefault();
-	if (type.id() == LogicalTypeId::STRUCT) {
-		// DuckDB's default projection hook receives the bound default expression, but not the Iceberg column
-		// metadata from which it originated. Carry the recursive field defaults through that existing interface in
-		// a real `constant_or_null` expression:
-		//
-		//   constant_or_null(<whole-STRUCT default>, <non-NULL recursive descriptor>)
-		//
-		// The second argument is deliberately non-NULL, so ordinary evaluation of the expression returns the first
-		// argument unchanged. Consequently an omitted/DEFAULT whole STRUCT still observes `write_default`: normally
-		// typed NULL, or a materialized STRUCT under the test-only compatibility setting.
-		//
-		// The expression is parsed here, where no ClientContext is available. DuckDB binds the registered scalar
-		// function later. The Iceberg projection resolver recognizes that bound function through
-		// ConstantOrNull::IsConstantOrNull and extracts the second argument only when it needs to remap a supplied
-		// non-NULL STRUCT. This envelope is internal and is not serialized into Iceberg metadata.
+	if (IcebergGeographyType::ContainsGeography(type)) {
+		// Geography fields can't be written, and a default expression would name the geography type, which isn't a
+		// registered DuckDB type, so binding any INSERT or UPDATE would fail before the write is refused
+	} else if (type.id() == LogicalTypeId::STRUCT) {
+		// struct_extract(<descriptor>, 'struct_default') evaluates to the STRUCT's own default, and also carries
+		// its fields' defaults for the projection resolver
 		vector<unique_ptr<ParsedExpression>> arguments;
-		arguments.push_back(make_uniq<ConstantExpression>(std::move(write_default)));
-		arguments.push_back(make_uniq<ConstantExpression>(GetWriteDefaultDescriptor()));
-		res.SetDefaultValue(make_uniq<FunctionExpression>(Identifier(ConstantOrNullFun::Name), std::move(arguments)));
+		arguments.push_back(ConstantExpression::FromValue(GetWriteDefaultDescriptor()));
+		arguments.push_back(ConstantExpression::FromValue(Value("struct_default")));
+		res.SetDefaultValue(make_uniq<FunctionExpression>(Identifier(StructExtractFun::Name), std::move(arguments)));
 	} else if (!write_default.IsNull()) {
 		if (type.IsNested()) {
 			throw NotImplementedException("DEFAULT values for nested types are not supported yet");
 		}
-		res.SetDefaultValue(make_uniq<ConstantExpression>(write_default));
+		res.SetDefaultValue(ConstantExpression::FromValue(write_default));
 	}
 
 	if (doc) {

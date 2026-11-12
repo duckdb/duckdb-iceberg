@@ -1,0 +1,230 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_fixed_type.test
+# description: Fixed binary types survive Iceberg schema creation and alterations
+# group: [create]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.fixed_type_round_trip;
+
+statement ok
+CREATE TABLE my_datalake.default.fixed_type_round_trip (
+	f ICEBERG_FIXED(4),
+	l ICEBERG_FIXED(2)[],
+	s STRUCT(f ICEBERG_FIXED(3)),
+	m MAP(ICEBERG_FIXED(1), ICEBERG_FIXED(2)),
+	b BLOB
+);
+
+statement ok
+ALTER TABLE my_datalake.default.fixed_type_round_trip ADD COLUMN extra INTEGER;
+
+statement ok
+ALTER TABLE my_datalake.default.fixed_type_round_trip RENAME COLUMN extra TO extra2;
+
+statement ok
+COMMENT ON COLUMN my_datalake.default.fixed_type_round_trip.extra2 IS 'schema round trip';
+
+query TT rowsort
+SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'fixed_type_round_trip';
+----
+b	BLOB
+extra2	INTEGER
+f	ICEBERG_FIXED(4)
+l	ICEBERG_FIXED(2)[]
+m	MAP(ICEBERG_FIXED(1), ICEBERG_FIXED(2))
+s	STRUCT(f ICEBERG_FIXED(3))
+
+statement ok
+INSERT INTO my_datalake.default.fixed_type_round_trip (f, l, s, m, b)
+VALUES ('abcd'::BLOB, ['xy'::BLOB], {'f': 'abc'::BLOB}, MAP(['k'::BLOB], ['vv'::BLOB]), 'binary'::BLOB);
+
+query TTTTT
+SELECT f, l[1], s.f, m['k'::ICEBERG_FIXED(1)], b
+FROM my_datalake.default.fixed_type_round_trip WHERE f = 'abcd'::BLOB;
+----
+abcd	xy	abc	vv	binary
+
+statement error
+INSERT INTO my_datalake.default.fixed_type_round_trip (f) VALUES ('abc'::BLOB);
+----
+Expected 4 bytes
+
+statement error
+INSERT INTO my_datalake.default.fixed_type_round_trip (f) VALUES ('123'::JSON);
+----
+Expected 4 bytes
+
+# Validate every nested position on the write path.
+statement error
+INSERT INTO my_datalake.default.fixed_type_round_trip (l) VALUES (['abc'::BLOB]);
+----
+Expected 2 bytes
+
+statement error
+INSERT INTO my_datalake.default.fixed_type_round_trip (s) VALUES ({'f': 'ab'::BLOB});
+----
+Expected 3 bytes
+
+statement error
+INSERT INTO my_datalake.default.fixed_type_round_trip (m) VALUES (MAP(['kk'::BLOB], ['vv'::BLOB]));
+----
+Expected 1 bytes
+
+statement error
+INSERT INTO my_datalake.default.fixed_type_round_trip (m) VALUES (MAP(['k'::BLOB], ['v'::BLOB]));
+----
+Expected 2 bytes
+
+# JSON's nested conversion constructs typed children without invoking scalar casts.
+# The write path must validate them even though the input already has the target type.
+statement error
+INSERT INTO my_datalake.default.fixed_type_round_trip (l) VALUES ('["x"]'::JSON);
+----
+Expected 2 bytes
+
+statement error
+INSERT INTO my_datalake.default.fixed_type_round_trip (s) VALUES ('{"f":"ab"}'::JSON);
+----
+Expected 3 bytes
+
+statement error
+INSERT INTO my_datalake.default.fixed_type_round_trip (m) VALUES ('{"k":"v"}'::JSON);
+----
+Expected 2 bytes
+
+statement error
+UPDATE my_datalake.default.fixed_type_round_trip SET f = 'bad'::BLOB;
+----
+Expected 4 bytes
+
+statement error
+UPDATE my_datalake.default.fixed_type_round_trip SET l = '["x"]'::JSON;
+----
+Expected 2 bytes
+
+statement error
+MERGE INTO my_datalake.default.fixed_type_round_trip AS dst
+USING (SELECT '["x"]'::JSON AS l) AS src ON true
+WHEN MATCHED THEN UPDATE SET l = src.l;
+----
+Expected 2 bytes
+
+query IT
+SELECT count(*), min(f) FROM my_datalake.default.fixed_type_round_trip;
+----
+1	abcd
+
+statement ok
+UPDATE my_datalake.default.fixed_type_round_trip SET f = 'wxyz'::BLOB;
+
+query T
+SELECT f FROM my_datalake.default.fixed_type_round_trip;
+----
+wxyz
+
+# Valid JSON and NULL children must still be writable.
+statement ok
+UPDATE my_datalake.default.fixed_type_round_trip SET l = '[null,"xy"]'::JSON, s = '{"f":null}'::JSON;
+
+query TT
+SELECT l, s FROM my_datalake.default.fixed_type_round_trip;
+----
+[NULL, xy]	{'f': NULL}
+
+statement error
+ALTER TABLE my_datalake.default.fixed_type_round_trip ALTER COLUMN f TYPE ICEBERG_FIXED(8);
+----
+can't be altered
+
+statement ok
+DROP TABLE my_datalake.default.fixed_type_round_trip;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.fixed_type_json_ctas;
+
+statement error
+CREATE TABLE my_datalake.default.fixed_type_json_ctas AS
+SELECT '["x"]'::JSON::ICEBERG_FIXED(2)[] AS l;
+----
+Expected 2 bytes
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.fixed_type_json_ctas;
+
+# Partition summary bounds of a fixed[L] identity partition hold the raw bytes
+# (they must not be hex-decoded like a VARCHAR stat value).
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.fixed_type_partitioned;
+
+statement ok
+CREATE TABLE my_datalake.default.fixed_type_partitioned (id INTEGER, f ICEBERG_FIXED(4));
+
+statement ok
+ALTER TABLE my_datalake.default.fixed_type_partitioned SET PARTITIONED BY (f);
+
+statement ok
+INSERT INTO my_datalake.default.fixed_type_partitioned VALUES (1, 'abcd'::BLOB), (2, 'wxyz'::BLOB);
+
+statement ok
+INSERT INTO my_datalake.default.fixed_type_partitioned VALUES (3, '\x00\x01\x02\xFF'::BLOB);
+
+statement ok
+INSERT INTO my_datalake.default.fixed_type_partitioned VALUES (4, NULL);
+
+query IT
+SELECT id, hex(f) FROM my_datalake.default.fixed_type_partitioned ORDER BY id;
+----
+1	61626364
+2	7778797A
+3	000102FF
+4	NULL
+
+query I
+SELECT id FROM my_datalake.default.fixed_type_partitioned WHERE f = 'abcd'::BLOB;
+----
+1
+
+query I
+SELECT id FROM my_datalake.default.fixed_type_partitioned WHERE f = '\x00\x01\x02\xFF'::BLOB;
+----
+3
+
+query I
+SELECT id FROM my_datalake.default.fixed_type_partitioned WHERE f IS NULL;
+----
+4
+
+query I
+SELECT id FROM my_datalake.default.fixed_type_partitioned WHERE f > 'abcd'::BLOB;
+----
+2
+
+statement ok
+DROP TABLE my_datalake.default.fixed_type_partitioned;
+
+# Bucket partitioning hashes the bytes and returns an INTEGER partition value.
+statement ok
+CREATE TABLE my_datalake.default.fixed_type_bucket (id INTEGER, f ICEBERG_FIXED(4))
+PARTITIONED BY (bucket(8, f));
+
+statement ok
+INSERT INTO my_datalake.default.fixed_type_bucket VALUES
+	(1, 'abcd'::BLOB), (2, 'wxyz'::BLOB), (3, '\x00\x01\x02\xFF'::BLOB), (4, NULL);
+
+query I
+SELECT id FROM my_datalake.default.fixed_type_bucket WHERE f = '\x00\x01\x02\xFF'::BLOB;
+----
+3
+
+query I
+SELECT id FROM my_datalake.default.fixed_type_bucket WHERE f IS NULL;
+----
+4
+
+statement ok
+DROP TABLE my_datalake.default.fixed_type_bucket;

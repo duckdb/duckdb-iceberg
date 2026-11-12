@@ -1,0 +1,65 @@
+# name: test/sql/copy/copy_existing_table.test
+# description: COPY ... (FORMAT ICEBERG) fails instead of silently replacing an existing table
+# group: [copy]
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+COPY (SELECT range::INTEGER AS id FROM range(3)) TO '{TEST_DIR}/copy_existing' (FORMAT ICEBERG);
+
+statement error
+COPY (SELECT 42 AS id) TO '{TEST_DIR}/copy_existing' (FORMAT ICEBERG);
+----
+an Iceberg table already exists at this location
+
+# The failed COPY left the table as it was, and wrote no files
+query I
+SELECT id FROM iceberg_scan('{TEST_DIR}/copy_existing') ORDER BY id
+----
+0
+1
+2
+
+query III
+SELECT
+	count(*) FILTER (WHERE file LIKE '%.metadata.json'),
+	count(*) FILTER (WHERE file LIKE '%.parquet'),
+	count(*) FILTER (WHERE file LIKE '%.avro')
+FROM glob('{TEST_DIR}/copy_existing/**')
+----
+1	1	2
+
+# A table without rows is still a table
+statement ok
+COPY (SELECT 1 AS id WHERE false) TO '{TEST_DIR}/copy_existing_empty' (FORMAT ICEBERG);
+
+statement error
+COPY (SELECT 1 AS id) TO '{TEST_DIR}/copy_existing_empty' (FORMAT ICEBERG);
+----
+an Iceberg table already exists at this location
+
+# Two COPYs that create the same table at the same time: exactly one commits, the other fails and removes its files
+concurrentloop i 0 2
+
+statement maybe
+COPY (SELECT range AS id FROM range(100000)) TO '{TEST_DIR}/copy_concurrent' (FORMAT ICEBERG);
+----
+an Iceberg table already exists at this location
+
+endloop
+
+query III
+SELECT
+	count(*) FILTER (WHERE file LIKE '%.metadata.json'),
+	count(*) FILTER (WHERE file LIKE '%.parquet'),
+	count(*) FILTER (WHERE file LIKE '%.avro')
+FROM glob('{TEST_DIR}/copy_concurrent/**')
+----
+1	1	2
+
+query I
+SELECT count(*) FROM iceberg_scan('{TEST_DIR}/copy_concurrent')
+----
+100000

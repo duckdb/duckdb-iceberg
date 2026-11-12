@@ -113,7 +113,7 @@ static unique_ptr<FunctionData> RemoveIcebergSchemaPropertiesBind(ClientContext 
 	auto &remove_values = input.inputs[1];
 	auto &list_children = ListValue::GetChildren(remove_values);
 	for (idx_t col_idx = 0; col_idx < list_children.size(); col_idx++) {
-		auto &remove_property = StringValue::Get(list_children[0]);
+		auto &remove_property = StringValue::Get(list_children[col_idx]);
 		ret->remove_properties.insert(remove_property);
 	}
 
@@ -252,8 +252,6 @@ static void GetIcebergSchemaPropertiesFunction(ClientContext &context, TableFunc
 	iceberg_schema->LoadProperties(context);
 
 	auto schema_key = iceberg_schema->GetSchemaKey();
-
-	auto &iceberg_transaction = IcebergTransaction::Get(context, iceberg_schema->catalog);
 	auto &schema_properties = iceberg_schema->schema_info.properties;
 
 	if (schema_properties.empty()) {
@@ -290,8 +288,11 @@ static void GetIcebergSchemaPropertiesFunction(ClientContext &context, TableFunc
 TableFunctionSet IcebergFunctions::SetIcebergSchemaPropertiesFunctions() {
 	TableFunctionSet function_set("set_iceberg_schema_properties");
 
-	auto fun = TableFunction({LogicalType::VARCHAR, LogicalType::ANY}, SetIcebergSchemaPropertiesFunction,
-	                         SetIcebergSchemaPropertiesBind, IcebergSchemaPropertiesGlobalTableFunctionState::Init);
+	auto fun = TableFunction(FunctionSignature()
+	                             .AddPositionalOnly("schema_name", LogicalType::VARCHAR)
+	                             .AddPositionalOnly("properties", LogicalType::ANY),
+	                         SetIcebergSchemaPropertiesFunction, SetIcebergSchemaPropertiesBind,
+	                         IcebergSchemaPropertiesGlobalTableFunctionState::Init);
 	function_set.AddFunction(fun);
 
 	return function_set;
@@ -300,7 +301,9 @@ TableFunctionSet IcebergFunctions::SetIcebergSchemaPropertiesFunctions() {
 TableFunctionSet IcebergFunctions::RemoveIcebergSchemaPropertiesFunctions() {
 	TableFunctionSet function_set("remove_iceberg_schema_properties");
 
-	auto fun = TableFunction({LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR)},
+	auto fun = TableFunction(FunctionSignature()
+	                             .AddPositionalOnly("schema_name", LogicalType::VARCHAR)
+	                             .AddPositionalOnly("property_names", LogicalType::LIST(LogicalType::VARCHAR)),
 	                         RemoveIcebergSchemaPropertiesFunction, RemoveIcebergSchemaPropertiesBind,
 	                         IcebergSchemaPropertiesGlobalTableFunctionState::Init);
 	function_set.AddFunction(fun);
@@ -311,7 +314,8 @@ TableFunctionSet IcebergFunctions::RemoveIcebergSchemaPropertiesFunctions() {
 TableFunctionSet IcebergFunctions::GetIcebergSchemaPropertiesFunctions() {
 	TableFunctionSet function_set("iceberg_schema_properties");
 
-	auto fun = TableFunction({LogicalType::VARCHAR}, GetIcebergSchemaPropertiesFunction, GetIcebergSchemaPropertiesBind,
+	auto fun = TableFunction(FunctionSignature().AddPositionalOnly("schema_name", LogicalType::VARCHAR),
+	                         GetIcebergSchemaPropertiesFunction, GetIcebergSchemaPropertiesBind,
 	                         IcebergSchemaPropertiesGlobalTableFunctionState::Init);
 	function_set.AddFunction(fun);
 

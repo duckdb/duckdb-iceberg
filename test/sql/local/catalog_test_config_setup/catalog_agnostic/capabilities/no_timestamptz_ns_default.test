@@ -1,0 +1,46 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/capabilities/no_timestamptz_ns_default.test
+# description: Reject nanosecond timestamp defaults when default support is absent
+# group: [capabilities]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env-not TIMESTAMPTZ_NS_DEFAULT_SUPPORT
+
+require-env FORMAT_V3_SUPPORT
+
+require-env TIMESTAMP_NS_SUPPORT
+
+require-env COLUMN_DEFAULT_SUPPORT
+
+include test/sql/init_requires
+
+require core_functions
+
+# Expected HTTP errors must be checked, not ignored.
+set ignore_error_messages
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cap_timestamptz_ns_default;
+
+# Verify the underlying type works without a default.
+statement ok
+CREATE TABLE my_datalake.default.cap_timestamptz_ns_default (value TIMESTAMPTZ_NS) WITH ('format-version' = 3);
+
+statement ok
+INSERT INTO my_datalake.default.cap_timestamptz_ns_default VALUES ('2000-01-01 00:00:00.123456789+00'::TIMESTAMPTZ_NS);
+
+query I
+SELECT count(*) FROM my_datalake.default.cap_timestamptz_ns_default;
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.cap_timestamptz_ns_default;
+
+statement error
+CREATE TABLE my_datalake.default.cap_timestamptz_ns_default (value TIMESTAMPTZ_NS DEFAULT '2000-01-01 00:00:00.123456789+00'::TIMESTAMPTZ_NS) WITH ('format-version' = 3);
+----
+HTTP Error
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cap_timestamptz_ns_default;

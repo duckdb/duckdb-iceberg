@@ -10,13 +10,7 @@ require-env SNOWFLAKE_SECRET_KEY_GCS
 
 require-env SNOWFLAKE_CATALOG_URI_GCS
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 
 # Do not ignore 'HTTP' error messages!
@@ -68,7 +62,7 @@ WITH (
     'property2'='value2'
 );
 ----
-<REGEX>:.*Unsupported format version.*
+<REGEX>:.*The highest supported iceberg version is 3.*
 
 statement ok
 drop table if exists my_datalake.test_create_schema.test_create_table_with_properties;

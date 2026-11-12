@@ -3,6 +3,7 @@
 #include "duckdb/main/secret/secret_manager.hpp"
 #include "duckdb/logging/log_manager.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/error_data.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/scalar_function.hpp"
@@ -26,9 +27,10 @@
 #include "iceberg_attach.hpp"
 #include "iceberg_options.hpp"
 #include "common/iceberg_default.hpp"
+#include "common/iceberg_fixed_type.hpp"
 #include "function/copy/iceberg_copy_function.hpp"
-#include "duckdb/optimizer/optimizer_extension.hpp"
-#include "planning/iceberg_optimizer.hpp"
+#include "duckdb/planner/planner_extension.hpp"
+#include "planning/iceberg_planner.hpp"
 
 namespace duckdb {
 
@@ -40,6 +42,22 @@ static void SetDefaultFormatVersion(ClientContext &context, SetScope scope, Valu
 	if (version < 2 || version > 3) {
 		throw InvalidConfigurationException("'%s' must be 2 or 3, got %llu", DEFAULT_FORMAT_VERSION_CONFIG_VARIABLE,
 		                                    version);
+	}
+}
+
+static void SetMetadataLogClockSkew(ClientContext &context, SetScope scope, Value &parameter) {
+	if (parameter.IsNull() || parameter.GetValue<int64_t>() < 0) {
+		throw InvalidConfigurationException("'%s' must be a non-negative number of milliseconds",
+		                                    METADATA_LOG_CLOCK_SKEW_CONFIG_VARIABLE);
+	}
+}
+
+static void SetMaxReservedManifestEntries(ClientContext &context, SetScope scope, Value &parameter) {
+	if (parameter.IsNull() || parameter.GetValue<uint64_t>() == 0 ||
+	    parameter.GetValue<uint64_t>() > MAX_MAX_RESERVED_MANIFEST_ENTRIES) {
+		throw InvalidConfigurationException("'%s' must be between 1 and %llu (the maximum), got %s",
+		                                    MAX_RESERVED_MANIFEST_ENTRIES_CONFIG_VARIABLE,
+		                                    MAX_MAX_RESERVED_MANIFEST_ENTRIES, parameter.ToString());
 	}
 }
 
@@ -71,17 +89,25 @@ public:
 	}
 };
 
+static void LoadRequiredExtension(DatabaseInstance &instance, const string &extension_name) {
+	try {
+		ExtensionHelper::AutoLoadExtension(instance, extension_name);
+	} catch (std::exception &ex) {
+		ErrorData error(ex);
+		throw MissingExtensionException("The iceberg extension requires the %s extension, but it could not be "
+		                                "loaded. Try running \"INSTALL %s; LOAD %s;\" first.\nCause: %s",
+		                                extension_name, extension_name, extension_name, error.RawMessage());
+	}
+	if (!instance.ExtensionIsLoaded(extension_name)) {
+		throw MissingExtensionException("The iceberg extension requires the %s extension to be loaded!",
+		                                extension_name);
+	}
+}
+
 static void LoadInternal(ExtensionLoader &loader) {
 	auto &instance = loader.GetDatabaseInstance();
-	ExtensionHelper::AutoLoadExtension(instance, "parquet");
-	ExtensionHelper::AutoLoadExtension(instance, "avro");
-
-	if (!instance.ExtensionIsLoaded("parquet")) {
-		throw MissingExtensionException("The iceberg extension requires the parquet extension to be loaded!");
-	}
-	if (!instance.ExtensionIsLoaded("avro")) {
-		throw MissingExtensionException("The iceberg extension requires the avro extension to be loaded!");
-	}
+	LoadRequiredExtension(instance, "parquet");
+	LoadRequiredExtension(instance, "avro");
 
 	auto &config = DBConfig::GetConfig(instance);
 
@@ -94,9 +120,6 @@ static void LoadInternal(ExtensionLoader &loader) {
 	    "Skip structural Puffin verification for deletion-vector files. This unsafe compatibility option permits "
 	    "reading invalid bare-blob files written by DuckDB Iceberg 1.5.3.",
 	    LogicalType::BOOLEAN, Value::BOOLEAN(false), nullptr, SetScope::GLOBAL);
-	config.AddExtensionOption("iceberg_via_aws_sdk_for_catalog_interactions",
-	                          "Use legacy code to interact with AWS-based catalogs, via AWS's SDK",
-	                          LogicalType::BOOLEAN, Value::BOOLEAN(false));
 	config.AddExtensionOption("iceberg_test_force_token_expiry",
 	                          "DEBUG SETTING: force OAuth2 token expiry for testing automatic refresh",
 	                          LogicalType::BOOLEAN, Value::BOOLEAN(false));
@@ -107,17 +130,42 @@ static void LoadInternal(ExtensionLoader &loader) {
 	    LogicalType::UBIGINT, Value::UBIGINT(DEFAULT_ICEBERG_FORMAT_VERSION), SetDefaultFormatVersion);
 	config.AddExtensionOption(
 	    "iceberg_use_metadata_log",
-	    "Whether or not to make use of the (optional) 'metadata-log' of a table to ensure atomicity guarantees hold, "
-	    "at the cost of making another GET for json metadata in rare circumstances",
-	    LogicalType::BOOLEAN, Value::BOOLEAN(false), nullptr, SetScope::GLOBAL);
+	    "Use metadata-log to select table metadata as of the transaction start for snapshot isolation. "
+	    "Disable to accept the latest table metadata resolved by the transaction instead",
+	    LogicalType::BOOLEAN, Value::BOOLEAN(true), nullptr, SetScope::GLOBAL);
+	config.AddExtensionOption(
+	    METADATA_LOG_CLOCK_SKEW_CONFIG_VARIABLE,
+	    "Clock-skew allowance in milliseconds when iceberg_use_metadata_log is enabled. Table metadata up to this "
+	    "far after transaction start is considered visible. Set to 0 for strict timestamp comparisons.",
+	    LogicalType::BIGINT, Value::BIGINT(DEFAULT_METADATA_LOG_CLOCK_SKEW_MS), SetMetadataLogClockSkew,
+	    SetScope::GLOBAL);
+	config.AddExtensionOption(
+	    MAX_RESERVED_MANIFEST_ENTRIES_CONFIG_VARIABLE,
+	    "The maximum number of manifest entries the manifest-list file counts may reserve up front for a single "
+	    "manifest. Scanning a manifest that declares more entries fails; the setting can be raised up to 100000000.",
+	    LogicalType::UBIGINT, Value::UBIGINT(DEFAULT_MAX_RESERVED_MANIFEST_ENTRIES), SetMaxReservedManifestEntries);
 	config.AddExtensionOption("iceberg_use_server_side_scan_planning",
 	                          "Whether or not to use server-side scanning planning (if available)",
 	                          LogicalType::BOOLEAN, Value::BOOLEAN(false), nullptr, SetScope::GLOBAL);
+	config.AddExtensionOption(
+	    ENABLE_MULTI_FILE_SCAN_TASKS_CONFIG_VARIABLE,
+	    "Execute eligible delete-free iceberg_scan_tasks descriptor lists through one Parquet multi-file scan.",
+	    LogicalType::BOOLEAN, Value::BOOLEAN(DEFAULT_ENABLE_MULTI_FILE_SCAN_TASKS), nullptr, SetScope::GLOBAL);
+	config.AddExtensionOption(
+	    ENABLE_SCAN_SERIALIZATION_CONFIG_VARIABLE,
+	    "Enable statement-local serialization of catalog-backed Iceberg scans for logical-plan copying. When disabled, "
+	    "copy-based optimizations retain the original plan.",
+	    LogicalType::BOOLEAN, Value::BOOLEAN(DEFAULT_ENABLE_SCAN_SERIALIZATION), nullptr, SetScope::GLOBAL);
 	config.AddExtensionOption(
 	    "iceberg_logging_post_body_truncate_limit",
 	    "Maximum number of characters of a REST catalog POST body to include in Iceberg log messages. "
 	    "Bodies longer than this are truncated with a trailing '... (truncated)' marker. Set to 0 to omit the body.",
 	    LogicalType::UBIGINT, Value::UBIGINT(10000));
+	config.AddExtensionOption(
+	    "iceberg_equality_delete_fast_filter",
+	    "Apply byte-comparable equality deletes through a shared columnar flat hash filter instead of a bound "
+	    "expression per delete row. Unsupported types retain the upstream expression path.",
+	    LogicalType::BOOLEAN, Value::BOOLEAN(true), nullptr, SetScope::GLOBAL);
 	config.AddExtensionOption(
 	    UNSAFE_STRUCT_NULL_DEFAULT_INTERP_CONFIG_VARIABLE,
 	    "DANGEROUS TESTING-ONLY SETTING: interpret a null Iceberg STRUCT default as an empty struct whose fields "
@@ -126,11 +174,15 @@ static void LoadInternal(ExtensionLoader &loader) {
 #ifdef ICEBERG_ENABLE_EQUALITY_DELETE_WRITES
 	config.AddExtensionOption(
 	    ENABLE_EQUALITY_DELETES_CONFIG_VARIABLE,
-	    "DANGEROUS TESTING-ONLY SETTING: when enabled, a DELETE on a v2 Iceberg table whose WHERE clause is a pure "
+	    "DANGEROUS TESTING-ONLY SETTING: when enabled, a DELETE on a v2 or v3 Iceberg table whose WHERE clause is a "
+	    "pure "
 	    "conjunction of equality predicates writes an Iceberg equality-delete file. Used to exercise the "
 	    "equality-delete read path.",
 	    LogicalType::BOOLEAN, Value::BOOLEAN(false));
 #endif
+
+	// Iceberg Types
+	IcebergFixedType::Register(loader);
 
 	// Iceberg Table Functions
 	for (auto &fun : IcebergFunctions::GetTableFunctions(loader)) {
@@ -159,7 +211,7 @@ static void LoadInternal(ExtensionLoader &loader) {
 	auto &log_manager = instance.GetLogManager();
 	log_manager.RegisterLogType(make_uniq<IcebergLogType>());
 	StorageExtension::Register(config, "iceberg", make_shared_ptr<IRCStorageExtension>());
-	OptimizerExtension::Register(config, IcebergOptimizer::Create());
+	PlannerExtension::Register(config, IcebergPlanner::Create());
 }
 
 void IcebergExtension::Load(ExtensionLoader &loader) {

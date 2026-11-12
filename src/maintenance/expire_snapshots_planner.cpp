@@ -139,26 +139,37 @@ void ApplyMainRetention(const IcebergTableMetadata &metadata, int64_t main_snaps
 	}
 }
 
-void ValidateMainOnlyMetadata(const IcebergTableMetadata &metadata) {
-	if (metadata.unsupported_snapshot_ref) {
+optional_ptr<const rest_api_objects::SnapshotReference> ValidateMainOnlyMetadata(const IcebergTableMetadata &metadata) {
+	optional_ptr<const rest_api_objects::SnapshotReference> main_snapshot_ref;
+	optional<string> unsupported_snapshot_ref;
+	if (metadata.refs) {
+		for (const auto &entry : metadata.refs->additional_properties) {
+			if (entry.first == "main") {
+				main_snapshot_ref = &entry.second;
+			} else if (!unsupported_snapshot_ref || entry.first < *unsupported_snapshot_ref) {
+				unsupported_snapshot_ref = entry.first;
+			}
+		}
+	}
+	if (unsupported_snapshot_ref) {
 		throw NotImplementedException(
 		    "iceberg_expire_snapshots currently supports only the main branch; found unsupported snapshot reference "
 		    "\"%s\"",
-		    *metadata.unsupported_snapshot_ref);
+		    *unsupported_snapshot_ref);
 	}
 
 	if (metadata.current_snapshot_id && !metadata.FindSnapshotByIdInternal(*metadata.current_snapshot_id)) {
 		throw InvalidConfigurationException("current-snapshot-id points to unknown snapshot %lld",
 		                                    *metadata.current_snapshot_id);
 	}
-	if (!metadata.main_snapshot_ref) {
-		if (metadata.snapshot_refs_present && metadata.current_snapshot_id) {
+	if (!main_snapshot_ref) {
+		if (metadata.refs && metadata.current_snapshot_id) {
 			throw InvalidConfigurationException("Snapshot refs must contain 'main' when current-snapshot-id is set");
 		}
-		return;
+		return nullptr;
 	}
 
-	const auto &main_ref = *metadata.main_snapshot_ref;
+	const auto &main_ref = *main_snapshot_ref;
 	if (main_ref.type != "branch") {
 		throw InvalidConfigurationException("Snapshot ref 'main' must be a branch");
 	}
@@ -177,16 +188,17 @@ void ValidateMainOnlyMetadata(const IcebergTableMetadata &metadata) {
 		    "Invalid min-snapshots-to-keep for snapshot ref 'main': expected a positive "
 		    "integer");
 	}
+	return main_snapshot_ref;
 }
 
-SnapshotRetentionPolicy ResolveMainPolicy(const IcebergTableMetadata &metadata,
+SnapshotRetentionPolicy ResolveMainPolicy(optional_ptr<const rest_api_objects::SnapshotReference> main_snapshot_ref,
                                           const SnapshotRetentionPolicy &global_policy, timestamp_ms_t now) {
 	auto result = global_policy;
-	if (!metadata.main_snapshot_ref) {
+	if (!main_snapshot_ref) {
 		return result;
 	}
 
-	const auto &main_ref = *metadata.main_snapshot_ref;
+	const auto &main_ref = *main_snapshot_ref;
 	if (main_ref.min_snapshots_to_keep) {
 		result.min_snapshots_to_keep = *main_ref.min_snapshots_to_keep;
 	}
@@ -227,10 +239,10 @@ void ApplyExplicitSnapshotIds(const IcebergTableMetadata &metadata, const vector
 
 ExpireSnapshotsPlan PlanSnapshotExpiration(const IcebergTableMetadata &metadata, const ExpireSnapshotsPlanInput &input,
                                            timestamp_ms_t now) {
-	ValidateMainOnlyMetadata(metadata);
+	const auto main_snapshot_ref = ValidateMainOnlyMetadata(metadata);
 
 	const auto global_policy = ResolveGlobalPolicy(metadata, input, now);
-	const auto main_policy = ResolveMainPolicy(metadata, global_policy, now);
+	const auto main_policy = ResolveMainPolicy(main_snapshot_ref, global_policy, now);
 
 	unordered_set<int64_t> to_expire;
 	to_expire.reserve(metadata.snapshots.size());

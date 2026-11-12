@@ -1,0 +1,35 @@
+# name: test/sql/local/iceberg_scans/snapshot_identity_required.test
+# description: Snapshot identity is required for both V1 and V2 metadata.
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+require json
+
+foreach version 1 2
+
+# Preserve the rest of a real snapshot, but remove its required identity.
+statement ok
+COPY (
+    SELECT json_merge_patch(content::JSON, json_object(
+        'snapshots', json_array(json_merge_patch(
+            content::JSON->'snapshots'->0, json_object('snapshot-id', NULL)
+        ))
+    ))
+    FROM read_text(CASE WHEN '{version}' = '1'
+        THEN '{WORKING_DIRECTORY}/data/persistent/iceberg_v1_deprecated/default/legacy_v1/metadata/v2.metadata.json'
+        ELSE '{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg/metadata/v2.metadata.json'
+    END)
+) TO '{TEST_DIR}/missing_snapshot_id_v{version}.metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+statement error
+SELECT * FROM iceberg_scan('{TEST_DIR}/missing_snapshot_id_v{version}.metadata.json');
+----
+Snapshot required property 'snapshot-id' is missing
+
+query I
+SELECT 42;
+----
+42
+
+endloop

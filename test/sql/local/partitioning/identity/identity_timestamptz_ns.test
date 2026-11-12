@@ -1,0 +1,74 @@
+# name: test/sql/local/partitioning/identity/identity_timestamptz_ns.test
+# description: Read Java Iceberg v3 identity partitions containing UTC nanosecond timestamps
+# group: [identity]
+
+include test/sql/init_requires
+
+require icu
+
+# Generated with Java Iceberg by scripts/persistent/PartitionTimestamptzNs.java.
+statement ok
+CREATE VIEW java_timestamptz_ns AS
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/partition_timestamptz_ns/metadata/v2.metadata.json');
+
+query T
+SELECT typeof(ts) FROM java_timestamptz_ns LIMIT 1;
+----
+TIMESTAMPTZ_NS
+
+query II
+SELECT id, epoch_ns(ts) FROM java_timestamptz_ns ORDER BY id;
+----
+1	1791540000123456789
+2	1791540000123456790
+3	-1
+4	0
+5	NULL
+
+query I
+SELECT id FROM java_timestamptz_ns
+WHERE ts = '2026-10-09 10:00:00.123456789+00'::TIMESTAMPTZ_NS;
+----
+1
+
+query I
+SELECT id FROM java_timestamptz_ns
+WHERE ts = '2026-10-09 12:00:00.123456790+02'::TIMESTAMPTZ_NS;
+----
+2
+
+query I
+SELECT id FROM java_timestamptz_ns WHERE ts < '1970-01-01 00:00:00+00'::TIMESTAMPTZ_NS;
+----
+3
+
+query I
+SELECT id FROM java_timestamptz_ns WHERE ts IS NULL;
+----
+5
+
+statement ok
+SET TimeZone='Europe/Amsterdam';
+
+query T
+SELECT ts FROM java_timestamptz_ns WHERE id = 1;
+----
+2026-10-09 12:00:00.123456789+02
+
+# Read partition values directly from the Java-written manifest as well.
+statement ok
+SET VARIABLE java_tsns_manifest = (
+	SELECT manifest_path
+	FROM read_avro('{WORKING_DIRECTORY}/data/persistent/partition_timestamptz_ns/metadata/snap-*.avro')
+);
+
+query TI
+SELECT typeof(data_file.partition.ts), epoch_ns(data_file.partition.ts)
+FROM read_avro(getvariable('java_tsns_manifest'))
+ORDER BY data_file.partition.ts NULLS LAST;
+----
+TIMESTAMPTZ_NS	-1
+TIMESTAMPTZ_NS	0
+TIMESTAMPTZ_NS	1791540000123456789
+TIMESTAMPTZ_NS	1791540000123456790
+TIMESTAMPTZ_NS	NULL

@@ -8,13 +8,7 @@ require-env AWS_ACCESS_KEY_ID
 
 require-env AWS_SECRET_ACCESS_KEY
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 require aws
 
@@ -63,5 +57,5 @@ WITH (
     'property2'='value2'
 );
 ----
-<REGEX>:.*The table is using version that is not supported.*
+<REGEX>:.*The highest supported iceberg version is 3.*
 

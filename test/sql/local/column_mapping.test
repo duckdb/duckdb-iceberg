@@ -2,13 +2,7 @@
 # description: test combinations of create secret and attah
 # group: [local]
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 statement ok
 SET unsafe_enable_version_guessing = true;

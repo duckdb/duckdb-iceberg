@@ -18,21 +18,51 @@
 
 namespace duckdb {
 
+namespace rest_api_objects {
+class CatalogConfig;
+}
+
 class IcebergSchemaEntry;
 struct IcebergTable;
 
 class MetadataCacheValue {
 public:
 	MetadataCacheValue(timestamp_ms_t expire_timestamp_ms,
-	                   unique_ptr<const rest_api_objects::LoadTableResult> load_table_result)
-	    : expire_timestamp_ms(expire_timestamp_ms), load_table_result(std::move(load_table_result)) {
+	                   shared_ptr<const rest_api_objects::LoadTableResult> load_table_result, string etag)
+	    : expire_timestamp_ms(expire_timestamp_ms), load_table_result(std::move(load_table_result)),
+	      etag(std::move(etag)) {
 	}
 
 public:
 	//! The timestamp until when this entry is valid
 	timestamp_ms_t expire_timestamp_ms;
 	//! The payload of the cache entry
-	unique_ptr<const rest_api_objects::LoadTableResult> load_table_result;
+	shared_ptr<const rest_api_objects::LoadTableResult> load_table_result;
+	string etag;
+};
+
+class LoadTableResultCache;
+
+//! Caller-owned state controlling whether a fetched result can enter the cache.
+//! The cache must outlive this state, which is kept separate from worker requests.
+class LoadTableCachePublication {
+public:
+	~LoadTableCachePublication();
+	bool TryPublish(shared_ptr<const rest_api_objects::LoadTableResult> result, string etag);
+
+	//! An expired response may still be revalidated with its ETag.
+	shared_ptr<const rest_api_objects::LoadTableResult> cached_result;
+	string etag;
+
+private:
+	friend class LoadTableResultCache;
+	explicit LoadTableCachePublication(string table_key) : table_key(std::move(table_key)) {
+	}
+	LoadTableCachePublication(const LoadTableCachePublication &) = delete;
+	LoadTableCachePublication &operator=(const LoadTableCachePublication &) = delete;
+
+	optional_ptr<LoadTableResultCache> cache;
+	string table_key;
 };
 
 class LoadTableResultCache {
@@ -60,39 +90,38 @@ public:
 		callback(*entry.load_table_result);
 		return true;
 	}
-	void SetOrOverwrite(const string &table_key,
-	                    unique_ptr<const rest_api_objects::LoadTableResult> load_table_result) {
-		annotated_lock_guard<annotated_mutex> guard(lock);
-		// If max_table_staleness_minutes is not set, use a time in the past so cache is always expired
-		system_clock::time_point expires_at;
-		if (attach_options.max_table_staleness_micros.IsValid()) {
-			expires_at =
-			    system_clock::now() + std::chrono::microseconds(attach_options.max_table_staleness_micros.GetIndex());
-		} else {
-			expires_at = system_clock::time_point::min();
-		}
-		auto epoch_micros = timestamp_t(duration_cast<microseconds>(expires_at.time_since_epoch()).count());
-		auto expire_timestamp_ms = timestamp_ms_t(Timestamp::GetEpochMs(epoch_micros));
-
-		// erase load table result if it exists.
-		tables.erase(table_key);
-		tables.emplace(table_key, MetadataCacheValue(expire_timestamp_ms, std::move(load_table_result)));
-	}
+	//! Create publication state before fetching. A later fetch supersedes earlier loads for the same key.
+	unique_ptr<LoadTableCachePublication> BeginLoad(const string &table_key);
+	//! Authoritative publication (e.g. staged creation) also invalidates outstanding fetches.
+	void SetOrOverwrite(const string &table_key, shared_ptr<const rest_api_objects::LoadTableResult> load_table_result);
 
 	//! Evict only if the table was initialized from the result that is still cached for its key.
 	void EvictIfCurrent(const IcebergTable &table);
 
 private:
+	friend class LoadTableCachePublication;
+	struct PendingLoads {
+		optional_ptr<LoadTableCachePublication> latest;
+		idx_t count = 0;
+	};
+	bool TryPublish(LoadTableCachePublication &publication, shared_ptr<const rest_api_objects::LoadTableResult> result,
+	                string etag);
+	void Release(LoadTableCachePublication &publication);
+	void InvalidateLoads(const string &table_key) DUCKDB_REQUIRES(lock);
+	void Store(const string &table_key, shared_ptr<const rest_api_objects::LoadTableResult> result, string etag)
+	    DUCKDB_REQUIRES(lock);
+
 	IcebergAttachOptions &attach_options;
 	annotated_mutex lock;
-	case_insensitive_map_t<MetadataCacheValue> tables DUCKDB_GUARDED_BY(lock);
+	unordered_map<string, MetadataCacheValue> tables DUCKDB_GUARDED_BY(lock);
+	unordered_map<string, PendingLoads> pending_loads DUCKDB_GUARDED_BY(lock);
 };
 
 class IcebergCatalog : public Catalog {
 public:
 	explicit IcebergCatalog(AttachedDatabase &db_p, AccessMode access_mode,
 	                        unique_ptr<IcebergAuthorization> auth_handler, IcebergAttachOptions &attach_options,
-	                        const Identifier &default_schema);
+	                        const optional<Identifier> &default_schema);
 	~IcebergCatalog() override;
 
 public:
@@ -100,8 +129,8 @@ public:
 	static unique_ptr<SecretEntry> GetIcebergSecret(ClientContext &context, const string &secret_name);
 	static unique_ptr<SecretEntry> GetHTTPSecret(ClientContext &context, const string &secret_name);
 	void ParsePrefix();
-	void ParseNamespaceSeparator();
-	void GetConfig(ClientContext &context, IcebergEndpointType &endpoint_type);
+	void Configure(ClientContext &context, const rest_api_objects::CatalogConfig &config,
+	               IcebergEndpointType endpoint_type);
 	IRCEndpointBuilder GetBaseUrl() const;
 	string GetWarehouse() const {
 		return warehouse;
@@ -120,13 +149,12 @@ public:
 	bool CheckAmbiguousCatalogOrSchema(ClientContext &context, const Identifier &schema) override {
 		return false;
 	}
-	optional<Identifier> GetDefaultSchema() const override {
-		if (default_schema.empty()) {
-			return nullopt;
-		}
-		return default_schema;
-	}
+	optional<Identifier> GetDefaultSchema() const override;
 	ErrorData SupportsCreateTable(BoundCreateTableInfo &info) override;
+	//! Applies IDENTIFIER_CASE to a namespace or table name
+	string FoldIdentifier(const string &name) const;
+	//! Applies IDENTIFIER_CASE to the schema and name parts, keeping the catalog alias as written
+	QualifiedName FoldName(const QualifiedName &name) const;
 
 public:
 	void Initialize(bool load_builtin) override;
@@ -146,6 +174,8 @@ public:
 	                             optional_ptr<PhysicalOperator> plan) override;
 	PhysicalOperator &PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner, LogicalCreateTable &op,
 	                                    PhysicalOperator &plan) override;
+	//! Plans a copy-on-write DELETE itself; any other DELETE plans its child and continues below
+	PhysicalOperator &PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op) override;
 	PhysicalOperator &PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
 	                             PhysicalOperator &plan) override;
 	//! Shared delete-planning body both PlanDelete and MERGE build on; only PlanDelete additionally opts the
@@ -168,8 +198,9 @@ public:
 	//! Allow ATTACH OR REPLACE to actually re-attach when iceberg-specific options change
 	bool HasConflictingAttachOptions(const string &path, const AttachOptions &options) override;
 	void SetAttachOptions(const unordered_map<string, Value> &options);
-	static string GetOnlyMergeOnReadSupportedErrorMessage(const string &table_name, const string &property,
-	                                                      const string &property_value);
+	//! Throws if the write mode property doesn't allow merge-on-read delete files, which is all DuckDB-Iceberg writes
+	static void VerifyMergeOnRead(const IcebergTableMetadata &metadata, const string &table_name,
+	                              const string &write_mode_property);
 
 public:
 	AccessMode access_mode;
@@ -183,14 +214,16 @@ public:
 	string namespace_separator = "\x1f";
 	//! attach options
 	IcebergAttachOptions attach_options;
-	Identifier default_schema;
+	//! Optionally (user-)provided default schema to use
+	optional<Identifier> default_schema;
+	case_insensitive_map_t<string> catalog_properties;
 
 private:
+	IcebergEndpointType endpoint_type = IcebergEndpointType::INVALID;
+	//! Original client selector, used for ATTACH OR REPLACE comparisons.
+	const string attach_path;
 	//! warehouse
 	string warehouse;
-	// defaults and overrides provided by a catalog.
-	case_insensitive_map_t<string> defaults;
-	case_insensitive_map_t<string> overrides;
 	//! Normalized attach options (after core stripping) used to detect a conflicting ATTACH OR REPLACE
 	unordered_map<string, Value> normalized_attach_options;
 

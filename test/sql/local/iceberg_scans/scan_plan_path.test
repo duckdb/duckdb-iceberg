@@ -1,0 +1,73 @@
+# name: test/sql/local/iceberg_scans/scan_plan_path.test
+# description: iceberg_scan_plan accepts a table location, with the same options as iceberg_scan
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+require json
+
+# A table that is not in a catalog is planned from its metadata, as iceberg_scan reads it.
+query I
+SELECT count(*) FROM iceberg_scan_plan('data/persistent/equality_deletes/warehouse/mydb/mytable');
+----
+2
+
+query IIII
+SELECT file_format, record_count > 0, len(delete_files) > 0, snapshot_id IS NOT NULL
+FROM iceberg_scan_plan('data/persistent/equality_deletes/warehouse/mydb/mytable')
+ORDER BY file_path;
+----
+PARQUET	true	true	true
+PARQUET	true	true	true
+
+# The planned tasks read back exactly what iceberg_scan reads, deletes applied.
+statement ok
+SET VARIABLE path_tasks = (SELECT list(task) FROM (SELECT * FROM iceberg_scan_plan('data/persistent/equality_deletes/warehouse/mydb/mytable')) task);
+
+query III
+SELECT id, name, bir FROM iceberg_scan_tasks(getvariable('path_tasks')) ORDER BY id;
+----
+4	d	2025-01-04
+5	e	2025-01-05
+
+query I
+SELECT count(*) FROM (
+    (SELECT * FROM iceberg_scan_tasks(getvariable('path_tasks')))
+    EXCEPT ALL
+    (SELECT * FROM iceberg_scan('data/persistent/equality_deletes/warehouse/mydb/mytable'))
+);
+----
+0
+
+# Identity partition values travel as partition constants for files that omit the column.
+query II
+SELECT partition_spec_id, partition_constants FROM iceberg_scan_plan('data/persistent/partition_integer') ORDER BY file_path;
+----
+0	{'1': 1337}
+0	{'1': 42}
+
+# The location options of iceberg_scan: an explicit metadata version, and a snapshot.
+query I
+SELECT count(*) FROM iceberg_scan_plan('data/persistent/name_mapping/warehouse_1/mydb/t1', version = '3', snapshot_from_id = 6597550917742534971);
+----
+1
+
+statement ok
+SET VARIABLE mapped_tasks = (SELECT list(task) FROM (SELECT * FROM iceberg_scan_plan('data/persistent/name_mapping/warehouse_1/mydb/t1', version = '3', snapshot_from_id = 6597550917742534971)) task);
+
+query I
+SELECT count(*) FROM iceberg_scan_tasks(getvariable('mapped_tasks'));
+----
+10000
+
+# A row filter prunes files and travels with the tasks, as for a catalog table.
+query I
+SELECT count(*) FROM iceberg_scan_plan('data/persistent/equality_deletes/warehouse/mydb/mytable', row_filter = 'id > 100');
+----
+0
+
+# Not a table: neither a catalog table nor a readable location.
+statement error
+SELECT * FROM iceberg_scan_plan('not_a_table');
+----
+<REGEX>:.*(No such file|not found|Failed to read|Cannot open|does not exist).*

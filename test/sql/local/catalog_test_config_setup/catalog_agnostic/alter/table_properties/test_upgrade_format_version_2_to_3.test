@@ -4,13 +4,9 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
-require avro
+require-env FORMAT_V3_SUPPORT
 
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 require core_functions
 
@@ -52,20 +48,16 @@ SELECT id, val FROM my_datalake.default.v2_to_v3_upgrade ORDER BY id;
 8	row_8
 9	row_9
 
-# V2 table: _row_id is NULL for all rows (row lineage not tracked in V2)
-query I
+# V2 table: row lineage columns only exist from V3
+statement error
 SELECT _row_id FROM my_datalake.default.v2_to_v3_upgrade ORDER BY id;
 ----
-NULL
-NULL
-NULL
-NULL
-NULL
-NULL
-NULL
-NULL
-NULL
-NULL
+<REGEX>:.*Referenced column "_row_id" not found.*
+
+statement error
+SELECT _last_updated_sequence_number FROM my_datalake.default.v2_to_v3_upgrade ORDER BY id;
+----
+<REGEX>:.*Referenced column "_last_updated_sequence_number" not found.*
 
 # Delete even-id rows — writes a V2 positional delete file (snapshot 2, sequence 2)
 statement ok
@@ -87,16 +79,11 @@ SELECT id, val FROM my_datalake.default.v2_to_v3_upgrade ORDER BY id;
 7	row_7
 9	row_9
 
-# Surviving V2 rows still have _row_id = NULL before any V3 write.
-# Sequence 1 because the positional delete did not rewrite the data file.
-query III
+# Surviving V2 rows: still no row lineage columns on a V2 table
+statement error
 SELECT _last_updated_sequence_number, _row_id, id FROM my_datalake.default.v2_to_v3_upgrade ORDER BY id;
 ----
-1	NULL	1
-1	NULL	3
-1	NULL	5
-1	NULL	7
-1	NULL	9
+<REGEX>:.*not found.*
 
 # Upgrade to V3
 statement ok
@@ -104,15 +91,16 @@ ALTER TABLE my_datalake.default.v2_to_v3_upgrade SET (
 	'format-version'=3
 );
 
-# Immediately after upgrade — no V3 snapshot written yet — row IDs are still NULL
+# Immediately after upgrade, no V3 snapshot written yet: the columns exist, and both are NULL because the
+# data file has no first_row_id yet.
 query III
 SELECT _last_updated_sequence_number, _row_id, id FROM my_datalake.default.v2_to_v3_upgrade ORDER BY id;
 ----
-1	NULL	1
-1	NULL	3
-1	NULL	5
-1	NULL	7
-1	NULL	9
+NULL	NULL	1
+NULL	NULL	3
+NULL	NULL	5
+NULL	NULL	7
+NULL	NULL	9
 
 # V3 Phase insert V3 rows
 

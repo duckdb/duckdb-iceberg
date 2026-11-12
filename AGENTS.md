@@ -71,9 +71,8 @@ Assume tests must run serially unless their isolation has been verified. Do not 
 ./build/debug/test/unittest test/sql/local/iceberg_scans/iceberg_scan.test
 
 # A catalog-backed test
-TEST_CONFIG="$(bash -c 'source scripts/catalog_test_config.sh && active_catalog_test_config')"
 ./build/debug/test/unittest \
-  --test-config "$TEST_CONFIG" \
+  --test-config "$(scripts/catalog_test_config.sh)" \
   test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_table.test
 
 # Python integration tests
@@ -84,11 +83,17 @@ python3 -m pytest -vv test/python \
 
 Sqllogictests use `.test`; expensive tests use `.test_slow`. Put behavior shared by all REST catalogs under `catalog_agnostic/` and catalog-only behavior under the existing `catalog_specifc/<catalog>/` tree. The directory name `catalog_specifc` is intentionally reproduced here because that is its current spelling; do not silently rename the tree.
 
+When inspecting REST-catalog table metadata directly (JSON metadata files, Avro manifest lists, or Avro manifests), wrap the catalog lookup that obtains the metadata paths and all subsequent file reads in the same explicit `BEGIN` / `COMMIT` transaction on the same connection. Start the transaction before calling functions such as `iceberg_metadata` or `iceberg_snapshots`, and commit after the `read_json`, `read_avro`, or `avro_metadata` assertions. Catalog-vended storage credentials are scoped to the transaction; saving a path in a variable does not retain its credentials after that transaction ends. Without this scope, catalogs such as Polaris can return HTTP 403 for direct metadata reads even when normal table queries succeed.
+
 Python tests outside `test/python/cloud/` require an active REST catalog. Cloud tests are only collected when requested explicitly. Use the existing `requires_spark`, `requires_capabilities`, and `spark_seed_tables` markers rather than open-coding environment checks.
 
 ## Catalog workflow and invariants
 
 Supported REST catalog markers are `fixture`, `lakekeeper`, `nessie`, and `polaris`; `local` is valid for data generation but not for REST-catalog unittest config resolution.
+
+The test-only `mock` marker is also supported for SQL tests. `make mock` / `make mock-stop` manage a Python standard-library server without Docker, using the endpoint and skip policy in `test/configs/mock.json` and fresh run directories under `.catalogs/mock/`. CI runs the catalog-agnostic SQL suite excluding `.test_slow`; the mock has no Spark generator or Python integration profile. See `scripts/mock_rest_catalog/README.md`.
+
+`make test_mock_native_reldebug` runs the same supported catalog suite using an in-process C++ HTTP provider, without services or networking. `test/configs/mock_native.json` inherits the Python mock's capabilities and skips. Native targets do not change `.catalogs/.active_catalog`. Run `build/reldebug/test/unittest_iceberg_native` for database-lifetime and publication-failure API tests. See `test/native_catalog/README.md`.
 
 ```shell
 make fixture-data
@@ -102,8 +107,8 @@ Pass `TEST=<pytest -k expression>` to a `*-data` target to generate a subset. Th
 Important lifecycle details:
 
 - A start target stops the catalog recorded in `.catalogs/.active_catalog`, starts the requested service, and updates the marker.
-- `scripts/catalog_test_config.sh` uses `BASH_SOURCE`; resolve configs through Bash rather than sourcing it directly from zsh.
-- All four local catalog targets require Docker Compose. Lakekeeper may use `sudo` to add `127.0.0.1 minio` to `/etc/hosts`.
+- Execute `scripts/catalog_test_config.sh` directly to resolve the active config; its shebang selects Bash even from zsh.
+- All four local catalog targets require Docker Compose. Lakekeeper and Gravitino may use `sudo` to add `127.0.0.1 seaweedfs` to `/etc/hosts`.
 - Lakekeeper is cloned at a pinned commit and patched. Polaris uses `release/1.4.x`. Preserve these choices unless the task is an intentional version update.
 - Catalog start and data targets mutate local services and generated data. Do not run them merely to validate documentation or inspect Make behavior.
 

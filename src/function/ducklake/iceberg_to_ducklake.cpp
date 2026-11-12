@@ -123,7 +123,7 @@ public:
 		table.schema_name = schema.schema_name;
 
 		//! Current schema state
-		optional_ptr<IcebergTableSchema> last_schema;
+		optional_ptr<const IcebergTableSchema> last_schema;
 
 		//! Current partition state
 		optional_idx current_partition_spec_id;
@@ -144,7 +144,7 @@ public:
 			}
 
 			//! Process the schema changes
-			auto &current_schema = *metadata.GetSchemaFromId(snapshot.GetSchemaId());
+			auto &current_schema = metadata.GetSchemaFromId(snapshot.GetSchemaId());
 			auto current_columns = SchemaToColumns(current_schema);
 			vector<DuckLakeColumn> added_columns;
 			vector<int64_t> dropped_columns;
@@ -195,10 +195,10 @@ public:
 			vector<DuckLakeDeleteFile> new_delete_files;
 			vector<string> deleted_delete_files;
 			for (auto &entry : iceberg_manifest_list->GetManifestFilesConst()) {
-				auto &manifest = entry.file;
+				auto &manifest = entry.GetFile();
 				auto &entries = entry.GetManifestEntries();
 
-				if (!manifest.added_snapshot_id || *manifest.added_snapshot_id != snapshot.snapshot_id) {
+				if (manifest.added_snapshot_id != snapshot.snapshot_id) {
 					//! This is essentially an "EXISTING" manifest
 					//! there just isn't a 'status' field to indicate that
 					continue;
@@ -301,7 +301,7 @@ public:
 	}
 
 public:
-	vector<string> CreateSQLStatements() {
+	vector<string> CreateSQLStatements(ClientContext &context) {
 		//! Order to process in:
 		// - snapshot + schema_versions
 		// - schema
@@ -491,8 +491,8 @@ public:
 					}
 
 					//! Transform the stats stored in the iceberg metadata
-					auto stats = IcebergPredicateStats::DeserializeBounds(lower_bound, upper_bound, column.column_name,
-					                                                      logical_type);
+					auto stats = IcebergPredicateStats::DeserializeBounds(context, lower_bound, upper_bound,
+					                                                      column.column_name, logical_type);
 					auto null_counts_it = iceberg_data_file.null_value_counts.find(column.column_id);
 					if (null_counts_it != iceberg_data_file.null_value_counts.end()) {
 						null_count = null_counts_it->second;
@@ -504,9 +504,13 @@ public:
 						stats.has_nan = nan_count != 0;
 					}
 
-					auto contains_nan = stats.has_nan ? "true" : "false";
-					auto min_value = stats.lower_bound->IsNull() ? "NULL" : "'" + stats.lower_bound->ToString() + "'";
-					auto max_value = stats.upper_bound->IsNull() ? "NULL" : "'" + stats.upper_bound->ToString() + "'";
+					auto contains_nan = (!stats.has_nan || *stats.has_nan) ? "true" : "false";
+					auto min_value = !stats.lower_bound || stats.lower_bound->IsNull()
+					                     ? "NULL"
+					                     : "'" + stats.lower_bound->ToString() + "'";
+					auto max_value = !stats.upper_bound || stats.upper_bound->IsNull()
+					                     ? "NULL"
+					                     : "'" + stats.upper_bound->ToString() + "'";
 
 					auto insert_statement = StringUtil::Format(FILE_COLUMN_STATS_SQL,
 					                                           // data_file_id
@@ -841,7 +845,7 @@ static unique_ptr<FunctionData> IcebergToDuckLakeBind(ClientContext &context, Ta
 
 	ret->AssignSchemaBeginSnapshots();
 
-	ret->sql_statements = ret->CreateSQLStatements();
+	ret->sql_statements = ret->CreateSQLStatements(context);
 
 	return_types.emplace_back(LogicalType::BIGINT);
 	names.emplace_back("count");
@@ -968,9 +972,14 @@ static void IcebergToDuckLakeFunction(ClientContext &context, TableFunctionInput
 TableFunctionSet IcebergFunctions::GetIcebergToDuckLakeFunction() {
 	TableFunctionSet function_set("iceberg_to_ducklake");
 
-	auto fun = TableFunction({LogicalType::VARCHAR, LogicalType::VARCHAR}, IcebergToDuckLakeFunction,
-	                         iceberg::ducklake::IcebergToDuckLakeBind, IcebergToDuckLakeGlobalTableFunctionState::Init);
-	fun.named_parameters.emplace("skip_tables", LogicalType::LIST(LogicalTypeId::VARCHAR));
+	auto fun = TableFunction(FunctionSignature()
+	                             .AddPositionalOnly("iceberg_catalog", LogicalType::VARCHAR)
+	                             .AddPositionalOnly("ducklake_catalog", LogicalType::VARCHAR),
+	                         IcebergToDuckLakeFunction, iceberg::ducklake::IcebergToDuckLakeBind,
+	                         IcebergToDuckLakeGlobalTableFunctionState::Init);
+	fun.GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
+		options.Add("skip_tables", LogicalType::LIST(LogicalTypeId::VARCHAR));
+	});
 	function_set.AddFunction(fun);
 
 	return function_set;

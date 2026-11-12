@@ -1,0 +1,112 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/manifest_rewrite_format_upgrade.test
+# description: Rewrites use the target table format while preserving existing entry identities.
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+require-env METADATA_FILE_READ_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.manifest_rewrite_format_upgrade;
+
+statement ok
+CREATE TABLE my_datalake.default.manifest_rewrite_format_upgrade (id INTEGER, category VARCHAR)
+PARTITIONED BY (category)
+WITH ('format-version' = 2, 'commit.manifest.min-count-to-merge' = 2);
+
+# Two V2 manifests will be compacted on the first append after the upgrade.
+statement ok
+INSERT INTO my_datalake.default.manifest_rewrite_format_upgrade VALUES (1, 'a'), (2, 'b');
+
+statement ok
+SET VARIABLE original_manifest = (
+    SELECT DISTINCT manifest_path FROM iceberg_metadata(my_datalake.default.manifest_rewrite_format_upgrade)
+);
+
+statement ok
+INSERT INTO my_datalake.default.manifest_rewrite_format_upgrade VALUES (3, 'a');
+
+statement ok
+ALTER TABLE my_datalake.default.manifest_rewrite_format_upgrade SET ('format-version' = 3);
+
+statement ok
+INSERT INTO my_datalake.default.manifest_rewrite_format_upgrade VALUES (4, 'b');
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE rewritten_manifest = (
+    SELECT DISTINCT manifest_path FROM iceberg_metadata(my_datalake.default.manifest_rewrite_format_upgrade)
+    WHERE status = 'EXISTING'
+);
+
+query T
+SELECT value FROM avro_metadata(getvariable('rewritten_manifest')) WHERE key = 'format-version';
+----
+3
+
+# The original file is still V2; only the replacement uses V3.
+query T
+SELECT value FROM avro_metadata(getvariable('original_manifest')) WHERE key = 'format-version';
+----
+2
+
+# Rewriting metadata must retain both sequence numbers, not inherit sequence 3.
+query III
+SELECT status, sequence_number, file_sequence_number
+FROM read_avro(getvariable('rewritten_manifest')) ORDER BY sequence_number;
+----
+0	1	1
+0	1	1
+0	2	2
+
+query II
+SELECT count(*), bool_and(e.snapshot_id = s.snapshot_id)
+FROM read_avro(getvariable('rewritten_manifest')) e
+JOIN iceberg_snapshots(my_datalake.default.manifest_rewrite_format_upgrade) s
+ON e.sequence_number = s.sequence_number;
+----
+3	true
+
+# A V3 manifest has the lineage field in its schema.
+query T
+SELECT DISTINCT typeof(data_file.first_row_id) FROM read_avro(getvariable('rewritten_manifest'));
+----
+BIGINT
+
+query III
+SELECT id, _last_updated_sequence_number, _row_id IS NOT NULL
+FROM my_datalake.default.manifest_rewrite_format_upgrade WHERE id = 2;
+----
+2	1	true
+
+statement ok
+SET VARIABLE appended_manifest = (
+    SELECT manifest_path FROM iceberg_metadata(my_datalake.default.manifest_rewrite_format_upgrade)
+    WHERE status = 'ADDED'
+);
+
+# New entries keep their unassigned sequence numbers in Avro, even though the
+# snapshot writer has already chosen a sequence number for the manifest list.
+query II
+SELECT sequence_number IS NULL, file_sequence_number IS NULL
+FROM read_avro(getvariable('appended_manifest'));
+----
+true	true
+
+query III
+SELECT id, _last_updated_sequence_number, _row_id
+FROM my_datalake.default.manifest_rewrite_format_upgrade WHERE id = 4;
+----
+4	3	3
+
+statement ok
+COMMIT;
+
+statement ok
+DROP TABLE my_datalake.default.manifest_rewrite_format_upgrade;

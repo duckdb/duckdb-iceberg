@@ -1,0 +1,128 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/manifest_compaction_partition_schema.test
+# description: Partition Avro types and summary bounds agree with each manifest's schema after promotion
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.manifest_compaction_partition_schema;
+
+statement ok
+CREATE TABLE my_datalake.default.manifest_compaction_partition_schema (p INTEGER, payload INTEGER)
+PARTITIONED BY (p) WITH (
+    'format-version' = '2',
+    'commit.manifest.min-count-to-merge' = '2',
+    'commit.manifest.target-size-bytes' = '8388608'
+);
+
+statement ok
+INSERT INTO my_datalake.default.manifest_compaction_partition_schema VALUES (1, 10);
+
+statement ok
+INSERT INTO my_datalake.default.manifest_compaction_partition_schema VALUES (2, 20);
+
+# Save the original manifest paths so the test proves that older manifests were actually rewritten.
+statement ok
+BEGIN;
+
+statement ok
+CREATE TEMP TABLE original_partition_manifests AS
+SELECT DISTINCT manifest_path FROM iceberg_metadata(my_datalake.default.manifest_compaction_partition_schema);
+
+query I
+SELECT count(*) FROM original_partition_manifests;
+----
+2
+
+statement ok
+COMMIT;
+
+statement ok
+ALTER TABLE my_datalake.default.manifest_compaction_partition_schema ALTER COLUMN p TYPE BIGINT;
+
+# Advance the table schema, but leave the old data files untouched.
+# An unpartitioned append only triggers manifest compaction; the old group must use schema 0.
+statement ok
+ALTER TABLE my_datalake.default.manifest_compaction_partition_schema RESET PARTITIONED BY;
+
+statement ok
+INSERT INTO my_datalake.default.manifest_compaction_partition_schema VALUES (2147483648, 30);
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE partition_manifest_list = (
+    SELECT manifest_list FROM iceberg_snapshots(my_datalake.default.manifest_compaction_partition_schema)
+    ORDER BY sequence_number DESC LIMIT 1
+);
+
+query I
+SELECT count(*) FROM read_avro(getvariable('partition_manifest_list'));
+----
+2
+
+query I
+SELECT count(*) FROM read_avro(getvariable('partition_manifest_list'))
+WHERE manifest_path IN (SELECT manifest_path FROM original_partition_manifests);
+----
+0
+
+statement ok
+SET VARIABLE partition_manifest_path = (
+    SELECT manifest_path FROM read_avro(getvariable('partition_manifest_list'))
+    WHERE partition_spec_id = 0
+);
+
+# Read each Avro file separately: a multi-file scan could silently promote the INTEGER field.
+# Inspect its embedded Iceberg schema, actual Avro partition type, partition ID, and raw summary bytes.
+query ITTIIITT
+SELECT
+    (SELECT value::INTEGER FROM avro_metadata(getvariable('partition_manifest_path')) WHERE key = 'schema-id'),
+    (SELECT (value::JSON)->>'$.fields[0].type' FROM avro_metadata(getvariable('partition_manifest_path')) WHERE key = 'schema'),
+    (SELECT typeof(data_file.partition.identity_p_1) FROM read_avro(getvariable('partition_manifest_path')) LIMIT 1),
+    (SELECT ((value::JSON)->>'$[0].field-id')::INTEGER FROM avro_metadata(getvariable('partition_manifest_path')) WHERE key = 'partition-spec'),
+    (SELECT min(data_file.partition.identity_p_1) FROM read_avro(getvariable('partition_manifest_path'))),
+    (SELECT max(data_file.partition.identity_p_1) FROM read_avro(getvariable('partition_manifest_path'))),
+    hex(partitions[1].lower_bound), hex(partitions[1].upper_bound)
+FROM read_avro(getvariable('partition_manifest_list'))
+WHERE manifest_path = getvariable('partition_manifest_path');
+----
+0	int	INTEGER	1000	1	2	01000000	02000000
+
+statement ok
+COMMIT;
+
+# Reading old partition constants into the current schema must still promote their values.
+query II
+SELECT p, payload FROM my_datalake.default.manifest_compaction_partition_schema WHERE p = 2;
+----
+2	20
+
+query II
+SELECT p, payload FROM my_datalake.default.manifest_compaction_partition_schema WHERE p > 2147483647;
+----
+2147483648	30
+
+# Removing a partition source from the current schema must not prevent reading historical manifests.
+statement ok
+ALTER TABLE my_datalake.default.manifest_compaction_partition_schema DROP COLUMN p;
+
+statement ok
+INSERT INTO my_datalake.default.manifest_compaction_partition_schema VALUES (40);
+
+query I
+SELECT payload FROM my_datalake.default.manifest_compaction_partition_schema ORDER BY payload;
+----
+10
+20
+30
+40
+
+statement ok
+DROP TABLE my_datalake.default.manifest_compaction_partition_schema;
+

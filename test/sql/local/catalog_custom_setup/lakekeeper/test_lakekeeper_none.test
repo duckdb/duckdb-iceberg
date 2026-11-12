@@ -4,13 +4,7 @@
 # This test just serves as an example, see scripts/auth_type_none for a way to create a suitable environment
 mode skip
 
-require httpfs
-
-require avro
-
-require parquet
-
-require iceberg
+include test/sql/init_requires
 
 require-env LAKEKEEPER_SERVER_AVAILABLE
 

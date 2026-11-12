@@ -1,0 +1,150 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/table_properties/test_reject_encryption_properties.test
+# description: Reject encryption activation before staging properties or committing plaintext writes
+# group: [table_properties]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.reject_encryption_properties;
+
+statement ok
+CREATE TABLE my_datalake.default.reject_encryption_properties (id BIGINT, data VARCHAR)
+WITH ('format-version' = '3');
+
+statement ok
+INSERT INTO my_datalake.default.reject_encryption_properties VALUES (1, 'original');
+
+# Property batches must be rejected atomically, including case-insensitive keys.
+foreach key encryption.key-id ENCRYPTION.KEY-ID
+
+statement error
+ALTER TABLE my_datalake.default.reject_encryption_properties
+SET ('{key}' = 'keyA', 'encryption-test-marker' = 'must-not-be-published');
+----
+Not implemented Error: Iceberg table encryption is not supported (encryption.key-id is set)
+
+statement error
+CALL set_iceberg_table_properties('my_datalake.default.reject_encryption_properties',
+	{'{key}': 'keyA', 'encryption-test-marker': 'must-not-be-published'});
+----
+Not implemented Error: Iceberg table encryption is not supported (encryption.key-id is set)
+
+endloop
+
+# Reject setting the property before a write, even with a transaction-local table.
+statement ok
+BEGIN;
+
+query I
+SELECT count(*) FROM my_datalake.default.reject_encryption_properties;
+----
+1
+
+statement error
+ALTER TABLE my_datalake.default.reject_encryption_properties SET ('encryption.key-id' = 'keyA');
+----
+Not implemented Error: Iceberg table encryption is not supported (encryption.key-id is set)
+
+statement error
+INSERT INTO my_datalake.default.reject_encryption_properties VALUES (2, 'secret');
+----
+Current transaction is aborted
+
+statement ok
+COMMIT;
+
+statement ok
+BEGIN;
+
+query I
+SELECT count(*) FROM my_datalake.default.reject_encryption_properties;
+----
+1
+
+statement error
+CALL set_iceberg_table_properties('my_datalake.default.reject_encryption_properties', {'encryption.key-id': 'keyA'});
+----
+Not implemented Error: Iceberg table encryption is not supported (encryption.key-id is set)
+
+statement error
+INSERT INTO my_datalake.default.reject_encryption_properties VALUES (2, 'secret');
+----
+Current transaction is aborted
+
+statement ok
+COMMIT;
+
+# A write already staged in the transaction must not be published with encryption enabled.
+# COMMIT on the aborted transaction rolls back the earlier write.
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.reject_encryption_properties VALUES (2, 'secret');
+
+statement error
+ALTER TABLE my_datalake.default.reject_encryption_properties SET ('encryption.key-id' = 'keyA');
+----
+Not implemented Error: Iceberg table encryption is not supported (encryption.key-id is set)
+
+statement ok
+COMMIT;
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.reject_encryption_properties VALUES (2, 'secret');
+
+statement error
+CALL set_iceberg_table_properties('my_datalake.default.reject_encryption_properties', {'encryption.key-id': 'keyA'});
+----
+Not implemented Error: Iceberg table encryption is not supported (encryption.key-id is set)
+
+statement ok
+COMMIT;
+
+query II
+SELECT * FROM my_datalake.default.reject_encryption_properties;
+----
+1	original
+
+query I
+SELECT count(*) FROM iceberg_snapshots('my_datalake.default.reject_encryption_properties');
+----
+1
+
+query I
+SELECT count(*) FROM iceberg_table_properties('my_datalake.default.reject_encryption_properties')
+WHERE lower(key) IN ('encryption.key-id', 'encryption-test-marker');
+----
+0
+
+# Ordinary property updates and plaintext writes remain usable after rejection.
+statement ok
+ALTER TABLE my_datalake.default.reject_encryption_properties SET ('encryption-test-marker' = 'allowed');
+
+statement ok
+CALL set_iceberg_table_properties('my_datalake.default.reject_encryption_properties', {'encryption-test-marker': 'updated'});
+
+statement ok
+INSERT INTO my_datalake.default.reject_encryption_properties VALUES (3, 'allowed');
+
+query II
+SELECT * FROM my_datalake.default.reject_encryption_properties ORDER BY id;
+----
+1	original
+3	allowed
+
+query I
+SELECT value FROM iceberg_table_properties('my_datalake.default.reject_encryption_properties')
+WHERE key = 'encryption-test-marker';
+----
+updated
+
+statement ok
+DROP TABLE my_datalake.default.reject_encryption_properties;

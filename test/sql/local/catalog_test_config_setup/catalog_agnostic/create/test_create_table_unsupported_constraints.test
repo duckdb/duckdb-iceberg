@@ -1,0 +1,99 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_table_unsupported_constraints.test
+# description: Reject unsupported CREATE TABLE constraints instead of silently ignoring them
+# group: [create]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+USE my_datalake.default;
+
+statement ok
+DROP TABLE IF EXISTS unsupported_create;
+
+# Column CHECK
+statement error
+CREATE TABLE unsupported_create (i INTEGER CHECK (i > 0));
+----
+Not implemented Error: Only NOT NULL constraints are supported for Iceberg tables
+
+# Table CHECK
+statement error
+CREATE TABLE unsupported_create (i INTEGER, j INTEGER, CHECK (i < j));
+----
+Not implemented Error: Only NOT NULL constraints are supported for Iceberg tables
+
+# Column UNIQUE
+statement error
+CREATE TABLE unsupported_create (i INTEGER UNIQUE);
+----
+Not implemented Error: Only NOT NULL constraints are supported for Iceberg tables
+
+# Table UNIQUE
+statement error
+CREATE TABLE unsupported_create (i INTEGER, j INTEGER, UNIQUE (i, j));
+----
+Not implemented Error: Only NOT NULL constraints are supported for Iceberg tables
+
+# Column PRIMARY KEY
+statement error
+CREATE TABLE unsupported_create (i INTEGER PRIMARY KEY);
+----
+Not implemented Error: Only NOT NULL constraints are supported for Iceberg tables
+
+# Table PRIMARY KEY
+statement error
+CREATE TABLE unsupported_create (i INTEGER, j INTEGER, PRIMARY KEY (i, j));
+----
+Not implemented Error: Only NOT NULL constraints are supported for Iceberg tables
+
+# Column REFERENCES (self-reference allows binding without an existing primary-key table)
+statement error
+CREATE TABLE unsupported_create (i INTEGER REFERENCES unsupported_create(i), UNIQUE (i));
+----
+Not implemented Error: Only NOT NULL constraints are supported for Iceberg tables
+
+# Table FOREIGN KEY
+statement error
+CREATE TABLE unsupported_create (i INTEGER, j INTEGER, FOREIGN KEY (j) REFERENCES unsupported_create(i), UNIQUE (i));
+----
+Not implemented Error: Only NOT NULL constraints are supported for Iceberg tables
+
+# Composite FOREIGN KEY
+statement error
+CREATE TABLE unsupported_create (i INTEGER, j INTEGER, k INTEGER, l INTEGER, FOREIGN KEY (k, l) REFERENCES unsupported_create(i, j), UNIQUE (i, j));
+----
+Not implemented Error: Only NOT NULL constraints are supported for Iceberg tables
+
+# Named constraint
+statement error
+CREATE TABLE unsupported_create (i INTEGER, CONSTRAINT positive CHECK (i > 0));
+----
+Not implemented Error: Only NOT NULL constraints are supported for Iceberg tables
+
+# Rejected CREATE statements must not leave a table behind.
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'unsupported_create';
+----
+0
+
+# Validate before CREATE OR REPLACE can drop an existing table.
+statement ok
+CREATE TABLE unsupported_create (i INTEGER);
+
+statement ok
+INSERT INTO unsupported_create VALUES (42);
+
+statement error
+CREATE OR REPLACE TABLE unsupported_create (i INTEGER CHECK (i > 0));
+----
+Not implemented Error: Only NOT NULL constraints are supported for Iceberg tables
+
+query I
+SELECT * FROM unsupported_create;
+----
+42
+
+statement ok
+DROP TABLE unsupported_create;

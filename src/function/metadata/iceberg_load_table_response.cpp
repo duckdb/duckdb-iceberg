@@ -69,16 +69,8 @@ static unique_ptr<FunctionData> IcebergLoadTableResponseBind(ClientContext &cont
                                                              vector<LogicalType> &return_types,
                                                              vector<Identifier> &names) {
 	auto input_string = input.inputs[0].ToString();
-	auto qualified_name = QualifiedName::ParseComponents(input_string);
-
-	if (qualified_name.size() != 3) {
-		throw InvalidInputException("Expected fully qualified table name (catalog.schema.table), got: %s",
-		                            input_string);
-	}
-
-	EntryLookupInfo table_lookup(CatalogType::TABLE_ENTRY,
-	                             QualifiedName(qualified_name[0], qualified_name[1], qualified_name[2]));
-	auto catalog_entry = Catalog::GetEntry(context, table_lookup, OnEntryNotFound::THROW_EXCEPTION);
+	auto catalog_entry = IcebergUtils::GetCatalogEntry(context, CatalogType::TABLE_ENTRY, input_string,
+	                                                   OnEntryNotFound::THROW_EXCEPTION);
 
 	if (catalog_entry->type != CatalogType::TABLE_ENTRY) {
 		throw InvalidInputException("'%s' is not a table", input_string);
@@ -155,7 +147,7 @@ static void IcebergLoadTableResponseFunction(ClientContext &context, TableFuncti
 	auto doc = ICUtils::APIResultToDoc(response->body);
 	auto root = doc->GetRoot();
 
-	auto load_result = rest_api_objects::LoadTableResult::FromJSON(root);
+	auto load_result = ICUtils::ParseLoadTableResult(root);
 
 	output.SetChildCardinality(1);
 
@@ -244,7 +236,8 @@ static void IcebergLoadTableResponseFunction(ClientContext &context, TableFuncti
 TableFunctionSet IcebergFunctions::GetIcebergLoadTableResponseFunction() {
 	TableFunctionSet function_set("iceberg_load_table_response");
 
-	auto fun = TableFunction({LogicalType::VARCHAR}, IcebergLoadTableResponseFunction, IcebergLoadTableResponseBind,
+	auto fun = TableFunction(FunctionSignature().AddPositionalOnly("path", LogicalType::VARCHAR),
+	                         IcebergLoadTableResponseFunction, IcebergLoadTableResponseBind,
 	                         IcebergLoadTableResponseGlobalState::Init);
 	function_set.AddFunction(fun);
 

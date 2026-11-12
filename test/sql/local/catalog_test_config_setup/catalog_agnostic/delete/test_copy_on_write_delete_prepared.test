@@ -1,0 +1,157 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_copy_on_write_delete_prepared.test
+# description: Prepared copy-on-write deletes see new files and leave empty matches unchanged
+# group: [delete]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require core_functions
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cow_delete_prepared;
+
+statement ok
+CREATE TABLE my_datalake.default.cow_delete_prepared (id INTEGER, payload VARCHAR) WITH (
+    'format-version' = '2',
+    'write.delete.mode' = 'copy-on-write'
+);
+
+statement ok
+PREPARE cow_delete_id AS DELETE FROM my_datalake.default.cow_delete_prepared WHERE id = $1;
+
+# The first execution has no snapshot or data files.
+query I
+EXECUTE cow_delete_id(1);
+----
+0
+
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.cow_delete_prepared);
+----
+0
+
+statement ok
+INSERT INTO my_datalake.default.cow_delete_prepared VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+query I
+EXECUTE cow_delete_id(1);
+----
+1
+
+query I
+EXECUTE cow_delete_id(1);
+----
+0
+
+# A second execution must scan the replacement file, not reuse the old filename filter.
+query I
+EXECUTE cow_delete_id(2);
+----
+1
+
+query IT
+SELECT * FROM my_datalake.default.cow_delete_prepared;
+----
+3	c
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.cow_delete_prepared VALUES (4, 'd'), (5, 'e');
+
+query I
+EXECUTE cow_delete_id(4);
+----
+1
+
+query I
+EXECUTE cow_delete_id(5);
+----
+1
+
+query IT
+SELECT * FROM my_datalake.default.cow_delete_prepared;
+----
+3	c
+
+statement ok
+ROLLBACK;
+
+query IT
+SELECT * FROM my_datalake.default.cow_delete_prepared;
+----
+3	c
+
+# Reusing a parameterless plan must also see files added after an empty match.
+statement ok
+PREPARE cow_delete_null AS DELETE FROM my_datalake.default.cow_delete_prepared WHERE payload IS NULL;
+
+query I
+EXECUTE cow_delete_null;
+----
+0
+
+statement ok
+INSERT INTO my_datalake.default.cow_delete_prepared VALUES (6, NULL), (7, 'g');
+
+query I
+EXECUTE cow_delete_null;
+----
+1
+
+statement ok
+INSERT INTO my_datalake.default.cow_delete_prepared VALUES (8, NULL), (9, 'i');
+
+query I
+EXECUTE cow_delete_null;
+----
+1
+
+query IT
+SELECT * FROM my_datalake.default.cow_delete_prepared ORDER BY id;
+----
+3	c
+7	g
+9	i
+
+statement ok
+SET VARIABLE cow_prepared_snapshot_count = (SELECT count(*) FROM iceberg_snapshots(my_datalake.default.cow_delete_prepared));
+
+statement ok
+EXPLAIN DELETE FROM my_datalake.default.cow_delete_prepared;
+
+query I
+DELETE FROM my_datalake.default.cow_delete_prepared WHERE false;
+----
+0
+
+query I
+SELECT count(*) = getvariable('cow_prepared_snapshot_count') FROM iceberg_snapshots(my_datalake.default.cow_delete_prepared);
+----
+true
+
+query I
+DELETE FROM my_datalake.default.cow_delete_prepared;
+----
+3
+
+query I
+DELETE FROM my_datalake.default.cow_delete_prepared;
+----
+0
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.cow_delete_prepared) WHERE status != 'DELETED';
+----
+0
+
+statement ok
+DEALLOCATE cow_delete_id;
+
+statement ok
+DEALLOCATE cow_delete_null;
+
+statement ok
+DROP TABLE my_datalake.default.cow_delete_prepared;

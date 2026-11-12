@@ -1,0 +1,188 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_pending_manifest_format_upgrade.test
+# description: Pending snapshots use the format active at their position in the update sequence.
+# group: [transactions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+require-env METADATA_FILE_READ_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.pending_manifest_format_upgrade;
+
+statement ok
+CREATE TABLE my_datalake.default.pending_manifest_format_upgrade (id INTEGER) WITH ('format-version' = 2);
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.pending_manifest_format_upgrade VALUES (10);
+
+statement ok
+ALTER TABLE my_datalake.default.pending_manifest_format_upgrade SET ('format-version' = 3);
+
+statement ok
+INSERT INTO my_datalake.default.pending_manifest_format_upgrade VALUES (20);
+
+# The earlier V2 pending file must not gain lineage merely because the table was upgraded.
+query III
+SELECT id, _row_id, _last_updated_sequence_number
+FROM my_datalake.default.pending_manifest_format_upgrade ORDER BY id;
+----
+10	NULL	NULL
+20	NULL	NULL
+
+statement ok
+COMMIT;
+
+query I
+SELECT metadata."format-version"
+FROM iceberg_load_table_response(my_datalake.default.pending_manifest_format_upgrade);
+----
+3
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE first_pending_manifest = (
+    SELECT manifest_path FROM iceberg_metadata(my_datalake.default.pending_manifest_format_upgrade)
+    ORDER BY manifest_sequence_number LIMIT 1
+);
+
+# The first snapshot precedes the upgrade and must keep its V2 manifest.
+query T
+SELECT value FROM avro_metadata(getvariable('first_pending_manifest')) WHERE key = 'format-version';
+----
+2
+
+query II
+SELECT sequence_number IS NULL, file_sequence_number IS NULL
+FROM read_avro(getvariable('first_pending_manifest'));
+----
+true	true
+
+statement ok
+SET VARIABLE second_pending_manifest = (
+    SELECT manifest_path FROM iceberg_metadata(my_datalake.default.pending_manifest_format_upgrade)
+    ORDER BY manifest_sequence_number DESC LIMIT 1
+);
+
+# Only the snapshot after the upgrade writes V3 row-lineage fields.
+query T
+SELECT value FROM avro_metadata(getvariable('second_pending_manifest')) WHERE key = 'format-version';
+----
+3
+
+query IIT
+SELECT sequence_number IS NULL, file_sequence_number IS NULL, typeof(data_file.first_row_id)
+FROM read_avro(getvariable('second_pending_manifest'));
+----
+true	true	BIGINT
+
+query III
+SELECT id, _row_id, _last_updated_sequence_number
+FROM my_datalake.default.pending_manifest_format_upgrade ORDER BY id;
+----
+10	0	1
+20	1	2
+
+statement ok
+COMMIT;
+
+statement ok
+DROP TABLE my_datalake.default.pending_manifest_format_upgrade;
+
+# Staged creation adds its own format-version update. Replay it in its original
+# position too, before the first insert and the later upgrade.
+statement ok
+BEGIN;
+
+statement ok
+CREATE TABLE my_datalake.default.pending_manifest_format_upgrade (id INTEGER) WITH ('format-version' = 2);
+
+statement ok
+INSERT INTO my_datalake.default.pending_manifest_format_upgrade VALUES (10);
+
+statement ok
+ALTER TABLE my_datalake.default.pending_manifest_format_upgrade SET ('format-version' = 3);
+
+statement ok
+INSERT INTO my_datalake.default.pending_manifest_format_upgrade VALUES (20);
+
+statement ok
+COMMIT;
+
+query I
+SELECT metadata."format-version"
+FROM iceberg_load_table_response(my_datalake.default.pending_manifest_format_upgrade);
+----
+3
+
+query III
+SELECT id, _row_id, _last_updated_sequence_number
+FROM my_datalake.default.pending_manifest_format_upgrade ORDER BY id;
+----
+10	0	1
+20	1	2
+
+statement ok
+INSERT INTO my_datalake.default.pending_manifest_format_upgrade VALUES (30);
+
+query III
+SELECT id, _row_id, _last_updated_sequence_number
+FROM my_datalake.default.pending_manifest_format_upgrade ORDER BY id;
+----
+10	0	1
+20	1	2
+30	2	3
+
+statement ok
+DROP TABLE my_datalake.default.pending_manifest_format_upgrade;
+
+# Assign inherited IDs at the upgrade for both committed V2 manifests and the
+# V2 manifest written by the first pending snapshot.
+statement ok
+CREATE TABLE my_datalake.default.pending_manifest_format_upgrade (id INTEGER) WITH ('format-version' = 2);
+
+statement ok
+INSERT INTO my_datalake.default.pending_manifest_format_upgrade VALUES (5);
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.pending_manifest_format_upgrade VALUES (10);
+
+statement ok
+ALTER TABLE my_datalake.default.pending_manifest_format_upgrade SET ('format-version' = 3);
+
+statement ok
+INSERT INTO my_datalake.default.pending_manifest_format_upgrade VALUES (20);
+
+statement ok
+COMMIT;
+
+query III
+SELECT id, _row_id, _last_updated_sequence_number
+FROM my_datalake.default.pending_manifest_format_upgrade ORDER BY id;
+----
+5	0	1
+10	1	2
+20	2	3
+
+# The first V3 snapshot accounts for both inherited V2 rows and the new row.
+query III
+SELECT metadata."next-row-id"::BIGINT, s."first-row-id"::BIGINT, s."added-rows"::BIGINT
+FROM iceberg_load_table_response('my_datalake.default.pending_manifest_format_upgrade'),
+     unnest(metadata.snapshots::VARIANT[]) AS t(s)
+WHERE s."snapshot-id"::BIGINT = metadata."current-snapshot-id"::BIGINT;
+----
+3	0	3
+
+statement ok
+DROP TABLE my_datalake.default.pending_manifest_format_upgrade;

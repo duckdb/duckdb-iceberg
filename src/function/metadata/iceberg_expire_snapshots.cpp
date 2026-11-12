@@ -109,11 +109,14 @@ unique_ptr<LogicalOperator> ExpireSnapshotsBindOperator(ClientContext &context, 
 
 TableFunctionSet IcebergFunctions::GetIcebergExpireSnapshotsFunction() {
 	TableFunctionSet function_set(EXPIRE_SNAPSHOTS_NAME);
-	TableFunction function(EXPIRE_SNAPSHOTS_NAME, {LogicalType::VARCHAR}, nullptr);
+	TableFunction function(EXPIRE_SNAPSHOTS_NAME,
+	                       FunctionSignature().AddPositionalOnly("table_name", LogicalType::VARCHAR), nullptr);
 	function.bind_operator = ExpireSnapshotsBindOperator;
-	function.named_parameters["older_than"] = LogicalType::TIMESTAMP;
-	function.named_parameters["retain_last"] = LogicalType::BIGINT;
-	function.named_parameters["snapshot_ids"] = LogicalType::ANY;
+	function.GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
+		options.Add("older_than", LogicalType::TIMESTAMP)
+		    .Add("retain_last", LogicalType::BIGINT)
+		    .Add("snapshot_ids", LogicalType::ANY);
+	});
 	function_set.AddFunction(function);
 	return function_set;
 }

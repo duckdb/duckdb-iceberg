@@ -1,0 +1,166 @@
+# name: test/sql/local/native_catalog/encrypted_table.test
+# description: Reject reads, DML, and maintenance writes to Java-encrypted tables, including empty tables
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+# Import the Java fixture's schema and properties through REST.
+foreach table t_enc t_enc_empty
+
+statement ok
+SET VARIABLE java_metadata = (
+	SELECT content FROM read_text('{WORKING_DIRECTORY}/data/persistent/encrypted_table/{table}/metadata/v1.metadata.json')
+);
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables',
+	json_object('name', '{table}', 'schema', json_extract(getvariable('java_metadata'), '$.schemas[0]'),
+		'properties', json_merge_patch(json_extract(getvariable('java_metadata'), '$.properties'),
+			'{"format-version":"3"}')));
+----
+200
+
+endloop
+
+# Point the populated table at the actual Java-encrypted manifest list.
+statement ok
+SET VARIABLE java_metadata = (
+	SELECT content FROM read_text('{WORKING_DIRECTORY}/data/persistent/encrypted_table/t_enc/metadata/v2.metadata.json')
+);
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/t_enc',
+	'{"requirements":[],"updates":[
+		{"action":"add-snapshot","snapshot":' || json_extract(getvariable('java_metadata'), '$.snapshots[0]') || '},
+		{"action":"set-snapshot-ref","ref-name":"main","type":"branch","snapshot-id":'
+			|| json_extract(getvariable('java_metadata'), '$."current-snapshot-id"') || '}]}');
+----
+200
+
+statement ok
+COPY (SELECT 3::BIGINT AS id, 'secret-c' AS data)
+TO '{TEST_DIR}/encrypted_input.csv' (FORMAT CSV, HEADER false);
+
+foreach table t_enc t_enc_empty
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE original_table = (
+	SELECT body FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/{table}', NULL)
+);
+
+statement ok
+SET VARIABLE original_files = (
+	SELECT list(file ORDER BY file)
+	FROM glob(json_extract_string(getvariable('original_table'), '$.metadata.location') || '/**')
+);
+
+statement ok
+COMMIT;
+
+statement error
+SELECT * FROM my_datalake.default.{table};
+----
+Not implemented Error: Iceberg table encryption is not supported (encryption.key-id is set)
+
+statement error
+INSERT INTO my_datalake.default.{table} VALUES (3, 'secret-c');
+----
+Not implemented Error: Iceberg table encryption is not supported (encryption.key-id is set)
+
+statement error
+INSERT INTO my_datalake.default.{table} SELECT 3::BIGINT, 'secret-c';
+----
+Not implemented Error: Iceberg table encryption is not supported (encryption.key-id is set)
+
+statement error
+COPY my_datalake.default.{table} FROM '{TEST_DIR}/encrypted_input.csv' (FORMAT CSV, HEADER false);
+----
+Not implemented Error: Iceberg table encryption is not supported (encryption.key-id is set)
+
+statement error
+UPDATE my_datalake.default.{table} SET data = 'updated' WHERE id = 1;
+----
+Not implemented Error: Iceberg table encryption is not supported (encryption.key-id is set)
+
+statement error
+DELETE FROM my_datalake.default.{table} WHERE id = 1;
+----
+Not implemented Error: Iceberg table encryption is not supported (encryption.key-id is set)
+
+statement error
+TRUNCATE my_datalake.default.{table};
+----
+Not implemented Error: Iceberg table encryption is not supported (encryption.key-id is set)
+
+# Cover mixed update/insert, delete, and insert-only MERGE actions.
+statement error
+MERGE INTO my_datalake.default.{table} AS target
+USING (VALUES (1, 'updated'), (3, 'secret-c')) AS source(id, data) ON target.id = source.id
+WHEN MATCHED THEN UPDATE SET data = source.data
+WHEN NOT MATCHED THEN INSERT VALUES (source.id, source.data);
+----
+Not implemented Error: Iceberg table encryption is not supported (encryption.key-id is set)
+
+statement error
+MERGE INTO my_datalake.default.{table} AS target
+USING (VALUES (1)) AS source(id) ON target.id = source.id
+WHEN MATCHED THEN DELETE;
+----
+Not implemented Error: Iceberg table encryption is not supported (encryption.key-id is set)
+
+statement error
+MERGE INTO my_datalake.default.{table} AS target
+USING (VALUES (3, 'secret-c')) AS source(id, data) ON target.id = source.id
+WHEN NOT MATCHED THEN INSERT VALUES (source.id, source.data);
+----
+Not implemented Error: Iceberg table encryption is not supported (encryption.key-id is set)
+
+# Maintenance must reject encryption even when the table is empty or the
+# operation would otherwise be a no-op. Exercise both CALL and SELECT forms.
+statement error
+CALL iceberg_rewrite_data_files('my_datalake.default.{table}', min_input_files => 1);
+----
+Not implemented Error: Iceberg table encryption is not supported (encryption.key-id is set)
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files('my_datalake.default.{table}', min_input_files => 1);
+----
+Not implemented Error: Iceberg table encryption is not supported (encryption.key-id is set)
+
+statement error
+CALL iceberg_rollback_to_snapshot('my_datalake.default.{table}',
+	json_extract(getvariable('java_metadata'), '$."current-snapshot-id"')::BIGINT);
+----
+Not implemented Error: Iceberg table encryption is not supported (encryption.key-id is set)
+
+# Rejection must leave both the catalog metadata and warehouse files unchanged.
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE current_table = (
+	SELECT body FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/{table}', NULL)
+);
+
+query I
+SELECT getvariable('current_table') = getvariable('original_table');
+----
+true
+
+query I
+SELECT list(file ORDER BY file) = getvariable('original_files')
+FROM glob(json_extract_string(getvariable('current_table'), '$.metadata.location') || '/**');
+----
+true
+
+statement ok
+COMMIT;
+
+endloop

@@ -6,13 +6,7 @@ require-env ICEBERG_AWS_REMOTE_AVAILABLE
 
 require-env R2_TOKEN
 
-require httpfs
-
-require avro
-
-require parquet
-
-require iceberg
+include test/sql/init_requires
 
 require aws
 

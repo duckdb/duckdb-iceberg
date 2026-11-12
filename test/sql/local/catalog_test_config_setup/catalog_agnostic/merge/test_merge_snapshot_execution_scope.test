@@ -1,0 +1,168 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/merge/test_merge_snapshot_execution_scope.test
+# description: MERGE snapshots preserve lineage and remain separate across statements.
+# group: [merge]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SNAPSHOT_HISTORY_SUPPORT
+
+require-env FORMAT_V3_SUPPORT
+
+require-env TIMETRAVEL_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.merge_snapshot_scope;
+
+statement ok
+CREATE TABLE my_datalake.default.merge_snapshot_scope (id INTEGER, v VARCHAR)
+WITH ('format-version' = '3');
+
+statement ok
+INSERT INTO my_datalake.default.merge_snapshot_scope VALUES (1, 'a'), (2, 'b');
+
+statement ok
+SET VARIABLE updated_row_id = (SELECT _row_id FROM my_datalake.default.merge_snapshot_scope WHERE id = 2);
+
+statement ok
+SET VARIABLE initial_snapshot = (
+    SELECT snapshot_id FROM iceberg_snapshots('my_datalake.default.merge_snapshot_scope')
+);
+
+statement ok
+MERGE INTO my_datalake.default.merge_snapshot_scope t
+USING (VALUES (2, 'B'), (3, 'c')) s(id, v) ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET v = s.v
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
+
+# Updated and inserted rows inherit the same snapshot sequence number.
+query ITI
+SELECT id, v, _last_updated_sequence_number FROM my_datalake.default.merge_snapshot_scope ORDER BY id;
+----
+1	a	1
+2	B	2
+3	c	2
+
+query I
+SELECT _row_id = getvariable('updated_row_id') FROM my_datalake.default.merge_snapshot_scope WHERE id = 2;
+----
+true
+
+query I
+SELECT count(DISTINCT _row_id) FROM my_datalake.default.merge_snapshot_scope;
+----
+3
+
+statement ok
+SET VARIABLE merge_snapshot = (
+    SELECT snapshot_id FROM iceberg_snapshots('my_datalake.default.merge_snapshot_scope')
+    WHERE sequence_number = 2
+);
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.merge_snapshot_scope VALUES (4, 'd');
+
+query I
+MERGE INTO my_datalake.default.merge_snapshot_scope t
+USING (VALUES (2, 'C'), (5, 'e')) s(id, v) ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET v = s.v
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
+----
+2
+
+# Repeating the MERGE is a separate statement with its own snapshot.
+query I
+MERGE INTO my_datalake.default.merge_snapshot_scope t
+USING (VALUES (2, 'C'), (5, 'e')) s(id, v) ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET v = s.v
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
+----
+2
+
+query ITI
+SELECT id, v, _last_updated_sequence_number FROM my_datalake.default.merge_snapshot_scope ORDER BY id;
+----
+1	a	1
+2	C	NULL
+3	c	2
+4	d	NULL
+5	e	NULL
+
+statement ok
+COMMIT;
+
+query IT
+SELECT sequence_number, operation
+FROM iceberg_snapshots('my_datalake.default.merge_snapshot_scope')
+ORDER BY sequence_number;
+----
+1	append
+2	overwrite
+3	append
+4	overwrite
+5	overwrite
+
+query ITI
+SELECT id, v, _last_updated_sequence_number FROM my_datalake.default.merge_snapshot_scope ORDER BY id;
+----
+1	a	1
+2	C	5
+3	c	2
+4	d	3
+5	e	5
+
+query II
+SELECT count(DISTINCT _row_id),
+       bool_and(_row_id = getvariable('updated_row_id')) FILTER (WHERE id = 2)
+FROM my_datalake.default.merge_snapshot_scope;
+----
+5	true
+
+# The retained MERGE snapshot contains both actions, and its parent is still readable.
+query IT
+SELECT * FROM my_datalake.default.merge_snapshot_scope
+AT (VERSION => getvariable('initial_snapshot')) ORDER BY id;
+----
+1	a
+2	b
+
+query IT
+SELECT * FROM my_datalake.default.merge_snapshot_scope
+AT (VERSION => getvariable('merge_snapshot')) ORDER BY id;
+----
+1	a
+2	B
+3	c
+
+statement ok
+BEGIN;
+
+statement ok
+MERGE INTO my_datalake.default.merge_snapshot_scope t
+USING (VALUES (2, 'rolled back'), (6, 'rolled back')) s(id, v) ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET v = s.v
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT count(*) FROM iceberg_snapshots('my_datalake.default.merge_snapshot_scope');
+----
+5
+
+query IT
+SELECT id, v FROM my_datalake.default.merge_snapshot_scope ORDER BY id;
+----
+1	a
+2	C
+3	c
+4	d
+5	e
+
+statement ok
+DROP TABLE my_datalake.default.merge_snapshot_scope;

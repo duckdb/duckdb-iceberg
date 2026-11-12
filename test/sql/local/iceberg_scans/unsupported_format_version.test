@@ -1,0 +1,15 @@
+# name: test/sql/local/iceberg_scans/unsupported_format_version.test
+# description: tables with a format version above the highest supported one are refused instead of read as an older version
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+statement error
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/format_version_4/metadata/v1.metadata.json');
+----
+<REGEX>:.*Iceberg format-version 4 is not supported, the highest supported version is 3.*
+
+statement error
+SELECT * FROM iceberg_metadata('{WORKING_DIRECTORY}/data/persistent/format_version_4/metadata/v1.metadata.json');
+----
+<REGEX>:.*Iceberg format-version 4 is not supported, the highest supported version is 3.*

@@ -15,16 +15,36 @@ static constexpr const char *VERSION_GUESSING_CONFIG_VARIABLE = "unsafe_enable_v
 // (InvalidConfigurationException).
 static constexpr const char *DEFAULT_FORMAT_VERSION_CONFIG_VARIABLE = "iceberg_default_format_version";
 static constexpr uint64_t DEFAULT_ICEBERG_FORMAT_VERSION = 2;
+// The highest Iceberg format version this extension can read and write
+static constexpr int32_t MAX_ICEBERG_FORMAT_VERSION = 3;
+
+static constexpr const char *METADATA_LOG_CLOCK_SKEW_CONFIG_VARIABLE = "iceberg_metadata_log_clock_skew_ms";
+static constexpr int64_t DEFAULT_METADATA_LOG_CLOCK_SKEW_MS = 0;
+
+// The number of manifest entries a manifest-list count may reserve up front for a single manifest
+static constexpr const char *MAX_RESERVED_MANIFEST_ENTRIES_CONFIG_VARIABLE = "iceberg_max_reserved_manifest_entries";
+static constexpr uint64_t DEFAULT_MAX_RESERVED_MANIFEST_ENTRIES = 1000000;
+static constexpr uint64_t MAX_MAX_RESERVED_MANIFEST_ENTRIES = 100000000;
+
+// Controls whether eligible delete-free iceberg_scan_tasks descriptor lists share
+// one Parquet multi-file executor. Lists with deletes or distinct residual filters
+// retain one-task-at-a-time execution.
+static constexpr const char *ENABLE_MULTI_FILE_SCAN_TASKS_CONFIG_VARIABLE = "iceberg_enable_multi_file_scan_tasks";
+static constexpr bool DEFAULT_ENABLE_MULTI_FILE_SCAN_TASKS = true;
+
+// Operational kill switch for statement-local copies of catalog-backed Iceberg scans.
+static constexpr const char *ENABLE_SCAN_SERIALIZATION_CONFIG_VARIABLE = "iceberg_enable_scan_serialization";
+static constexpr bool DEFAULT_ENABLE_SCAN_SERIALIZATION = true;
 
 // Compatibility escape hatch for deletion-vector files written by DuckDB Iceberg 1.5.3,
 // which contain only the deletion-vector blob rather than a valid Puffin container.
 static constexpr const char *SKIP_PUFFIN_VERIFICATION_CONFIG_VARIABLE = "iceberg_unsafe_skip_puffin_verification";
 
-// When this is true, a DELETE on a v2 Iceberg table whose WHERE clause is a pure
+// When this is true, a DELETE on a v2, v3 Iceberg table whose WHERE clause is a pure
 // conjunction of equality predicates writes an Iceberg equality-delete file instead
-// of a positional delete. This exists only to exercise the equality-delete read path.
-static constexpr const char *ENABLE_EQUALITY_DELETES_CONFIG_VARIABLE =
-    "unsafe_and_disabled_for_iceberg_v3_enable_equality_deletes";
+// of a positional delete (v2) or deletion vector (v3). This exists only to exercise
+// the equality-delete read path.
+static constexpr const char *ENABLE_EQUALITY_DELETES_CONFIG_VARIABLE = "__iceberg_unsafe_enable_equality_deletes";
 
 static constexpr const char *UNSAFE_STRUCT_NULL_DEFAULT_INTERP_CONFIG_VARIABLE =
     "__iceberg_unsafe_struct_null_default_interp";
@@ -47,7 +67,7 @@ static string DEFAULT_TABLE_VERSION = UNKNOWN_TABLE_VERSION;
 struct IcebergOptions {
 public:
 	IcebergOptions();
-	IcebergOptions(named_parameter_map_t &named_parameters);
+	IcebergOptions(named_argument_map_t &named_parameters);
 	IcebergOptions(const IcebergOptions &) = default;
 	IcebergOptions &operator=(const IcebergOptions &other);
 

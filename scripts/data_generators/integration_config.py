@@ -73,6 +73,7 @@ class CatalogProfile:
     pyiceberg_oauth_payload: dict[str, str] | None = None
     supports_v3_tables: bool = True
     supports_row_lineage: bool = True
+    allows_cleanup: bool = True
 
     @property
     def duckdb_catalog_init_sql(self) -> str:
@@ -104,6 +105,8 @@ class CatalogProfile:
             capabilities.add("format_v3")
         if self.supports_row_lineage:
             capabilities.add("row_lineage")
+        if self.allows_cleanup:
+            capabilities.add("allows_cleanup")
         return frozenset(capabilities)
 
 
@@ -224,6 +227,7 @@ REST_CATALOG_PROFILES = {
             "header.X-Iceberg-Access-Delegation": "vended-credentials",
             "s3.region": "us-west-2",
         },
+        allows_cleanup=False,
     ),
     "nessie": CatalogProfile(
         name="nessie",

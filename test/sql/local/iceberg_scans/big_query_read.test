@@ -1,11 +1,7 @@
 # name: test/sql/local/iceberg_scans/big_query_read.test
 # group: [iceberg_scans]
 
-require avro
-
-require parquet
-
-require iceberg
+include test/sql/init_requires
 
 # FIXME: the checked in avro file is missing field-ids, which the MultiFileReader doesn't forgive.
 mode skip

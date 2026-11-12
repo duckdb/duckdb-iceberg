@@ -1,0 +1,104 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/manifest_compaction_dropped_partition_source.test
+# description: Manifest compaction resolves promoted partition source types after the source is dropped
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.manifest_compaction_dropped_source;
+
+# The current schema no longer contains p, and older schemas contain both INTEGER and BIGINT.
+# The manifest group's own schema must select BIGINT, irrespective of historical schema order.
+statement ok
+CREATE TABLE my_datalake.default.manifest_compaction_dropped_source (p INTEGER, payload INTEGER)
+PARTITIONED BY (p) WITH (
+    'format-version' = '2',
+    'commit.manifest.min-count-to-merge' = '2',
+    'commit.manifest.target-size-bytes' = '8388608'
+);
+
+statement ok
+ALTER TABLE my_datalake.default.manifest_compaction_dropped_source ALTER COLUMN p TYPE BIGINT;
+
+statement ok
+INSERT INTO my_datalake.default.manifest_compaction_dropped_source VALUES (2147483648, 10);
+
+statement ok
+INSERT INTO my_datalake.default.manifest_compaction_dropped_source VALUES (2147483649, 20);
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE TEMP TABLE original_partition_manifests AS
+SELECT DISTINCT manifest_path FROM iceberg_metadata(my_datalake.default.manifest_compaction_dropped_source);
+
+statement ok
+COMMIT;
+
+statement ok
+ALTER TABLE my_datalake.default.manifest_compaction_dropped_source RESET PARTITIONED BY;
+
+statement ok
+ALTER TABLE my_datalake.default.manifest_compaction_dropped_source DROP COLUMN p;
+
+# This append triggers the rewrite of both BIGINT manifests while p is absent from the current schema.
+statement ok
+INSERT INTO my_datalake.default.manifest_compaction_dropped_source VALUES (30);
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE partition_manifest_list = (
+    SELECT manifest_list FROM iceberg_snapshots(my_datalake.default.manifest_compaction_dropped_source)
+    ORDER BY sequence_number DESC LIMIT 1
+);
+
+query I
+SELECT count(*) FROM read_avro(getvariable('partition_manifest_list'))
+WHERE manifest_path IN (SELECT manifest_path FROM original_partition_manifests);
+----
+0
+
+statement ok
+SET VARIABLE partition_manifest_path = (
+    SELECT manifest_path FROM read_avro(getvariable('partition_manifest_list')) WHERE partition_spec_id = 0
+);
+
+query IT
+SELECT
+    (SELECT value::INTEGER FROM avro_metadata(getvariable('partition_manifest_path')) WHERE key = 'schema-id'),
+    (SELECT (value::JSON)->>'$.fields[0].type' FROM avro_metadata(getvariable('partition_manifest_path')) WHERE key = 'schema');
+----
+1	long
+
+query TII
+SELECT typeof(data_file.partition.identity_p_1), data_file.partition.identity_p_1, data_file.record_count
+FROM read_avro(getvariable('partition_manifest_path')) ORDER BY data_file.partition.identity_p_1;
+----
+BIGINT	2147483648	1
+BIGINT	2147483649	1
+
+query TT
+SELECT hex(partitions[1].lower_bound), hex(partitions[1].upper_bound)
+FROM read_avro(getvariable('partition_manifest_list')) WHERE partition_spec_id = 0;
+----
+0000008000000000	0100008000000000
+
+statement ok
+COMMIT;
+
+query I
+SELECT payload FROM my_datalake.default.manifest_compaction_dropped_source ORDER BY payload;
+----
+10
+20
+30
+
+statement ok
+DROP TABLE my_datalake.default.manifest_compaction_dropped_source;

@@ -1,0 +1,52 @@
+# name: ${FILE_PATH}
+# description: Decode and apply ${CASE} positional deletes with ${THREADS} threads
+# group: [performance]
+
+name Positional deletes - ${CASE} - ${THREADS} threads
+group performance
+subgroup positional_deletes
+
+require avro
+
+require parquet
+
+require iceberg
+
+require json
+
+# Follow scan_tasks benchmarks: materialize descriptors outside the timer, while
+# retaining delete-file reads, bitmap construction, data decoding and filtering.
+# Local files and disabled external caching isolate CPU costs; OS pages stay warm.
+load
+SET threads=1;
+SET enable_external_file_cache=false;
+COPY (SELECT i::BIGINT id, (3*i+7)::BIGINT payload FROM range(8388608) t(i))
+TO '${BENCHMARK_DIR}/positional_${CASE}_${THREADS}_data.parquet'
+(FORMAT PARQUET, ROW_GROUP_SIZE 131072, FIELD_IDS {id:1, payload:2});
+COPY (SELECT '${BENCHMARK_DIR}/positional_${CASE}_${THREADS}_data.parquet' file_path, i::BIGINT pos
+      FROM range(8388608) t(i) WHERE ${DELETE_PREDICATE} ORDER BY i)
+TO '${BENCHMARK_DIR}/positional_${CASE}_${THREADS}_deletes.parquet'
+(FORMAT PARQUET, ROW_GROUP_SIZE 131072, FIELD_IDS {file_path:2147483546, pos:2147483545});
+CREATE TEMP TABLE tasks AS
+SELECT '${BENCHMARK_DIR}/positional_${CASE}_${THREADS}_data.parquet'::VARCHAR file_path,
+       'PARQUET'::VARCHAR file_format,
+       (SELECT size FROM read_blob('${BENCHMARK_DIR}/positional_${CASE}_${THREADS}_data.parquet'))::BIGINT file_size_in_bytes,
+       8388608::BIGINT record_count, NULL::BIGINT sequence_number, NULL::BIGINT first_row_id,
+       0::INTEGER partition_spec_id, {'1':NULL::BIGINT} partition_constants,
+       [{'file_path':'${BENCHMARK_DIR}/positional_${CASE}_${THREADS}_deletes.parquet'::VARCHAR,
+         'file_format':'PARQUET'::VARCHAR, 'content':1::INTEGER,
+         'file_size_in_bytes':(SELECT size FROM read_blob('${BENCHMARK_DIR}/positional_${CASE}_${THREADS}_deletes.parquet'))::BIGINT,
+         'record_count':${DELETED_COUNT}::BIGINT, 'equality_ids':[]::INTEGER[],
+         'referenced_data_file':NULL::VARCHAR, 'content_offset':NULL::BIGINT,
+         'content_size_in_bytes':NULL::BIGINT}] AS delete_files,
+       NULL::BIGINT snapshot_id, 0::INTEGER schema_id,
+       '{"format-version":2,"table-uuid":"00000000-0000-0000-0000-000000000003","location":"${BENCHMARK_DIR}","last-updated-ms":0,"last-column-id":2,"last-sequence-number":0,"current-schema-id":0,"schemas":[{"schema-id":0,"type":"struct","fields":[{"id":1,"name":"id","required":false,"type":"long"},{"id":2,"name":"payload","required":false,"type":"long"}]}],"partition-specs":[{"spec-id":0,"fields":[]}],"default-spec-id":0,"sort-orders":[{"order-id":0,"fields":[]}],"default-sort-order-id":0}'::JSON::VARIANT metadata,
+       NULL::STRUCT(id BIGINT, payload BIGINT) AS schema;
+SET VARIABLE task_list=(SELECT list(t) FROM tasks t);
+SET threads=${THREADS};
+
+run
+SELECT count(*), sum(id), sum(payload) FROM iceberg_scan_tasks(getvariable('task_list'));
+
+result III
+${COUNT}	${SUM_ID}	${SUM_PAYLOAD}

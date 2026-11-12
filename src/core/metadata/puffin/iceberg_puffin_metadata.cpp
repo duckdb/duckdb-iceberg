@@ -2,6 +2,7 @@
 
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "duckdb/common/allocator.hpp"
+#include "duckdb/common/numeric_utils.hpp"
 #include "duckdb/common/string_util.hpp"
 
 #include "duckdb/common/json_document.hpp"
@@ -13,6 +14,31 @@ namespace {
 constexpr data_t PUFFIN_MAGIC[4] = {0x50, 0x46, 0x41, 0x31};
 constexpr idx_t FOOTER_TRAILER_SIZE = sizeof(int32_t) + sizeof(uint32_t) + sizeof(PUFFIN_MAGIC);
 constexpr idx_t FOOTER_FIXED_SIZE = sizeof(PUFFIN_MAGIC) + FOOTER_TRAILER_SIZE;
+
+JSONMutableValue WriteBlobMetadata(JSONWriter &json, const IcebergPuffinBlobMetadata &blob) {
+	auto obj = json.CreateObject();
+	obj.AddString("type", blob.type);
+	auto fields = json.CreateArray();
+	obj.Add("fields", fields);
+	for (auto field : blob.fields) {
+		fields.Append(json.CreateSignedInteger(field));
+	}
+	obj.Add("snapshot-id", json.CreateSignedInteger(blob.snapshot_id));
+	obj.Add("sequence-number", json.CreateSignedInteger(blob.sequence_number));
+	obj.Add("offset", json.CreateSignedInteger(blob.offset));
+	obj.Add("length", json.CreateSignedInteger(blob.length));
+	if (blob.compression_codec) {
+		obj.AddString("compression-codec", *blob.compression_codec);
+	}
+	if (blob.properties) {
+		auto properties = json.CreateObject();
+		obj.Add("properties", properties);
+		for (const auto &property : *blob.properties) {
+			properties.AddString(property.first, property.second);
+		}
+	}
+	return obj;
+}
 
 string ParseProperties(optional<case_insensitive_map_t<string>> &target, JSONValue properties_val) {
 	if (!properties_val.IsObject()) {
@@ -143,6 +169,56 @@ IcebergPuffinFileMetadataResult ParseFileMetadata(JSONValue root) {
 }
 
 } // namespace
+
+IcebergPuffinFileLayout::IcebergPuffinFileLayout()
+    : data_size(sizeof(PUFFIN_MAGIC)), footer_size(FOOTER_FIXED_SIZE + strlen("{\"blobs\":[]}")) {
+}
+
+idx_t IcebergPuffinFileLayout::AddBlob(idx_t size, IcebergPuffinBlobMetadata metadata) {
+	metadata.offset = NumericCast<int64_t>(data_size);
+	metadata.length = NumericCast<int64_t>(size);
+	JSONWriter json;
+	json.SetRoot(WriteBlobMetadata(json, metadata));
+	footer_size += json.ToString().size() + (blob_count++ > 0 ? 1 : 0);
+	data_size += size;
+	return data_size + footer_size;
+}
+
+IcebergPuffinWriter::IcebergPuffinWriter(FileSystem &fs, const string &path)
+    : writer(fs, path, FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_FILE_CREATE) {
+	writer.WriteData(PUFFIN_MAGIC, sizeof(PUFFIN_MAGIC));
+}
+
+idx_t IcebergPuffinWriter::WriteBlob(const vector<data_t> &blob, IcebergPuffinBlobMetadata metadata) {
+	auto offset = writer.GetTotalWritten();
+	metadata.offset = NumericCast<int64_t>(offset);
+	metadata.length = NumericCast<int64_t>(blob.size());
+	writer.WriteData(blob.data(), blob.size());
+	blobs.push_back(std::move(metadata));
+	return offset;
+}
+
+idx_t IcebergPuffinWriter::Finish() {
+	JSONWriter json;
+	auto root = json.CreateObject();
+	json.SetRoot(root);
+	auto blob_array = json.CreateArray();
+	root.Add("blobs", blob_array);
+	for (const auto &blob : blobs) {
+		blob_array.Append(WriteBlobMetadata(json, blob));
+	}
+	auto payload = json.ToString();
+	// Footer: magic, uncompressed JSON, little-endian payload size, flags, magic.
+	data_t trailer[FOOTER_TRAILER_SIZE];
+	Store<int32_t>(NumericCast<int32_t>(payload.size()), trailer);
+	Store<uint32_t>(0, trailer + sizeof(int32_t));
+	memcpy(trailer + sizeof(int32_t) + sizeof(uint32_t), PUFFIN_MAGIC, sizeof(PUFFIN_MAGIC));
+	writer.WriteData(PUFFIN_MAGIC, sizeof(PUFFIN_MAGIC));
+	writer.WriteData(reinterpret_cast<const_data_ptr_t>(payload.data()), payload.size());
+	writer.WriteData(trailer, sizeof(trailer));
+	writer.Close();
+	return writer.GetTotalWritten();
+}
 
 IcebergPuffinFileFooterResult IcebergPuffinReader::ReadFooter(FileSystem &fs, FileHandle &handle, const string &path,
                                                               optional<int64_t> expected_file_size,

@@ -262,9 +262,10 @@ bool IcebergDelete::TryGetEqualityDeletePredicates(ClientContext &context, Icebe
 		return false;
 	}
 
-	//! Equality-delete writing is only supported for v2, unpartitioned tables.
+	//! Equality-delete writing is only supported for v2 & v3, unpartitioned tables.
+	//! v1 has no delete files, and v4 forbids writing new equality deletes.
 	auto &table_metadata = table.table_info.table_metadata;
-	if (table_metadata.iceberg_version != 2) {
+	if (table_metadata.iceberg_version != 2 && table_metadata.iceberg_version != 3) {
 		return false;
 	}
 	if (table_metadata.HasPartitionSpec() && table_metadata.GetLatestPartitionSpec().IsPartitioned()) {
@@ -417,6 +418,11 @@ void IcebergDelete::WriteEqualityDeleteFile(ClientContext &context, IcebergDelet
 	field_input.push_back(Value::STRUCT(std::move(field_id_values)));
 	info->options["field_ids"] = std::move(field_input);
 
+	auto codec = table.table_info.table_metadata.GetDeleteCompressionCodec();
+	if (!codec.empty()) {
+		info->options["codec"].emplace_back(codec);
+	}
+
 	auto &copy_fun = IcebergUtils::GetCopyFunction(context, "parquet");
 	CopyFunctionBindInput bind_input(*info);
 
@@ -532,7 +538,7 @@ void IcebergDelete::WriteEqualityDeleteFile(ClientContext &context, IcebergDelet
 		}
 	}
 
-	global_state.written_files.emplace(delete_file_path, std::move(delete_file));
+	global_state.write_result.written_files.emplace(delete_file_path, std::move(delete_file));
 }
 
 } // namespace duckdb

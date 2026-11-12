@@ -5,13 +5,7 @@
 # Requires: python3 scripts/sigv4_mock_server.py 19130
 require-env SIGV4_MOCK_SERVER_AVAILABLE
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 require aws
 
@@ -30,6 +24,10 @@ CREATE SECRET sigv4_secret (
 
 statement ok
 CALL enable_logging(level='debug');
+
+# Inspect the signing scheme in the logged Authorization header.
+statement ok
+SET redact_http_logs=false
 
 statement ok
 ATTACH ':' AS glue_catalog (

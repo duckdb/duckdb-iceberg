@@ -4,13 +4,7 @@
 
 require-env FIXTURE_SERVER_AVAILABLE
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 set ignore_error_messages
 
@@ -20,7 +14,7 @@ CALL enable_logging('HTTP');
 statement ok
 set logging_level='debug';
 
-# Create S3 storage secret for MinIO
+# Create S3 storage secret for SeaweedFS
 statement ok
 CREATE SECRET (
     TYPE S3,

@@ -1,0 +1,23 @@
+# name: test/sql/local/iceberg_scans/invalid_metadata_exception.test
+# description: Invalid Iceberg schema references report configuration errors and leave the connection usable
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+COPY (
+    SELECT replace(content, '"schema-id" : 0,', '"schema-id" : 999,')
+    FROM read_text('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg/metadata/v2.metadata.json')
+) TO '{TEST_DIR}/invalid_schema.metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+statement error
+SELECT * FROM iceberg_scan('{TEST_DIR}/invalid_schema.metadata.json', allow_moved_paths = true);
+----
+Invalid Configuration Error: Schema id 0 not found in Iceberg metadata
+
+query I
+SELECT 42;
+----
+42

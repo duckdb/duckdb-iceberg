@@ -12,6 +12,58 @@ namespace rest_api_objects {
 
 ContentFile::ContentFile() {
 }
+ContentFile::Object9::Object9() {
+}
+
+ContentFile::Object9 ContentFile::Object9::FromJSON(JSONValue obj) {
+	Object9 res;
+	auto error = res.TryFromJSON(obj);
+	if (!error.empty()) {
+		throw InvalidInputException(error);
+	}
+	return res;
+}
+
+ContentFile::Object9 ContentFile::Object9::Copy() const {
+	Object9 res;
+	for (auto &entry : additional_properties) {
+		res.additional_properties.emplace(entry.first, entry.second.Copy());
+	}
+	return res;
+}
+
+string ContentFile::Object9::TryFromJSON(JSONValue obj) {
+	string error;
+	obj.IterateObject([&](const string &key_str, JSONValue val) {
+		if (!error.empty()) {
+			return;
+		}
+		FieldStatistics tmp;
+		error = tmp.TryFromJSON(val);
+		if (!error.empty()) {
+			return;
+		}
+		additional_properties.emplace(key_str, std::move(tmp));
+	});
+	if (!error.empty()) {
+		return error;
+	}
+	return "";
+}
+
+void ContentFile::Object9::PopulateJSON(JSONWriter &writer, JSONMutableValue obj) const {
+	// Serialize additional properties
+	for (const auto &[key, value] : additional_properties) {
+		auto value_json = value.ToJSON(writer);
+		obj.Add(key, value_json);
+	}
+}
+
+JSONMutableValue ContentFile::Object9::ToJSON(JSONWriter &writer) const {
+	auto obj = writer.CreateObject();
+	PopulateJSON(writer, obj);
+	return obj;
+}
 
 ContentFile ContentFile::FromJSON(JSONValue obj) {
 	ContentFile res;
@@ -48,6 +100,10 @@ ContentFile ContentFile::Copy() const {
 	if (sort_order_id.has_value()) {
 		res.sort_order_id.emplace();
 		(*res.sort_order_id) = (*sort_order_id);
+	}
+	if (content_stats.has_value()) {
+		res.content_stats.emplace();
+		(*res.content_stats) = (*content_stats).Copy();
 	}
 	return res;
 }
@@ -199,6 +255,15 @@ string ContentFile::TryFromJSON(JSONValue obj) {
 		}
 		sort_order_id = std::move(sort_order_id_tmp);
 	}
+	auto content_stats_val = obj.GetMember("content-stats");
+	if (content_stats_val.IsValid()) {
+		Object9 content_stats_tmp;
+		error = content_stats_tmp.TryFromJSON(content_stats_val);
+		if (!error.empty()) {
+			return error;
+		}
+		content_stats = std::move(content_stats_tmp);
+	}
 	return "";
 }
 
@@ -258,6 +323,13 @@ void ContentFile::PopulateJSON(JSONWriter &writer, JSONMutableValue obj) const {
 		auto &sort_order_id_value = *sort_order_id;
 		auto sort_order_id_json = writer.CreateSignedInteger(sort_order_id_value);
 		obj.Add("sort-order-id", sort_order_id_json);
+	}
+
+	// Serialize: content-stats
+	if (content_stats.has_value()) {
+		auto &content_stats_value = *content_stats;
+		auto content_stats_json = content_stats_value.ToJSON(writer);
+		obj.Add("content-stats", content_stats_json);
 	}
 }
 

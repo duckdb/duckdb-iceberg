@@ -4,7 +4,6 @@
 #include "duckdb/common/operator/add.hpp"
 #include "duckdb/common/operator/subtract.hpp"
 
-#include "core/metadata/iceberg_table_metadata.hpp"
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "common/iceberg_utils.hpp"
@@ -18,6 +17,14 @@ int64_t IcebergSnapshot::NewSnapshotId() {
 		random_number ^= (1LL << 63);
 	}
 	return random_number;
+}
+
+int64_t IcebergSnapshot::NextSequenceNumber(int64_t last_sequence_number) {
+	int64_t next;
+	if (last_sequence_number < 0 || !TryAddOperator::Operation(last_sequence_number, int64_t(1), next)) {
+		throw InvalidConfigurationException("Iceberg sequence number exceeds the nonnegative BIGINT range");
+	}
+	return next;
 }
 
 static string OperationTypeToString(IcebergSnapshotOperationType type) {
@@ -35,13 +42,10 @@ static string OperationTypeToString(IcebergSnapshotOperationType type) {
 	}
 }
 
-rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject(const IcebergTableMetadata &table_metadata) const {
+rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject() const {
 	rest_api_objects::Snapshot res;
 
-	if (!snapshot_id) {
-		throw InvalidConfigurationException("snapshot.snapshot_id is not set");
-	}
-	res.snapshot_id = *snapshot_id;
+	res.snapshot_id = snapshot_id;
 	res.timestamp_ms = timestamp_ms.value;
 	if (manifest_list.empty()) {
 		throw InvalidConfigurationException("Writing snapshots without a manifest list is not supported");
@@ -65,8 +69,6 @@ rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject(const IcebergTableMetad
 
 	if (first_row_id) {
 		res.first_row_id = *first_row_id;
-	} else if (table_metadata.iceberg_version >= 3) {
-		throw InternalException("first-row-id required for V3 tables!");
 	}
 
 	return res;
@@ -74,20 +76,23 @@ rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject(const IcebergTableMetad
 
 IcebergSnapshot IcebergSnapshot::ParseSnapshot(const rest_api_objects::Snapshot &snapshot,
                                                IcebergTableMetadata &metadata) {
-	if (!snapshot.schema_id) {
-		throw InvalidConfigurationException("snapshot.schema_id is not set");
-	}
-
-	IcebergSnapshot ret(*snapshot.schema_id);
+	//! The schema-id is optional, so it stays unset if the snapshot doesn't record it
+	IcebergSnapshot ret(snapshot.schema_id, snapshot.snapshot_id);
 	if (metadata.iceberg_version == 1) {
 		//! SPEC: Snapshot field sequence-number must default to 0
 		ret.sequence_number = 0;
 	} else if (metadata.iceberg_version >= 2) {
-		D_ASSERT(snapshot.sequence_number);
+		if (!snapshot.sequence_number || *snapshot.sequence_number < 0) {
+			throw InvalidConfigurationException("Snapshot %d must have a non-negative 'sequence-number'",
+			                                    snapshot.snapshot_id);
+		}
 		ret.sequence_number = *snapshot.sequence_number;
 	}
+	if (snapshot.schema_id && *snapshot.schema_id < 0) {
+		throw InvalidConfigurationException("Snapshot %d has an invalid 'schema-id': %d", snapshot.snapshot_id,
+		                                    *snapshot.schema_id);
+	}
 
-	ret.snapshot_id = snapshot.snapshot_id;
 	ret.timestamp_ms = timestamp_ms_t(snapshot.timestamp_ms);
 	if (snapshot.manifest_list) {
 		ret.manifest_list = *snapshot.manifest_list;
@@ -97,6 +102,7 @@ IcebergSnapshot IcebergSnapshot::ParseSnapshot(const rest_api_objects::Snapshot 
 		throw InvalidConfigurationException("Snapshot must contain either 'manifest-list' or 'manifests'");
 	}
 	ret.metrics = IcebergSnapshotMetrics(snapshot.summary.additional_properties);
+	ret.summary = snapshot.summary.additional_properties;
 
 	if (snapshot.parent_snapshot_id) {
 		ret.parent_snapshot_id = *snapshot.parent_snapshot_id;
@@ -126,7 +132,12 @@ IcebergSnapshot IcebergSnapshot::ParseSnapshot(const rest_api_objects::Snapshot 
 }
 
 int32_t IcebergSnapshot::GetSchemaId() const {
-	return schema_id;
+	if (!schema_id) {
+		throw InvalidConfigurationException(
+		    "Snapshot %s doesn't record its 'schema-id', so the schema it was written with is unknown",
+		    std::to_string(snapshot_id));
+	}
+	return *schema_id;
 }
 
 } // namespace duckdb

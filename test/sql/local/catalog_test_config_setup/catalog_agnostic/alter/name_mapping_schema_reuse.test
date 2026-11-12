@@ -1,0 +1,137 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/name_mapping_schema_reuse.test
+# description: Schema reuse maintains historic aliases and per-column properties together
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.name_mapping_reuse;
+
+statement ok
+CREATE TABLE my_datalake.default.name_mapping_reuse (a INTEGER, b INTEGER, s STRUCT(x INTEGER, y INTEGER)) WITH (
+	'schema.name-mapping.default' = '[{"field-id":1,"names":["a"]},{"field-id":2,"names":["b"]},{"field-id":3,"names":["s"],"fields":[{"field-id":4,"names":["x"]},{"field-id":5,"names":["y"]}]}]',
+	'write.metadata.metrics.column.a' = 'none',
+	'write.metadata.metrics.column.b' = 'full',
+	'write.metadata.metrics.column.s.x' = 'counts'
+);
+
+statement ok
+CREATE MACRO name_mapping_reuse_entries() AS TABLE
+SELECT (e->>'$."field-id"')::INTEGER AS field_id, json_extract_string(e, '$.names[*]') AS names
+FROM (
+	SELECT unnest(json_extract(value::JSON, '$[*]')) AS e
+	FROM iceberg_table_properties('my_datalake.default.name_mapping_reuse')
+	WHERE key = 'schema.name-mapping.default'
+);
+
+# Swap names through a temporary name, reassigning each alias to its new field ID.
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_reuse RENAME COLUMN a TO tmp;
+
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_reuse RENAME COLUMN b TO a;
+
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_reuse RENAME COLUMN tmp TO b;
+
+statement ok
+COMMIT;
+
+query II
+SELECT field_id, names FROM name_mapping_reuse_entries() ORDER BY field_id;
+----
+1	[tmp, b]
+2	[a]
+3	[s]
+
+query II
+SELECT key, value FROM iceberg_table_properties('my_datalake.default.name_mapping_reuse')
+WHERE key LIKE '%.column.%' ORDER BY key;
+----
+write.metadata.metrics.column.a	full
+write.metadata.metrics.column.b	none
+write.metadata.metrics.column.s.x	counts
+
+# Each inverse rename reuses an existing schema. Both kinds of property must still follow the fields.
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_reuse RENAME COLUMN b TO tmp;
+
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_reuse RENAME COLUMN a TO b;
+
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_reuse RENAME COLUMN tmp TO a;
+
+query II
+SELECT field_id, names FROM name_mapping_reuse_entries() ORDER BY field_id;
+----
+1	[tmp, a]
+2	[b]
+3	[s]
+
+query II
+SELECT key, value FROM iceberg_table_properties('my_datalake.default.name_mapping_reuse')
+WHERE key LIKE '%.column.%' ORDER BY key;
+----
+write.metadata.metrics.column.a	none
+write.metadata.metrics.column.b	full
+write.metadata.metrics.column.s.x	counts
+
+statement ok
+COMMIT;
+
+query II
+SELECT metadata."current-schema-id"::INTEGER, len(metadata.schemas::VARIANT[])
+FROM iceberg_load_table_response('my_datalake.default.name_mapping_reuse');
+----
+0	4
+
+query II
+SELECT field_id, names FROM name_mapping_reuse_entries() ORDER BY field_id;
+----
+1	[tmp, a]
+2	[b]
+3	[s]
+
+statement ok
+SET VARIABLE mapping_before = (
+	SELECT value FROM iceberg_table_properties('my_datalake.default.name_mapping_reuse')
+	WHERE key = 'schema.name-mapping.default'
+);
+
+# A comment, primitive type promotion, and DROP have no new names. Preserve even the dropped entries.
+statement ok
+COMMENT ON COLUMN my_datalake.default.name_mapping_reuse.a IS 'comment';
+
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_reuse ALTER COLUMN a TYPE BIGINT;
+
+statement ok
+ALTER TABLE my_datalake.default.name_mapping_reuse DROP COLUMN s.x;
+
+query I
+SELECT value = getvariable('mapping_before')
+FROM iceberg_table_properties('my_datalake.default.name_mapping_reuse')
+WHERE key = 'schema.name-mapping.default';
+----
+true
+
+query II
+SELECT key, value FROM iceberg_table_properties('my_datalake.default.name_mapping_reuse')
+WHERE key LIKE '%.column.%' ORDER BY key;
+----
+write.metadata.metrics.column.a	none
+write.metadata.metrics.column.b	full
+
+statement ok
+DROP TABLE my_datalake.default.name_mapping_reuse;

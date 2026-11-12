@@ -38,6 +38,15 @@ struct RewritePlan {
 	shared_ptr<IcebergTable> table_info;
 	//! Files selected for rewrite after per-partition size / min_input_files gating.
 	vector<RewriteCandidate> selected_candidates;
+	//! Distinct delete-file paths whose referenced data files were all selected.
+	//! Invalidated on the same REPLACE commit as the rewritten data files.
+	vector<string> delete_files_to_remove;
+	//! The rows the selected files hold before deletes: the most the rewrite can write
+	int64_t selected_record_count = 0;
+	//! The most rows the deletes that may apply to the selected files can remove, so the rewrite writes at least
+	//! selected_record_count minus this. Capped at selected_record_count to avoid overflow. Unset when an equality
+	//! delete may apply: it can remove any number of rows.
+	optional<int64_t> max_deleted_rows = 0;
 };
 
 struct RewriteDataFilesPlanInput {
@@ -51,6 +60,8 @@ struct RewriteDataFilesPlanInput {
 	//! Optional upper bound on how many eligible files will be rewritten.
 	optional<int64_t> max_files_to_rewrite;
 	bool rewrite_all = false;
+	//! Spec to rewrite into. Defaults to the table's current default spec (default_spec_id).
+	optional<int32_t> output_spec_id;
 };
 
 RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input);

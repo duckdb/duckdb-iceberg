@@ -6,20 +6,14 @@ require-env CATALOG_TEST_CONFIG_SETUP
 
 require-env EQUALITY_DELETE_WRITES_ENABLED 1
 
-require avro
-
-require parquet
-
-require iceberg
-
-require httpfs
+include test/sql/init_requires
 
 
 statement ok
 use my_datalake.default;
 
 statement ok
-set unsafe_and_disabled_for_iceberg_v3_enable_equality_deletes=true;
+set __iceberg_unsafe_enable_equality_deletes=true;
 
 statement ok
 drop table if exists my_datalake.default.equality_delete_struct_field;
@@ -76,19 +70,17 @@ set variable data_file = (
 	limit 1
 );
 
+# Verify the equality id belongs to the deepest field, rather than one of its parent structs.
+# Catalogs can assign different valid field IDs when creating the table.
 query I
-select unnest(equality_ids)
+select equality_ids = (
+	select list(field_id)
+	from parquet_schema(getvariable('data_file'))
+	where name = 'key'
+)
 from (select unnest(data_file) from read_avro(getvariable('delete_manifest')));
 ----
-8
-
-# Verify the equality id belongs to the deepest field, rather than one of its parent structs.
-query I
-select field_id
-from parquet_schema(getvariable('data_file'))
-where name = 'key';
-----
-8
+true
 
 statement ok
 commit;

@@ -1,0 +1,48 @@
+# name: test/sql/local/metadata_log_clock_skew_setting.test
+# description: Metadata-log clock-skew allowance defaults, validation, and reset
+# group: [local]
+
+require iceberg
+
+# This setting is not in core's extension autoload registry.
+statement ok
+LOAD iceberg;
+
+query I
+select current_setting('iceberg_metadata_log_clock_skew_ms');
+----
+0
+
+statement ok
+set iceberg_metadata_log_clock_skew_ms = 0;
+
+query I
+select current_setting('iceberg_metadata_log_clock_skew_ms');
+----
+0
+
+statement error
+set iceberg_metadata_log_clock_skew_ms = -1;
+----
+must be a non-negative number of milliseconds
+
+statement error
+set iceberg_metadata_log_clock_skew_ms = NULL;
+----
+must be a non-negative number of milliseconds
+
+statement ok
+set iceberg_metadata_log_clock_skew_ms = 250;
+
+query I
+select current_setting('iceberg_metadata_log_clock_skew_ms');
+----
+250
+
+statement ok
+reset iceberg_metadata_log_clock_skew_ms;
+
+query I
+select current_setting('iceberg_metadata_log_clock_skew_ms');
+----
+0

@@ -1,0 +1,40 @@
+# name: test/sql/local/iceberg_scans/malformed_metadata.test
+# description: metadata missing required fields, or with an invalid format version, is refused with an error
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+statement error
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_location/metadata/v1.metadata.json');
+----
+<REGEX>:.*'location' field is missing from the metadata.json file.*
+
+statement error
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_last_updated_ms/metadata/v1.metadata.json');
+----
+<REGEX>:.*'last-updated-ms' field is missing from the metadata.json file.*
+
+statement error
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_schema_id/metadata/v1.metadata.json');
+----
+<REGEX>:.*'schema-id' field is missing from a schema in the metadata.json file.*
+
+statement error
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/missing_spec_id/metadata/v1.metadata.json');
+----
+<REGEX>:.*'spec-id' field is missing from a partition spec in the metadata.json file.*
+
+statement error
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/invalid_format_version/metadata/v1.metadata.json');
+----
+<REGEX>:.*'format-version' 0 in the metadata.json file is not a valid Iceberg format version.*
+
+statement error
+SELECT * FROM iceberg_metadata('{WORKING_DIRECTORY}/data/persistent/missing_location/metadata/v1.metadata.json');
+----
+<REGEX>:.*'location' field is missing from the metadata.json file.*
+
+statement error
+SELECT * FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/manifest_newer_than_table/metadata/v2.metadata.json');
+----
+<REGEX>:.*Manifest file has format-version 2, which is newer than the table's format-version 1.*

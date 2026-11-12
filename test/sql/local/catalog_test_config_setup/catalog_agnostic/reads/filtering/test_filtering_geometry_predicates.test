@@ -3,13 +3,13 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
-require avro
+require-env FORMAT_V3_SUPPORT
 
-require parquet
+require-env GEOMETRY_SUPPORT
 
-require iceberg
+require-env SCAN_PLANNING_MODE client
 
-require httpfs
+include test/sql/init_requires
 
 
 statement ok
@@ -63,9 +63,6 @@ order by g::VARCHAR;
 LINESTRING (0 0, 10 10)
 POINT (1 2)
 POINT (5 7)
-
-statement ok
-select * from duckdb_logs() where type = 'Iceberg' and message.contains('Iceberg Filter Pushdown, skipped ''data_file'':');
 
 query I
 select count(*) from duckdb_logs()
@@ -153,3 +150,184 @@ select count(*) from duckdb_logs()
 where type = 'Iceberg' and message.contains('Iceberg Filter Pushdown, skipped ''data_file'':');
 ----
 0
+
+# Null counts must prune all-NULL files even when they have no bbox bounds.
+statement ok
+drop table if exists my_datalake.default.geom_pruning_null;
+
+statement ok
+create table my_datalake.default.geom_pruning_null (g GEOMETRY) with ('format-version'='3');
+
+statement ok
+insert into my_datalake.default.geom_pruning_null values (NULL), (NULL);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.geom_pruning_null
+where g && 'POINT(0 0)'::GEOMETRY;
+----
+0
+
+query I
+select count(*) from duckdb_logs()
+where type = 'Iceberg' and message.contains('Iceberg Filter Pushdown, skipped ''data_file'':');
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.geom_pruning_null where g is not null;
+----
+0
+
+query I
+select count(*) from duckdb_logs()
+where type = 'Iceberg' and message.contains('Iceberg Filter Pushdown, skipped ''data_file'':');
+----
+1
+
+query I
+select count(*) from my_datalake.default.geom_pruning_null where g is null;
+----
+2
+
+statement ok
+drop table my_datalake.default.geom_pruning_null;
+
+# A covering bbox must still reject NULLs and empty geometries. Iceberg does
+# not record empty-geometry counts, so bbox coverage alone cannot remove it.
+statement ok
+insert into my_datalake.default.geom_pruning values (NULL), ('POINT EMPTY'::GEOMETRY);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.geom_pruning
+where g && 'POLYGON((-1 -1, 121 -1, 121 121, -1 121, -1 -1))';
+----
+7
+
+statement ok
+set disabled_optimizers='filter_pushdown';
+
+query I
+select count(*) from my_datalake.default.geom_pruning
+where g && 'POLYGON((-1 -1, 121 -1, 121 121, -1 121, -1 -1))';
+----
+7
+
+statement ok
+reset disabled_optimizers;
+
+# Reversed arguments, CRS-only casts, and inclusive bbox boundaries.
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.geom_pruning
+where ST_Intersects_Extent('POINT(10 10)'::GEOMETRY, g::GEOMETRY);
+----
+1
+
+query I
+select count(*) from duckdb_logs()
+where type = 'Iceberg' and message.contains('Iceberg Filter Pushdown, skipped ''data_file'':');
+----
+2
+
+# XYZ, XYM, and XYZM bounds still prune using XY only.
+foreach suffix z m zm
+
+statement ok
+drop table if exists my_datalake.default.geom_pruning_{suffix};
+
+statement ok
+create table my_datalake.default.geom_pruning_{suffix} (g GEOMETRY) with ('format-version'='3');
+
+endloop
+
+statement ok
+insert into my_datalake.default.geom_pruning_z values ('POINT Z (1 2 3)'::GEOMETRY);
+
+statement ok
+insert into my_datalake.default.geom_pruning_z values ('POINT Z (100 100 -3)'::GEOMETRY);
+
+statement ok
+insert into my_datalake.default.geom_pruning_m values ('POINT M (1 2 3)'::GEOMETRY);
+
+statement ok
+insert into my_datalake.default.geom_pruning_m values ('POINT M (100 100 -3)'::GEOMETRY);
+
+statement ok
+insert into my_datalake.default.geom_pruning_zm values ('POINT ZM (1 2 3 4)'::GEOMETRY);
+
+statement ok
+insert into my_datalake.default.geom_pruning_zm values ('POINT ZM (100 100 -3 -4)'::GEOMETRY);
+
+foreach suffix z m zm
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.geom_pruning_{suffix}
+where 'POINT(1 2)'::GEOMETRY && g;
+----
+1
+
+query I
+select count(*) from duckdb_logs()
+where type = 'Iceberg' and message.contains('Iceberg Filter Pushdown, skipped ''data_file'':');
+----
+1
+
+statement ok
+drop table my_datalake.default.geom_pruning_{suffix};
+
+endloop
+
+# Missing bbox metrics are unknown, not evidence of an empty geometry.
+foreach metrics counts none
+
+statement ok
+drop table if exists my_datalake.default.geom_pruning_no_bounds;
+
+statement ok
+create table my_datalake.default.geom_pruning_no_bounds (g GEOMETRY)
+with ('format-version'='3', 'write.metadata.metrics.default'='{metrics}');
+
+statement ok
+insert into my_datalake.default.geom_pruning_no_bounds values ('POINT(1 2)'::GEOMETRY), (NULL), ('POINT EMPTY'::GEOMETRY);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from my_datalake.default.geom_pruning_no_bounds
+where g && 'POINT(1 2)'::GEOMETRY;
+----
+1
+
+query I
+select count(*) from duckdb_logs()
+where type = 'Iceberg' and message.contains('Iceberg Filter Pushdown, skipped ''data_file'':');
+----
+0
+
+query I
+select count(*) from my_datalake.default.geom_pruning_no_bounds where g is null;
+----
+1
+
+statement ok
+drop table my_datalake.default.geom_pruning_no_bounds;
+
+endloop
+
+statement ok
+drop table my_datalake.default.geom_pruning;

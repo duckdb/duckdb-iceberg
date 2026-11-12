@@ -1,4 +1,7 @@
+#include "duckdb/execution/operator/persistent/physical_merge_into.hpp"
 #include "execution/operator/iceberg_delete.hpp"
+#include "execution/operator/iceberg_copy_on_write_delete.hpp"
+#include "execution/operator/merge_into/iceberg_merge_delete_collector.hpp"
 
 #include "iceberg_logging.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
@@ -11,6 +14,9 @@
 #include "duckdb/execution/physical_operator.hpp"
 #include "duckdb/function/copy_function.hpp"
 #include "duckdb/common/types/uuid.hpp"
+#include "duckdb/common/operator/cast_operators.hpp"
+#include "duckdb/parallel/base_pipeline_event.hpp"
+#include "duckdb/parallel/executor_task.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 
 #include "catalog/rest/iceberg_catalog.hpp"
@@ -23,6 +29,7 @@
 #include "core/metadata/manifest/iceberg_manifest.hpp"
 
 #include "core/deletes/iceberg_deletion_vector.hpp"
+#include "core/metadata/puffin/iceberg_puffin_metadata.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_update.hpp"
 #include "iceberg_logging.hpp"
 
@@ -59,6 +66,12 @@ static bool IsScanCreatedByDelete(const PhysicalTableScan &scan) {
 }
 
 optional_ptr<PhysicalTableScan> IcebergDelete::FindIcebergScan(PhysicalOperator &plan) {
+	if (plan.type == PhysicalOperatorType::MERGE_ACTION_SOURCE) {
+		// the rows of a merge action are pushed into the source by the merge into - look for the scan in the plan
+		// that the merge into reads from
+		auto &merge_input = plan.Cast<PhysicalMergeActionSource>().merge_input;
+		return merge_input ? FindIcebergScan(*merge_input) : nullptr;
+	}
 	if (plan.type == PhysicalOperatorType::TABLE_SCAN) {
 		// does this emit the virtual columns?
 		auto &scan = plan.Cast<PhysicalTableScan>();
@@ -87,7 +100,13 @@ IcebergDelete::IcebergDelete(PhysicalPlan &physical_plan, IcebergTableSchemaVers
 }
 
 unique_ptr<GlobalSinkState> IcebergDelete::GetGlobalSinkState(ClientContext &context) const {
-	return make_uniq<IcebergDeleteGlobalState>();
+	auto result = make_uniq<IcebergDeleteGlobalState>();
+	if (merge_delete_action_index.IsValid()) {
+		auto &transaction = IcebergTransaction::Get(context, table.catalog);
+		auto &transaction_data = table.table_info.GetOrCreateTransactionData(transaction);
+		result->merge_deletes = transaction_data.GetMergeDeleteCollector(merge_delete_action_count);
+	}
+	return std::move(result);
 }
 
 unique_ptr<LocalSinkState> IcebergDelete::GetLocalSinkState(ExecutionContext &context) const {
@@ -162,11 +181,7 @@ SinkCombineResultType IcebergDelete::Combine(ExecutionContext &context, Operator
 // Finalize
 //===--------------------------------------------------------------------===//
 
-void IcebergDelete::WriteDeletionVectorFile(ClientContext &context, IcebergDeleteGlobalState &global_state,
-                                            const string &filename, IcebergDeleteFileInfo delete_file,
-                                            const set<idx_t> &sorted_deletes) const {
-	auto delete_file_path = delete_file.file_name;
-
+vector<data_t> IcebergDelete::SerializeDeletionVector(const set<idx_t> &sorted_deletes) const {
 	// Build deletion vector data
 	unordered_map<int32_t, roaring::Roaring> bitmaps;
 
@@ -180,36 +195,12 @@ void IcebergDelete::WriteDeletionVectorFile(ClientContext &context, IcebergDelet
 		bitmap.add(low_bits);
 	}
 
-	// Serialize the deletion vector to a blob, then wrap it in a valid Puffin file
-	// container (Magic + Blob + Footer) so the output is a spec-compliant Puffin file
-	// rather than a bare blob. The blob is placed at offset 4, after the leading magic.
-	auto blob_data = IcebergDeletionVectorData::ToBlob(bitmaps);
-	auto puffin_file = IcebergDeletionVectorData::ToPuffinFile(blob_data, filename, sorted_deletes.size());
-
-	// Write the Puffin file
-	auto &fs = FileSystem::GetFileSystem(context);
-	auto file_handle =
-	    fs.OpenFile(delete_file_path, FileOpenFlags::FILE_FLAGS_WRITE | FileOpenFlags::FILE_FLAGS_FILE_CREATE);
-	file_handle->Write(puffin_file.data(), puffin_file.size());
-	file_handle->Close();
-
-	delete_file.file_name = delete_file_path;
-	delete_file.file_format = "puffin";
-	delete_file.delete_count = sorted_deletes.size();
-	// The deletion-vector blob is written immediately after the 4-byte leading Puffin magic.
-	delete_file.content_offset = 4;
-	delete_file.content_size_in_bytes = blob_data.size();
-	delete_file.file_size_bytes = puffin_file.size();
-	DUCKDB_LOG(context, IcebergLogType,
-	           "Iceberg DELETE, wrote deletion_vector_file '%s' for data_file '%s', delete_count=%llu, "
-	           "file_size=%llu bytes",
-	           delete_file_path, filename, sorted_deletes.size(), puffin_file.size());
-	global_state.written_files.emplace(filename, std::move(delete_file));
+	return IcebergDeletionVectorData::ToBlob(bitmaps);
 }
 
-void IcebergDelete::WritePositionalDeleteFile(ClientContext &context, IcebergDeleteGlobalState &global_state,
-                                              const string &filename, IcebergDeleteFileInfo delete_file,
-                                              set<idx_t> sorted_deletes) const {
+IcebergDeleteFileInfo IcebergDelete::WritePositionalDeleteFile(ClientContext &context, const string &filename,
+                                                               IcebergDeleteFileInfo delete_file,
+                                                               const set<idx_t> &sorted_deletes) const {
 	auto delete_file_path = delete_file.file_name;
 	auto info = make_uniq<CopyInfo>();
 	info->file_path = delete_file_path;
@@ -225,6 +216,11 @@ void IcebergDelete::WritePositionalDeleteFile(ClientContext &context, IcebergDel
 	vector<Value> field_input;
 	field_input.push_back(std::move(field_ids));
 	info->options["field_ids"] = std::move(field_input);
+
+	auto codec = table.table_info.table_metadata.GetDeleteCompressionCodec();
+	if (!codec.empty()) {
+		info->options["codec"].emplace_back(codec);
+	}
 
 	vector<string> names_to_write {"file_path", "pos"};
 	vector<LogicalType> types_to_write {LogicalType::VARCHAR, LogicalType::BIGINT};
@@ -294,91 +290,303 @@ void IcebergDelete::WritePositionalDeleteFile(ClientContext &context, IcebergDel
 	           "Iceberg DELETE, wrote positional_delete_file '%s' for data_file '%s', delete_count=%llu, "
 	           "file_size=%llu bytes",
 	           delete_file_path, filename, stats.row_count, stats.file_size_bytes);
-	global_state.written_files.emplace(filename, std::move(delete_file));
+	return delete_file;
 }
 
-static void PopulateAlteredManifests(const IcebergMultiFileList &multi_file_list, IcebergManifestDeletes &out,
-                                     IcebergDeleteData &delete_data) {
-	if (delete_data.type != IcebergDeleteType::DELETION_VECTOR) {
+static void PopulateAlteredManifests(IcebergManifestDeletes &out, const IcebergDeleteData &delete_data) {
+	for (auto &file : delete_data.source_files) {
+		out.InvalidateFile(file);
+	}
+}
+
+namespace {
+
+string DeleteFilePath(FileSystem &fs, const string &filename, const string &format) {
+	// External writers can use forward slashes for Windows paths. Normalize only
+	// the output directory; delete matching must retain the original data-file path.
+	auto normalized_filename = fs.ConvertSeparators(filename);
+	auto last_sep = normalized_filename.rfind(fs.PathSeparator(normalized_filename));
+	if (last_sep == string::npos) {
+		throw InvalidConfigurationException("Cannot create valid file path for delete file");
+	}
+	// A shared Puffin file lives beside its first data file. Each blob retains its own partition in the manifest.
+	return fs.JoinPath(normalized_filename.substr(0, last_sep + 1),
+	                   UUID::ToString(UUID::GenerateRandomUUID()) + "-deletes." + format);
+}
+
+idx_t DeleteTargetFileSize(const IcebergTableMetadata &metadata) {
+	constexpr const char *PROPERTY = "write.delete.target-file-size-bytes";
+	auto &properties = metadata.GetTableProperties();
+	auto entry = properties.find(PROPERTY);
+	if (entry == properties.end()) {
+		return 64ULL * 1024 * 1024;
+	}
+	int64_t size;
+	if (!TryCast::Operation<string_t, int64_t>(string_t(entry->second), size, true) || size <= 0) {
+		throw InvalidInputException("Iceberg: '%s' must be a positive integer number of bytes, got '%s'", PROPERTY,
+		                            entry->second);
+	}
+	return static_cast<idx_t>(size);
+}
+
+IcebergPuffinBlobMetadata DeletionVectorMetadata(const IcebergDeleteFileInfo &file) {
+	IcebergPuffinBlobMetadata metadata;
+	metadata.type = "deletion-vector-v1";
+	metadata.fields.push_back(MultiFileReader::DELETE_POS_FIELD_ID);
+	metadata.snapshot_id = -1;
+	metadata.sequence_number = -1;
+	metadata.properties = case_insensitive_map_t<string> {{"referenced-data-file", file.data_file_path},
+	                                                      {"cardinality", std::to_string(file.delete_count)}};
+	return metadata;
+}
+
+void FinishDeleteFiles(const IcebergDelete &op, ClientContext &context, IcebergDeleteGlobalState &global_state,
+                       vector<IcebergDeleteFileWrite> &writes, bool stage_snapshot) {
+	{
+		lock_guard<mutex> guard(global_state.lock);
+		auto &result = global_state.write_result;
+		for (auto &write : writes) {
+			if (write.superseded_deletes) {
+				PopulateAlteredManifests(result.altered_manifests, *write.superseded_deletes);
+			}
+			auto data_file_path = write.delete_file.data_file_path;
+			result.written_files.emplace(std::move(data_file_path), std::move(write.delete_file));
+		}
+	}
+	if (stage_snapshot) {
+		op.AddDeleteSnapshot(context, global_state);
+	}
+}
+
+//! Each write task owns one size-bounded Puffin file.
+class IcebergDeletionVectorWriteTask : public ExecutorTask {
+public:
+	IcebergDeletionVectorWriteTask(Executor &executor, shared_ptr<Event> event,
+	                               vector<reference<IcebergDeleteFileWrite>> inputs)
+	    : ExecutorTask(executor, std::move(event)), inputs(std::move(inputs)) {
+	}
+
+	TaskExecutionResult ExecuteTask(TaskExecutionMode mode) override {
+		auto &context = event->GetClientContext();
+		context.InterruptCheck();
+		auto &fs = FileSystem::GetFileSystem(context);
+		IcebergPuffinWriter writer(fs, DeleteFilePath(fs, inputs[0].get().delete_file.data_file_path, "puffin"));
+		for (auto &entry : inputs) {
+			context.InterruptCheck();
+			auto &input = entry.get();
+			auto &file = input.delete_file;
+			file.file_name = writer.GetPath();
+			file.content_offset = writer.WriteBlob(input.deletion_vector, DeletionVectorMetadata(file));
+			input.deletion_vector = vector<data_t>();
+		}
+		auto file_size = writer.Finish();
+		for (auto &input : inputs) {
+			input.get().delete_file.file_size_bytes = file_size;
+		}
+		DUCKDB_LOG(context, IcebergLogType,
+		           "Iceberg DELETE, wrote deletion_vector_file '%s', vector_count=%llu, file_size=%llu bytes",
+		           writer.GetPath(), inputs.size(), file_size);
+		event->FinishTask();
+		return TaskExecutionResult::TASK_FINISHED;
+	}
+
+	string TaskType() const override {
+		return "IcebergDeletionVectorWriteTask";
+	}
+
+private:
+	vector<reference<IcebergDeleteFileWrite>> inputs;
+};
+
+class IcebergDeletionVectorWriteEvent : public BasePipelineEvent {
+public:
+	IcebergDeletionVectorWriteEvent(Pipeline &pipeline, const IcebergDelete &op, IcebergDeleteGlobalState &global_state,
+	                                vector<IcebergDeleteFileWrite> writes, bool stage_snapshot, idx_t target_file_size)
+	    : BasePipelineEvent(pipeline), op(op), global_state(global_state), writes(std::move(writes)),
+	      stage_snapshot(stage_snapshot), target_file_size(target_file_size) {
+	}
+
+	void Schedule() override {
+		// DVs are always per data file. Unlike v2 position deletes, write.delete.granularity does not
+		// constrain their containers: the v3 spec permits Puffin files to span partitions and specs.
+		vector<shared_ptr<Task>> tasks;
+		vector<reference<IcebergDeleteFileWrite>> inputs;
+		IcebergPuffinFileLayout layout;
+		for (auto &write : writes) {
+			auto next_layout = layout;
+			auto metadata = DeletionVectorMetadata(write.delete_file);
+			auto size = next_layout.AddBlob(write.deletion_vector.size(), metadata);
+			if (!inputs.empty() && size > target_file_size) {
+				tasks.push_back(
+				    make_shared_ptr<IcebergDeletionVectorWriteTask>(executor, shared_from_this(), std::move(inputs)));
+				inputs = vector<reference<IcebergDeleteFileWrite>>();
+				next_layout = IcebergPuffinFileLayout();
+				next_layout.AddBlob(write.deletion_vector.size(), std::move(metadata));
+			}
+			// An oversized vector must stay intact: a data file can only have one live DV.
+			inputs.push_back(write);
+			layout = next_layout;
+		}
+		tasks.push_back(
+		    make_shared_ptr<IcebergDeletionVectorWriteTask>(executor, shared_from_this(), std::move(inputs)));
+		SetTasks(std::move(tasks));
+	}
+
+	void FinishEvent() override {
+		FinishDeleteFiles(op, GetClientContext(), global_state, writes, stage_snapshot);
+	}
+
+private:
+	const IcebergDelete &op;
+	IcebergDeleteGlobalState &global_state;
+	vector<IcebergDeleteFileWrite> writes;
+	bool stage_snapshot;
+	idx_t target_file_size;
+};
+
+//! Merge old deletes and serialize each vector in parallel before packing by actual encoded size.
+class IcebergDeleteFileMaterializeTask : public ExecutorTask {
+public:
+	IcebergDeleteFileMaterializeTask(Executor &executor, shared_ptr<Event> event, const IcebergDelete &op,
+	                                 const string &filename, vector<idx_t> &deleted_rows, IcebergDeleteFileWrite &out)
+	    : ExecutorTask(executor, std::move(event)), op(op), filename(filename), deleted_rows(deleted_rows), out(out) {
+	}
+
+	TaskExecutionResult ExecuteTask(TaskExecutionMode mode) override {
+		auto &context = event->GetClientContext();
+		context.InterruptCheck();
+		out = op.MaterializeDeletes(context, filename, deleted_rows);
+		// The encoded vector replaces the pending row positions while waiting for the write event.
+		deleted_rows = vector<idx_t>();
+		event->FinishTask();
+		return TaskExecutionResult::TASK_FINISHED;
+	}
+
+	string TaskType() const override {
+		return "IcebergDeleteFileMaterializeTask";
+	}
+
+private:
+	const IcebergDelete &op;
+	const string &filename;
+	vector<idx_t> &deleted_rows;
+	IcebergDeleteFileWrite &out;
+};
+
+class IcebergDeleteFileMaterializeEvent : public BasePipelineEvent {
+public:
+	IcebergDeleteFileMaterializeEvent(Pipeline &pipeline, const IcebergDelete &op,
+	                                  IcebergDeleteGlobalState &global_state, IcebergPendingDeletes pending_deletes,
+	                                  bool stage_snapshot)
+	    : BasePipelineEvent(pipeline), op(op), global_state(global_state), pending_deletes(std::move(pending_deletes)),
+	      writes(this->pending_deletes.rows_by_file.size()), stage_snapshot(stage_snapshot) {
+	}
+
+	void Schedule() override {
+		if (op.table.table_info.table_metadata.iceberg_version >= 3) {
+			target_file_size = DeleteTargetFileSize(op.table.table_info.table_metadata);
+		}
+		vector<shared_ptr<Task>> tasks;
+		idx_t index = 0;
+		for (auto &entry : pending_deletes.rows_by_file) {
+			tasks.push_back(make_shared_ptr<IcebergDeleteFileMaterializeTask>(
+			    executor, shared_from_this(), op, entry.first, entry.second, writes[index++]));
+		}
+		SetTasks(std::move(tasks));
+	}
+
+	void FinishEvent() override {
+		if (op.table.table_info.table_metadata.iceberg_version >= 3) {
+			InsertEvent(make_shared_ptr<IcebergDeletionVectorWriteEvent>(*pipeline, op, global_state, std::move(writes),
+			                                                             stage_snapshot, target_file_size));
+		} else {
+			FinishDeleteFiles(op, GetClientContext(), global_state, writes, stage_snapshot);
+		}
+	}
+
+private:
+	const IcebergDelete &op;
+	IcebergDeleteGlobalState &global_state;
+	IcebergPendingDeletes pending_deletes;
+	vector<IcebergDeleteFileWrite> writes;
+	bool stage_snapshot;
+	idx_t target_file_size = 0;
+};
+
+} // namespace
+
+void IcebergDelete::ScheduleDeletes(Pipeline &pipeline, Event &event, IcebergDeleteGlobalState &global_state,
+                                    bool stage_snapshot) const {
+	D_ASSERT(!is_equality_delete);
+	auto pending_deletes = global_state.TakePendingDeletes();
+	if (global_state.merge_deletes) {
+		D_ASSERT(stage_snapshot);
+		// Earlier actions must finish so that the remaining contributors can run.
+		auto merged_deletes = global_state.merge_deletes->CompleteAction(merge_delete_action_index.GetIndex(),
+		                                                                 std::move(pending_deletes));
+		if (!merged_deletes) {
+			return;
+		}
+		pending_deletes = std::move(*merged_deletes);
+	}
+	if (pending_deletes.IsEmpty()) {
+		// An empty UPDATE may have no source scan after optimization.
 		return;
 	}
-	for (auto &bound_entry : delete_data.entries) {
-		auto &entry = bound_entry.entry;
-		out.InvalidateFile(entry.data_file.file_path);
-	}
-}
-
-void IcebergDelete::FlushDeletes(IcebergTransaction &transaction, ClientContext &context,
-                                 IcebergDeleteGlobalState &global_state) const {
-	bool write_deletion_vector = table.table_info.table_metadata.iceberg_version >= 3;
-
 	if (!multi_file_list) {
 		throw InternalException("IcebergDelete multi_file_list is NULL");
 	}
+	event.InsertEvent(make_shared_ptr<IcebergDeleteFileMaterializeEvent>(pipeline, *this, global_state,
+	                                                                     std::move(pending_deletes), stage_snapshot));
+}
 
-	lock_guard<mutex> guard(global_state.lock);
-	for (auto &entry : global_state.deleted_rows) {
-		auto &filename = entry.first;
-		auto &deleted_rows = entry.second;
+IcebergDeleteFileWrite IcebergDelete::MaterializeDeletes(ClientContext &context, const string &filename,
+                                                         const vector<idx_t> &deleted_rows) const {
+	bool write_deletion_vector = table.table_info.table_metadata.iceberg_version >= 3;
+	IcebergDeleteFileWrite result;
 
-		// sort and duplicate eliminate the deletes
-		set<idx_t> sorted_deletes;
-		for (auto &row_idx : deleted_rows) {
-			sorted_deletes.insert(row_idx);
-		}
-		if (sorted_deletes.size() != deleted_rows.size()) {
-			throw NotImplementedException("The same row was updated multiple times - this is not (yet) supported in "
-			                              "Iceberg. Eliminate duplicate matches prior to running the UPDATE");
-		}
-		if (write_deletion_vector) {
-			//! Addd the existing delete we're replacing
-			auto existing_delete = multi_file_list->GetExistingPositionalDeleteData(filename);
-			if (existing_delete) {
-				auto &delete_data = *existing_delete;
-				PopulateAlteredManifests(*multi_file_list, global_state.altered_manifests, delete_data);
-				delete_data.ToSet(sorted_deletes);
-			}
-		}
-
-		IcebergDeleteFileInfo delete_file;
-		delete_file.data_file_path = filename;
-		delete_file.partition_info = multi_file_list->GetPartitionForDataFile(filename);
-
-		auto &fs = FileSystem::GetFileSystem(context);
-
-		string file_format;
-		if (write_deletion_vector) {
-			file_format = "puffin";
-		} else {
-			file_format = "parquet";
-		}
-
-		string delete_filename = UUID::ToString(UUID::GenerateRandomUUID()) + "-deletes." + file_format;
-		// Place the delete file in the same directory as the data file it references,
-		// so that for partitioned tables it lands in the correct partition folder.
-		auto sep = fs.PathSeparator(filename);
-		auto last_sep = filename.rfind(sep);
-		if (last_sep == string::npos) {
-			throw InvalidConfigurationException("Cannot create valid file path for delete file");
-		}
-		string data_file_dir = filename.substr(0, last_sep);
-		string delete_file_path = fs.JoinPath(data_file_dir, delete_filename);
-
-		delete_file.file_name = delete_file_path;
-
-		if (!write_deletion_vector) {
-			WritePositionalDeleteFile(context, global_state, filename, delete_file, sorted_deletes);
-		} else {
-			WriteDeletionVectorFile(context, global_state, filename, delete_file, sorted_deletes);
+	// Check newly selected positions before adding existing deletes: only new duplicate matches are errors.
+	set<idx_t> sorted_deletes;
+	for (auto &row_idx : deleted_rows) {
+		sorted_deletes.insert(row_idx);
+	}
+	if (sorted_deletes.size() != deleted_rows.size()) {
+		throw NotImplementedException("The same row was updated multiple times - this is not (yet) supported in "
+		                              "Iceberg. Eliminate duplicate matches prior to running the UPDATE");
+	}
+	if (write_deletion_vector) {
+		// A v3 vector must also retain all positions already deleted from this data file.
+		result.superseded_deletes = multi_file_list->GetExistingPositionalDeleteData(filename);
+		if (result.superseded_deletes) {
+			result.superseded_deletes->ToSet(sorted_deletes);
 		}
 	}
+
+	IcebergDeleteFileInfo delete_file;
+	delete_file.data_file_path = filename;
+	delete_file.partition_info = multi_file_list->GetScanPlanner().GetPartitionForDataFile(filename);
+
+	if (!write_deletion_vector) {
+		delete_file.file_name = DeleteFilePath(FileSystem::GetFileSystem(context), filename, "parquet");
+		result.delete_file = WritePositionalDeleteFile(context, filename, std::move(delete_file), sorted_deletes);
+	} else {
+		result.deletion_vector = SerializeDeletionVector(sorted_deletes);
+		delete_file.file_format = "puffin";
+		delete_file.delete_count = sorted_deletes.size();
+		delete_file.content_size_in_bytes = result.deletion_vector.size();
+		result.delete_file = std::move(delete_file);
+	}
+	return result;
 }
 
 partitioned_manifest_entry_map_t IcebergDelete::GenerateDeleteManifestEntries(IcebergDeleteGlobalState &global_state) {
 	lock_guard<mutex> guard(global_state.lock);
-	auto &delete_files = global_state.written_files;
+	return global_state.write_result.GenerateManifestEntries();
+}
+
+partitioned_manifest_entry_map_t IcebergDeleteWriteResult::GenerateManifestEntries() const {
 	partitioned_manifest_entry_map_t iceberg_delete_files;
-	for (auto &delete_entry : delete_files) {
+	for (const auto &delete_entry : written_files) {
 		auto data_file_name = delete_entry.first;
 		auto &delete_file = delete_entry.second;
 
@@ -418,9 +626,9 @@ partitioned_manifest_entry_map_t IcebergDelete::GenerateDeleteManifestEntries(Ic
 			data_file.content_offset = delete_file.content_offset.GetIndex();
 		}
 
-		// set lower and upper bound for the filename column
-		data_file.lower_bounds[MultiFileReader::FILENAME_FIELD_ID] = Value::BLOB(data_file_name);
-		data_file.upper_bounds[MultiFileReader::FILENAME_FIELD_ID] = Value::BLOB(data_file_name);
+		// Filename bounds contain raw UTF-8 bytes, not escaped BLOB literals.
+		data_file.lower_bounds[MultiFileReader::DELETE_FILE_PATH_FIELD_ID] = Value::BLOB_RAW(data_file_name);
+		data_file.upper_bounds[MultiFileReader::DELETE_FILE_PATH_FIELD_ID] = Value::BLOB_RAW(data_file_name);
 		// set referenced_data_file
 		data_file.referenced_data_file = data_file_name;
 		// copy partition info from the data file being deleted
@@ -437,44 +645,37 @@ SinkFinalizeType IcebergDelete::Finalize(Pipeline &pipeline, Event &event, Clien
                                          OperatorSinkFinalizeInput &input) const {
 	auto &global_state = input.global_state.Cast<IcebergDeleteGlobalState>();
 
-	if (is_equality_delete) {
-		//! Ensure the equality-delete file is written even if Sink never ran (e.g. zero matching rows).
-		bool should_write = false;
-		{
-			lock_guard<mutex> guard(global_state.lock);
-			if (!global_state.equality_delete_written) {
-				global_state.equality_delete_written = true;
-				should_write = true;
-			}
-		}
-		if (should_write) {
-			WriteEqualityDeleteFile(context, global_state);
-		}
-	} else if (global_state.deleted_rows.empty()) {
-		// FIXME: replace with get deleted rows
+	if (!is_equality_delete) {
+		ScheduleDeletes(pipeline, event, global_state, true);
 		return SinkFinalizeType::READY;
 	}
 
-	auto &iceberg_transaction = IcebergTransaction::Get(context, table.catalog);
-	if (!is_equality_delete) {
-		// write out the delete rows
-		FlushDeletes(iceberg_transaction, context, global_state);
+	//! Ensure the equality-delete file is written even if Sink never ran (e.g. zero matching rows).
+	bool should_write = false;
+	{
+		lock_guard<mutex> guard(global_state.lock);
+		if (!global_state.equality_delete_written) {
+			global_state.equality_delete_written = true;
+			should_write = true;
+		}
 	}
+	if (should_write) {
+		WriteEqualityDeleteFile(context, global_state);
+	}
+	AddDeleteSnapshot(context, global_state);
+	return SinkFinalizeType::READY;
+}
 
-	// write out the new manifest file
-	auto &irc_table = table.Cast<IcebergTableSchemaVersion>();
-
-	auto &table_info = irc_table.table_info;
+void IcebergDelete::AddDeleteSnapshot(ClientContext &context, IcebergDeleteGlobalState &global_state) const {
+	auto &iceberg_transaction = IcebergTransaction::Get(context, table.catalog);
 	auto iceberg_delete_files = GenerateDeleteManifestEntries(global_state);
-
-	if (!global_state.written_files.empty()) {
-		ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTable &tbl) {
+	if (!global_state.write_result.written_files.empty()) {
+		ApplyTableUpdate(table.table_info, iceberg_transaction, [&](IcebergTable &tbl) {
 			auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
 			transaction_data.AddDeleteSnapshot(std::move(iceberg_delete_files),
-			                                   std::move(global_state.altered_manifests));
+			                                   std::move(global_state.write_result.altered_manifests), merge_action);
 		});
 	}
-	return SinkFinalizeType::READY;
 }
 
 //===--------------------------------------------------------------------===//
@@ -505,6 +706,8 @@ InsertionOrderPreservingMap<string> IcebergDelete::ParamsToString() const {
 PhysicalOperator &IcebergDelete::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner,
                                             IcebergTableSchemaVersion &table, PhysicalOperator &child_plan,
                                             vector<idx_t> &&row_id_indexes) {
+	// DELETE, UPDATE and MERGE all plan their delete files here.
+	table.table_info.table_metadata.VerifyDeleteFileFormat();
 	auto scan = FindIcebergScan(child_plan);
 
 	optional_ptr<IcebergMultiFileList> multi_file_list;
@@ -517,12 +720,35 @@ PhysicalOperator &IcebergDelete::PlanDelete(ClientContext &context, PhysicalPlan
 
 #ifdef ICEBERG_ENABLE_EQUALITY_DELETE_WRITES
 	vector<IcebergEqualityDeletePredicate> equality_predicates;
-	bool is_equality_delete = TryGetEqualityDeletePredicates(context, table, child_plan, equality_predicates);
+	// MERGE deletes only the rows selected by its action conditions, not a broader target-scan predicate.
+	bool is_equality_delete = !IcebergTransaction::Get(context, table.catalog).planning_merge_into &&
+	                          TryGetEqualityDeletePredicates(context, table, child_plan, equality_predicates);
 	return planner.Make<IcebergDelete>(table, multi_file_list, child_plan, std::move(row_id_indexes),
 	                                   is_equality_delete, std::move(equality_predicates));
 #else
 	return planner.Make<IcebergDelete>(table, multi_file_list, child_plan, std::move(row_id_indexes));
 #endif
+}
+
+PhysicalOperator &IcebergCatalog::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner,
+                                             LogicalDelete &op) {
+	auto &irc_transaction = IcebergTransaction::Get(context, *this);
+	//! A MERGE plans its delete action through PlanDeleteOperation, which applies write.merge.mode instead
+	if (!op.return_chunk && !irc_transaction.planning_merge_into) {
+		auto &table_entry = op.table.Cast<IcebergTableSchemaVersion>();
+		auto &alter = irc_transaction.GetOrCreateAlter();
+		auto &updated_table = alter.GetOrInitializeTable(table_entry.table_info);
+		auto &table_metadata = updated_table.table_metadata;
+		//! V3 is not supported yet: a rewrite has to carry each kept row's lineage into the new files. A V3 DELETE
+		//! continues below, where a copy-on-write mode is refused as before.
+		if (table_metadata.iceberg_version == 2 && table_metadata.UsesCopyOnWrite(WRITE_DELETE_MODE)) {
+			table_entry.table_info.VerifyWriteEncryptionSupported();
+			table_entry.PrepareIcebergScanFromEntry(context);
+			auto &updated_table_entry = *updated_table.schema_versions[table_metadata.GetLatestSchema().schema_id];
+			return IcebergCopyOnWriteDeleteFilter::PlanDelete(context, planner, op, updated_table_entry);
+		}
+	}
+	return Catalog::PlanDelete(context, planner, op);
 }
 
 PhysicalOperator &IcebergCatalog::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
@@ -536,6 +762,7 @@ PhysicalOperator &IcebergCatalog::PlanDeleteOperation(ClientContext &context, Ph
 		throw BinderException("RETURNING clause not yet supported for deletion from Iceberg table");
 	}
 	auto &table_entry = op.table.Cast<IcebergTableSchemaVersion>();
+	table_entry.table_info.VerifyWriteEncryptionSupported();
 	table_entry.PrepareIcebergScanFromEntry(context);
 
 	auto &irc_transaction = IcebergTransaction::Get(context, *this);
@@ -545,31 +772,21 @@ PhysicalOperator &IcebergCatalog::PlanDeleteOperation(ClientContext &context, Ph
 	auto &schema = table_metadata.GetLatestSchema();
 	auto &updated_table_entry = *updated_table.schema_versions[schema.schema_id];
 
-	auto iceberg_version = updated_table_entry.table_info.table_metadata.iceberg_version;
+	auto &metadata = updated_table_entry.table_info.table_metadata;
+	auto iceberg_version = metadata.iceberg_version;
 	if (iceberg_version < 2) {
-		throw NotImplementedException("Delete from Iceberg V%d tables",
-		                              updated_table_entry.table_info.table_metadata.iceberg_version);
+		throw NotImplementedException("Delete from Iceberg V%d tables", metadata.iceberg_version);
 	}
 
 	vector<idx_t> row_id_indexes;
-	// we only push 2 columns for positional deletes
-	idx_t column_offset = 0;
-	if (iceberg_version >= 3) {
-		//! The row ids of the table contain the _row_id column, which we're not interested in
-		column_offset = 1;
-	}
+	//! Positional deletes use filename and file row number, followed by unused lineage in V3.
 	for (idx_t i = 0; i < 2; i++) {
-		auto &bound_ref = op.expressions[column_offset + i]->Cast<BoundReferenceExpression>();
+		auto &bound_ref = op.expressions[i]->Cast<BoundReferenceExpression>();
 		row_id_indexes.push_back(bound_ref.Index());
 	}
 
-	auto allows_positional_deletes = updated_table_entry.table_info.table_metadata.PropertiesAllowPositionalDeletes(
-	    IcebergSnapshotOperationType::DELETE);
-	if (!allows_positional_deletes) {
-		auto delete_table_property = updated_table_entry.table_info.table_metadata.GetTableProperty(WRITE_DELETE_MODE);
-		auto error_message = IcebergCatalog::GetOnlyMergeOnReadSupportedErrorMessage(
-		    updated_table_entry.name.GetIdentifierName(), WRITE_DELETE_MODE, delete_table_property);
-		throw NotImplementedException(error_message);
+	if (!irc_transaction.planning_merge_into) {
+		VerifyMergeOnRead(metadata, updated_table_entry.name.GetIdentifierName(), WRITE_DELETE_MODE);
 	}
 
 	auto &iceberg_delete =
