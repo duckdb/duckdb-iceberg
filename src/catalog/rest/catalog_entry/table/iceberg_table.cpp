@@ -12,6 +12,7 @@
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/operator/add.hpp"
 #include "duckdb/parser/column_definition.hpp"
+#include "duckdb/parser/constraints/not_null_constraint.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "duckdb/main/config.hpp"
 #include "duckdb/common/types/uuid.hpp"
@@ -418,7 +419,13 @@ optional_ptr<CatalogEntry> IcebergTable::CreateSchemaVersion(const IcebergTableS
 	CreateTableInfo info;
 	info.SetTableName(Identifier(name));
 	for (auto &col : table_schema.columns) {
+		LogicalIndex column_index(info.columns.LogicalColumnCount());
 		info.columns.AddColumn(col->GetColumnDefinition());
+		//! Expose required top-level fields as NOT NULL, so DESCRIBE, information_schema and duckdb_constraints()
+		//! report them correctly. Required fields inside structs have no DuckDB constraint to map to.
+		if (col->required) {
+			info.constraints.push_back(make_uniq<NotNullConstraint>(column_index));
+		}
 	}
 
 	auto table_entry = make_uniq<IcebergTableSchemaVersion>(*this, catalog, schema, info, table_schema.schema_id);
