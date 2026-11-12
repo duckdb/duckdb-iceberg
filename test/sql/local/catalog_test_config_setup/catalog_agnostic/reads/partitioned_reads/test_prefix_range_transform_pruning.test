@@ -1,0 +1,69 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/partitioned_reads/test_prefix_range_transform_pruning.test
+# description: Prefix-range join filters must not prune on non-identity (transformed) partition values
+# group: [partitioned_reads]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SCAN_PLANNING_MODE client
+
+include test/sql/init_requires
+
+require icu
+
+statement ok
+SET timezone='UTC';
+
+statement ok
+create schema if not exists my_datalake.default;
+
+statement ok
+drop table if exists my_datalake.default.test_prf_year_transform;
+
+statement ok
+CREATE TABLE my_datalake.default.test_prf_year_transform (d date, v int)
+PARTITIONED BY (year(d));
+
+statement ok
+insert into my_datalake.default.test_prf_year_transform
+select date '2020-01-01' + interval (range) day, range from range(0, 100);
+
+statement ok
+insert into my_datalake.default.test_prf_year_transform
+select date '2021-01-01' + interval (range) day, range from range(0, 100);
+
+statement ok
+insert into my_datalake.default.test_prf_year_transform
+select date '2022-01-01' + interval (range) day, range from range(0, 100);
+
+statement ok
+create table probe_dates as select unnest([date '2020-02-10', date '2022-02-10']) as d;
+
+statement ok
+set dynamic_or_filter_threshold=0;
+
+statement ok
+CALL enable_logging('Iceberg');
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query II
+select t.d, t.v from my_datalake.default.test_prf_year_transform t join probe_dates p using (d) order by t.d;
+----
+2020-02-10	40
+2022-02-10	40
+
+query I
+select count(distinct message) from duckdb_logs()
+where type = 'Iceberg' and message like '%skipped ''data_file''%' and message like '%with bounds%';
+----
+1
+
+query I
+select count(distinct message) from duckdb_logs()
+where type = 'Iceberg' and message like '%skipped%' and message like '%partition column%';
+----
+0
+
+statement ok
+drop table if exists my_datalake.default.test_prf_year_transform;

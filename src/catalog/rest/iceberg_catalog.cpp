@@ -28,13 +28,18 @@ LoadTableCachePublication::~LoadTableCachePublication() {
 	}
 }
 
-bool LoadTableCachePublication::TryPublish(unique_ptr<const rest_api_objects::LoadTableResult> result) {
-	return cache->TryPublish(*this, std::move(result));
+bool LoadTableCachePublication::TryPublish(shared_ptr<const rest_api_objects::LoadTableResult> result, string etag) {
+	return cache->TryPublish(*this, std::move(result), std::move(etag));
 }
 
 unique_ptr<LoadTableCachePublication> LoadTableResultCache::BeginLoad(const string &table_key) {
 	auto publication = unique_ptr<LoadTableCachePublication>(new LoadTableCachePublication(table_key));
 	annotated_lock_guard<annotated_mutex> guard(lock);
+	auto cached = tables.find(table_key);
+	if (cached != tables.end()) {
+		publication->cached_result = cached->second.load_table_result;
+		publication->etag = cached->second.etag;
+	}
 	auto &pending = pending_loads[table_key];
 	pending.latest = publication.get();
 	pending.count++;
@@ -62,26 +67,28 @@ void LoadTableResultCache::InvalidateLoads(const string &table_key) {
 }
 
 bool LoadTableResultCache::TryPublish(LoadTableCachePublication &publication,
-                                      unique_ptr<const rest_api_objects::LoadTableResult> result) {
+                                      shared_ptr<const rest_api_objects::LoadTableResult> result, string etag) {
 	annotated_lock_guard<annotated_mutex> guard(lock);
 	auto it = pending_loads.find(publication.table_key);
 	if (it == pending_loads.end() || it->second.latest.get() != &publication) {
 		return false;
 	}
-	Store(publication.table_key, std::move(result));
+	Store(publication.table_key, std::move(result), std::move(etag));
 	it->second.latest = nullptr;
 	return true;
 }
 
 void LoadTableResultCache::SetOrOverwrite(const string &table_key,
-                                          unique_ptr<const rest_api_objects::LoadTableResult> result) {
+                                          shared_ptr<const rest_api_objects::LoadTableResult> result) {
 	annotated_lock_guard<annotated_mutex> guard(lock);
 	InvalidateLoads(table_key);
-	Store(table_key, std::move(result));
+	Store(table_key, std::move(result), "");
 }
 
-void LoadTableResultCache::Store(const string &table_key, unique_ptr<const rest_api_objects::LoadTableResult> result) {
-	// With staleness disabled, retain the payload for identity-based invalidation but expire it immediately.
+void LoadTableResultCache::Store(const string &table_key, shared_ptr<const rest_api_objects::LoadTableResult> result,
+                                 string etag) {
+	// With staleness disabled, retain the payload for ETag revalidation and identity-based invalidation,
+	// but require a catalog request before reusing it.
 	system_clock::time_point expires_at;
 	if (attach_options.max_table_staleness_micros.IsValid()) {
 		expires_at =
@@ -92,7 +99,7 @@ void LoadTableResultCache::Store(const string &table_key, unique_ptr<const rest_
 	auto epoch_micros = timestamp_t(duration_cast<microseconds>(expires_at.time_since_epoch()).count());
 	auto expire_timestamp_ms = timestamp_ms_t(Timestamp::GetEpochMs(epoch_micros));
 	tables.erase(table_key);
-	tables.emplace(table_key, MetadataCacheValue(expire_timestamp_ms, std::move(result)));
+	tables.emplace(table_key, MetadataCacheValue(expire_timestamp_ms, std::move(result), std::move(etag)));
 }
 
 void LoadTableResultCache::EvictIfCurrent(const IcebergTable &table) {
@@ -134,7 +141,7 @@ void IcebergCatalog::ScanSchemas(ClientContext &context, std::function<void(Sche
 optional_ptr<SchemaCatalogEntry> IcebergCatalog::LookupSchema(CatalogTransaction transaction,
                                                               const EntryLookupInfo &schema_lookup,
                                                               OnEntryNotFound if_not_found) {
-	auto &schema_name = schema_lookup.GetEntryName();
+	auto schema_name = FoldIdentifier(schema_lookup.GetEntryName());
 	auto entry = schemas.GetEntry(transaction.GetContext(), schema_name, if_not_found);
 	if (!entry && if_not_found != OnEntryNotFound::RETURN_NULL) {
 		throw CatalogException(schema_lookup.GetErrorContext(), "Schema with name \"%s\" not found", schema_name);
@@ -147,6 +154,24 @@ optional<Identifier> IcebergCatalog::GetDefaultSchema() const {
 	return default_schema;
 }
 
+string IcebergCatalog::FoldIdentifier(const string &name) const {
+	if (attach_options.identifier_case == IcebergIdentifierCase::LOWERCASE) {
+		return StringUtil::Lower(name);
+	}
+	return name;
+}
+
+QualifiedName IcebergCatalog::FoldName(const QualifiedName &name) const {
+	if (attach_options.identifier_case == IcebergIdentifierCase::PRESERVE_CASE) {
+		return name;
+	}
+	auto path = name.Path();
+	for (idx_t i = name.Catalog().empty() ? 0 : 1; i < path.size(); i++) {
+		path[i] = Identifier(FoldIdentifier(path[i].GetIdentifierName()));
+	}
+	return QualifiedName::FromPath(std::move(path));
+}
+
 optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) {
 	optional_ptr<ClientContext> context = transaction.GetContext();
 	if (info.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT) {
@@ -155,6 +180,7 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 	}
 
 	D_ASSERT(context);
+	info.SetQualifiedName(FoldName(info.GetQualifiedName()));
 	auto &iceberg_transaction = IcebergTransaction::Get(*context, *this);
 	auto &schema_name = info.GetQualifiedName().Schema().GetIdentifierName();
 	auto created_schema = iceberg_transaction.created_schemas.CheckPending(schema_name, info.on_conflict);
@@ -177,7 +203,7 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 			iceberg_transaction.schemas[schema_name] = new_schema;
 			return new_schema.get();
 		}
-		throw CatalogException("Schema with name \"%s\" already exists", info.GetQualifiedName().Schema());
+		throw CatalogException("Schema with name %s already exists", info.GetQualifiedName().Schema());
 	}
 
 	// Schema does not exist - stage it locally and defer the server creation and catalog publication to commit
@@ -188,10 +214,15 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 }
 
 void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
-	if (info.cascade) {
+	if (info.cascade && endpoint_type != IcebergEndpointType::AWS_GLUE) {
 		throw NotImplementedException(
 		    "DROP SCHEMA <schema_name> CASCADE is not supported for Iceberg schemas currently");
 	}
+	if (!info.cascade && endpoint_type == IcebergEndpointType::AWS_GLUE) {
+		throw NotImplementedException("DROP SCHEMA without CASCADE is not supported for AWS Glue: deleting a namespace "
+		                              "also deletes its tables. Use DROP SCHEMA <schema_name> CASCADE");
+	}
+	info.SetQualifiedName(FoldName(info.GetQualifiedName()));
 
 	// Verify schema existence on the server first
 	bool schema_exists =
@@ -204,7 +235,7 @@ void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 			GetSchemas().RemoveEntry(info.GetQualifiedName().Name().GetIdentifierName());
 			return;
 		}
-		throw CatalogException("Schema with name \"%s\" does not exist", info.GetQualifiedName().Name());
+		throw CatalogException("Schema with name %s does not exist", info.GetQualifiedName().Name());
 	}
 
 	// Schema exists - defer the server deletion to commit
@@ -262,7 +293,7 @@ unique_ptr<SecretEntry> IcebergCatalog::GetStorageSecret(ClientContext &context,
 			}
 			throw InvalidConfigurationException(
 			    "Found a secret by the name of '%s', but it is not of an accepted type for a 'secret', "
-			    "accepted types are: 's3' or 'aws', found '%s'",
+			    "accepted types are: 's3' or 'aws', found %s",
 			    secret_name, secret_type);
 		}
 		throw InvalidConfigurationException(
@@ -448,6 +479,7 @@ void IcebergCatalog::ParsePrefix() {
 
 void IcebergCatalog::Configure(ClientContext &context, const rest_api_objects::CatalogConfig &catalog_config,
                                IcebergEndpointType endpoint_type) {
+	this->endpoint_type = endpoint_type;
 	base_uri = attach_options.catalog_uri;
 	StringUtil::RTrim(base_uri, "/");
 	if (base_uri.empty()) {

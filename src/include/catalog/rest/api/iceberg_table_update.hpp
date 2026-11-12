@@ -74,7 +74,7 @@ private:
 	vector<IcebergManifestListEntry> manifests;
 	//! Earlier snapshots are retained in table_change; only the latest is needed as the next parent.
 	optional<IcebergSnapshot> written_snapshot;
-	sequence_number_t next_sequence_number;
+	sequence_number_t last_sequence_number;
 	IcebergRowIdAllocator row_ids;
 };
 

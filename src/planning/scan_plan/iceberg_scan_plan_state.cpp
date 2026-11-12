@@ -55,6 +55,15 @@ void IcebergScanPlanState::FreezeConfiguration() {
 
 IcebergScanPlanState::~IcebergScanPlanState() = default;
 
+IcebergEqualityDeleteBounds &IcebergScanPlanState::GetEqualityDeleteBounds(idx_t manifest_idx, idx_t entry_idx) {
+	lock_guard<mutex> guard(equality_bounds_lock);
+	auto &bounds = equality_delete_bounds[manifest_idx][entry_idx];
+	if (!bounds) {
+		bounds = make_uniq<IcebergEqualityDeleteBounds>();
+	}
+	return *bounds;
+}
+
 IcebergScanPlanProvider &IcebergScanPlanState::GetScanPlanProvider(const IcebergTableFilters &filters,
                                                                    const IcebergScanOrder &scan_order) {
 	if (!scan_plan_provider) {

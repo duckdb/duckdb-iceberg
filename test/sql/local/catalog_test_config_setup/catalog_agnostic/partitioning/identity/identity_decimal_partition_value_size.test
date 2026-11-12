@@ -1,0 +1,126 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/partitioning/identity/identity_decimal_partition_value_size.test
+# description: Decimal partition values must be written with Iceberg's fixed size (sign bit included) for every precision
+# group: [identity]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+foreach fv 2 3
+
+statement ok
+drop table if exists my_datalake.default.decimal_partition_p7_v{fv};
+
+statement ok
+create table my_datalake.default.decimal_partition_p7_v{fv} (id INTEGER, c DECIMAL(7,2)) WITH ('format-version' = {fv});
+
+statement ok
+ALTER TABLE my_datalake.default.decimal_partition_p7_v{fv} SET PARTITIONED BY (c);
+
+statement ok
+INSERT INTO my_datalake.default.decimal_partition_p7_v{fv} VALUES (1, 1.25), (2, 99999.99), (3, -99999.99);
+
+query I
+SELECT id FROM my_datalake.default.decimal_partition_p7_v{fv} WHERE c = 99999.99;
+----
+2
+
+query I
+SELECT id FROM my_datalake.default.decimal_partition_p7_v{fv} WHERE c < 0;
+----
+3
+
+statement ok
+drop table if exists my_datalake.default.decimal_partition_p12_v{fv};
+
+statement ok
+create table my_datalake.default.decimal_partition_p12_v{fv} (id INTEGER, c DECIMAL(12,2)) WITH ('format-version' = {fv});
+
+statement ok
+ALTER TABLE my_datalake.default.decimal_partition_p12_v{fv} SET PARTITIONED BY (c);
+
+statement ok
+INSERT INTO my_datalake.default.decimal_partition_p12_v{fv} VALUES (1, 1.25), (2, 9999999999.99), (3, -9999999999.99);
+
+query I
+SELECT id FROM my_datalake.default.decimal_partition_p12_v{fv} WHERE c = 9999999999.99;
+----
+2
+
+query I
+SELECT id FROM my_datalake.default.decimal_partition_p12_v{fv} WHERE c < 0;
+----
+3
+
+statement ok
+drop table if exists my_datalake.default.decimal_partition_p19_v{fv};
+
+statement ok
+create table my_datalake.default.decimal_partition_p19_v{fv} (id INTEGER, c DECIMAL(19,2)) WITH ('format-version' = {fv});
+
+statement ok
+ALTER TABLE my_datalake.default.decimal_partition_p19_v{fv} SET PARTITIONED BY (c);
+
+statement ok
+INSERT INTO my_datalake.default.decimal_partition_p19_v{fv} VALUES (1, 1.25), (2, 99999999999999999.99), (3, -99999999999999999.99);
+
+query I
+SELECT id FROM my_datalake.default.decimal_partition_p19_v{fv} WHERE c = 99999999999999999.99;
+----
+2
+
+query I
+SELECT id FROM my_datalake.default.decimal_partition_p19_v{fv} WHERE c < 0;
+----
+3
+
+statement ok
+drop table if exists my_datalake.default.decimal_partition_p24_v{fv};
+
+statement ok
+create table my_datalake.default.decimal_partition_p24_v{fv} (id INTEGER, c DECIMAL(24,2)) WITH ('format-version' = {fv});
+
+statement ok
+ALTER TABLE my_datalake.default.decimal_partition_p24_v{fv} SET PARTITIONED BY (c);
+
+statement ok
+INSERT INTO my_datalake.default.decimal_partition_p24_v{fv} VALUES (1, 1.25), (2, 9999999999999999999999.99), (3, -9999999999999999999999.99);
+
+query I
+SELECT id FROM my_datalake.default.decimal_partition_p24_v{fv} WHERE c = 9999999999999999999999.99;
+----
+2
+
+query I
+SELECT id FROM my_datalake.default.decimal_partition_p24_v{fv} WHERE c < 0;
+----
+3
+
+statement ok
+drop table if exists my_datalake.default.decimal_partition_p36_v{fv};
+
+statement ok
+create table my_datalake.default.decimal_partition_p36_v{fv} (id INTEGER, c DECIMAL(36,2)) WITH ('format-version' = {fv});
+
+statement ok
+ALTER TABLE my_datalake.default.decimal_partition_p36_v{fv} SET PARTITIONED BY (c);
+
+statement ok
+INSERT INTO my_datalake.default.decimal_partition_p36_v{fv} VALUES (1, 1.25), (2, 9999999999999999999999999999999999.99), (3, -9999999999999999999999999999999999.99);
+
+query I
+SELECT id FROM my_datalake.default.decimal_partition_p36_v{fv} WHERE c = 9999999999999999999999999999999999.99;
+----
+2
+
+query I
+SELECT id FROM my_datalake.default.decimal_partition_p36_v{fv} WHERE c < 0;
+----
+3
+
+endloop

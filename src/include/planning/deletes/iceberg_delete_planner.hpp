@@ -10,6 +10,7 @@ class IcebergScanPlanProvider;
 struct IcebergTableMetadata;
 class IcebergTableSchema;
 struct IcebergFilePruner;
+struct IcebergEqualityDeleteBounds;
 struct IcebergOptions;
 
 struct IcebergDeletePlanningContext {
@@ -31,10 +32,16 @@ struct IcebergDeletePlanner {
 	                                                   const BoundIcebergManifestEntry &data_manifest_entry);
 	static bool DeleteEntryMatchesFilters(const IcebergDeletePlanningContext &context, idx_t delete_manifest_idx,
 	                                      const IcebergManifestEntry &delete_manifest_entry);
+	//! Cheap reference/provider guard, before query predicates or equality-bound decoding.
+	static bool DeleteEntryMatchesDataFileReference(const IcebergDeletePlanningContext &context,
+	                                                const IcebergManifestEntry &delete_manifest_entry,
+	                                                const BoundIcebergManifestEntry &data_manifest_entry);
+	//! Apply partition, sequence, and bounds rules after the reference/provider guard.
 	static bool DeleteEntryAppliesToDataFile(const IcebergDeletePlanningContext &context, idx_t delete_manifest_idx,
 	                                         const IcebergManifestEntry &delete_manifest_entry,
 	                                         const BoundIcebergManifestEntry &data_manifest_entry,
-	                                         const partition_value_map_t &data_partition_values);
+	                                         const partition_value_map_t &data_partition_values,
+	                                         optional_ptr<IcebergEqualityDeleteBounds> delete_bounds);
 };
 
 } // namespace duckdb

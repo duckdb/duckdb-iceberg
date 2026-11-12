@@ -21,11 +21,20 @@ static constexpr int32_t MAX_ICEBERG_FORMAT_VERSION = 3;
 static constexpr const char *METADATA_LOG_CLOCK_SKEW_CONFIG_VARIABLE = "iceberg_metadata_log_clock_skew_ms";
 static constexpr int64_t DEFAULT_METADATA_LOG_CLOCK_SKEW_MS = 0;
 
+// The number of manifest entries a manifest-list count may reserve up front for a single manifest
+static constexpr const char *MAX_RESERVED_MANIFEST_ENTRIES_CONFIG_VARIABLE = "iceberg_max_reserved_manifest_entries";
+static constexpr uint64_t DEFAULT_MAX_RESERVED_MANIFEST_ENTRIES = 1000000;
+static constexpr uint64_t MAX_MAX_RESERVED_MANIFEST_ENTRIES = 100000000;
+
 // Controls whether eligible delete-free iceberg_scan_tasks descriptor lists share
 // one Parquet multi-file executor. Lists with deletes or distinct residual filters
 // retain one-task-at-a-time execution.
 static constexpr const char *ENABLE_MULTI_FILE_SCAN_TASKS_CONFIG_VARIABLE = "iceberg_enable_multi_file_scan_tasks";
 static constexpr bool DEFAULT_ENABLE_MULTI_FILE_SCAN_TASKS = true;
+
+// Operational kill switch for statement-local copies of catalog-backed Iceberg scans.
+static constexpr const char *ENABLE_SCAN_SERIALIZATION_CONFIG_VARIABLE = "iceberg_enable_scan_serialization";
+static constexpr bool DEFAULT_ENABLE_SCAN_SERIALIZATION = true;
 
 // Compatibility escape hatch for deletion-vector files written by DuckDB Iceberg 1.5.3,
 // which contain only the deletion-vector blob rather than a valid Puffin container.

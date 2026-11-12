@@ -50,27 +50,41 @@ set variable input_file_paths = (
 	where content = 'DATA' and status <> 'DELETED'
 );
 
+statement ok
+set variable largest_input_bytes = (
+	select max(size)::BIGINT from read_blob(getvariable('input_file_paths'))
+);
+
+statement ok
+set variable input_bytes = (
+	select sum(size)::BIGINT from read_blob(getvariable('input_file_paths'))
+);
+
+# Spark requires target > min. Keep every file below min, and the target one byte
+# above that min, so the files stay eligible while their combined size still clears
+# the byte gate. max stays above the target.
+statement ok
+set variable min_bytes = getvariable('largest_input_bytes') + 1;
+
+statement ok
+set variable target_bytes = getvariable('min_bytes') + 1;
+
 query II
-select bool_and(size < 2000), sum(size) >= 2000
-from read_blob($input_file_paths);
+select bool_and(size::BIGINT < getvariable('min_bytes')),
+       getvariable('input_bytes') > getvariable('target_bytes')
+from read_blob(getvariable('input_file_paths'));
 ----
 true	true
 
 statement ok
 commit
 
-# Spark's default min is 75% of target (1500 here). Catalogs write slightly
-# different parquet sizes for the same rows (Nessie ~1.7KiB, fixture ~1.5KiB),
-# so files can land in the "leave-alone" category. Pin min_file_size_bytes above
-# actual file size so this test hits enough_bytes, not catalog writer variation.
-# Also pin max_file_size_bytes: Spark's default max is 180% of target (3600),
-# which would reject min 10000.
-# Three files is below min_input_files=5, but combined size meets the 2KiB target.
+# Three files is below min_input_files=5, but combined size is above the target.
 query IIIII
 call iceberg_rewrite_data_files(
 	'my_datalake.default.rewrite_enough_bytes',
-	target_file_size_bytes => 2000,
-	min_file_size_bytes => 10000,
+	target_file_size_bytes => getvariable('target_bytes'),
+	min_file_size_bytes => getvariable('min_bytes'),
 	max_file_size_bytes => 1000000000,
 	min_input_files => 5
 );
@@ -109,10 +123,11 @@ set variable file_path = (
 	limit 1
 );
 
-# Combined input is ~4.4KiB of highly compressible parquet. One rewrite output
-# file should land at or above the 2KiB target without rotating into many files.
+# One row group stays in a single file. That file is at least the target, which sits
+# just above the largest input.
 query I
-select size >= 2000 and size < 20000 from read_blob($file_path);
+select size::BIGINT >= getvariable('target_bytes') and size::BIGINT < 20000
+from read_blob($file_path);
 ----
 true
 

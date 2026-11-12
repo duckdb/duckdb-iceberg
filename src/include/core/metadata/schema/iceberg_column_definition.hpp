@@ -46,15 +46,8 @@ public:
 
 private:
 	Value GetWriteDefault() const;
-	//! Returns an internal, recursive description of a STRUCT write default.
-	//!
-	//! `struct_default` is the default for the whole STRUCT. `field_defaults` contains the defaults used only after
-	//! a non-NULL STRUCT value has been supplied. Keeping these values separate is required by Iceberg: a missing
-	//! nested STRUCT field uses its whole-STRUCT default, while a present nested STRUCT has its omitted children
-	//! filled recursively.
-	//!
-	//! This descriptor is carried through DuckDB's default-expression plumbing as the second argument of a
-	//! `constant_or_null` envelope. It is internal metadata and is never serialized to Iceberg.
+	//! The write defaults of a STRUCT: `struct_default` is used when the STRUCT is missing, `field_defaults` when a
+	//! supplied STRUCT is missing some of its fields. Internal only, never written to Iceberg metadata.
 	Value GetWriteDefaultDescriptor() const;
 
 public:

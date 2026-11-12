@@ -28,15 +28,17 @@ struct IcebergTable;
 class MetadataCacheValue {
 public:
 	MetadataCacheValue(timestamp_ms_t expire_timestamp_ms,
-	                   unique_ptr<const rest_api_objects::LoadTableResult> load_table_result)
-	    : expire_timestamp_ms(expire_timestamp_ms), load_table_result(std::move(load_table_result)) {
+	                   shared_ptr<const rest_api_objects::LoadTableResult> load_table_result, string etag)
+	    : expire_timestamp_ms(expire_timestamp_ms), load_table_result(std::move(load_table_result)),
+	      etag(std::move(etag)) {
 	}
 
 public:
 	//! The timestamp until when this entry is valid
 	timestamp_ms_t expire_timestamp_ms;
 	//! The payload of the cache entry
-	unique_ptr<const rest_api_objects::LoadTableResult> load_table_result;
+	shared_ptr<const rest_api_objects::LoadTableResult> load_table_result;
+	string etag;
 };
 
 class LoadTableResultCache;
@@ -46,7 +48,11 @@ class LoadTableResultCache;
 class LoadTableCachePublication {
 public:
 	~LoadTableCachePublication();
-	bool TryPublish(unique_ptr<const rest_api_objects::LoadTableResult> result);
+	bool TryPublish(shared_ptr<const rest_api_objects::LoadTableResult> result, string etag);
+
+	//! An expired response may still be revalidated with its ETag.
+	shared_ptr<const rest_api_objects::LoadTableResult> cached_result;
+	string etag;
 
 private:
 	friend class LoadTableResultCache;
@@ -87,7 +93,7 @@ public:
 	//! Create publication state before fetching. A later fetch supersedes earlier loads for the same key.
 	unique_ptr<LoadTableCachePublication> BeginLoad(const string &table_key);
 	//! Authoritative publication (e.g. staged creation) also invalidates outstanding fetches.
-	void SetOrOverwrite(const string &table_key, unique_ptr<const rest_api_objects::LoadTableResult> load_table_result);
+	void SetOrOverwrite(const string &table_key, shared_ptr<const rest_api_objects::LoadTableResult> load_table_result);
 
 	//! Evict only if the table was initialized from the result that is still cached for its key.
 	void EvictIfCurrent(const IcebergTable &table);
@@ -98,10 +104,11 @@ private:
 		optional_ptr<LoadTableCachePublication> latest;
 		idx_t count = 0;
 	};
-	bool TryPublish(LoadTableCachePublication &publication, unique_ptr<const rest_api_objects::LoadTableResult> result);
+	bool TryPublish(LoadTableCachePublication &publication, shared_ptr<const rest_api_objects::LoadTableResult> result,
+	                string etag);
 	void Release(LoadTableCachePublication &publication);
 	void InvalidateLoads(const string &table_key) DUCKDB_REQUIRES(lock);
-	void Store(const string &table_key, unique_ptr<const rest_api_objects::LoadTableResult> result)
+	void Store(const string &table_key, shared_ptr<const rest_api_objects::LoadTableResult> result, string etag)
 	    DUCKDB_REQUIRES(lock);
 
 	IcebergAttachOptions &attach_options;
@@ -144,6 +151,10 @@ public:
 	}
 	optional<Identifier> GetDefaultSchema() const override;
 	ErrorData SupportsCreateTable(BoundCreateTableInfo &info) override;
+	//! Applies IDENTIFIER_CASE to a namespace or table name
+	string FoldIdentifier(const string &name) const;
+	//! Applies IDENTIFIER_CASE to the schema and name parts, keeping the catalog alias as written
+	QualifiedName FoldName(const QualifiedName &name) const;
 
 public:
 	void Initialize(bool load_builtin) override;
@@ -163,6 +174,8 @@ public:
 	                             optional_ptr<PhysicalOperator> plan) override;
 	PhysicalOperator &PlanCreateTableAs(ClientContext &context, PhysicalPlanGenerator &planner, LogicalCreateTable &op,
 	                                    PhysicalOperator &plan) override;
+	//! Plans a copy-on-write DELETE itself; any other DELETE plans its child and continues below
+	PhysicalOperator &PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op) override;
 	PhysicalOperator &PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
 	                             PhysicalOperator &plan) override;
 	//! Shared delete-planning body both PlanDelete and MERGE build on; only PlanDelete additionally opts the
@@ -206,6 +219,7 @@ public:
 	case_insensitive_map_t<string> catalog_properties;
 
 private:
+	IcebergEndpointType endpoint_type = IcebergEndpointType::INVALID;
 	//! Original client selector, used for ATTACH OR REPLACE comparisons.
 	const string attach_path;
 	//! warehouse

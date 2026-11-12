@@ -36,7 +36,7 @@ LogicalType IcebergFixedType::Parse(const string &type) {
 	}
 	auto length_str = type.substr(6, type.size() - 7);
 	int32_t length;
-	if (!TryCast::Operation<string_t, int32_t>(string_t(length_str), length, true)) {
+	if (!TryCast::Operation<string_t, int32_t>(string_t(length_str), length, true) || length <= 0) {
 		throw InvalidConfigurationException("Invalid fixed type length: %s", type);
 	}
 	return Get(length);
@@ -148,7 +148,7 @@ static bool ContainsFixedType(const LogicalType &type) {
 }
 
 static void ThrowFixedTypeOutsideIceberg(const Identifier &name) {
-	throw NotImplementedException("Cannot store \"%s\": ICEBERG_FIXED can only be used in Iceberg tables. Cast it to "
+	throw NotImplementedException("Cannot store %s: ICEBERG_FIXED can only be used in Iceberg tables. Cast it to "
 	                              "BLOB to store it in a DuckDB table.",
 	                              name);
 }

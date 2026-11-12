@@ -1,0 +1,106 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/partitioning/test_partition_sort_source_types.test
+# description: Partition and sort transforms refuse VARIANT, STRUCT, LIST and MAP source columns
+# group: [partitioning]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+require-env VARIANT_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.transform_sources;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.transform_sources_ctas;
+
+# CREATE TABLE refuses VARIANT, STRUCT, LIST and MAP sources
+statement error
+CREATE TABLE my_datalake.default.transform_sources (v VARIANT, i INTEGER) PARTITIONED BY (v) WITH ('format-version' = '3');
+----
+<REGEX>:.*Cannot partition by 'v': the identity transform doesn't accept VARIANT columns.*
+
+statement error
+CREATE TABLE my_datalake.default.transform_sources (v VARIANT, i INTEGER) PARTITIONED BY (bucket(4, v)) WITH ('format-version' = '3');
+----
+<REGEX>:.*Cannot partition by 'bucket\(4, v\)': the bucket\[4\] transform doesn't accept VARIANT columns.*
+
+statement error
+CREATE TABLE my_datalake.default.transform_sources (v VARIANT, i INTEGER) SORTED BY (v) WITH ('format-version' = '3');
+----
+<REGEX>:.*Cannot sort by 'v': the identity transform doesn't accept VARIANT columns.*
+
+statement error
+CREATE TABLE my_datalake.default.transform_sources (s STRUCT(v VARIANT, x INTEGER)) PARTITIONED BY (s.v) WITH ('format-version' = '3');
+----
+<REGEX>:.*Cannot partition by 's.v': the identity transform doesn't accept VARIANT columns.*
+
+statement error
+CREATE TABLE my_datalake.default.transform_sources (s STRUCT(x INTEGER)) PARTITIONED BY (s) WITH ('format-version' = '3');
+----
+<REGEX>:.*Cannot partition by 's': the identity transform doesn't accept STRUCT\(x INTEGER\) columns.*
+
+statement error
+CREATE TABLE my_datalake.default.transform_sources (l INTEGER[]) SORTED BY (l) WITH ('format-version' = '3');
+----
+<REGEX>:.*Cannot sort by 'l': the identity transform doesn't accept INTEGER\[\] columns.*
+
+statement error
+CREATE TABLE my_datalake.default.transform_sources (m MAP(VARCHAR, INTEGER)) PARTITIONED BY (m) WITH ('format-version' = '3');
+----
+<REGEX>:.*Cannot partition by 'm': the identity transform doesn't accept MAP\(VARCHAR, INTEGER\) columns.*
+
+# no table was created by the refused statements
+query I
+SELECT count(*) FROM (SHOW TABLES FROM my_datalake.default) WHERE name = 'transform_sources';
+----
+0
+
+# CTAS is refused before any file is written
+statement error
+CREATE TABLE my_datalake.default.transform_sources_ctas PARTITIONED BY (v) WITH ('format-version' = '3') AS SELECT 1::VARIANT v;
+----
+<REGEX>:.*Cannot partition by 'v': the identity transform doesn't accept VARIANT columns.*
+
+statement error
+CREATE TABLE my_datalake.default.transform_sources_ctas SORTED BY (v) WITH ('format-version' = '3') AS SELECT 1::VARIANT v;
+----
+<REGEX>:.*Cannot sort by 'v': the identity transform doesn't accept VARIANT columns.*
+
+# a primitive field nested in a struct is still a valid source
+statement ok
+CREATE TABLE my_datalake.default.transform_sources (v VARIANT, s STRUCT(x INTEGER, y INTEGER), i INTEGER)
+PARTITIONED BY (s.x) SORTED BY (i) WITH ('format-version' = '3');
+
+statement ok
+INSERT INTO my_datalake.default.transform_sources VALUES (1::VARIANT, {'x': 1, 'y': 1}, 2);
+
+# ALTER refuses the same sources and keeps the current spec and order
+statement error
+ALTER TABLE my_datalake.default.transform_sources SET PARTITIONED BY (v);
+----
+<REGEX>:.*Cannot partition by 'v': the identity transform doesn't accept VARIANT columns.*
+
+statement error
+ALTER TABLE my_datalake.default.transform_sources SET SORTED BY (v);
+----
+<REGEX>:.*Cannot sort by 'v': the identity transform doesn't accept VARIANT columns.*
+
+statement error
+ALTER TABLE my_datalake.default.transform_sources SET SORTED BY (i, s);
+----
+<REGEX>:.*Cannot sort by 's': the identity transform doesn't accept STRUCT\(x INTEGER, y INTEGER\) columns.*
+
+statement ok
+INSERT INTO my_datalake.default.transform_sources VALUES ('x'::VARIANT, {'x': 2, 'y': 2}, 3);
+
+query III
+SELECT v::VARCHAR, s.x, i FROM my_datalake.default.transform_sources ORDER BY i;
+----
+1	1	2
+x	2	3
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.transform_sources;

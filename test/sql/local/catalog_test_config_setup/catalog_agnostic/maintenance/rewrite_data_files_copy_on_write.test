@@ -1,0 +1,193 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_copy_on_write.test
+# description: Maintenance and copy-on-write share file replacement while preserving their transaction and sequence policies
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SNAPSHOT_HISTORY_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.rewrite_cow_policy;
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_cow_policy (id INTEGER)
+WITH ('format-version' = '2', 'write.delete.mode' = 'copy-on-write');
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_cow_policy VALUES (1), (2), (3), (4);
+
+# Repeated CoW rewrites must see pending inserts and earlier replacement files.
+# Neither overwriting a file nor removing it entirely reserves the table for maintenance.
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_cow_policy VALUES (5), (6);
+
+query I
+DELETE FROM my_datalake.default.rewrite_cow_policy WHERE id = 1;
+----
+1
+
+query I
+DELETE FROM my_datalake.default.rewrite_cow_policy WHERE id = 3;
+----
+1
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_cow_policy VALUES (7), (8);
+
+query I
+DELETE FROM my_datalake.default.rewrite_cow_policy WHERE id IN (5, 6);
+----
+2
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_cow_policy VALUES (9);
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.rewrite_cow_policy;
+----
+[2, 4, 7, 8, 9]
+
+statement ok
+COMMIT;
+
+query IT
+SELECT sequence_number, operation FROM iceberg_snapshots(my_datalake.default.rewrite_cow_policy)
+ORDER BY sequence_number;
+----
+1	append
+2	append
+3	overwrite
+4	overwrite
+5	append
+6	delete
+7	append
+
+query I
+SELECT bool_and(data_sequence_number = file_sequence_number)
+FROM iceberg_metadata(my_datalake.default.rewrite_cow_policy)
+WHERE content = 'DATA' AND status <> 'DELETED';
+----
+true
+
+# Maintenance uses the same output writer, but preserves the starting data sequence.
+query II
+SELECT rewritten_data_files_count, added_data_files_count
+FROM iceberg_rewrite_data_files('my_datalake.default.rewrite_cow_policy', rewrite_all = true);
+----
+3	1
+
+query III
+SELECT data_sequence_number, file_sequence_number, record_count
+FROM iceberg_metadata(my_datalake.default.rewrite_cow_policy)
+WHERE content = 'DATA' AND status <> 'DELETED';
+----
+7	8	5
+
+query T
+SELECT operation FROM iceberg_snapshots(my_datalake.default.rewrite_cow_policy)
+ORDER BY sequence_number DESC LIMIT 1;
+----
+replace
+
+# Sharing the execution path must not allow maintenance to ignore pending CoW changes.
+statement ok
+BEGIN;
+
+query I
+DELETE FROM my_datalake.default.rewrite_cow_policy WHERE id = 2;
+----
+1
+
+statement error
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_cow_policy', rewrite_all = true);
+----
+has uncommitted changes in this transaction
+
+statement ok
+ROLLBACK;
+
+# The maintenance-only restriction still blocks later CoW writes.
+statement ok
+BEGIN;
+
+statement ok
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_cow_policy', rewrite_all = true);
+
+statement error
+DELETE FROM my_datalake.default.rewrite_cow_policy WHERE id = 2;
+----
+after rewriting its data files in the same transaction
+
+statement ok
+COMMIT;
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.rewrite_cow_policy;
+----
+[2, 4, 7, 8, 9]
+
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.rewrite_cow_policy);
+----
+8
+
+# A no-op maintenance call does not block CoW. Its replacements inherit the new
+# sequence rather than reusing the sequence pinned by the preceding maintenance commit.
+statement ok
+BEGIN;
+
+query IIIII
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_cow_policy', min_input_files = 99);
+----
+0	0	0	0	0
+
+query I
+DELETE FROM my_datalake.default.rewrite_cow_policy WHERE id = 2;
+----
+1
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_cow_policy VALUES (10);
+
+statement ok
+COMMIT;
+
+query III
+SELECT data_sequence_number, file_sequence_number, record_count
+FROM iceberg_metadata(my_datalake.default.rewrite_cow_policy)
+WHERE content = 'DATA' AND status <> 'DELETED'
+ORDER BY data_sequence_number;
+----
+9	9	4
+10	10	1
+
+# A no-op CoW DELETE likewise leaves the transaction eligible for maintenance.
+statement ok
+BEGIN;
+
+query I
+DELETE FROM my_datalake.default.rewrite_cow_policy WHERE id = -1;
+----
+0
+
+query II
+SELECT rewritten_data_files_count, added_data_files_count
+FROM iceberg_rewrite_data_files('my_datalake.default.rewrite_cow_policy', rewrite_all = true);
+----
+2	1
+
+statement ok
+COMMIT;
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.rewrite_cow_policy;
+----
+[4, 7, 8, 9, 10]
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_cow_policy;

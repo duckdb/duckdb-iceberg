@@ -127,6 +127,13 @@ jobs:
             --unittest-binary build/release/test/unittest \
             --test-python-verbosity verbose
 
+      - name: Setup metadata performance benchmark
+        run: |
+          .venv-spark4/bin/python -m pytest -vv \
+            test/python/benchmark/test_metadata_performance.py \
+            --unittest-binary build/release/test/unittest \
+            --test-python-verbosity verbose
+
       - name: Checkout Base Branch
         run: |
           rm -rf base
@@ -155,6 +162,10 @@ jobs:
       - name: Regression Test Metadata Late Materialization
         run: |
           python duckdb/scripts/regression/test_runner.py --old base/build/release/benchmark/benchmark_runner --new build/release/benchmark/benchmark_runner --benchmarks .github/regression/metadata_late_materialization.csv --verbose --threads 2
+
+      - name: Regression Test Metadata Performance
+        run: |
+          python duckdb/scripts/regression/test_runner.py --old base/build/release/benchmark/benchmark_runner --new build/release/benchmark/benchmark_runner --benchmarks .github/regression/metadata_performance.csv --verbose --threads 2
 
       - name: Regression Test File Pruning Benchmarks
         run: |

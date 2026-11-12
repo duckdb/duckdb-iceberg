@@ -23,6 +23,7 @@ class BaseManifestReader;
 class AvroScan {
 public:
 	AvroScan(const string &path, ClientContext &context, shared_ptr<IcebergAvroScanInfo> avro_scan_info);
+	~AvroScan();
 
 public:
 	static unique_ptr<AvroScan> ScanManifestList(const IcebergSnapshotScanInfo &snapshot_info,

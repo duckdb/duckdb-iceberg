@@ -35,11 +35,12 @@ SELECT i FROM my_datalake.default.time_travel_future_timestamp AT (TIMESTAMP => 
 Could not find snapshot at or before timestamp '1990-01-01 00:00:00'
 
 # A snapshot can only be created in the past, so a timestamp in the future can
-# not identify a point in the history of the table.
+# not identify a point in the history of the table. The near-future timestamp
+# is computed from 'now()', so the test does not expire on a fixed date.
 statement error
-SELECT i FROM my_datalake.default.time_travel_future_timestamp AT (TIMESTAMP => TIMESTAMP '2027-01-01 00:00:00') ORDER BY i;
+SELECT i FROM my_datalake.default.time_travel_future_timestamp AT (TIMESTAMP => now()::TIMESTAMP + INTERVAL 1 YEAR) ORDER BY i;
 ----
-<REGEX>:.*Can not time travel to '2027-01-01 00:00:00', it lies in the future.*
+<REGEX>:.*Can not time travel to '.*', it lies in the future.*
 
 statement error
 SELECT i FROM my_datalake.default.time_travel_future_timestamp AT (TIMESTAMP => TIMESTAMP '2099-12-31 23:59:59') ORDER BY i;
@@ -48,9 +49,9 @@ SELECT i FROM my_datalake.default.time_travel_future_timestamp AT (TIMESTAMP => 
 
 # The check happens during bind, so it fires even when the table is never read.
 statement error
-SELECT count(*) FROM my_datalake.default.time_travel_future_timestamp AT (TIMESTAMP => TIMESTAMP '2027-01-01 00:00:00') WHERE false;
+SELECT count(*) FROM my_datalake.default.time_travel_future_timestamp AT (TIMESTAMP => now()::TIMESTAMP + INTERVAL 1 YEAR) WHERE false;
 ----
-<REGEX>:.*Can not time travel to '2027-01-01 00:00:00', it lies in the future.*
+<REGEX>:.*Can not time travel to '.*', it lies in the future.*
 
 
 # A table with new data in the current transaction.
@@ -72,9 +73,9 @@ SELECT i FROM my_datalake.default.time_travel_future_timestamp ORDER BY i;
 
 # The uncommitted row does not make a future timestamp valid.
 statement error
-SELECT i FROM my_datalake.default.time_travel_future_timestamp AT (TIMESTAMP => TIMESTAMP '2027-01-01 00:00:00') ORDER BY i;
+SELECT i FROM my_datalake.default.time_travel_future_timestamp AT (TIMESTAMP => now()::TIMESTAMP + INTERVAL 1 YEAR) ORDER BY i;
 ----
-<REGEX>:.*Can not time travel to '2027-01-01 00:00:00', it lies in the future.*
+<REGEX>:.*Can not time travel to '.*', it lies in the future.*
 
 statement ok
 ROLLBACK;
@@ -101,9 +102,9 @@ SELECT i FROM my_datalake.default.time_travel_future_timestamp ORDER BY i;
 4
 
 statement error
-SELECT i FROM my_datalake.default.time_travel_future_timestamp AT (TIMESTAMP => TIMESTAMP '2027-01-01 00:00:00') ORDER BY i;
+SELECT i FROM my_datalake.default.time_travel_future_timestamp AT (TIMESTAMP => now()::TIMESTAMP + INTERVAL 1 YEAR) ORDER BY i;
 ----
-<REGEX>:.*Can not time travel to '2027-01-01 00:00:00', it lies in the future.*
+<REGEX>:.*Can not time travel to '.*', it lies in the future.*
 
 # Time traveling by snapshot id is unaffected.
 statement ok
