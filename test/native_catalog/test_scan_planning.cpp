@@ -11,6 +11,9 @@
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "function/scan_planning/iceberg_row_filter.hpp"
 #include "planning/iceberg_multi_file_list.hpp"
+#include "planning/metadata_io/avro/iceberg_manifest_cache.hpp"
+#include "planning/metadata_io/avro/avro_scan.hpp"
+#include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
 
 #include <future>
 #include <condition_variable>
@@ -706,6 +709,7 @@ TEST_CASE("Iceberg overlapping lazy delete loads publish atomically and propagat
 	PlanningTest test;
 	Query(test.connection, "SET threads=1");
 	Query(test.connection, "SET enable_external_file_cache=false");
+	Query(test.connection, "SET iceberg_enable_manifest_cache=false");
 	Query(test.connection, "CREATE TABLE lake.default.t (id INTEGER) WITH "
 	                       "('format-version'=3, 'commit.manifest-merge.enabled'='false')");
 	Query(test.connection, "INSERT INTO lake.default.t SELECT range FROM range(10)");
@@ -713,6 +717,7 @@ TEST_CASE("Iceberg overlapping lazy delete loads publish atomically and propagat
 	Query(test.connection, "DELETE FROM lake.default.t WHERE id=1");
 	Query(test.connection, "DELETE FROM lake.default.t WHERE id=12");
 	auto bound = test.Bind();
+	Query(test.connection, "SET iceberg_enable_manifest_cache=true");
 	auto &base = bound->Cast<MultiFileBindData>().file_list->Cast<IcebergMultiFileList>().GetScanPlanner();
 	auto &fs = FileSystem::GetFileSystem(*test.connection.context);
 	IcebergScanPlanContext context {
@@ -790,6 +795,243 @@ TEST_CASE("Iceberg overlapping lazy delete loads publish atomically and propagat
 		// The reusable portion owns the raw entries, not a pointer into the store.
 		REQUIRE_FALSE(retained->Entries().empty());
 	}
+	// A failed or interrupted load cannot leave the successfully read prefix cached.
+	// A new store retries after the transport recovers.
+	fs.UnregisterSubSystem("GatedManifestFileSystem");
+	IcebergManifestStore retry(planning_lock, context);
+	{
+		annotated_lock_guard<annotated_mutex> guard(retry.lock);
+		retry.LoadManifestList();
+		auto descriptors = retry.DeleteManifests();
+		IcebergManifestFileScanInfo info(context.metadata, context.snapshot, descriptors, context.options, fs,
+		                                 context.path, nullptr, {0, 1});
+		auto &cache = ObjectCache::GetObjectCache(context.context);
+		for (idx_t i = 0; i < 2; i++) {
+			auto cached = cache.GetWithTypePrefix<IcebergParsedManifest>(ManifestCacheKey(info, i));
+			REQUIRE(bool(cached) == !failure);
+		}
+	}
+	retry.ReadDeleteManifests({0, 1}, 0);
+	{
+		annotated_lock_guard<annotated_mutex> guard(retry.lock);
+		auto indexes = retry.GetDeleteIndexes({0, 1});
+		REQUIRE(indexes.size() == 2);
+		if (retained) {
+			REQUIRE(indexes[0].index.get() == retained.get());
+		}
+	}
+}
+
+TEST_CASE("Iceberg parsed manifest ownership inheritance identity and eviction", "[iceberg_planning]") {
+	PlanningTest test;
+	Query(test.connection, "SET iceberg_enable_manifest_cache=false");
+	Query(test.connection, "CREATE TABLE lake.default.t (part INTEGER, id INTEGER) PARTITIONED BY (part) "
+	                       "WITH ('format-version'=3, 'commit.manifest-merge.enabled'='false')");
+	Query(test.connection, "INSERT INTO lake.default.t VALUES (1,11),(1,12)");
+	Query(test.connection, "INSERT INTO lake.default.t VALUES (2,21),(2,22)");
+	auto bound = test.Bind();
+	auto &base = bound->Cast<MultiFileBindData>().file_list->Cast<IcebergMultiFileList>().GetScanPlanner();
+	auto &context = *test.connection.context;
+	auto &fs = FileSystem::GetFileSystem(context);
+	vector<IcebergManifestListEntry> descriptors;
+	IcebergManifestList::LoadManifestFiles(base.GetSnapshot(), base.GetMetadata(), context, descriptors);
+	REQUIRE(descriptors.size() == 2);
+	Query(test.connection, "SET iceberg_enable_manifest_cache=true");
+	auto read = [&](vector<IcebergManifestListEntry> &files, vector<idx_t> indexes) {
+		auto scan = AvroScan::ScanManifest(base.GetSnapshot(), files, base.GetOptions(), fs, base.GetPath(),
+		                                   base.GetMetadata(), context, nullptr, std::move(indexes));
+		manifest_file::ManifestReader reader(*scan);
+		while (!reader.Finished()) {
+			reader.Read();
+		}
+		scan->Complete();
+		return scan->scan_info->Cast<IcebergManifestFileScanInfo>().manifest_parses.load();
+	};
+	auto first = descriptors;
+	REQUIRE(read(first, {0}) == 1);
+	REQUIRE(first[0].parsed_manifest);
+	REQUIRE_FALSE(first[1].HasManifestEntries());
+	auto owner = first[0].parsed_manifest;
+	auto entry_address = &owner->Entries()[0];
+	auto file = descriptors[0].GetFile();
+	file.sequence_number = 100;
+	file.added_snapshot_id = 200;
+	file.first_row_id = 300;
+	vector<IcebergManifestListEntry> second {IcebergManifestListEntry(file), descriptors[1]};
+	REQUIRE(read(second, {0, 1}) == 1);
+	REQUIRE(second[0].parsed_manifest.get() == owner.get());
+	REQUIRE(&second[0].GetManifestEntries()[0] == entry_address);
+	REQUIRE(second[1].GetManifestEntries().size() == 1);
+	const auto &entry = second[0].GetManifestEntries()[0];
+	REQUIRE_FALSE(entry.ExplicitSequenceNumber());
+	REQUIRE_FALSE(entry.ExplicitFileSequenceNumber());
+	REQUIRE_FALSE(entry.HasSnapshotId());
+	REQUIRE_FALSE(entry.data_file.HasFirstRowId());
+	REQUIRE(entry.GetSequenceNumber(file) == 100);
+	REQUIRE(entry.GetFileSequenceNumber(file) == 100);
+	REQUIRE(entry.GetSnapshotId(file) == 200);
+	BoundIcebergManifestListEntry binding(7, second[0], IcebergRowLineageMode::NONE);
+	auto rebound = binding.BindEntry(entry);
+	REQUIRE(rebound.manifest_file_idx == 7);
+	REQUIRE(rebound.GetFirstRowId() == 300);
+	// Rewriting resolves this descriptor's inheritance in a private copy.
+	auto rewritten = file.PrepareEntriesForRewrite(second[0].TakeManifestEntries());
+	REQUIRE(rewritten[0].GetSnapshotId() == entry.GetSnapshotId(file));
+	REQUIRE(entry.status == IcebergManifestEntryStatusType::ADDED);
+	REQUIRE(rewritten[0].status == IcebergManifestEntryStatusType::EXISTING);
+	REQUIRE(&first[0].GetManifestEntries()[0] == entry_address);
+
+	IcebergManifestFileScanInfo info(base.GetMetadata(), base.GetSnapshot(), descriptors, base.GetOptions(), fs,
+	                                 base.GetPath(), nullptr, {0});
+	auto key = ManifestCacheKey(info, 0);
+	auto &cache = ObjectCache::GetObjectCache(context);
+	REQUIRE(cache.GetWithTypePrefix<IcebergParsedManifest>(key).get() == owner.get());
+	auto weight = owner->GetEstimatedCacheMemory().GetIndex();
+	REQUIRE(weight > sizeof(IcebergManifestEntry));
+	REQUIRE(cache.GetCurrentMemory() >= weight);
+	REQUIRE(cache.EvictToReduceMemory(cache.GetCurrentMemory()) >= weight);
+	REQUIRE_FALSE(cache.GetWithTypePrefix<IcebergParsedManifest>(key));
+	REQUIRE(&owner->Entries()[0] == entry_address);
+	auto after_eviction = descriptors;
+	REQUIRE(read(after_eviction, {0}) == 1);
+	REQUIRE(after_eviction[0].parsed_manifest.get() != owner.get());
+
+	auto invalid_counts = descriptors;
+	invalid_counts[0].GetManifest().counts = IcebergManifestCounts::Zero();
+	ManifestEntryReadState batches;
+	REQUIRE_THROWS_WITH(AvroScan::ScanManifest(base.GetSnapshot(), invalid_counts, base.GetOptions(), fs,
+	                                           base.GetPath(), base.GetMetadata(), context, &batches, {0}),
+	                    Catch::Contains("more entries than its manifest-list counts"));
+	auto invalid_content = descriptors;
+	invalid_content[0].GetManifest().content = IcebergManifestContentType::DELETE;
+	REQUIRE_THROWS_WITH(read(invalid_content, {0}), Catch::Contains("header does not match"));
+
+	// Interleave two misses before either one publishes, as in concurrent scans.
+	cache.DeleteWithTypePrefix<IcebergParsedManifest>(key);
+	auto racing_a = descriptors;
+	auto racing_b = descriptors;
+	auto start = [&](vector<IcebergManifestListEntry> &files) {
+		return AvroScan::ScanManifest(base.GetSnapshot(), files, base.GetOptions(), fs, base.GetPath(),
+		                              base.GetMetadata(), context, nullptr, {0});
+	};
+	auto scan_a = start(racing_a);
+	auto scan_b = start(racing_b);
+	for (auto scan : {scan_a.get(), scan_b.get()}) {
+		manifest_file::ManifestReader reader(*scan);
+		while (!reader.Finished()) {
+			reader.Read();
+		}
+		scan->Complete();
+	}
+	REQUIRE(racing_a[0].parsed_manifest.get() != racing_b[0].parsed_manifest.get());
+	REQUIRE(cache.GetWithTypePrefix<IcebergParsedManifest>(key).get() == racing_b[0].parsed_manifest.get());
+	REQUIRE(racing_a[0].GetManifestEntries()[0].data_file.file_path ==
+	        racing_b[0].GetManifestEntries()[0].data_file.file_path);
+
+	cache.DeleteWithTypePrefix<IcebergParsedManifest>(key);
+	{
+		auto partial_files = descriptors;
+		auto partial = start(partial_files);
+		manifest_file::ManifestReader reader(*partial);
+		reader.Read();
+		REQUIRE_THROWS_WITH(partial->Complete(), Catch::Contains("incomplete manifest scan"));
+		REQUIRE_FALSE(cache.GetWithTypePrefix<IcebergParsedManifest>(key));
+	}
+	{
+		auto interrupted_files = descriptors;
+		auto interrupted = start(interrupted_files);
+		manifest_file::ManifestReader reader(*interrupted);
+		while (!reader.Finished()) {
+			reader.Read();
+		}
+		context.Interrupt();
+		REQUIRE_THROWS_AS(interrupted->Complete(), InterruptException);
+		context.ClearInterrupt();
+		REQUIRE_FALSE(cache.GetWithTypePrefix<IcebergParsedManifest>(key));
+	}
+	auto retried = descriptors;
+	REQUIRE(read(retried, {0}) == 1);
+
+	// Publication-time validation failure cannot destroy entries already exposed
+	// to streaming consumers, nor publish the successful prefix of the load.
+	IcebergManifestFileScanInfo both_info(base.GetMetadata(), base.GetSnapshot(), descriptors, base.GetOptions(), fs,
+	                                      base.GetPath(), nullptr, {0, 1});
+	auto second_key = ManifestCacheKey(both_info, 1);
+	cache.DeleteWithTypePrefix<IcebergParsedManifest>(key);
+	cache.DeleteWithTypePrefix<IcebergParsedManifest>(second_key);
+	auto rejected_files = descriptors;
+	{
+		auto rejected = AvroScan::ScanManifest(base.GetSnapshot(), rejected_files, base.GetOptions(), fs,
+		                                       base.GetPath(), base.GetMetadata(), context);
+		manifest_file::ManifestReader reader(*rejected);
+		while (!reader.Finished()) {
+			reader.Read();
+		}
+		auto retained_entry = &rejected_files[0].GetManifestEntries()[0];
+		rejected_files[1].manifest_header["content"] = Value("deletes");
+		REQUIRE_THROWS_WITH(rejected->Complete(), Catch::Contains("header does not match"));
+		REQUIRE(&rejected_files[0].GetManifestEntries()[0] == retained_entry);
+		REQUIRE(rejected_files[0].GetManifestEntries()[0].data_file.file_path == entry_address->data_file.file_path);
+		REQUIRE_FALSE(cache.GetWithTypePrefix<IcebergParsedManifest>(key));
+		REQUIRE_FALSE(cache.GetWithTypePrefix<IcebergParsedManifest>(second_key));
+	}
+	REQUIRE(rejected_files[0].HasManifestEntries());
+	REQUIRE(rejected_files[1].HasManifestEntries());
+	auto publication_retry = descriptors;
+	REQUIRE(read(publication_retry, {0, 1}) == 2);
+
+	info.file_secret.cache_scope = "different-attachment";
+	REQUIRE(ManifestCacheKey(info, 0) != key);
+	info.file_secret.cache_scope.clear();
+	info.partition_field_id_to_type[1000] = LogicalType::BIGINT;
+	REQUIRE(ManifestCacheKey(info, 0) != key);
+	auto metadata = base.GetMetadata().Copy();
+	IcebergManifestFileScanInfo changed(metadata, base.GetSnapshot(), descriptors, base.GetOptions(), fs,
+	                                    base.GetPath(), nullptr, {0});
+	REQUIRE(ManifestCacheKey(changed, 0) == key);
+	metadata.table_uuid += "-other";
+	REQUIRE(ManifestCacheKey(changed, 0) != key);
+	metadata.table_uuid = base.GetMetadata().table_uuid;
+	metadata.iceberg_version = 2;
+	REQUIRE(ManifestCacheKey(changed, 0) != key);
+	metadata.iceberg_version = 3;
+	metadata.partition_specs.begin()->second.fields[0].transform = IcebergTransform("day");
+	REQUIRE(ManifestCacheKey(changed, 0) != key);
+	auto moved_options = base.GetOptions();
+	moved_options.allow_moved_paths = true;
+	IcebergManifestFileScanInfo moved_a(base.GetMetadata(), base.GetSnapshot(), descriptors, moved_options, fs,
+	                                    "/moved-a", nullptr, {0});
+	IcebergManifestFileScanInfo moved_b(base.GetMetadata(), base.GetSnapshot(), descriptors, moved_options, fs,
+	                                    "/moved-b", nullptr, {0});
+	REQUIRE(ManifestCacheKey(moved_a, 0) != ManifestCacheKey(moved_b, 0));
+	REQUIRE(ManifestCacheKey(moved_a, 0) != key);
+}
+
+TEST_CASE("Iceberg frozen partition index survives its creating connection and cache eviction", "[iceberg_planning]") {
+	DuckDB database(nullptr);
+	shared_ptr<IcebergParsedManifest> payload;
+	auto spec = PartitionSpec();
+	auto data = DeleteEntry(0, Value(string(100, 'x'))).data_file;
+	{
+		Connection creator(database);
+		IcebergTableMetadata metadata {IcebergTableMetadataSchemas()};
+		metadata.partition_specs.emplace(17, spec);
+		IcebergManifestListEntry manifest(
+		    IcebergManifestFile("immutable.avro", 1024, 1, IcebergManifest(17, IcebergManifestContentType::DELETE, 1)),
+		    IcebergManifestMetadata(0, 17, 2, IcebergManifestContentType::DELETE),
+		    {DeleteEntry(0, Value(string(100, 'x'))), DeleteEntry(1, Value()),
+		     DeleteEntry(2, Value(string(100, 'x')))});
+		payload = make_shared_ptr<IcebergParsedManifest>(*creator.context, manifest, metadata, 32);
+		auto &cache = ObjectCache::GetObjectCache(*creator.context);
+		cache.PutWithTypePrefix<IcebergParsedManifest>("lifetime", payload);
+	}
+	Connection reader(database);
+	auto &cache = ObjectCache::GetObjectCache(*reader.context);
+	REQUIRE(cache.GetWithTypePrefix<IcebergParsedManifest>("lifetime").get() == payload.get());
+	REQUIRE(Candidates(*payload->DeleteIndex(), data, 17) == vector<idx_t> {0, 2});
+	cache.DeleteWithTypePrefix<IcebergParsedManifest>("lifetime");
+	REQUIRE(Candidates(*payload->DeleteIndex(), data, 17) == vector<idx_t> {0, 2});
+	REQUIRE(&payload->Entries()[0] == &payload->DeleteIndex()->Entries()[0]);
 }
 
 int main(int argc, char **argv) {

@@ -95,6 +95,16 @@ I/O/cancellation errors. The equality-delete view cases require equality-delete 
 ./build/reldebug/test/unittest_iceberg_planning
 ```
 
+Parsed-manifest cases check shared entry addresses, list-specific inheritance,
+copy-on-write rewrites, key compatibility, eviction, interleaved misses and
+failed publication without invalidating streamed references. Frozen partition
+indexes are also probed after the creating connection closes.
+`test/sql/local/native_catalog/parsed_manifest_cache.test` checks cold/warm
+counters, selective then broader scans, dynamic filters, new snapshots,
+rollback, ETag/304 and early LIMIT cleanup. The standalone
+`test/sql/local/iceberg_scans/parsed_manifest_cache.test` covers warm v1 header
+fallback and day partition values.
+
 CI runs these tests in both the assertion build and the release build. The release
 build enables equality-delete writes, so the shared-provider case executes there.
 

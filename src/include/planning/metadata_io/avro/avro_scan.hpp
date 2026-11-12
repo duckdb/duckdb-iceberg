@@ -21,6 +21,8 @@ namespace duckdb {
 class BaseManifestReader;
 
 class AvroScan {
+	friend class BaseManifestReader;
+
 public:
 	AvroScan(const string &path, ClientContext &context, shared_ptr<IcebergAvroScanInfo> avro_scan_info);
 	~AvroScan();
@@ -42,6 +44,8 @@ public:
 	bool Finished() const;
 	const vector<column_t> &GetColumnIds() const;
 	const idx_t IcebergVersion() const;
+	//! Call only after every reader/task completed successfully. Destruction never publishes.
+	void Complete();
 
 public:
 	string path;
@@ -55,6 +59,15 @@ public:
 
 	shared_ptr<IcebergAvroScanInfo> scan_info;
 	bool finished = false;
+
+private:
+	void FindCachedManifests();
+	vector<pair<idx_t, string>> cache_misses;
+	idx_t cache_hits = 0;
+	bool completed = false;
+	//! A reader that exits early or throws never contributes to readers_finished.
+	mutable atomic<idx_t> readers_started {0};
+	mutable atomic<idx_t> readers_finished {0};
 };
 
 } // namespace duckdb

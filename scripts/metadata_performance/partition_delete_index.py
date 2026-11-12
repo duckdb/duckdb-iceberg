@@ -108,7 +108,7 @@ def main():
     if re.search(r"^COVERAGE:BOOL=(ON|TRUE|1)$", cache, re.MULTILINE):
         parser.error("Build with COVERAGE=OFF")
     args.output.mkdir(parents=True, exist_ok=False)
-    setup = Shell(args.build, args.output)
+    setup = Shell(args.build, args.output, manifest_cache=False)
     try:
         versions = setup.query("SELECT extension_name,extension_version FROM duckdb_extensions() WHERE loaded")
         loaded = {row["extension_name"]: row["extension_version"] for row in versions}
@@ -177,7 +177,8 @@ def main():
                             )
                         }
                         assert counts == {
-                            "delete_index_builds": 1,
+                            # This diagnostic query follows a completed timed query in both modes.
+                            "delete_index_builds": 0,
                             "delete_candidate_visits": case["partitions"] * 16,
                             "delete_predicate_evaluations": case["partitions"] * 4,
                         }, counts
