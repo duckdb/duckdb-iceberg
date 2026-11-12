@@ -35,7 +35,6 @@ vector<TableFunctionSet> IcebergFunctions::GetTableFunctions(ExtensionLoader &lo
 	functions.push_back(GetIcebergRewriteDataFilesFunction());
 	functions.push_back(GetIcebergRollbackToSnapshotFunction());
 	functions.push_back(GetIcebergViewMetadataFunction());
-	functions.push_back(GetIcebergWrittenFilesFunction());
 
 	return functions;
 }

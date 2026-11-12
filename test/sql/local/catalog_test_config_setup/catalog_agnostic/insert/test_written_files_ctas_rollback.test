@@ -1,5 +1,5 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_written_files_ctas_rollback.test
-# description: iceberg_written_files() lists a CREATE TABLE AS inside a transaction until the transaction rolls back
+# description: temp.main.iceberg_written_files has a CREATE TABLE AS inside a transaction until the transaction rolls back
 # group: [insert]
 
 require-env CATALOG_TEST_CONFIG_SETUP
@@ -9,7 +9,20 @@ require-env STAGED_CREATE_SUPPORT
 include test/sql/init_requires
 
 statement ok
+SET iceberg_store_written_files = true;
+
+statement ok
 DROP TABLE IF EXISTS my_datalake.default.written_files_ctas_rollback;
+
+# the table is created by the first write that stores its files, so make it before the transaction
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.written_files_ctas_first;
+
+statement ok
+CREATE TABLE my_datalake.default.written_files_ctas_first AS SELECT 1 AS id;
+
+statement ok
+DELETE FROM temp.main.iceberg_written_files;
 
 statement ok
 BEGIN;
@@ -18,7 +31,7 @@ statement ok
 CREATE TABLE my_datalake.default.written_files_ctas_rollback AS SELECT range AS id FROM range(5);
 
 query I
-SELECT sum(record_count) FROM iceberg_written_files();
+SELECT sum(record_count) FROM temp.main.iceberg_written_files;
 ----
 5
 
@@ -26,7 +39,7 @@ statement ok
 ROLLBACK;
 
 query I
-SELECT count(*) FROM iceberg_written_files();
+SELECT count(*) FROM temp.main.iceberg_written_files;
 ----
 0
 
@@ -34,3 +47,6 @@ statement error
 SELECT * FROM my_datalake.default.written_files_ctas_rollback;
 ----
 does not exist
+
+statement ok
+DROP TABLE my_datalake.default.written_files_ctas_first;

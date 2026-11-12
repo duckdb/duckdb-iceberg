@@ -26,7 +26,7 @@
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "execution/operator/iceberg_delete.hpp"
-#include "catalog/rest/transaction/iceberg_written_files.hpp"
+#include "execution/operator/iceberg_written_files.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "core/metadata/schema/iceberg_column_definition.hpp"
 #include "core/metadata/schema/iceberg_table_schema.hpp"
@@ -105,9 +105,6 @@ IcebergInsertGlobalState::IcebergInsertGlobalState(ClientContext &context)
 }
 
 unique_ptr<GlobalSinkState> IcebergInsert::GetGlobalSinkState(ClientContext &context) const {
-	if (!update_delete_op && !merge_action) {
-		IcebergWrittenFilesState::Get(context)->BeginWrite();
-	}
 	return make_uniq<IcebergInsertGlobalState>(context);
 }
 
@@ -418,9 +415,6 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 		}
 	} else {
 		// Stage an INSERT statement or a MERGE insert action; the latter may join an overwrite snapshot.
-		if (!merge_action) {
-			IcebergWrittenFilesState::Get(context)->AddFiles(files, iceberg_transaction);
-		}
 		if (!written_files.empty()) {
 			ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTable &tbl) {
 				auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
@@ -433,6 +427,9 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 	auto log_table_name = StringUtil::Format("%s.%s.%s", effective_table->ParentCatalog().GetName().GetIdentifierName(),
 	                                         effective_table->ParentSchema().name.GetIdentifierName(),
 	                                         effective_table->name.GetIdentifierName());
+	if (!files.empty() && IcebergWrittenFiles::IsEnabled(context)) {
+		IcebergWrittenFiles::Append(context, log_table_name, files);
+	}
 	for (auto &file : files) {
 		DUCKDB_LOG(context, IcebergDataFileWrittenLogType, log_table_name, file.file_path, file.record_count,
 		           file.file_size_in_bytes);
