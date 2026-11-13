@@ -29,6 +29,7 @@ public:
 	vector<OpenFileInfo> GetAllFiles() const override;
 	FileExpandResult GetExpandResult() const override;
 	idx_t GetTotalFileCount() const override;
+	MultiFileCount GetFileCount(idx_t min_exact_count = 0) const override;
 	unique_ptr<NodeStatistics> GetCardinality(ClientContext &context) const override;
 	OpenFileInfo GetFile(idx_t i) const override;
 
@@ -45,6 +46,9 @@ public:
 	IcebergDeleteExecutionState &GetDeleteReader() const;
 	//! A view of this list that plans with the given filters, sharing metadata planning and delete execution state.
 	unique_ptr<IcebergMultiFileList> WithPlannerFilters(IcebergTableFilters filters) const;
+
+protected:
+	bool FileIsAvailable(idx_t i) const override;
 
 private:
 	IcebergMultiFileList(unique_ptr<IcebergScanPlanner> planner,
