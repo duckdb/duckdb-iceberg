@@ -499,7 +499,7 @@ void IcebergMultiFileReader::ApplyColumnDefaults(const unordered_map<int32_t, Va
                                                  MultiFileReaderData &reader_data,
                                                  vector<MultiFileColumnDefinition> &scan_columns,
                                                  const vector<ColumnIndex> &scan_column_ids,
-                                                 const IcebergTableMetadataSchemas &schemas) {
+                                                 const IcebergTableMetadataSchemas &schemas, ClientContext &context) {
 	unordered_set<int32_t> local_ids;
 	CollectFieldIds(reader_data.reader->columns, local_ids);
 	unordered_set<idx_t> visited;
@@ -532,13 +532,19 @@ void IcebergMultiFileReader::ApplyColumnDefaults(const unordered_map<int32_t, Va
 		}
 		if (!index->IsPushdownExtract()) {
 			if (!value) {
+				if (missing.get() != &column) {
+					//! FIXME: remove once DuckDB fills a missing field with the scan type (duckdb#27704)
+					// Fields of a pushed-down struct default to NULL, so this field is NULL in every row
+					reader_data.constant_map.Add(MultiFileGlobalIndex(i), Value(id.GetScanType()));
+				}
 				continue;
 			}
 			if (missing.get() == &column) {
 				reader_data.constant_map.Add(MultiFileGlobalIndex(i), std::move(*value));
 			} else {
-				// Below a struct that is in the file, the mapper must apply the default to keep that struct's NULLs.
-				missing->default_expression = ConstantExpression::FromValue(*value);
+				// A non-NULL identity value proves its ancestors are non-NULL.
+				// Keep each projected cast in its own scan slot.
+				reader_data.constant_map.Add(MultiFileGlobalIndex(i), value->CastAs(context, id.GetScanType()));
 			}
 			continue;
 		}
@@ -548,6 +554,11 @@ void IcebergMultiFileReader::ApplyColumnDefaults(const unordered_map<int32_t, Va
 		}
 		auto projected = ProjectValue(*value, *index);
 		if (projected) {
+			// A cast pushed into the extraction changes the type the scan expects
+			auto &scan_type = id.GetScanType();
+			if (projected->type() != scan_type) {
+				projected = projected->CastAs(context, scan_type);
+			}
 			reader_data.constant_map.Add(MultiFileGlobalIndex(i), std::move(*projected));
 		} else {
 			missing->default_expression = ConstantExpression::FromValue(*value);
@@ -608,7 +619,7 @@ ReaderInitializeType IcebergMultiFileReader::InitializeTaskReader(
 	}
 	//! After the field mapping, so files without field ids are matched too
 	AddPresenceFields(local_columns, scan_columns, scan_column_ids, schemas);
-	ApplyColumnDefaults(partition_constants, reader_data, scan_columns, scan_column_ids, schemas);
+	ApplyColumnDefaults(partition_constants, reader_data, scan_columns, scan_column_ids, schemas, context);
 
 	vector<bool> accelerated_files;
 	Value fast_filter_setting;
