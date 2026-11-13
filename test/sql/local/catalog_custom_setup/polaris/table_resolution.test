@@ -78,7 +78,8 @@ statement ok
 DETACH my_datalake;
 
 # ---------------------------------------------------------------------------
-# lazy (the default): listing a schema never loads its tables
+# lazy (the default): listing a schema does not load its tables, a table is
+# loaded the first time its columns are read
 # ---------------------------------------------------------------------------
 
 statement ok
@@ -95,19 +96,15 @@ CALL enable_logging('HTTP');
 statement ok
 CALL truncate_duckdb_logs();
 
-# the tables are listed, but with no columns resolved they only carry the placeholder
-query II
-SELECT table_name, column_name FROM information_schema.columns
-WHERE table_catalog = 'my_datalake' AND table_schema = 'table_resolution'
-ORDER BY table_name;
+# a misspelled name lists the schema to suggest similar names, which needs no table metadata
+statement error
+SELECT * FROM my_datalake.table_resolution.tr_alhpa;
 ----
-tr_alpha	__
-tr_beta	__
-tr_gamma	__
+<REGEX>:.*Table with name tr_alhpa does not exist.*
 
-# the namespaces were listed, but no table metadata was requested at all
 query I
-SELECT count(*) FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%table_resolution/tables/%';
+SELECT count(*) FROM duckdb_logs_parsed('HTTP')
+WHERE regexp_matches(request.url, 'table_resolution/tables/tr_(alpha|beta|gamma)$');
 ----
 0
 
@@ -116,6 +113,76 @@ SELECT count(*) > 0 FROM duckdb_logs_parsed('HTTP')
 WHERE request.url LIKE '%/namespaces/table_resolution/tables';
 ----
 1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# reading the columns loads each table once, and reports its real columns rather than a placeholder
+query III
+SELECT table_name, column_name, data_type FROM information_schema.columns
+WHERE table_catalog = 'my_datalake' AND table_schema = 'table_resolution'
+ORDER BY table_name, ordinal_position;
+----
+tr_alpha	id	BIGINT
+tr_alpha	name	VARCHAR
+tr_beta	a	INTEGER
+tr_beta	b	DOUBLE
+tr_beta	c	BOOLEAN
+tr_gamma	x	VARCHAR
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP')
+WHERE regexp_matches(request.url, 'table_resolution/tables/tr_(alpha|beta|gamma)$');
+----
+3
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# a filter on the table name is pushed into the listing, so only that table is loaded
+query II
+SELECT column_name, data_type FROM information_schema.columns
+WHERE table_catalog = 'my_datalake' AND table_schema = 'table_resolution' AND table_name = 'tr_gamma';
+----
+x	VARCHAR
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP')
+WHERE regexp_matches(request.url, 'table_resolution/tables/tr_(alpha|beta|gamma)$');
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# within a transaction a table is loaded once: later listings and reads of the table reuse that load
+statement ok
+BEGIN;
+
+query I
+SELECT count(*) FROM information_schema.columns
+WHERE table_catalog = 'my_datalake' AND table_schema = 'table_resolution';
+----
+6
+
+query I
+SELECT count(*) FROM (SHOW ALL TABLES) WHERE database = 'my_datalake' AND schema = 'table_resolution';
+----
+3
+
+query I
+SELECT count(*) FROM my_datalake.table_resolution.tr_alpha;
+----
+10
+
+statement ok
+COMMIT;
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP')
+WHERE regexp_matches(request.url, 'table_resolution/tables/tr_(alpha|beta|gamma)$');
+----
+3
 
 statement ok
 DETACH my_datalake;

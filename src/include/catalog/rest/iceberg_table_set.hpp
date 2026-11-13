@@ -16,6 +16,7 @@ struct CreateTableInfo;
 struct DropInfo;
 class IcebergSchemaEntry;
 class IcebergTransaction;
+class IcebergLazyTableEntry;
 class LoadTableCachePublication;
 
 class IcebergTableSet {
@@ -33,12 +34,15 @@ public:
 
 private:
 	bool TryFillEntryFromCache(ClientContext &context, IcebergTable &table);
-	void ScanEagerEntries(ClientContext &context, const std::function<void(CatalogEntry &)> &callback)
-	    DUCKDB_REQUIRES(entry_lock);
+	void ScanEagerEntries(ClientContext &context, vector<reference<CatalogEntry>> &result) DUCKDB_REQUIRES(entry_lock);
 	bool ApplyLoadResult(ClientContext &context, IcebergTable &table, IcebergLoadTableResult result,
 	                     LoadTableCachePublication &publication);
-	CatalogEntry &GetScanEntry(IcebergTable &table_info) const DUCKDB_REQUIRES(entry_lock);
-	IcebergTableSchemaVersion &GetOrCreateDummy(IcebergTable &table_info) const DUCKDB_REQUIRES(entry_lock);
+	//! The entry a listing reports for 'listed_table' in this transaction, or nullptr if the transaction does not see
+	//! the table. Requires the transaction's table_lookup_lock.
+	optional_ptr<CatalogEntry> GetScanEntry(IcebergTransaction &transaction, IcebergTable &listed_table)
+	    DUCKDB_REQUIRES(entry_lock);
+	IcebergLazyTableEntry &GetOrCreateLazyEntry(IcebergTransaction &transaction, const string &table_name,
+	                                            const string &table_key);
 	void LoadEntriesInternal(ClientContext &context) DUCKDB_REQUIRES(entry_lock);
 	void ApplyListResult(IcebergListTablesResult tables) DUCKDB_REQUIRES(entry_lock);
 	shared_ptr<IcebergTable> CreateEntryInternal(const string &name, IcebergTable &&table,

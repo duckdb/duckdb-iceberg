@@ -110,8 +110,6 @@ public:
 	case_insensitive_map_t<string> config;
 	vector<rest_api_objects::StorageCredential> storage_credentials;
 	unordered_map<int32_t, unique_ptr<IcebergTableSchemaVersion>> schema_versions;
-	// dummy entry to hold existence of a table, but no schema versions
-	unique_ptr<IcebergTableSchemaVersion> dummy_entry;
 	unique_ptr<IcebergTransactionData> transaction_data;
 	//! Owns the validated generation used for identity-based eviction (not a historical metadata identity).
 	shared_ptr<const IcebergLoadTableResponse> initialization_source;

@@ -1,0 +1,68 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_list_staged_table.test
+# description: Catalog listings include transaction-local tables without exposing them to other connections
+# group: [create]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env STAGED_CREATE_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.listing_staged;
+
+statement ok
+BEGIN;
+
+# Establish the server's table listing before staging a table it does not contain.
+query I
+SELECT count(*) FROM duckdb_tables()
+WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'listing_staged';
+----
+0
+
+statement ok
+CREATE TABLE my_datalake.default.listing_staged (id INTEGER NOT NULL, payload VARCHAR);
+
+query I
+SELECT count(*) FROM my_datalake.default.listing_staged;
+----
+0
+
+query III
+SELECT column_name, data_type, is_nullable FROM duckdb_columns()
+WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'listing_staged'
+ORDER BY column_index;
+----
+id	INTEGER	false
+payload	VARCHAR	true
+
+query II
+SELECT name, column_names FROM (SHOW ALL TABLES)
+WHERE database = 'my_datalake' AND schema = 'default' AND name = 'listing_staged';
+----
+listing_staged	[id, payload]
+
+query I observer
+SELECT count(*) FROM duckdb_tables()
+WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'listing_staged';
+----
+0
+
+statement ok
+ALTER TABLE my_datalake.default.listing_staged ADD COLUMN extra BOOLEAN;
+
+query II
+SELECT name, column_names FROM (SHOW ALL TABLES)
+WHERE database = 'my_datalake' AND schema = 'default' AND name = 'listing_staged';
+----
+listing_staged	[id, payload, extra]
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT count(*) FROM duckdb_tables()
+WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'listing_staged';
+----
+0
