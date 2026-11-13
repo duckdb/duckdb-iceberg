@@ -111,11 +111,20 @@ insert into my_datalake.default.test_horizon_mixed_existing values (3, 'mixed');
 TransactionContext Error: Iceberg REST Catalog cannot commit this transaction atomically because it would require multiple table commit requests without atomic multi-table commit support
 
 statement ok
-commit;
+rollback;
 
 query II
 select * from my_datalake.default.test_horizon_mixed_existing order by all;
 ----
+
+# The rollback dropped the table that the create request had already added to the catalog
+statement error
+select count(*) from my_datalake.default.test_horizon_mixed_empty_create;
+----
+Catalog Error: Table with name test_horizon_mixed_empty_create does not exist!
+
+statement ok
+create table my_datalake.default.test_horizon_mixed_empty_create (id int, label varchar);
 
 query I
 select count(*) from my_datalake.default.test_horizon_mixed_empty_create;
