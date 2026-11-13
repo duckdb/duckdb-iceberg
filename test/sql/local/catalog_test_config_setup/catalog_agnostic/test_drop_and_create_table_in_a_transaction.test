@@ -84,10 +84,14 @@ ROLLBACK
 statement ok con3
 ROLLBACK
 
-statement error con3
+# outside of a transaction the existing table is replaced
+statement ok con3
 create or replace table my_datalake.default.duid (a int);
+
+query I con3
+select count(*) from my_datalake.default.duid;
 ----
-<REGEX>:.*Not implemented Error.*CREATE OR REPLACE not supported in DuckDB-Iceberg. Please use separate Drop and Create Statements.*
+0
 
 statement error con1
 create or replace schema my_datalake.default.new_schema;

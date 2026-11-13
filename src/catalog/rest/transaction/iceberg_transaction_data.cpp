@@ -101,6 +101,7 @@ IcebergTransactionData::IcebergTransactionData(ClientContext &context, IcebergTr
 	initial_table_uuid = table_info.GetMetadata().table_uuid;
 	initial_format_version = table_info.GetMetadata().iceberg_version;
 	initial_schema_id = table_info.GetMetadata().GetCurrentSchemaId();
+	initial_snapshot_id = table_info.GetMetadata().current_snapshot_id;
 	initial_default_spec_id = table_info.GetMetadata().default_spec_id;
 	if (table_info.GetMetadata().HasSortOrder()) {
 		initial_default_sort_order_id = table_info.GetMetadata().default_sort_order_id;
@@ -436,6 +437,26 @@ void IcebergTransactionData::TableSetDefaultSortOrder() {
 
 void IcebergTransactionData::TableSetDefaultSpec() {
 	updates.push_back(make_uniq<SetDefaultSpec>(table_info.GetMetadata().default_spec_id));
+}
+
+void IcebergTransactionData::TableReplaceContents(IcebergTableMetadata &metadata) {
+	lock_guard<mutex> guard(lock);
+	D_ASSERT(alters.empty());
+	replaces_table = true;
+	assert_schema_id = true;
+	replacement_query_id = transaction.active_query.load();
+	metadata.current_snapshot_id.reset();
+	if (metadata.refs) {
+		metadata.refs->additional_properties.erase("main");
+	}
+	existing_manifest_list.clear();
+	base_snapshot_id.reset();
+	// Emit this even when main was absent, commit also asserts its original state.
+	updates.push_back(make_uniq<RemoveSnapshotRef>("main"));
+}
+
+bool IcebergTransactionData::IsReplacementStatement() const {
+	return replacement_query_id && *replacement_query_id == transaction.active_query.load();
 }
 
 void IcebergTransactionData::TableSetProperties(const case_insensitive_map_t<string> &properties) {

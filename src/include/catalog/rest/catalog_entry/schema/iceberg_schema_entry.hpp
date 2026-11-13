@@ -43,8 +43,10 @@ public:
 	void DropEntry(ClientContext &context, DropInfo &info) override;
 	void DropEntry(ClientContext &context, DropInfo &info, bool delete_entry = false);
 	optional_ptr<CatalogEntry> LookupEntry(CatalogTransaction transaction, const EntryLookupInfo &lookup_info) override;
+	//! Returns false when the create is to be skipped (IF NOT EXISTS). Sets replace_existing when an existing table
+	//! is to be replaced (OR REPLACE)
 	bool HandleCreateConflict(CatalogTransaction &transaction, CatalogType catalog_type, const string &entry_name,
-	                          OnCreateConflict on_conflict);
+	                          OnCreateConflict on_conflict, bool &replace_existing);
 	bool DoesExist() const {
 		return exists;
 	}
@@ -63,5 +65,11 @@ public:
 	IcebergTableSet tables;
 	IcebergSchemaInformation schema_info;
 };
+
+struct IcebergTransactionData;
+class IcebergTableSchema;
+//! Makes new_schema the current schema of a table updated in a transaction, reusing an identical earlier schema
+void IntroduceNewSchema(ClientContext &context, IcebergTable &updated_table, IcebergTransactionData &transaction_data,
+                        shared_ptr<IcebergTableSchema> new_schema, bool update_schema_properties = true);
 
 } // namespace duckdb

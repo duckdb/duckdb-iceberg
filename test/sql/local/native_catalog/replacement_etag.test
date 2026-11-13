@@ -1,0 +1,136 @@
+# name: test/sql/local/native_catalog/replacement_etag.test
+# description: Replacement after an ETag 304 keeps its schema local and invalidates the old cache on commit
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+ATTACH OR REPLACE '' AS my_datalake (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+    AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none', MAX_TABLE_STALENESS '0 seconds');
+
+statement ok
+CREATE MACRO cor_etag_response(payload, status_code) AS TABLE
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response', json_object(
+    'method', 'GET', 'path', '/v1/namespaces/default/tables/cor_etag', 'status', status_code,
+    'body', payload::JSON, 'headers', json_object('ETag', '"before-replace"')));
+
+statement ok
+CALL enable_logging('HTTP', storage='memory');
+
+statement ok
+SET redact_http_logs = false;
+
+foreach completion commit rollback
+
+statement ok
+CREATE TABLE my_datalake.default.cor_etag AS SELECT 1 a;
+
+statement ok
+SET VARIABLE cor_response = (
+    SELECT body::JSON FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/cor_etag', NULL)
+);
+
+query I
+SELECT * FROM cor_etag_response(getvariable('cor_response'), 200);
+----
+204
+
+sleep 1 milliseconds
+
+query I
+SELECT a FROM my_datalake.default.cor_etag;
+----
+1
+
+query I
+SELECT * FROM cor_etag_response(NULL, 304);
+----
+204
+
+# Pin the same cached metadata generation in another transaction. Replacement
+# must detach its writable metadata without changing this reader's schema or rows.
+statement ok reader
+BEGIN;
+
+query I reader
+SELECT a FROM my_datalake.default.cor_etag;
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+sleep 1 milliseconds
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_etag AS SELECT 2 b;
+
+query I
+SELECT b FROM my_datalake.default.cor_etag;
+----
+2
+
+query II
+SELECT request.headers['If-None-Match'], response.status FROM duckdb_logs_parsed('HTTP')
+WHERE request.type = 'GET' AND request.url LIKE '%/tables/cor_etag';
+----
+"before-replace"	NotModified_304
+
+query I reader
+SELECT a FROM my_datalake.default.cor_etag;
+----
+1
+
+statement ok
+{completion};
+
+query I reader
+SELECT a FROM my_datalake.default.cor_etag;
+----
+1
+
+statement ok reader
+COMMIT;
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+statement ok
+CALL truncate_duckdb_logs();
+
+sleep 1 milliseconds
+
+query I
+SELECT to_json(t) = CASE WHEN '{completion}' = 'commit' THEN '{"b":2}'::JSON ELSE '{"a":1}'::JSON END
+FROM my_datalake.default.cor_etag t;
+----
+true
+
+query I
+SELECT CASE WHEN '{completion}' = 'rollback'
+    THEN request.headers['If-None-Match'] = '"before-replace"'
+    ELSE request.headers['If-None-Match'] IS NULL END
+FROM duckdb_logs_parsed('HTTP')
+WHERE request.type = 'GET' AND request.url LIKE '%/tables/cor_etag';
+----
+true
+
+query I
+SELECT count(*) = CASE WHEN '{completion}' = 'commit' THEN 2 ELSE 1 END
+FROM iceberg_snapshots(my_datalake.default.cor_etag);
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.cor_etag;
+
+endloop

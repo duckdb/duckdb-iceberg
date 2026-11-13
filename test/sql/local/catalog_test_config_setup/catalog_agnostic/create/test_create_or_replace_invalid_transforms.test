@@ -1,0 +1,104 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_or_replace_invalid_transforms.test
+# description: Rejected replacement partition and sort definitions preserve the original table
+# group: [create]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cor_invalid_transforms;
+
+statement ok
+CREATE TABLE my_datalake.default.cor_invalid_transforms (original INTEGER, part VARCHAR)
+PARTITIONED BY (part) SORTED BY (original) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.cor_invalid_transforms VALUES (7, 'kept');
+
+statement ok
+SET VARIABLE cor_invalid_before = (
+    SELECT metadata_location FROM iceberg_load_table_response(my_datalake.default.cor_invalid_transforms)
+);
+
+foreach clause PARTITIONED SORTED
+
+# Reject both an unsupported transform/type combination and a nonprimitive source.
+statement error
+CREATE OR REPLACE TABLE my_datalake.default.cor_invalid_transforms (b BOOLEAN)
+{clause} BY (bucket(4, b));
+----
+<REGEX>:.*the bucket\[4\] transform doesn't accept BOOLEAN columns.*
+
+query I
+SELECT metadata_location = getvariable('cor_invalid_before')
+FROM iceberg_load_table_response(my_datalake.default.cor_invalid_transforms);
+----
+true
+
+query IT
+SELECT original, part FROM my_datalake.default.cor_invalid_transforms;
+----
+7	kept
+
+statement error
+CREATE OR REPLACE TABLE my_datalake.default.cor_invalid_transforms
+{clause} BY (items) AS SELECT [1, 2] items;
+----
+<REGEX>:.*the identity transform doesn't accept INTEGER\[\] columns.*
+
+query I
+SELECT metadata_location = getvariable('cor_invalid_before')
+FROM iceberg_load_table_response(my_datalake.default.cor_invalid_transforms);
+----
+true
+
+query IT
+SELECT original, part FROM my_datalake.default.cor_invalid_transforms;
+----
+7	kept
+
+endloop
+
+# The replacement has already built a valid new partition spec before sorting fails.
+statement ok
+BEGIN;
+
+statement error
+CREATE OR REPLACE TABLE my_datalake.default.cor_invalid_transforms (new_id INTEGER, b BOOLEAN)
+PARTITIONED BY (new_id) SORTED BY (bucket(4, b)) WITH ('cor.invalid' = 'must not persist');
+----
+<REGEX>:.*the bucket\[4\] transform doesn't accept BOOLEAN columns.*
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT metadata_location = getvariable('cor_invalid_before')
+FROM iceberg_load_table_response(my_datalake.default.cor_invalid_transforms);
+----
+true
+
+query IT
+SELECT original, part FROM my_datalake.default.cor_invalid_transforms;
+----
+7	kept
+
+query I
+SELECT count(*) FROM iceberg_table_properties(my_datalake.default.cor_invalid_transforms)
+WHERE key = 'cor.invalid';
+----
+0
+
+# A later valid write still uses the original schema and partition/sort definitions.
+statement ok
+INSERT INTO my_datalake.default.cor_invalid_transforms VALUES (8, 'later');
+
+query IT
+SELECT original, part FROM my_datalake.default.cor_invalid_transforms ORDER BY original;
+----
+7	kept
+8	later
+
+statement ok
+DROP TABLE my_datalake.default.cor_invalid_transforms;

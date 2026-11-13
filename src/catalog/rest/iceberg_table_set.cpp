@@ -498,6 +498,107 @@ IcebergTable &IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCat
 	return table_info;
 }
 
+//! Makes the sort order a replaced table's definition asks for its default, reusing an identical earlier one
+static void ReplaceSortOrder(IcebergTransaction &transaction, IcebergTable &table_info,
+                             const vector<unique_ptr<ParsedExpression>> &sort_keys, const IcebergTableSchema &schema) {
+	auto &metadata = table_info.GetMetadata();
+	if (sort_keys.empty() && (!metadata.HasSortOrder() || metadata.default_sort_order_id.GetIndex() == 0)) {
+		table_info.GetOrCreateTransactionData(transaction).updates.push_back(make_uniq<SetDefaultSortOrder>(0));
+		return;
+	}
+	vector<OrderByNode> orders;
+	orders.reserve(sort_keys.size());
+	for (auto &key : sort_keys) {
+		orders.emplace_back(OrderType::ORDER_DEFAULT, OrderByNullType::ORDER_DEFAULT, key->Copy());
+	}
+	table_info.SetSortedBy(transaction, orders, schema);
+}
+
+IcebergTable &IcebergTableSet::ReplaceEntry(ClientContext &context, IcebergCatalog &catalog,
+                                            IcebergTable &catalog_table, CreateTableInfo &info) {
+	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
+	auto &alter_update = iceberg_transaction.GetOrCreateAlter();
+	auto &table_info = alter_update.GetOrInitializeTable(catalog_table);
+	auto &transaction_data = table_info.GetOrCreateTransactionData(iceberg_transaction);
+	auto &metadata = table_info.GetMetadataMutable();
+	auto &table_name = info.GetTableName().GetIdentifierName();
+
+	auto binder = Binder::CreateBinder(context);
+	TableFunctionBinder property_binder(*binder, context, "format-version");
+
+	// the format version can only go up
+	auto format_version_it = info.options.find("format-version");
+	if (format_version_it != info.options.end()) {
+		auto format_version = ParseTableProperty(property_binder, context, *format_version_it->second, "format-version",
+		                                         LogicalType::INTEGER)
+		                          .GetValue<int32_t>();
+		if (format_version < 1) {
+			throw InvalidInputException("The lowest supported iceberg version is 1!");
+		}
+		if (format_version > MAX_ICEBERG_FORMAT_VERSION) {
+			throw InvalidInputException("The highest supported iceberg version is %d!", MAX_ICEBERG_FORMAT_VERSION);
+		}
+		auto current_version = NumericCast<int32_t>(metadata.iceberg_version);
+		if (format_version < current_version) {
+			throw InvalidInputException(
+			    "Cannot replace table '%s' with format-version %d: the table uses format-version %d, which cannot "
+			    "be downgraded",
+			    table_name, format_version, current_version);
+		}
+		if (format_version > current_version) {
+			metadata.iceberg_version = NumericCast<idx_t>(format_version);
+			transaction_data.TableAddUpradeFormatVersion();
+		}
+	}
+	auto location_it = info.options.find("location");
+	if (location_it != info.options.end()) {
+		auto location =
+		    ParseTableProperty(property_binder, context, *location_it->second, "location", LogicalType::VARCHAR)
+		        .GetValue<string>();
+		auto existing_location = metadata.location;
+		// Catalogs may strip trailing slashes from the location supplied at creation.
+		StringUtil::RTrim(location, "/");
+		StringUtil::RTrim(existing_location, "/");
+		if (location != existing_location) {
+			throw NotImplementedException("CREATE OR REPLACE TABLE cannot change the location of table '%s'",
+			                              table_name);
+		}
+	}
+	case_insensitive_map_t<string> properties;
+	for (auto &option : info.options) {
+		if (StringUtil::CIEquals(option.first, "format-version") || StringUtil::CIEquals(option.first, "location")) {
+			continue;
+		}
+		IcebergTableMetadata::VerifyNotReservedProperty(option.first, "CREATE OR REPLACE TABLE ... WITH");
+		properties[option.first] =
+		    ParseTableProperty(property_binder, context, *option.second, option.first, LogicalType::VARCHAR)
+		        .GetValue<string>();
+	}
+
+	int32_t last_column_id;
+	auto new_schema = IcebergCreateTableRequest::CreateIcebergSchema(context, metadata, info.columns, &info.constraints,
+	                                                                 last_column_id);
+	last_column_id = IcebergCreateTableRequest::AssignReplacementFieldIds(*new_schema, metadata);
+	transaction_data.TableAddAssertLastAssignedFieldId();
+	metadata.last_column_id = NumericCast<idx_t>(last_column_id);
+	IntroduceNewSchema(context, table_info, transaction_data, std::move(new_schema), false);
+	auto &current_schema = metadata.GetLatestSchema();
+
+	// the partitioning and sort order of the replaced table do not carry over
+	table_info.SetPartitionedBy(iceberg_transaction, info.partition_keys, current_schema);
+	ReplaceSortOrder(iceberg_transaction, table_info, info.sort_keys, current_schema);
+
+	if (!properties.empty()) {
+		for (auto &property : properties) {
+			metadata.table_properties[property.first] = property.second;
+		}
+		transaction_data.TableSetProperties(properties);
+	}
+	// nor does its data
+	transaction_data.TableReplaceContents(metadata);
+	return table_info;
+}
+
 static bool EntryMissingFromListing(const optional<vector<rest_api_objects::TableIdentifier>> &listing,
                                     const string &name) {
 	// A refused listing is not evidence that an entry is absent: retain the direct lookup.
