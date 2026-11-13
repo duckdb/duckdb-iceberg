@@ -1,6 +1,8 @@
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 
 #include "duckdb/common/assert.hpp"
+#include "duckdb/common/enum_util.hpp"
+#include "duckdb/common/exception/http_exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "duckdb/common/types/timestamp.hpp"
@@ -31,6 +33,7 @@
 #include "catalog/rest/api/iceberg_create_table_request.hpp"
 #include "catalog/rest/api/catalog_api.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
+#include "maintenance/expire_snapshots_cleanup.hpp"
 #include "core/metadata/snapshot/iceberg_snapshot.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
@@ -454,6 +457,55 @@ void IcebergTransaction::CleanupMetadataFiles(ClientContext &context, const vect
 	RemoveFilesBestEffort(context, fs, unique_paths, "metadata file");
 }
 
+void IcebergTransaction::CleanupExpiredSnapshotFiles(IcebergTransactionAlterUpdate &alter_update,
+                                                     ClientContext &context) {
+	for (auto &entry : alter_update.updated_tables) {
+		auto &table = entry.second.get();
+		if (!table.transaction_data || table.transaction_data->expired_snapshots.empty()) {
+			continue;
+		}
+		auto &transaction_data = *table.transaction_data;
+		if (!transaction_data.clean_expired_files) {
+			continue;
+		}
+		if (!catalog.attach_options.remove_files_on_delete) {
+			DUCKDB_LOG(context, IcebergLogType,
+			           "Iceberg Snapshot Expiration, kept the files of %llu expired snapshot(s) of table \"%s\": "
+			           "remove_files_on_delete is off",
+			           static_cast<uint64_t>(transaction_data.expired_snapshots.size()), table.name);
+			continue;
+		}
+		try {
+			//! The committed metadata decides what is still reachable; the reads use this table's credentials.
+			table.GetLatestSchema()->Cast<IcebergTableSchemaVersion>().PrepareIcebergScanFromEntry(context);
+			auto get_table_result = IRCAPI::GetTable(context, catalog, table.schema, table.name);
+			if (get_table_result.error_) {
+				throw HTTPException(StringUtil::Format(
+				    "GetTableInformation endpoint returned response code %s with message \"%s\"",
+				    EnumUtil::ToString(get_table_result.status_), get_table_result.error_->_error.message));
+			}
+			auto after = IcebergTableMetadata::FromTableMetadata(get_table_result.result_->result.metadata);
+			auto files =
+			    PlanExpiredSnapshotFiles(context, table.GetMetadata(), transaction_data.expired_snapshots, after);
+			auto &fs = FileSystem::GetFileSystem(context);
+			RemoveFilesBestEffort(context, fs, files.data_files, "expired data file");
+			RemoveFilesBestEffort(context, fs, files.manifests, "expired manifest");
+			RemoveFilesBestEffort(context, fs, files.manifest_lists, "expired manifest list");
+			RemoveFilesBestEffort(context, fs, files.statistics_files, "expired statistics file");
+		} catch (std::exception &ex) {
+			ErrorData error(ex);
+			if (error.Type() == ExceptionType::INTERRUPT) {
+				throw;
+			}
+			//! The expiration is committed; the files it left behind are orphans for a later cleanup.
+			DUCKDB_LOG(context, IcebergLogType,
+			           "Iceberg Snapshot Expiration, could not determine the files of the expired snapshots of table "
+			           "\"%s\", nothing deleted: %s",
+			           table.name, ex.what());
+		}
+	}
+}
+
 void IcebergTransaction::RefreshRetryTables(IcebergTransactionAlterUpdate &alter_update,
                                             const unordered_set<string> &table_keys, ClientContext &context) {
 	for (const auto &table_key : table_keys) {
@@ -578,6 +630,7 @@ void IcebergTransaction::DoTableUpdates(IcebergTransactionAlterUpdate &alter_upd
 	} else {
 		DoSingleTableCommitUpdates(alter_update, context);
 	}
+	CleanupExpiredSnapshotFiles(alter_update, context);
 
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	if (ic_catalog.attach_options.max_table_staleness_micros.IsValid()) {

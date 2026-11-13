@@ -127,6 +127,8 @@ private:
 	bool CanUseMultiTableCommit(const IcebergTransactionAlterUpdate &alter_update) const;
 	void VerifyAlterUpdateAtomicity(const IcebergTransactionAlterUpdate &alter_update) const;
 	void CleanupMetadataFiles(ClientContext &context, const vector<string> &paths);
+	//! After a committed snapshot expiration: delete the files only the expired snapshots reached
+	void CleanupExpiredSnapshotFiles(IcebergTransactionAlterUpdate &alter_update, ClientContext &context);
 	void RefreshRetryTables(IcebergTransactionAlterUpdate &alter_update, const unordered_set<string> &table_keys,
 	                        ClientContext &context);
 	void CleanupFiles();

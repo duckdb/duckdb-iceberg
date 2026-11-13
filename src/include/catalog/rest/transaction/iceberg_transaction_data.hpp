@@ -62,7 +62,7 @@ public:
 	void TableSetDefaultSpec();
 	void TableSetProperties(const case_insensitive_map_t<string> &properties);
 	void TableRemoveProperties(const vector<string> &properties);
-	void TableRemoveSnapshots(const vector<int64_t> &snapshot_ids);
+	void TableRemoveSnapshots(const vector<int64_t> &snapshot_ids, bool clean_expired_files);
 	void TableSetLocation();
 	//! Roll main back to an ancestor snapshot (Spark rollback_to_snapshot semantics).
 	void TableRollbackToSnapshot(int64_t snapshot_id);
@@ -98,6 +98,9 @@ public:
 	//! schema updates etc.
 	vector<unique_ptr<IcebergTableUpdate>> updates;
 	vector<unique_ptr<IcebergTableRequirement>> requirements;
+	//! Snapshots iceberg_expire_snapshots removes, for the file cleanup after the commit
+	vector<IcebergSnapshot> expired_snapshots;
+	bool clean_expired_files = true;
 	//! Cached manifest list from the source snapshot
 	vector<IcebergManifestListEntry> existing_manifest_list;
 
