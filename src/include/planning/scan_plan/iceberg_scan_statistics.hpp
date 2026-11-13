@@ -15,10 +15,10 @@ public:
 
 	optional<idx_t> EstimateCardinality() const;
 	optional<idx_t> ExactRowCount() const;
-
-private:
+	//! Data-row counts before applying deletes or file-level pruning.
 	optional<idx_t> CountDataRows() const;
 
+private:
 	const vector<BoundIcebergManifestListEntry> &data_manifests;
 	const vector<bool> &data_manifest_matches;
 	const vector<BoundIcebergManifestListEntry> &delete_manifests;

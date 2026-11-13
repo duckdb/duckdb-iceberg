@@ -364,6 +364,19 @@ unique_ptr<NodeStatistics> IcebergScanPlanner::GetCardinality() const {
 			return make_uniq<NodeStatistics>(NumericCast<idx_t>(records->second));
 		}
 	}
+	{
+		annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
+		// Missing delete-row counts can prevent the estimate above while data-row counts remain useful.
+		// Do not initialize a view for this fallback: legacy metadata can require eager manifest reads.
+		if (view_initialized) {
+			auto cardinality =
+			    IcebergScanStatistics(data_manifests, data_manifest_matches, delete_manifests, delete_manifest_matches)
+			        .CountDataRows();
+			if (cardinality) {
+				return make_uniq<NodeStatistics>(*cardinality);
+			}
+		}
+	}
 	return make_uniq<NodeStatistics>(1000);
 }
 

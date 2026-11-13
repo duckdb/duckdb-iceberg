@@ -488,6 +488,13 @@ TEST_CASE("Iceberg corrupt file counts recover or fail without poisoning later s
 }
 
 TEST_CASE("Iceberg cardinality fallback never enumerates files", "[iceberg_planning][iceberg_file_count]") {
+	string added_rows;
+	SECTION("Missing data-row counts") {
+		added_rows = "NULL";
+	}
+	SECTION("Overflowing data-row counts") {
+		added_rows = "9223372036854775807";
+	}
 	for (auto warm_cache : {false, true}) {
 		for (auto summary_count : {"2", "", "0"}) {
 			CAPTURE(warm_cache, summary_count);
@@ -504,7 +511,7 @@ TEST_CASE("Iceberg cardinality fallback never enumerates files", "[iceberg_plann
 			auto bound = test.Bind();
 			auto &base = bound->Cast<MultiFileBindData>().file_list->Cast<IcebergMultiFileList>().GetScanPlanner();
 			auto path = WriteCountMetadata(
-			    test, base, "added_files_count", "existing_files_count", "deleted_files_count", "NULL", "NULL",
+			    test, base, "added_files_count", "existing_files_count", "deleted_files_count", added_rows, "1",
 			    IcebergSnapshotMetrics(case_insensitive_map_t<string> {{"total-records", summary_count}}));
 			Query(test.connection, "CALL enable_logging('Iceberg', storage='memory')");
 			IcebergMultiFileList files(*test.connection.context, nullptr, path, base.GetOptions());
@@ -515,8 +522,10 @@ TEST_CASE("Iceberg cardinality fallback never enumerates files", "[iceberg_plann
 			REQUIRE(cardinality);
 			REQUIRE(cardinality->has_estimated_cardinality);
 			REQUIRE_FALSE(cardinality->has_max_cardinality);
-			if (string(summary_count) == "2") {
-				REQUIRE(cardinality->estimated_cardinality == 2);
+			if (string(summary_count).empty()) {
+				REQUIRE(cardinality->estimated_cardinality == 1000);
+			} else {
+				REQUIRE(cardinality->estimated_cardinality == (string(summary_count) == "2" ? 2 : 0));
 			}
 			CheckFileCount(files, 0, 0, FileExpansionType::NOT_ALL_FILES_KNOWN);
 			Query(test.connection, "EXPLAIN SELECT id FROM iceberg_scan('" + path + "')");
@@ -531,6 +540,56 @@ TEST_CASE("Iceberg cardinality fallback never enumerates files", "[iceberg_plann
 				}
 			}
 			REQUIRE(values == vector<int32_t> {1, 2});
+		}
+	}
+}
+
+TEST_CASE("Iceberg cardinality falls back to data rows when delete-row counts are missing",
+          "[iceberg_planning][iceberg_file_count]") {
+	for (auto warm_cache : {false, true}) {
+		for (auto summary_count : {"", "777"}) {
+			CAPTURE(warm_cache, summary_count);
+			PlanningTest test;
+			Query(test.connection, "SET iceberg_enable_manifest_cache=false");
+			Query(test.connection, "SET parquet_metadata_cache=" + string(warm_cache ? "true" : "false"));
+			Query(test.connection, "CREATE TABLE lake.default.t (id INTEGER) WITH "
+			                       "('format-version'=2, 'commit.manifest.min-count-to-merge'='2', "
+			                       "'commit.manifest-merge.enabled'='true')");
+			Query(test.connection, "INSERT INTO lake.default.t VALUES (1), (2)");
+			Query(test.connection, "INSERT INTO lake.default.t VALUES (3), (4), (5)");
+			Query(test.connection, "DELETE FROM lake.default.t WHERE id=2");
+			if (warm_cache) {
+				Query(test.connection, "SELECT id FROM lake.default.t");
+			}
+			auto bound = test.Bind();
+			auto &base = bound->Cast<MultiFileBindData>().file_list->Cast<IcebergMultiFileList>().GetScanPlanner();
+			auto path = WriteCountMetadata(
+			    test, base, "added_files_count", "existing_files_count", "deleted_files_count",
+			    "CASE WHEN content=0 THEN added_rows_count END", "CASE WHEN content=0 THEN existing_rows_count END",
+			    IcebergSnapshotMetrics(case_insensitive_map_t<string> {{"total-records", summary_count}}));
+			Query(test.connection, "CALL enable_logging('Iceberg', storage='memory')");
+			IcebergMultiFileList files(*test.connection.context, nullptr, path, base.GetOptions());
+			vector<LogicalType> types;
+			vector<Identifier> names;
+			files.Bind(types, names);
+			auto cardinality = files.GetCardinality(*test.connection.context);
+			REQUIRE(cardinality);
+			REQUIRE(cardinality->has_estimated_cardinality);
+			REQUIRE_FALSE(cardinality->has_max_cardinality);
+			// The data manifests contain five rows; the delete removes one during execution.
+			REQUIRE(cardinality->estimated_cardinality == (string(summary_count).empty() ? 5 : 777));
+			CheckFileCount(files, 0, 0, FileExpansionType::NOT_ALL_FILES_KNOWN);
+			Query(test.connection, "EXPLAIN SELECT id FROM iceberg_scan('" + path + "')");
+			RequireNoManifestScans(test.connection);
+			auto result = test.connection.Query("SELECT id FROM iceberg_scan('" + path + "') ORDER BY id");
+			REQUIRE_FALSE(result->HasError());
+			vector<int32_t> values;
+			while (auto chunk = result->Fetch()) {
+				for (idx_t i = 0; i < chunk->size(); i++) {
+					values.push_back(chunk->GetValue(0, i).GetValue<int32_t>());
+				}
+			}
+			REQUIRE(values == vector<int32_t> {1, 3, 4, 5});
 		}
 	}
 }
@@ -553,6 +612,47 @@ TEST_CASE("Iceberg cardinality after uncommitted rewrites stays an estimate",
 	Query(test.connection, "EXPLAIN SELECT id FROM lake.default.t");
 	RequireNoManifestScans(test.connection);
 	REQUIRE(files.GetTotalFileCount() == 1);
+}
+
+TEST_CASE("Iceberg cardinality fallback does not initialize legacy manifests",
+          "[iceberg_planning][iceberg_file_count]") {
+	PlanningTest test;
+	Query(test.connection, "BEGIN");
+	auto &context = *test.connection.context;
+	const string path = "data/persistent/iceberg_v1_deprecated/default/legacy_v1/metadata/v2.metadata.json";
+	IcebergOptions options;
+	IcebergMultiFileList original(context, nullptr, path, options);
+	vector<LogicalType> types;
+	vector<Identifier> names;
+	original.Bind(types, names);
+	auto metadata = make_shared_ptr<IcebergTableMetadata>(original.GetScanPlanner().GetMetadata().Copy());
+	metadata->snapshots.at(*metadata->current_snapshot_id).metrics =
+	    IcebergSnapshotMetrics(case_insensitive_map_t<string>());
+	auto snapshot = metadata->GetSnapshot(*options.snapshot_lookup);
+	auto scan_info =
+	    make_shared_ptr<IcebergScanInfo>(path, metadata, snapshot, metadata->GetSchemaFromId(snapshot.schema_id));
+	IcebergMultiFileList files(context, std::move(scan_info), path, options);
+	types.clear();
+	names.clear();
+	files.Bind(types, names);
+	Query(test.connection, "CALL enable_logging('Iceberg', storage='memory')");
+	auto cardinality = files.GetCardinality(context);
+	REQUIRE(cardinality);
+	REQUIRE(cardinality->has_estimated_cardinality);
+	REQUIRE_FALSE(cardinality->has_max_cardinality);
+	REQUIRE(cardinality->estimated_cardinality == 1000);
+	CheckFileCount(files, 0, 0, FileExpansionType::NOT_ALL_FILES_KNOWN);
+	RequireNoManifestScans(test.connection);
+
+	// Once execution has loaded the manifests, their row counts are available without more I/O.
+	REQUIRE(files.GetAllFiles().size() == 2);
+	Query(test.connection, "CALL truncate_duckdb_logs()");
+	cardinality = files.GetCardinality(context);
+	REQUIRE(cardinality);
+	REQUIRE(cardinality->has_estimated_cardinality);
+	REQUIRE_FALSE(cardinality->has_max_cardinality);
+	REQUIRE(cardinality->estimated_cardinality == 3);
+	RequireNoManifestScans(test.connection);
 }
 
 TEST_CASE("Iceberg underreported counts preserve streamed references and allow a corrected retry",
