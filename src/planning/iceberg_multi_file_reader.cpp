@@ -820,15 +820,25 @@ bool IcebergMultiFileReader::ParseOption(const Identifier &key, const Value &val
 		return true;
 	}
 	if (key == "snapshot_from_id") {
+		IcebergSnapshotLookup::VerifyOptionNotNull(key.GetIdentifierName(), val);
 		if (snapshot_lookup->GetSource() != SnapshotSource::LATEST) {
-			throw InvalidInputException("Can't use 'snapshot_from_id' in combination with 'snapshot_from_timestamp'");
+			throw InvalidInputException(IcebergSnapshotLookup::EXCLUSIVE_OPTIONS_ERROR);
 		}
 		snapshot_lookup.emplace(IcebergSnapshotLookup::FromSnapshotId(val.GetValue<uint64_t>()));
 		return true;
 	}
-	if (key == "snapshot_from_timestamp") {
+	if (key == "snapshot_from_ref") {
+		IcebergSnapshotLookup::VerifyOptionNotNull(key.GetIdentifierName(), val);
 		if (snapshot_lookup->GetSource() != SnapshotSource::LATEST) {
-			throw InvalidInputException("Can't use 'snapshot_from_id' in combination with 'snapshot_from_timestamp'");
+			throw InvalidInputException(IcebergSnapshotLookup::EXCLUSIVE_OPTIONS_ERROR);
+		}
+		snapshot_lookup.emplace(IcebergSnapshotLookup::FromRef(StringValue::Get(val)));
+		return true;
+	}
+	if (key == "snapshot_from_timestamp") {
+		IcebergSnapshotLookup::VerifyOptionNotNull(key.GetIdentifierName(), val);
+		if (snapshot_lookup->GetSource() != SnapshotSource::LATEST) {
+			throw InvalidInputException(IcebergSnapshotLookup::EXCLUSIVE_OPTIONS_ERROR);
 		}
 		snapshot_lookup.emplace(IcebergSnapshotLookup::FromTimestamp(
 		    val.DefaultCastAs(LogicalType::TIMESTAMP_MS).GetValue<timestamp_ms_t>()));

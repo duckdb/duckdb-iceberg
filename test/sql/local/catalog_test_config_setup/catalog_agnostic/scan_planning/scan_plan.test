@@ -42,7 +42,7 @@ select count(*) from iceberg_scan_plan('my_datalake.default.scan_plan_test');
 statement error
 select * from iceberg_scan_plan('my_datalake.default.scan_plan_test', snapshot_from_id=1, snapshot_from_timestamp=timestamp '2020-01-01');
 ----
-Can't use 'snapshot_from_id' in combination with 'snapshot_from_timestamp'
+Only one of 'snapshot_from_id', 'snapshot_from_timestamp' and 'snapshot_from_ref' can be used
 
 statement error
 select * from iceberg_scan_plan('my_datalake.default.scan_plan_test', snapshot_from_id=NULL);

@@ -1,0 +1,170 @@
+# name: test/sql/local/iceberg_scans/iceberg_scan_refs.test
+# description: Read a table at a branch or tag (duckdb-iceberg#1252)
+# group: [iceberg_scans]
+
+require avro
+
+require parquet
+
+require iceberg
+
+# Fixture v2-refs (from lineitem_iceberg v2):
+#   main -> 2354745328521181395 (51793 rows); audit (branch), v1 and 42 (tags) -> 7817332053627255703 (60175 rows)
+#   dangling (tag) -> missing snapshot; weird -> unknown ref type 'Bogus'; zzxxx... (tag, 80 chars) -> 7817332053627255703
+#   Both snapshots were written with schema 0; the current schema 1 adds column l_added.
+
+query II
+select name, type from iceberg_refs('data/persistent/iceberg/lineitem_iceberg', version = '2-refs') order by name collate "binary";
+----
+42	TAG
+Dev	BRANCH
+audit	BRANCH
+dangling	TAG
+dev	BRANCH
+main	BRANCH
+v1	TAG
+weird	BOGUS
+zzxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx	TAG
+
+# Default read follows main
+query I
+select count(*) from iceberg_scan('data/persistent/iceberg/lineitem_iceberg', version = '2-refs', allow_moved_paths = true);
+----
+51793
+
+query I
+select count(*) from iceberg_scan('data/persistent/iceberg/lineitem_iceberg', version = '2-refs', allow_moved_paths = true, snapshot_from_ref = 'main');
+----
+51793
+
+query I
+select count(*) from iceberg_scan('data/persistent/iceberg/lineitem_iceberg', version = '2-refs', allow_moved_paths = true, snapshot_from_ref = 'audit');
+----
+60175
+
+query I
+select count(*) from iceberg_scan('data/persistent/iceberg/lineitem_iceberg', version = '2-refs', allow_moved_paths = true, snapshot_from_ref = 'v1');
+----
+60175
+
+# A ref named like a number is still a ref here
+query I
+select count(*) from iceberg_scan('data/persistent/iceberg/lineitem_iceberg', version = '2-refs', allow_moved_paths = true, snapshot_from_ref = '42');
+----
+60175
+
+# A branch reads with the current schema (l_added exists, NULL in old data files)
+query II
+select count(*), count(l_added) from iceberg_scan('data/persistent/iceberg/lineitem_iceberg', version = '2-refs', allow_moved_paths = true, snapshot_from_ref = 'audit');
+----
+60175	0
+
+# A tag reads with the schema of its snapshot (no l_added)
+statement error
+select l_added from iceberg_scan('data/persistent/iceberg/lineitem_iceberg', version = '2-refs', allow_moved_paths = true, snapshot_from_ref = 'v1');
+----
+Referenced column "l_added" not found
+
+query I
+select count(*) from (describe select * from iceberg_scan('data/persistent/iceberg/lineitem_iceberg', version = '2-refs', allow_moved_paths = true, snapshot_from_ref = 'v1'));
+----
+16
+
+# Metadata functions accept the same option, and read the ref's snapshot: the same files as
+# snapshot_from_id = 7817332053627255703, not main's
+query I
+select (select list(file_path order by file_path) from iceberg_metadata('data/persistent/iceberg/lineitem_iceberg', version = '2-refs', allow_moved_paths = true, snapshot_from_ref = 'v1'))
+	= (select list(file_path order by file_path) from iceberg_metadata('data/persistent/iceberg/lineitem_iceberg', version = '2-refs', allow_moved_paths = true, snapshot_from_id = 7817332053627255703));
+----
+true
+
+query I
+select (select list(file_path order by file_path) from iceberg_metadata('data/persistent/iceberg/lineitem_iceberg', version = '2-refs', allow_moved_paths = true, snapshot_from_ref = 'v1'))
+	= (select list(file_path order by file_path) from iceberg_metadata('data/persistent/iceberg/lineitem_iceberg', version = '2-refs', allow_moved_paths = true, snapshot_from_ref = 'main'));
+----
+false
+
+query I
+select (select list(path order by path) from iceberg_manifests('data/persistent/iceberg/lineitem_iceberg', version = '2-refs', allow_moved_paths = true, snapshot_from_ref = 'audit'))
+	= (select list(path order by path) from iceberg_manifests('data/persistent/iceberg/lineitem_iceberg', version = '2-refs', allow_moved_paths = true, snapshot_from_id = 7817332053627255703));
+----
+true
+
+query I
+select (select list(path order by path) from iceberg_manifests('data/persistent/iceberg/lineitem_iceberg', version = '2-refs', allow_moved_paths = true, snapshot_from_ref = 'audit'))
+	= (select list(path order by path) from iceberg_manifests('data/persistent/iceberg/lineitem_iceberg', version = '2-refs', allow_moved_paths = true, snapshot_from_ref = 'main'));
+----
+false
+
+query I
+select (select count(*) from iceberg_files('data/persistent/iceberg/lineitem_iceberg', version = '2-refs', allow_moved_paths = true, snapshot_from_ref = 'v1'))
+	= (select count(*) from iceberg_files('data/persistent/iceberg/lineitem_iceberg', version = '2-refs', allow_moved_paths = true, snapshot_from_id = 7817332053627255703));
+----
+true
+
+query I
+select count(*) > 0 from iceberg_scan_plan('data/persistent/iceberg/lineitem_iceberg', version = '2-refs', allow_moved_paths = true, snapshot_from_ref = 'v1');
+----
+true
+
+# Ref names are case-sensitive: 'Dev' and 'dev' are different refs
+query I
+select count(*) from iceberg_scan('data/persistent/iceberg/lineitem_iceberg', version = '2-refs', allow_moved_paths = true, snapshot_from_ref = 'Dev');
+----
+51793
+
+query I
+select count(*) from iceberg_scan('data/persistent/iceberg/lineitem_iceberg', version = '2-refs', allow_moved_paths = true, snapshot_from_ref = 'dev');
+----
+60175
+
+statement error
+select count(*) from iceberg_scan('data/persistent/iceberg/lineitem_iceberg', version = '2-refs', allow_moved_paths = true, snapshot_from_ref = 'AUDIT');
+----
+Iceberg ref 'AUDIT' does not exist
+
+statement error
+select count(*) from iceberg_scan('data/persistent/iceberg/lineitem_iceberg', version = '2-refs', allow_moved_paths = true, snapshot_from_ref = 'nope');
+----
+Iceberg ref 'nope' does not exist (available refs: 42, Dev, audit, dangling, dev, main, v1, weird, zzxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx...)
+
+statement error
+select count(*) from iceberg_scan('data/persistent/iceberg/lineitem_iceberg', version = '2-refs', allow_moved_paths = true, snapshot_from_ref = 'dangling');
+----
+Iceberg ref 'dangling' points at snapshot 1, which is not in the table metadata
+
+statement error
+select count(*) from iceberg_scan('data/persistent/iceberg/lineitem_iceberg', version = '2-refs', allow_moved_paths = true, snapshot_from_ref = 'weird');
+----
+Iceberg ref 'weird' has unknown type 'Bogus', expected 'branch' or 'tag'
+
+statement error
+select count(*) from iceberg_scan('data/persistent/iceberg/lineitem_iceberg', version = '2-refs', allow_moved_paths = true, snapshot_from_ref = '');
+----
+Iceberg ref name can not be empty
+
+statement error
+select count(*) from iceberg_scan('data/persistent/iceberg/lineitem_iceberg', version = '2-refs', allow_moved_paths = true, snapshot_from_ref = NULL);
+----
+'snapshot_from_ref' can not be NULL
+
+statement error
+select count(*) from iceberg_metadata('data/persistent/iceberg/lineitem_iceberg', version = '2-refs', allow_moved_paths = true, snapshot_from_ref = NULL);
+----
+'snapshot_from_ref' can not be NULL
+
+statement error
+select count(*) from iceberg_scan('data/persistent/iceberg/lineitem_iceberg', version = '2-refs', allow_moved_paths = true, snapshot_from_id = NULL);
+----
+'snapshot_from_id' can not be NULL
+
+statement error
+select count(*) from iceberg_scan('data/persistent/iceberg/lineitem_iceberg', version = '2-refs', allow_moved_paths = true, snapshot_from_ref = 'v1', snapshot_from_id = 7817332053627255703);
+----
+Only one of 'snapshot_from_id', 'snapshot_from_timestamp' and 'snapshot_from_ref' can be used
+
+# Older metadata without refs: 'main' still resolves to the current snapshot
+query I
+select count(*) from iceberg_scan('data/persistent/iceberg/lineitem_iceberg', version = '1', allow_moved_paths = true, snapshot_from_ref = 'main');
+----
+60175

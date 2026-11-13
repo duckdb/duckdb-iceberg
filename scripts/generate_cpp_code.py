@@ -17,6 +17,10 @@ OUTPUT_HEADER_DIR = os.path.join(SCRIPT_PATH, '..', 'src', 'include', 'rest_cata
 OUTPUT_SOURCE_DIR = os.path.join(SCRIPT_PATH, '..', 'src', 'rest_catalog', 'objects')
 API_SPEC_PATH = os.path.join(SCRIPT_PATH, 'api.yaml')
 
+#! Schemas whose map keys are case-sensitive by spec. Iceberg ref names (branches and tags) are
+#! case-sensitive, so 'Dev' and 'dev' are distinct refs and neither may be dropped while parsing.
+CASE_SENSITIVE_MAP_SCHEMAS = {'SnapshotReferences'}
+
 CPP_KEYWORDS = {
     'namespace',
     'class',
@@ -1375,7 +1379,11 @@ class CPPClass:
         variable_type = self.generate_variable_type(additional_properties)
         member_schema = ObjectProperty()
         member_schema.additional_properties = additional_properties
-        self.add_member('additional_properties', f'case_insensitive_map_t<{variable_type}>', member_schema)
+        if self.name in CASE_SENSITIVE_MAP_SCHEMAS:
+            map_type = f'unordered_map<string, {variable_type}>'
+        else:
+            map_type = f'case_insensitive_map_t<{variable_type}>'
+        self.add_member('additional_properties', map_type, member_schema)
 
     def generate_variable_type(self, schema: Property) -> str:
         if schema.type == Property.Type.OBJECT:
@@ -1782,6 +1790,8 @@ if __name__ == '__main__':
                 for x in sorted(list(include_schemas))
                 if x not in parse_info.recursive_schemas
             ]
+            if name in CASE_SENSITIVE_MAP_SCHEMAS:
+                additional_headers.insert(0, '#include "duckdb/common/unordered_map.hpp"')
             file_content = HEADER_FORMAT.format(
                 ADDITIONAL_HEADERS='\n'.join(additional_headers),
                 FORWARD_DECLARATIONS='\n'.join(forward_declarations),

@@ -91,6 +91,9 @@ public:
 
 	optional_ptr<const IcebergSnapshot> GetSnapshotById(int64_t snapshot_id) const;
 	optional_ptr<const IcebergSnapshot> GetSnapshotByTimestampMS(timestamp_ms_t timestamp) const;
+	//! Resolves a branch or tag from 'refs'; throws if it is missing
+	optional_ptr<const IcebergSnapshot> GetSnapshotByRef(const string &ref_name, bool &is_branch) const;
+	bool HasRef(const string &ref_name) const;
 
 	//! Version extraction and identification
 	static bool UnsafeVersionGuessingEnabled(ClientContext &context);
