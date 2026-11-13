@@ -1,0 +1,60 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/partitions/delete_metadata_only_nan.test
+# description: Exact floating-point partition values can prove metadata-only deletes while preserving NaN and NULL siblings
+# group: [partitions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+foreach type FLOAT DOUBLE
+
+statement ok
+CREATE TABLE my_datalake.default.metadata_delete_nan (x {type}, id INTEGER)
+PARTITIONED BY (x);
+
+statement ok
+INSERT INTO my_datalake.default.metadata_delete_nan VALUES
+	(1, 1), (1, 2), ('NaN', 3), ('NaN', 4), (NULL, 5), ('Infinity', 6);
+
+query I
+DELETE FROM my_datalake.default.metadata_delete_nan WHERE x < 2;
+----
+2
+
+query II
+SELECT x, id FROM my_datalake.default.metadata_delete_nan ORDER BY id;
+----
+nan	3
+nan	4
+NULL	5
+inf	6
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.metadata_delete_nan)
+WHERE content = 'POSITION_DELETES';
+----
+0
+
+# NaN equals itself in DuckDB, and an exact NaN partition contains only matching rows.
+query I
+DELETE FROM my_datalake.default.metadata_delete_nan WHERE x = 'NaN'::{type};
+----
+2
+
+query II
+SELECT x, id FROM my_datalake.default.metadata_delete_nan ORDER BY id;
+----
+NULL	5
+inf	6
+
+query II
+SELECT count(*) FILTER (WHERE content = 'DATA' AND status != 'DELETED'),
+	count(*) FILTER (WHERE content = 'POSITION_DELETES')
+FROM iceberg_metadata(my_datalake.default.metadata_delete_nan);
+----
+2	0
+
+statement ok
+DROP TABLE my_datalake.default.metadata_delete_nan;
+
+endloop
