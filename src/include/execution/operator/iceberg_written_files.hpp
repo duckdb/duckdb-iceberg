@@ -6,6 +6,8 @@
 namespace duckdb {
 
 class ClientContext;
+struct IcebergManifestEntry;
+struct IcebergTable;
 
 struct IcebergWrittenFile {
 	string file_path;
@@ -19,6 +21,10 @@ struct IcebergWrittenFiles {
 	static constexpr const char *SETTING = "iceberg_store_written_files";
 	static constexpr const char *TABLE = "iceberg_written_files";
 
+	//! Capture statistics before the manifest entries move into transaction state.
+	static vector<IcebergWrittenFile> Collect(const vector<IcebergManifestEntry> &entries);
+	//! Publish only after the write has successfully staged its files.
+	static void Record(ClientContext &context, const IcebergTable &table, const vector<IcebergWrittenFile> &files);
 	static bool IsEnabled(ClientContext &context);
 	static void Append(ClientContext &context, const string &table, const vector<IcebergWrittenFile> &files);
 };

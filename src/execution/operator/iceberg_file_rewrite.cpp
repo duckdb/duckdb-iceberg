@@ -8,6 +8,7 @@
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_data.hpp"
+#include "execution/operator/iceberg_written_files.hpp"
 #include "iceberg_logging.hpp"
 
 namespace duckdb {
@@ -109,13 +110,17 @@ SinkFinalizeType IcebergFileRewrite::Finalize(Pipeline &pipeline, Event &event, 
 	}
 
 	auto &transaction = IcebergTransaction::Get(context, state.table_info.catalog);
+	auto files = IcebergWrittenFiles::Collect(new_entries);
 	//! Multiple rewrite operators in one statement can initialize and update table state concurrently.
-	lock_guard<mutex> guard(transaction.rewrite_commit_lock);
-	ApplyTableUpdate(state.table_info, transaction, [&](IcebergTable &table) {
-		auto &transaction_data = table.GetOrCreateTransactionData(transaction);
-		StageRewrite(transaction_data, state, rewrite.operation, std::move(new_entries), std::move(replaced_files));
-	});
+	{
+		lock_guard<mutex> guard(transaction.rewrite_commit_lock);
+		ApplyTableUpdate(state.table_info, transaction, [&](IcebergTable &table) {
+			auto &transaction_data = table.GetOrCreateTransactionData(transaction);
+			StageRewrite(transaction_data, state, rewrite.operation, std::move(new_entries), std::move(replaced_files));
+		});
+	}
 	state.staged = true;
+	IcebergWrittenFiles::Record(context, state.table_info, files);
 	return SinkFinalizeType::READY;
 }
 

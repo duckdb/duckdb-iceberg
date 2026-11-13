@@ -391,11 +391,7 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 		lock_guard<mutex> guard(global_state.lock);
 		written_files = std::move(global_state.written_files);
 	}
-	vector<IcebergWrittenFile> files;
-	for (auto &entry : written_files) {
-		auto &data_file = entry.data_file;
-		files.push_back({data_file.file_path, data_file.record_count, data_file.file_size_in_bytes});
-	}
+	auto files = IcebergWrittenFiles::Collect(written_files);
 
 	if (update_delete_op) {
 		// Stage the UPDATE's deletes and replacement rows together, possibly within a shared MERGE snapshot.
@@ -424,16 +420,7 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 			});
 		}
 	}
-	auto log_table_name = StringUtil::Format("%s.%s.%s", effective_table->ParentCatalog().GetName().GetIdentifierName(),
-	                                         effective_table->ParentSchema().name.GetIdentifierName(),
-	                                         effective_table->name.GetIdentifierName());
-	if (!files.empty() && IcebergWrittenFiles::IsEnabled(context)) {
-		IcebergWrittenFiles::Append(context, log_table_name, files);
-	}
-	for (auto &file : files) {
-		DUCKDB_LOG(context, IcebergDataFileWrittenLogType, log_table_name, file.file_path, file.record_count,
-		           file.file_size_in_bytes);
-	}
+	IcebergWrittenFiles::Record(context, table_info, files);
 	return SinkFinalizeType::READY;
 }
 

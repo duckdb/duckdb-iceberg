@@ -2,12 +2,45 @@
 
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
+#include "duckdb/common/exception.hpp"
 #include "duckdb/common/mutex.hpp"
+#include "duckdb/logging/logger.hpp"
 #include "duckdb/main/appender.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
 
+#include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
+#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
+#include "catalog/rest/iceberg_catalog.hpp"
+#include "iceberg_logging.hpp"
+
 namespace duckdb {
+
+vector<IcebergWrittenFile> IcebergWrittenFiles::Collect(const vector<IcebergManifestEntry> &entries) {
+	vector<IcebergWrittenFile> files;
+	files.reserve(entries.size());
+	for (auto &entry : entries) {
+		auto &data_file = entry.data_file;
+		files.push_back({data_file.file_path, data_file.record_count, data_file.file_size_in_bytes});
+	}
+	return files;
+}
+
+void IcebergWrittenFiles::Record(ClientContext &context, const IcebergTable &table,
+                                 const vector<IcebergWrittenFile> &files) {
+	if (files.empty()) {
+		return;
+	}
+	auto table_name = StringUtil::Format("%s.%s.%s", table.catalog.GetName().GetIdentifierName(),
+	                                     table.schema.name.GetIdentifierName(), table.name);
+	if (IsEnabled(context)) {
+		Append(context, table_name, files);
+	}
+	for (auto &file : files) {
+		DUCKDB_LOG(context, IcebergDataFileWrittenLogType, table_name, file.file_path, file.record_count,
+		           file.file_size_in_bytes);
+	}
+}
 
 bool IcebergWrittenFiles::IsEnabled(ClientContext &context) {
 	Value enabled;
@@ -29,9 +62,24 @@ void IcebergWrittenFiles::Append(ClientContext &context, const string &table, co
 	info->columns.AddColumn(ColumnDefinition("file_path", LogicalType::VARCHAR));
 	info->columns.AddColumn(ColumnDefinition("record_count", LogicalType::BIGINT));
 	info->columns.AddColumn(ColumnDefinition("file_size_in_bytes", LogicalType::BIGINT));
+	auto expected_columns = info->columns.Copy();
 	temp_catalog.CreateTable(context, std::move(info));
 
 	auto &entry = temp_catalog.GetEntry<TableCatalogEntry>(context, name);
+	// The user can create or alter this table. InternalAppender appends by physical position, so even
+	// two swapped VARCHAR columns would silently corrupt the reported table names and file paths.
+	auto &columns = entry.GetColumns();
+	bool compatible = columns.LogicalColumnCount() == expected_columns.LogicalColumnCount();
+	for (idx_t i = 0; compatible && i < expected_columns.LogicalColumnCount(); i++) {
+		auto &column = columns.GetColumn(LogicalIndex(i));
+		auto &expected = expected_columns.GetColumn(LogicalIndex(i));
+		compatible =
+		    !column.Generated() && column.GetName() == expected.GetName() && column.GetType() == expected.GetType();
+	}
+	if (!compatible) {
+		throw InvalidInputException("temp.main.%s has an incompatible schema. Drop or rename it before enabling %s.",
+		                            TABLE, SETTING);
+	}
 	InternalAppender appender(context, entry);
 	auto query_id = context.transaction.GetActiveQuery();
 	for (auto &file : files) {
