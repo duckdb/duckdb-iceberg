@@ -221,7 +221,7 @@ optional_ptr<CatalogEntry> IcebergUtils::TryGetCatalogTable(ClientContext &conte
 
 QualifiedName IcebergUtils::GetQualifiedTableName(CatalogEntry &table_entry) {
 	auto &entry = table_entry.Cast<InCatalogEntry>();
-	return QualifiedName(entry.catalog.GetName(), entry.ParentSchema().name, entry.name);
+	return entry.ParentSchema().GetQualifiedName(entry.name);
 }
 
 optional_ptr<SchemaCatalogEntry> IcebergUtils::GetSchemaEntry(ClientContext &context, string &input_string) {

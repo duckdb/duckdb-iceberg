@@ -102,7 +102,7 @@ unique_ptr<LogicalOperator> BindKeepScan(ClientContext &context, IcebergTableSch
 	auto select = make_uniq<SelectNode>();
 	select->select_list.push_back(make_uniq<StarExpression>());
 	auto table_ref = make_uniq<BaseTableRef>();
-	table_ref->SetQualifiedName(table.ParentCatalog().GetName(), table.ParentSchema().name, table.name);
+	table_ref->SetQualifiedName(table.ParentSchema().GetQualifiedName(table.name));
 	select->from_table = std::move(table_ref);
 
 	auto binder = Binder::CreateBinder(context);
