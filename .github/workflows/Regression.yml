@@ -168,9 +168,10 @@ jobs:
           python duckdb/scripts/regression/test_runner.py --old base/build/release/benchmark/benchmark_runner --new build/release/benchmark/benchmark_runner --benchmarks .github/regression/metadata_performance.csv --verbose --threads 2
 
       - name: Regression Test File Pruning Benchmarks
+        # Fixed sampling makes the geomean use all 100 samples instead of the initial ten adaptive samples.
         run: |
           ls benchmark/file_pruning_benchmarks/*.benchmark > .github/regression/file_pruning_benchmarks.csv
-          python duckdb/scripts/regression/test_runner.py --old base/build/release/benchmark/benchmark_runner --new build/release/benchmark/benchmark_runner --benchmarks .github/regression/file_pruning_benchmarks.csv --verbose --threads 2
+          python duckdb/scripts/regression/test_runner.py --old base/build/release/benchmark/benchmark_runner --new build/release/benchmark/benchmark_runner --benchmarks .github/regression/file_pruning_benchmarks.csv --verbose --threads 2 --samples 100
 
       - name: Regression Test Rewrite Data Files Benchmarks
         run: |
