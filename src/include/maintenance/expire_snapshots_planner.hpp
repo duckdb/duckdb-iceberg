@@ -18,6 +18,8 @@ struct ExpireSnapshotsPlanInput {
 
 struct ExpireSnapshotsPlan {
 	vector<int64_t> to_expire;
+	//! Branches and tags (never main) whose snapshot is older than their max-ref-age-ms
+	vector<string> refs_to_remove;
 	int64_t retained_snapshots = 0;
 };
 

@@ -82,8 +82,12 @@ void AssertCurrentSchemaIdRequirement::CreateRequirement(DatabaseInstance &db, C
 	req.assert_current_schema_id->current_schema_id = current_schema_id;
 }
 
-AssertRefSnapshotId::AssertRefSnapshotId(optional<int64_t> snapshot_id)
-    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_REF_SNAPSHOT_ID), snapshot_id(snapshot_id) {
+AssertRefSnapshotId::AssertRefSnapshotId(optional<int64_t> snapshot_id) : AssertRefSnapshotId("main", snapshot_id) {
+}
+
+AssertRefSnapshotId::AssertRefSnapshotId(string ref_p, optional<int64_t> snapshot_id)
+    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_REF_SNAPSHOT_ID), ref(std::move(ref_p)),
+      snapshot_id(snapshot_id) {
 }
 
 void AssertRefSnapshotId::CreateRequirement(DatabaseInstance &db, ClientContext &context,
@@ -92,7 +96,7 @@ void AssertRefSnapshotId::CreateRequirement(DatabaseInstance &db, ClientContext 
 	auto &req = commit_state.table_change.requirements.back();
 	req.assert_ref_snapshot_id = rest_api_objects::AssertRefSnapshotId();
 	req.assert_ref_snapshot_id->type = "assert-ref-snapshot-id";
-	req.assert_ref_snapshot_id->ref = "main";
+	req.assert_ref_snapshot_id->ref = ref;
 	req.assert_ref_snapshot_id->snapshot_id = snapshot_id;
 }
 
@@ -279,6 +283,19 @@ void RemoveSnapshots::CreateUpdate(DatabaseInstance &db, ClientContext &context,
 	update.remove_snapshots_update = rest_api_objects::RemoveSnapshotsUpdate();
 	update.remove_snapshots_update->base_update.action = "remove-snapshots";
 	update.remove_snapshots_update->snapshot_ids = snapshot_ids;
+}
+
+RemoveSnapshotRef::RemoveSnapshotRef(string ref_name_p)
+    : IcebergTableUpdate(IcebergTableUpdateType::REMOVE_SNAPSHOT_REF), ref_name(std::move(ref_name_p)) {
+}
+
+void RemoveSnapshotRef::CreateUpdate(DatabaseInstance &db, ClientContext &context,
+                                     IcebergCommitState &commit_state) const {
+	commit_state.table_change.updates.push_back(rest_api_objects::TableUpdate());
+	auto &update = commit_state.table_change.updates.back();
+	update.remove_snapshot_ref_update = rest_api_objects::RemoveSnapshotRefUpdate();
+	update.remove_snapshot_ref_update->base_update.action = "remove-snapshot-ref";
+	update.remove_snapshot_ref_update->ref_name = ref_name;
 }
 
 SetLocation::SetLocation(string location)

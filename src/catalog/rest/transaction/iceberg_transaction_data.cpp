@@ -28,7 +28,8 @@ static bool HasTableUpdate(const vector<unique_ptr<IcebergTableUpdate>> &updates
 }
 
 static void VerifyNoSnapshotExpiration(const vector<unique_ptr<IcebergTableUpdate>> &updates, const char *operation) {
-	if (HasTableUpdate(updates, IcebergTableUpdateType::REMOVE_SNAPSHOTS)) {
+	if (HasTableUpdate(updates, IcebergTableUpdateType::REMOVE_SNAPSHOTS) ||
+	    HasTableUpdate(updates, IcebergTableUpdateType::REMOVE_SNAPSHOT_REF)) {
 		throw TransactionException("%s cannot be combined with snapshot expiration in the same transaction", operation);
 	}
 }
@@ -451,6 +452,43 @@ void IcebergTransactionData::TableRemoveProperties(const vector<string> &propert
 	updates.push_back(make_uniq<RemoveProperties>(properties));
 }
 
+void IcebergTransactionData::RequireSnapshotRefsUnchanged() {
+	if (HasTableUpdate(updates, IcebergTableUpdateType::REMOVE_SNAPSHOTS) ||
+	    HasTableUpdate(updates, IcebergTableUpdateType::REMOVE_SNAPSHOT_REF)) {
+		//! The first expiration in this transaction already pinned the refs it planned from.
+		return;
+	}
+	//! The standard requirements detect changes to the refs the plan was made from, but cannot
+	//! detect a concurrently created ref or retention-only policy changes.
+	const auto &metadata = table_info.GetMetadata();
+	requirements.push_back(make_uniq<AssertRefSnapshotId>(metadata.current_snapshot_id));
+	if (!metadata.refs) {
+		return;
+	}
+	//! The refs map has no order; keep the commit body deterministic.
+	vector<string> ref_names;
+	for (auto &entry : metadata.refs->additional_properties) {
+		if (entry.first != "main") {
+			ref_names.push_back(entry.first);
+		}
+	}
+	std::sort(ref_names.begin(), ref_names.end());
+	for (auto &ref_name : ref_names) {
+		auto &ref = metadata.refs->additional_properties.at(ref_name);
+		requirements.push_back(make_uniq<AssertRefSnapshotId>(ref_name, ref.snapshot_id));
+	}
+}
+
+void IcebergTransactionData::TableRemoveSnapshotRefs(const vector<string> &ref_names) {
+	if (ref_names.empty()) {
+		return;
+	}
+	RequireSnapshotRefsUnchanged();
+	for (auto &ref_name : ref_names) {
+		updates.push_back(make_uniq<RemoveSnapshotRef>(ref_name));
+	}
+}
+
 void IcebergTransactionData::TableRemoveSnapshots(const vector<int64_t> &snapshot_ids) {
 	for (auto &update : updates) {
 		if (update->type == IcebergTableUpdateType::REMOVE_SNAPSHOTS) {
@@ -458,11 +496,8 @@ void IcebergTransactionData::TableRemoveSnapshots(const vector<int64_t> &snapsho
 			return;
 		}
 	}
+	RequireSnapshotRefsUnchanged();
 	updates.push_back(make_uniq<RemoveSnapshots>(snapshot_ids));
-	//! The standard requirement detects changes to main, but cannot detect a
-	//! concurrently created ref or retention-only policy changes.
-	const auto &metadata = table_info.GetMetadata();
-	requirements.push_back(make_uniq<AssertRefSnapshotId>(metadata.current_snapshot_id));
 }
 
 void IcebergTransactionData::TableSetLocation() {
