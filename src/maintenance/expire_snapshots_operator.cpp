@@ -66,9 +66,14 @@ void ValidateGCEnabled(const IcebergTableMetadata &metadata) {
 	                            EXPIRE_SNAPSHOTS_NAME, entry->second);
 }
 
-void ApplyExpirationToTransactionMetadata(IcebergTableMetadata &metadata, const vector<int64_t> &snapshot_ids) {
-	for (auto snapshot_id : snapshot_ids) {
+void ApplyExpirationToTransactionMetadata(IcebergTableMetadata &metadata, const ExpireSnapshotsPlan &plan) {
+	for (auto snapshot_id : plan.to_expire) {
 		metadata.snapshots.erase(snapshot_id);
+	}
+	if (metadata.refs) {
+		for (auto &ref_name : plan.refs_to_remove) {
+			metadata.refs->additional_properties.erase(ref_name);
+		}
 	}
 
 	//! Remove the full prefix through the newest expired log entry. Keeping an
@@ -94,16 +99,19 @@ ExpireSnapshotsPlan ExecuteSnapshotExpiration(ClientContext &context, const Expi
 	auto plan = PlanSnapshotExpiration(visible_table.GetMetadata(), input, now);
 	ValidateGCEnabled(visible_table.GetMetadata());
 
-	if (plan.to_expire.empty()) {
+	if (plan.to_expire.empty() && plan.refs_to_remove.empty()) {
 		return plan;
 	}
 
 	ApplyTableUpdate(visible_table, transaction, [&](IcebergTable &table) {
 		auto &transaction_data = table.GetOrCreateTransactionData(transaction);
-		transaction_data.TableRemoveSnapshots(plan.to_expire);
+		transaction_data.TableRemoveSnapshotRefs(plan.refs_to_remove);
+		if (!plan.to_expire.empty()) {
+			transaction_data.TableRemoveSnapshots(plan.to_expire);
+		}
 		//! Mirror the staged update so another call in this transaction replans
-		//! from the remaining snapshots.
-		ApplyExpirationToTransactionMetadata(table.GetMetadataMutable(), plan.to_expire);
+		//! from the remaining snapshots and refs.
+		ApplyExpirationToTransactionMetadata(table.GetMetadataMutable(), plan);
 	});
 	return plan;
 }

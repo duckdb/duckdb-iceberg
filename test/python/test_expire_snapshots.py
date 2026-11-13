@@ -188,46 +188,54 @@ class TestExpireSnapshots:
             )
             test.statement_ok("ROLLBACK")
 
-    @JAVA_FIXTURE_ONLY
-    def test_non_main_refs_report_first_name_without_staging(
-        self,
-        registered_metadata_table,
-        duckdb_runner,
-    ):
-        def add_non_main_refs(metadata):
-            current_id = metadata["current-snapshot-id"]
-            metadata["refs"]["zeta"] = {"snapshot-id": current_id, "type": "branch"}
-            metadata["refs"]["alpha"] = {"snapshot-id": current_id, "type": "tag"}
-
-        _, table_name = registered_metadata_table(
-            "default.expire_snapshots_non_main_noop_source",
-            "default.expire_snapshots_non_main_noop",
-            1,
-            add_non_main_refs,
-        )
+    def test_non_main_refs_retain_their_snapshots_and_expire_by_ref_age(self, seeded_table, duckdb_runner):
+        table, table_name = seeded_table("default.expire_snapshots_refs", 5)
+        ids = [snapshot.snapshot_id for snapshot in _ordered_snapshots(table)]
+        # v1 keeps the oldest snapshot. audit keeps two of its own. stale is past its max-ref-age-ms.
+        table.manage_snapshots().create_tag(ids[0], "v1").commit()
+        table.manage_snapshots().create_branch(ids[2], "audit", min_snapshots_to_keep=2).commit()
+        table.manage_snapshots().create_tag(ids[1], "stale", max_ref_age_ms=1).commit()
+        sleep(0.01)
 
         with duckdb_runner() as test:
             test.statement_ok("CALL enable_logging('Iceberg')")
             test.statement_ok("CALL truncate_duckdb_logs()")
-            test.statement_ok("BEGIN")
-            test.statement_error(
-                _expire_query(table_name, "retain_last => 10"),
-                'found unsupported snapshot reference "alpha"',
+            # A snapshot a retained ref points at cannot be expired explicitly.
+            test.statement_error(_expire_query(table_name, f"snapshot_ids => [{ids[0]}]"), "still referenced by v1")
+            # main keeps its head, audit keeps two (its own min-snapshots-to-keep), v1 keeps the oldest.
+            # The stale tag is past its max-ref-age-ms and is removed; only the fourth snapshot is unreachable.
+            _check_expiration(test, table_name, (1, 4), "older_than => TIMESTAMP '2999-01-01'", "retain_last => 1")
+            test.query(
+                "IIII",
+                f"""
+                WITH commit_log AS (
+                    SELECT message
+                    FROM duckdb_logs()
+                    WHERE type = 'Iceberg'
+                      AND message LIKE 'POST % body=%'
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                )
+                SELECT
+                    list_count(regexp_extract_all(message, '"type":"assert-ref-snapshot-id"')),
+                    list_sort(regexp_extract_all(message, '"ref":"([a-z0-9]+)"', 1)),
+                    position('"action":"remove-snapshot-ref"' IN message)
+                        < position('"action":"remove-snapshots"' IN message),
+                    CAST(contains(message, '"snapshot-ids":[{ids[3]}]') AS INTEGER)
+                FROM commit_log
+                """,
+                [(4, "[audit, main, stale, v1]", True, 1)],
             )
-            # DuckDB aborts an explicit transaction after a statement error.
-            # Rolling it back must not reveal a staged metadata mutation or POST.
-            test.statement_ok("ROLLBACK")
-            test.query("I", f"SELECT count(*) FROM iceberg_snapshots({table_name})", [(1,)])
             test.query(
                 "I",
-                """
-                SELECT count(*)
-                FROM duckdb_logs()
-                WHERE type = 'Iceberg'
-                  AND message LIKE 'POST % body=%'
-                """,
-                [(0,)],
+                f"SELECT list_sort(list(name)) FROM iceberg_refs({table_name})",
+                [("[audit, main, v1]",)],
             )
+
+        table.refresh()
+        assert {snapshot.snapshot_id for snapshot in table.metadata.snapshots} == {ids[0], ids[1], ids[2], ids[4]}
+        assert set(table.metadata.refs) == {"audit", "main", "v1"}
+        assert table.metadata.refs["audit"].snapshot_id == ids[2]
 
     @pytest.mark.parametrize(
         ("shape", "expected_error"),

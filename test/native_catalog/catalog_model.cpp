@@ -607,14 +607,19 @@ void Catalog::Apply(Json &metadata, const Json &update, map<string, int64_t> &la
 	} else if (action == "set-snapshot-ref") {
 		auto identifier = update.At("snapshot-id").Integer();
 		auto &snapshot = FindID(metadata.At("snapshots"), "snapshot-id", identifier);
-		if (update.At("ref-name").String() != "main" || update.At("type").String() != "branch") {
-			Unsupported("Only the main branch is implemented");
+		auto name = update.At("ref-name").String();
+		auto type = update.At("type").String();
+		if (type != "branch" && type != "tag") {
+			Invalid("Unknown snapshot reference type");
+		}
+		if (name == "main" && type != "branch") {
+			Invalid("The main branch cannot be a tag");
 		}
 		auto ref = update;
 		ref.Erase("action");
 		ref.Erase("ref-name");
-		metadata.At("refs")["main"] = std::move(ref);
-		if (metadata.Get("current-snapshot-id") != update.At("snapshot-id")) {
+		metadata.At("refs")[name] = std::move(ref);
+		if (name == "main" && metadata.Get("current-snapshot-id") != update.At("snapshot-id")) {
 			// Publication waits for this tick before exposing the candidate.
 			auto timestamp = MaxValue(NowMillis(), request_start_ms + 1);
 			if (std::find(added_snapshots.begin(), added_snapshots.end(), identifier) != added_snapshots.end()) {
@@ -622,6 +627,13 @@ void Catalog::Apply(Json &metadata, const Json &update, map<string, int64_t> &la
 			}
 			metadata.At("snapshot-log").Push(Json::Object({{"snapshot-id", identifier}, {"timestamp-ms", timestamp}}));
 			metadata["current-snapshot-id"] = identifier;
+		}
+	} else if (action == "remove-snapshot-ref") {
+		// Like Iceberg's metadata builder, removing an absent ref is a no-op.
+		auto name = update.At("ref-name").String();
+		metadata.At("refs").Erase(name);
+		if (name == "main") {
+			metadata.Erase("current-snapshot-id");
 		}
 	} else {
 		Invalid("Unknown update action: " + action);

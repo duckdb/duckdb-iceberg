@@ -79,6 +79,31 @@ class SnapshotRemovalTests(unittest.TestCase):
         self.assertIn("Unknown snapshot reference", str(error.exception))
         self.assertEqual(self.catalog.tables[self.key], before)
 
+    def test_tags_and_branches_are_set_and_removed_without_moving_main(self):
+        tag = {"action": "set-snapshot-ref", "ref-name": "v1", "type": "tag", "snapshot-id": 10, "max-ref-age-ms": 5}
+        branch = {
+            "action": "set-snapshot-ref",
+            "ref-name": "audit",
+            "type": "branch",
+            "snapshot-id": 20,
+            "min-snapshots-to-keep": 2,
+        }
+        result = self.commit([tag, branch])["metadata"]
+        self.assertEqual(result["refs"]["v1"], {"type": "tag", "snapshot-id": 10, "max-ref-age-ms": 5})
+        self.assertEqual(result["refs"]["audit"], {"type": "branch", "snapshot-id": 20, "min-snapshots-to-keep": 2})
+        self.assertEqual(result["current-snapshot-id"], 30)
+        self.assertEqual([s["snapshot-id"] for s in result["snapshot-log"]], [10, 20, 30])
+        with self.assertRaises(CatalogError) as error:
+            self.commit([{"action": "set-snapshot-ref", "ref-name": "main", "type": "tag", "snapshot-id": 30}])
+        self.assertEqual(error.exception.code, 400)
+        removal = {"action": "remove-snapshot-ref", "ref-name": "v1"}
+        result = self.commit([removal, {"action": "remove-snapshot-ref", "ref-name": "absent"}])["metadata"]
+        self.assertEqual(sorted(result["refs"]), ["audit", "main"])
+        self.assertEqual(result["current-snapshot-id"], 30)
+        result = self.commit([{"action": "remove-snapshot-ref", "ref-name": "main"}])["metadata"]
+        self.assertEqual(sorted(result["refs"]), ["audit"])
+        self.assertIsNone(result.get("current-snapshot-id"))
+
     def test_malformed_snapshot_ids_do_not_publish(self):
         before = copy.deepcopy(self.catalog.tables[self.key])
         for identifiers in (None, 10, [True], ["10"], [10.5], [None], [1 << 63]):
