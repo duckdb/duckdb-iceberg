@@ -1,0 +1,68 @@
+# name: test/sql/local/native_catalog/nested_namespace_missing_parent.test
+# description: a catalog that refuses to create a namespace under a missing parent gives a clear error
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+ATTACH '' AS nested_lake (TYPE ICEBERG, URI 'http://iceberg-mock.invalid', AUTHORIZATION_TYPE 'none',
+	ACCESS_DELEGATION_MODE 'none', SUPPORT_NESTED_NAMESPACES true);
+
+statement ok
+CREATE SCHEMA nested_lake.np_parent;
+
+# Model a catalog that only creates a namespace inside an existing parent. The mock itself creates it anyway.
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	'{"method":"POST","path":"/v1/namespaces","status":404,"body":{"error":{"message":"Parent namespace does not exist","type":"NoSuchNamespaceException","code":404}}}');
+----
+204
+
+statement error
+CREATE SCHEMA nested_lake.np_missing.np_child;
+----
+Cannot create schema "np_missing.np_child": parent schema "np_missing" does not exist
+
+statement error
+CREATE SCHEMA nested_lake."np_missing.np_child";
+----
+Cannot create schema "np_missing.np_child": parent schema "np_missing" does not exist
+
+statement error
+CREATE SCHEMA IF NOT EXISTS nested_lake.np_parent.np_missing.np_child;
+----
+Cannot create schema "np_parent.np_missing.np_child": parent schema "np_parent.np_missing" does not exist
+
+# Any other failure keeps the catalog's own error.
+statement error
+CREATE SCHEMA nested_lake.np_parent.np_child;
+----
+NotFound_404
+
+statement error
+CREATE SCHEMA nested_lake.np_top;
+----
+NotFound_404
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+query I
+SELECT count(*) FROM duckdb_schemas() WHERE database_name = 'nested_lake' AND schema_name IN ('np_missing', 'np_child', 'np_top');
+----
+0
+
+statement ok
+CREATE SCHEMA nested_lake.np_parent.np_child;
+
+statement ok
+DROP SCHEMA nested_lake.np_parent.np_child;
+
+statement ok
+DROP SCHEMA nested_lake.np_parent;

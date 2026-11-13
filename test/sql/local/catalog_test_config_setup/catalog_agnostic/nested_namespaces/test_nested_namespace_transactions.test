@@ -1,0 +1,183 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/nested_namespaces/test_nested_namespace_transactions.test
+# description: nested namespaces and their tables follow the transaction that creates or drops them
+# group: [nested_namespaces]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+include test/sql/local/catalog_test_config_setup/catalog_agnostic/setup/nested_namespace_catalog.test_setup
+
+statement ok
+drop table if exists nested_lake.nt_parent.nt_child.t;
+
+statement ok
+drop schema if exists nested_lake.nt_parent.nt_child.nt_leaf;
+
+statement ok
+drop schema if exists nested_lake.nt_parent.nt_child;
+
+statement ok
+drop schema if exists nested_lake.nt_parent;
+
+# a parent and its child created in one transaction are visible in it, and gone after a rollback
+statement ok
+begin;
+
+statement ok
+create schema nested_lake.nt_parent;
+
+statement ok
+create schema nested_lake.nt_parent.nt_child;
+
+statement ok
+create schema nested_lake.nt_parent.nt_child.nt_leaf;
+
+query II
+select schema_name, parent_schema from duckdb_schemas() where database_name = 'nested_lake' and schema_name like 'nt\_%' escape '\' order by all;
+----
+nt_child	nt_parent
+nt_leaf	nt_child
+nt_parent	NULL
+
+statement error
+create schema nested_lake.nt_parent.nt_child;
+----
+already exists
+
+statement ok
+rollback;
+
+query I
+select count(*) from duckdb_schemas() where database_name = 'nested_lake' and schema_name like 'nt\_%' escape '\';
+----
+0
+
+statement error
+create table nested_lake.nt_parent.nt_child.t (i INTEGER);
+----
+does not exist
+
+# the same statements committed: the parent is created before its children
+statement ok
+begin;
+
+statement ok
+create schema nested_lake.nt_parent.nt_child.nt_leaf;
+
+statement ok
+create schema nested_lake.nt_parent.nt_child;
+
+statement ok
+create schema nested_lake.nt_parent;
+
+statement ok
+commit;
+
+query II
+select schema_name, parent_schema from duckdb_schemas() where database_name = 'nested_lake' and schema_name like 'nt\_%' escape '\' order by all;
+----
+nt_child	nt_parent
+nt_leaf	nt_child
+nt_parent	NULL
+
+# a table in a nested namespace
+statement ok
+begin;
+
+statement ok
+create table nested_lake.nt_parent.nt_child.t (i INTEGER);
+
+statement ok
+insert into nested_lake.nt_parent.nt_child.t values (1), (2);
+
+query I
+select sum(i) from nested_lake.nt_parent.nt_child.t;
+----
+3
+
+statement ok
+rollback;
+
+statement error
+select * from nested_lake.nt_parent.nt_child.t;
+----
+does not exist
+
+statement ok
+begin;
+
+statement ok
+create table nested_lake.nt_parent.nt_child.t (i INTEGER);
+
+statement ok
+insert into nested_lake.nt_parent.nt_child.t values (1), (2);
+
+statement ok
+commit;
+
+statement ok
+begin;
+
+statement ok
+insert into nested_lake.nt_parent.nt_child.t values (3);
+
+statement ok
+delete from nested_lake.nt_parent.nt_child.t where i = 1;
+
+query I
+select sum(i) from nested_lake."nt_parent.nt_child".t;
+----
+5
+
+statement ok
+rollback;
+
+query I
+select sum(i) from nested_lake.nt_parent.nt_child.t;
+----
+3
+
+statement ok
+drop table nested_lake.nt_parent.nt_child.t;
+
+# a rolled back drop keeps the namespace
+statement ok
+begin;
+
+statement ok
+drop schema nested_lake.nt_parent.nt_child.nt_leaf;
+
+query I
+select count(*) from duckdb_schemas() where database_name = 'nested_lake' and schema_name = 'nt_leaf';
+----
+0
+
+statement ok
+rollback;
+
+query I
+select count(*) from duckdb_schemas() where database_name = 'nested_lake' and schema_name = 'nt_leaf';
+----
+1
+
+# a parent and its children dropped in one transaction: the children go first
+statement ok
+begin;
+
+statement ok
+drop schema nested_lake.nt_parent;
+
+statement ok
+drop schema nested_lake.nt_parent.nt_child;
+
+statement ok
+drop schema nested_lake.nt_parent.nt_child.nt_leaf;
+
+statement ok
+commit;
+
+query I
+select count(*) from duckdb_schemas() where database_name = 'nested_lake' and schema_name like 'nt\_%' escape '\';
+----
+0

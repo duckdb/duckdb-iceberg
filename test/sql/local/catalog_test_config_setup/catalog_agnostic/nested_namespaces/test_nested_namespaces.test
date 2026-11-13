@@ -1,0 +1,372 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/nested_namespaces/test_nested_namespaces.test
+# description: with SUPPORT_NESTED_NAMESPACES a nested schema path names a multi-level namespace
+# group: [nested_namespaces]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+include test/sql/local/catalog_test_config_setup/catalog_agnostic/setup/nested_namespace_catalog.test_setup
+
+statement ok
+drop table if exists nested_lake.nn_parent.nn_child.t;
+
+statement ok
+drop table if exists nested_lake.nn_parent.nn_child.created_as;
+
+statement ok
+drop table if exists nested_lake.nn_child.t;
+
+statement ok
+drop schema if exists nested_lake.nn_parent.nn_child.nn_leaf;
+
+statement ok
+drop schema if exists nested_lake.nn_parent.nn_child;
+
+statement ok
+drop schema if exists nested_lake.nn_parent;
+
+statement ok
+drop schema if exists nested_lake.nn_child;
+
+statement ok
+drop table if exists nested_lake.nn_implicit.nn_made.t;
+
+statement ok
+drop schema if exists nested_lake.nn_implicit.nn_made;
+
+# create schemas at depth 1, 2 and 3
+statement ok
+create schema nested_lake.nn_parent;
+
+statement ok
+create schema nested_lake.nn_parent.nn_child;
+
+statement ok
+create schema nested_lake.nn_parent.nn_child.nn_leaf;
+
+statement ok
+create schema if not exists nested_lake.nn_parent.nn_child.nn_leaf;
+
+statement error
+create schema nested_lake.nn_parent.nn_child;
+----
+already exists
+
+# a top-level namespace with the same last name as the nested one
+statement ok
+create schema nested_lake.nn_child;
+
+# every namespace is listed once, under its parent
+query II
+select schema_name, parent_schema from duckdb_schemas() where database_name = 'nested_lake' and schema_name like 'nn\_%' escape '\' order by all;
+----
+nn_child	nn_parent
+nn_child	NULL
+nn_leaf	nn_child
+nn_parent	NULL
+
+query I
+select schema_name from information_schema.schemata where catalog_name = 'nested_lake' and schema_name like 'nn\_%' escape '\' order by all;
+----
+nn_child
+nn_child
+nn_leaf
+nn_parent
+
+# the same table name in the nested namespace and in its top-level sibling
+statement ok
+create table nested_lake.nn_parent.nn_child.t (i INTEGER, s VARCHAR);
+
+statement ok
+create table nested_lake.nn_child.t (i INTEGER, s VARCHAR);
+
+statement ok
+insert into nested_lake.nn_parent.nn_child.t values (1, 'nested'), (2, 'nested'), (3, 'nested');
+
+statement ok
+insert into nested_lake.nn_child.t values (10, 'top');
+
+query IT
+select * from nested_lake.nn_parent.nn_child.t order by i;
+----
+1	nested
+2	nested
+3	nested
+
+query IT
+select * from nested_lake.nn_child.t order by i;
+----
+10	top
+
+statement ok
+update nested_lake.nn_parent.nn_child.t set i = i + 100 where i = 1;
+
+statement ok
+delete from nested_lake.nn_parent.nn_child.t where i = 2;
+
+query IT
+select * from nested_lake.nn_parent.nn_child.t order by i;
+----
+3	nested
+101	nested
+
+# the sibling is untouched
+query IT
+select * from nested_lake.nn_child.t order by i;
+----
+10	top
+
+query TT
+select column_name, column_type from (describe nested_lake.nn_parent.nn_child.t) order by all;
+----
+i	INTEGER
+s	VARCHAR
+
+# columns can be qualified with the full path
+query I
+select nested_lake.nn_parent.nn_child.t.i from nested_lake.nn_parent.nn_child.t order by 1;
+----
+3
+101
+
+statement ok
+create table nested_lake.nn_parent.nn_child.created_as as select 42 as answer;
+
+query I
+select answer from nested_lake.nn_parent.nn_child.created_as;
+----
+42
+
+statement ok
+drop table nested_lake.nn_parent.nn_child.created_as;
+
+# each table is listed once
+query TT
+select "schema", name from (show all tables) where database = 'nested_lake' and "schema" = 'nn_child' order by all;
+----
+nn_child	t
+nn_child	t
+
+query TT
+select table_schema, table_name from information_schema.tables where table_catalog = 'nested_lake' and table_schema = 'nn_child';
+----
+nn_child	t
+nn_child	t
+
+# a query loads the table from its own namespace only
+statement ok
+CALL enable_logging('HTTP');
+
+query I
+select count(*) from nested_lake.nn_parent.nn_child.t;
+----
+2
+
+query T
+select regexp_extract(request.url, '/v1/namespaces/(.*)', 1) from duckdb_logs_parsed('HTTP');
+----
+nn_parent%1Fnn_child/tables/t
+
+statement ok
+CALL disable_logging();
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# the quoted dotted form names the same namespace
+query IT
+select * from nested_lake."nn_parent.nn_child".t order by i;
+----
+3	nested
+101	nested
+
+statement ok
+insert into nested_lake."nn_parent.nn_child".t values (4, 'quoted');
+
+query IT
+select * from nested_lake.nn_parent.nn_child.t order by i;
+----
+3	nested
+4	quoted
+101	nested
+
+query I
+select count(*) from nested_lake.nn_parent."nn_child".t;
+----
+3
+
+# SHOW TABLES FROM, USE and the search path take the nested path
+query T
+show tables from nested_lake.nn_parent.nn_child;
+----
+t
+
+query T
+show tables from nested_lake.nn_parent.nn_child.nn_leaf;
+----
+
+statement ok
+use nested_lake.nn_parent.nn_child;
+
+query T
+select current_schema();
+----
+nn_parent.nn_child
+
+query I
+select count(*) from t;
+----
+3
+
+query T
+show tables;
+----
+t
+
+statement ok
+use nested_lake.nn_child;
+
+query I
+select count(*) from t;
+----
+1
+
+statement ok
+use nested_lake."nn_parent.nn_child";
+
+query I
+select count(*) from t;
+----
+3
+
+statement ok
+set search_path = 'nested_lake.nn_child,nested_lake.nn_parent.nn_child';
+
+query I
+select count(*) from t;
+----
+1
+
+statement ok
+set search_path = 'nested_lake.nn_parent.nn_child,nested_lake.nn_child';
+
+query I
+select count(*) from t;
+----
+3
+
+statement ok
+use my_datalake.default;
+
+# a path through a namespace that does not exist is an error, not a hit on the sibling
+statement error
+select * from nested_lake.nn_missing.nn_child.t;
+----
+does not exist
+
+statement error
+select * from nested_lake.nn_parent.nn_missing.t;
+----
+does not exist
+
+statement error
+insert into nested_lake.nn_missing.nn_child.t values (5, 'missing');
+----
+does not exist
+
+statement error
+create table nested_lake.nn_missing.nn_child.created (i INTEGER);
+----
+does not exist
+
+statement error
+drop table nested_lake.nn_missing.nn_child.t;
+----
+does not exist
+
+statement ok
+drop table if exists nested_lake.nn_missing.nn_child.t;
+
+statement error
+drop schema nested_lake.nn_missing.nn_child;
+----
+Schema with name "nn_missing.nn_child" does not exist
+
+statement ok
+drop schema if exists nested_lake.nn_missing.nn_child;
+
+query I
+select count(*) from nested_lake.nn_child.t;
+----
+1
+
+# the lookups above did not leave a namespace behind
+query I
+select count(*) from duckdb_schemas() where database_name = 'nested_lake' and schema_name = 'nn_missing';
+----
+0
+
+# whether a parent has to exist is up to the catalog: this one creates a namespace without it
+statement ok
+create schema nested_lake.nn_implicit.nn_made;
+
+statement ok
+create table nested_lake.nn_implicit.nn_made.t as select 7 as i;
+
+query I
+select i from nested_lake.nn_implicit.nn_made.t;
+----
+7
+
+query II
+select schema_name, parent_schema from duckdb_schemas() where database_name = 'nested_lake' and schema_name = 'nn_made';
+----
+nn_made	nn_implicit
+
+statement ok
+drop table nested_lake.nn_implicit.nn_made.t;
+
+statement ok
+drop schema nested_lake.nn_implicit.nn_made;
+
+# a namespace with children or tables cannot be dropped
+statement error
+drop schema nested_lake.nn_parent;
+----
+<REGEX>:.*Namespace.*not empty.*
+
+statement error
+drop schema nested_lake.nn_parent.nn_child;
+----
+<REGEX>:.*Namespace.*not empty.*
+
+statement error
+drop schema nested_lake.nn_parent cascade;
+----
+CASCADE is not supported
+
+statement ok
+drop table nested_lake.nn_parent.nn_child.t;
+
+statement ok
+drop table nested_lake.nn_child.t;
+
+# drop at depth 3 and 2; the sibling keeps existing until it is dropped by its own name
+statement ok
+drop schema nested_lake.nn_parent.nn_child.nn_leaf;
+
+statement ok
+drop schema nested_lake.nn_parent.nn_child;
+
+query II
+select schema_name, parent_schema from duckdb_schemas() where database_name = 'nested_lake' and schema_name like 'nn\_%' escape '\' order by all;
+----
+nn_child	NULL
+nn_parent	NULL
+
+statement ok
+drop schema nested_lake.nn_parent;
+
+statement ok
+drop schema nested_lake.nn_child;

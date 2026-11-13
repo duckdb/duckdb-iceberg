@@ -1,0 +1,51 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/nested_namespaces/test_nested_schema_path_requests.test
+# description: a rejected nested schema path sends no request and leaves no schema behind
+# group: [nested_namespaces]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement error
+select * from my_datalake.nested_ghost.nested_spirit.t;
+----
+does not support nested schemas
+
+statement error
+insert into my_datalake.nested_ghost.nested_spirit.t values (1);
+----
+does not support nested schemas
+
+statement error
+update my_datalake.nested_ghost.nested_spirit.t set i = 0;
+----
+does not support nested schemas
+
+statement error
+delete from my_datalake.nested_ghost.nested_spirit.t;
+----
+does not support nested schemas
+
+statement error
+create table my_datalake.default.nested_ghost_copy as select * from my_datalake.nested_ghost.nested_spirit.t;
+----
+does not support nested schemas
+
+query I
+select count(*) from duckdb_logs_parsed('HTTP') where request.url like '%nested_ghost%' or request.url like '%nested_spirit%';
+----
+0
+
+statement ok
+CALL disable_logging();
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from duckdb_schemas() where database_name = 'my_datalake' and (schema_name like '%nested_ghost%' or schema_name like '%nested_spirit%');
+----
+0
