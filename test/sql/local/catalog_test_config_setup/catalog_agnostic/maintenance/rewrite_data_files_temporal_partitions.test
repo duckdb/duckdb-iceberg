@@ -61,7 +61,7 @@ query I
 select count(*)
 from iceberg_metadata('my_datalake.default.rewrite_day')
 where content = 'DATA' and status <> 'DELETED'
-  and replace(file_path, chr(92), '/') like '%/day_ts_2=%';
+  and replace(file_path, chr(92), '/') like '%/ts_day=%';
 ----
 12
 
@@ -102,7 +102,7 @@ query I
 select count(*)
 from iceberg_metadata('my_datalake.default.rewrite_day')
 where content = 'DATA' and status <> 'DELETED'
-  and replace(file_path, chr(92), '/') like '%/day_ts_2=%';
+  and replace(file_path, chr(92), '/') like '%/ts_day=%';
 ----
 2
 
@@ -164,7 +164,7 @@ query I
 select count(*)
 from iceberg_metadata('my_datalake.default.rewrite_month')
 where content = 'DATA' and status <> 'DELETED'
-  and replace(file_path, chr(92), '/') like '%/month_ts_2=%';
+  and replace(file_path, chr(92), '/') like '%/ts_month=%';
 ----
 12
 
@@ -205,7 +205,7 @@ query I
 select count(*)
 from iceberg_metadata('my_datalake.default.rewrite_month')
 where content = 'DATA' and status <> 'DELETED'
-  and replace(file_path, chr(92), '/') like '%/month_ts_2=%';
+  and replace(file_path, chr(92), '/') like '%/ts_month=%';
 ----
 2
 
@@ -286,8 +286,8 @@ select count(*)
 from iceberg_metadata('my_datalake.default.rewrite_max_files_day')
 where content = 'DATA' and status <> 'DELETED'
   and (
-	replace(file_path, chr(92), '/') like '%/day_ts_2=' || date_diff('day', DATE '1970-01-01', DATE '2021-06-15')::VARCHAR || '/%'
-	or replace(file_path, chr(92), '/') like '%/day_ts_2=2021-06-15/%'
+	replace(file_path, chr(92), '/') like '%/ts_day=' || date_diff('day', DATE '1970-01-01', DATE '2021-06-15')::VARCHAR || '/%'
+	or replace(file_path, chr(92), '/') like '%/ts_day=2021-06-15/%'
   );
 ----
 4
@@ -297,8 +297,8 @@ select count(*)
 from iceberg_metadata('my_datalake.default.rewrite_max_files_day')
 where content = 'DATA' and status <> 'DELETED'
   and (
-	replace(file_path, chr(92), '/') like '%/day_ts_2=' || date_diff('day', DATE '1970-01-01', DATE '2021-06-16')::VARCHAR || '/%'
-	or replace(file_path, chr(92), '/') like '%/day_ts_2=2021-06-16/%'
+	replace(file_path, chr(92), '/') like '%/ts_day=' || date_diff('day', DATE '1970-01-01', DATE '2021-06-16')::VARCHAR || '/%'
+	or replace(file_path, chr(92), '/') like '%/ts_day=2021-06-16/%'
   );
 ----
 6

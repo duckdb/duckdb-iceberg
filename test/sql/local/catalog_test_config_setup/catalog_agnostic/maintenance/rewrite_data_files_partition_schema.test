@@ -57,7 +57,7 @@ SELECT
 1	long
 
 query TII
-SELECT typeof(data_file.partition.identity_p_1), data_file.partition.identity_p_1, data_file.record_count
+SELECT typeof(data_file.partition.p), data_file.partition.p, data_file.record_count
 FROM read_avro(getvariable('rewrite_partition_manifest')) WHERE status = 1;
 ----
 BIGINT	7	2

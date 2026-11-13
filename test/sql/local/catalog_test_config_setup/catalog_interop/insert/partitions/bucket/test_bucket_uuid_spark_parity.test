@@ -57,8 +57,8 @@ statement ok
 set variable duckdb_manifest = (select manifest_path from iceberg_metadata(my_datalake.default.test_bucket_uuid_spark_parity) order by manifest_sequence_number desc limit 1);
 
 # The partition column of the manifest entries holds the bucket that Iceberg assigned to each file.
-# The partition field is accessed by position because Spark names it 'val_bucket' while DuckDB
-# names it 'bucket_32__val_2'.
+# The partition field is accessed by position because Spark's CREATE TABLE names it 'val_bucket' while DuckDB
+# names it 'val_bucket_32', like Spark's ADD PARTITION FIELD.
 statement ok
 create table spark_file_partitions as
 select file_path, struct_extract_at(partition, 1) as bucket_id

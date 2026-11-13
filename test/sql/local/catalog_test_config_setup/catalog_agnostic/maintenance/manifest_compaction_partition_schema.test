@@ -84,10 +84,10 @@ query ITTIIITT
 SELECT
     (SELECT value::INTEGER FROM avro_metadata(getvariable('partition_manifest_path')) WHERE key = 'schema-id'),
     (SELECT (value::JSON)->>'$.fields[0].type' FROM avro_metadata(getvariable('partition_manifest_path')) WHERE key = 'schema'),
-    (SELECT typeof(data_file.partition.identity_p_1) FROM read_avro(getvariable('partition_manifest_path')) LIMIT 1),
+    (SELECT typeof(data_file.partition.p) FROM read_avro(getvariable('partition_manifest_path')) LIMIT 1),
     (SELECT ((value::JSON)->>'$[0].field-id')::INTEGER FROM avro_metadata(getvariable('partition_manifest_path')) WHERE key = 'partition-spec'),
-    (SELECT min(data_file.partition.identity_p_1) FROM read_avro(getvariable('partition_manifest_path'))),
-    (SELECT max(data_file.partition.identity_p_1) FROM read_avro(getvariable('partition_manifest_path'))),
+    (SELECT min(data_file.partition.p) FROM read_avro(getvariable('partition_manifest_path'))),
+    (SELECT max(data_file.partition.p) FROM read_avro(getvariable('partition_manifest_path'))),
     hex(partitions[1].lower_bound), hex(partitions[1].upper_bound)
 FROM read_avro(getvariable('partition_manifest_list'))
 WHERE manifest_path = getvariable('partition_manifest_path');
