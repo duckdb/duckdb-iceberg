@@ -171,6 +171,7 @@ public:
 	//! snapshot_id -> snapshot
 	unordered_map<int64_t, IcebergSnapshot> snapshots;
 	//! Branch and tag references, including their optional retention settings
+	//! An absent value denotes legacy implicit main; an explicit empty map does not.
 	optional<rest_api_objects::SnapshotReferences> refs;
 	//! History of refs.main per Iceberg spec "snapshot-log": (snapshot_id, raw millis)
 	//! pairs recording each change to current-snapshot-id, sorted ascending by ms.
