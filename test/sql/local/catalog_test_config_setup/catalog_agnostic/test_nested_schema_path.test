@@ -1,0 +1,119 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/test_nested_schema_path.test
+# description: a name with more than one schema part is rejected instead of resolving to its last schema
+# group: [catalog_agnostic]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+drop table if exists my_datalake.default.nested_path_table;
+
+statement ok
+drop table if exists my_datalake.default.nested_path_created;
+
+statement ok
+drop schema if exists my_datalake.nested_path_child;
+
+statement ok
+create table my_datalake.default.nested_path_table (i INTEGER);
+
+statement ok
+insert into my_datalake.default.nested_path_table values (1), (2), (3);
+
+statement error
+select count(*) from my_datalake.x.default.nested_path_table;
+----
+does not support nested schemas
+
+statement error
+insert into my_datalake.x.default.nested_path_table values (4);
+----
+does not support nested schemas
+
+statement error
+update my_datalake.x.default.nested_path_table set i = 0;
+----
+does not support nested schemas
+
+statement error
+delete from my_datalake.x.default.nested_path_table;
+----
+does not support nested schemas
+
+statement error
+describe my_datalake.x.default.nested_path_table;
+----
+does not support nested schemas
+
+statement error
+drop table my_datalake.x.default.nested_path_table;
+----
+does not support nested schemas
+
+statement error
+drop table if exists my_datalake.x.default.nested_path_table;
+----
+does not support nested schemas
+
+# the table in the top-level schema is untouched
+query II
+select count(*), sum(i) from my_datalake.default.nested_path_table;
+----
+3	6
+
+statement error
+create table my_datalake.x.default.nested_path_created (i INTEGER);
+----
+does not support nested schemas
+
+statement error
+create table my_datalake.x.default.nested_path_created as select 1 as i;
+----
+does not support nested schemas
+
+statement error
+select * from my_datalake.default.nested_path_created;
+----
+does not exist
+
+statement error
+create schema my_datalake.nested_path_parent.nested_path_child;
+----
+does not support nested schemas
+
+statement error
+create schema if not exists my_datalake.nested_path_parent.nested_path_child;
+----
+does not support nested schemas
+
+# no top-level schema was created under the last name
+query I
+select count(*) from duckdb_schemas() where database_name = 'my_datalake' and schema_name = 'nested_path_child';
+----
+0
+
+statement error
+drop schema my_datalake.nested_path_child;
+----
+does not exist
+
+statement ok
+create schema my_datalake.nested_path_child;
+
+statement error
+drop schema my_datalake.x.nested_path_child;
+----
+does not support nested schemas
+
+statement error
+drop schema if exists my_datalake.x.nested_path_child;
+----
+does not support nested schemas
+
+# the top-level schema is still there to drop
+statement ok
+drop schema my_datalake.nested_path_child;
+
+statement ok
+drop table my_datalake.default.nested_path_table;

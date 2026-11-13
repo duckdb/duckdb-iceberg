@@ -1,0 +1,85 @@
+# name: test/sql/local/native_catalog/quoted_dotted_schema.test
+# description: a quoted dotted schema is one schema part, so it keeps naming a multi-level namespace
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+statement ok
+drop table if exists my_datalake."dotted_parent.dotted_child".t;
+
+statement ok
+drop schema if exists my_datalake."dotted_parent.dotted_child";
+
+statement ok
+drop schema if exists my_datalake.dotted_parent;
+
+statement ok
+create schema my_datalake.dotted_parent;
+
+statement ok
+create schema my_datalake."dotted_parent.dotted_child";
+
+statement ok
+create table my_datalake."dotted_parent.dotted_child".t (i INTEGER);
+
+statement ok
+insert into my_datalake."dotted_parent.dotted_child".t values (1), (2), (3);
+
+statement ok
+update my_datalake."dotted_parent.dotted_child".t set i = i + 10 where i = 1;
+
+statement ok
+delete from my_datalake."dotted_parent.dotted_child".t where i = 2;
+
+query I
+select i from my_datalake."dotted_parent.dotted_child".t order by i;
+----
+3
+11
+
+query I
+select count(*) from iceberg_scan('my_datalake."dotted_parent.dotted_child".t');
+----
+2
+
+query I
+select count(*) > 0 from iceberg_snapshots('my_datalake."dotted_parent.dotted_child".t');
+----
+true
+
+query I
+select count(*) > 0 from iceberg_scan_plan('my_datalake."dotted_parent.dotted_child".t');
+----
+true
+
+query I
+select count(*) > 0 from iceberg_table_properties('my_datalake."dotted_parent.dotted_child".t');
+----
+true
+
+query I
+select count(*) from iceberg_load_table_response('my_datalake."dotted_parent.dotted_child".t');
+----
+1
+
+# without the quotes the same parts are a nested schema path
+statement error
+select * from my_datalake.dotted_parent.dotted_child.t;
+----
+does not support nested schemas
+
+statement error
+select * from iceberg_snapshots('my_datalake.dotted_parent.dotted_child.t');
+----
+does not support nested schemas
+
+statement ok
+drop table my_datalake."dotted_parent.dotted_child".t;
+
+statement ok
+drop schema my_datalake."dotted_parent.dotted_child";
+
+statement ok
+drop schema my_datalake.dotted_parent;
