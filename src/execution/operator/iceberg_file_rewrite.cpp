@@ -8,6 +8,7 @@
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_data.hpp"
+#include "execution/operator/iceberg_written_files.hpp"
 #include "iceberg_logging.hpp"
 
 namespace duckdb {
@@ -32,8 +33,9 @@ IcebergFileRewriteGlobalState::~IcebergFileRewriteGlobalState() {
 }
 
 IcebergFileRewrite::IcebergFileRewrite(PhysicalPlan &physical_plan, vector<LogicalType> types,
-                                       idx_t estimated_cardinality)
-    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, std::move(types), estimated_cardinality) {
+                                       idx_t estimated_cardinality, IcebergWriteOperation write_operation)
+    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, std::move(types), estimated_cardinality),
+      write_operation(write_operation) {
 }
 
 void IcebergFileRewrite::PlanCopy(ClientContext &context, PhysicalPlanGenerator &planner,
@@ -109,13 +111,17 @@ SinkFinalizeType IcebergFileRewrite::Finalize(Pipeline &pipeline, Event &event, 
 	}
 
 	auto &transaction = IcebergTransaction::Get(context, state.table_info.catalog);
+	auto files = IcebergWrittenFiles::Collect(new_entries);
 	//! Multiple rewrite operators in one statement can initialize and update table state concurrently.
-	lock_guard<mutex> guard(transaction.rewrite_commit_lock);
-	ApplyTableUpdate(state.table_info, transaction, [&](IcebergTable &table) {
-		auto &transaction_data = table.GetOrCreateTransactionData(transaction);
-		StageRewrite(transaction_data, state, rewrite.operation, std::move(new_entries), std::move(replaced_files));
-	});
+	{
+		lock_guard<mutex> guard(transaction.rewrite_commit_lock);
+		ApplyTableUpdate(state.table_info, transaction, [&](IcebergTable &table) {
+			auto &transaction_data = table.GetOrCreateTransactionData(transaction);
+			StageRewrite(transaction_data, state, rewrite.operation, std::move(new_entries), std::move(replaced_files));
+		});
+	}
 	state.staged = true;
+	IcebergWrittenFiles::Record(context, state.table_info, write_operation, files);
 	return SinkFinalizeType::READY;
 }
 

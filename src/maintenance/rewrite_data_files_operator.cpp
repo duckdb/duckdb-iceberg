@@ -87,7 +87,9 @@ PhysicalOperator &LogicalRewriteDataFiles::CreatePlan(ClientContext &context, Ph
 
 PhysicalRewriteDataFiles::PhysicalRewriteDataFiles(PhysicalPlan &physical_plan, RewritePlan plan_p,
                                                    idx_t estimated_cardinality)
-    : IcebergFileRewrite(physical_plan, RewriteResultTypes(), estimated_cardinality), plan(std::move(plan_p)) {
+    : IcebergFileRewrite(physical_plan, RewriteResultTypes(), estimated_cardinality,
+                         IcebergWriteOperation::REWRITE_DATA_FILES),
+      plan(std::move(plan_p)) {
 }
 
 unique_ptr<GlobalSinkState> PhysicalRewriteDataFiles::GetGlobalSinkState(ClientContext &context) const {

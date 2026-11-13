@@ -29,7 +29,8 @@ class CopyOnWriteDeleteRewrite : public IcebergFileRewrite {
 public:
 	CopyOnWriteDeleteRewrite(PhysicalPlan &physical_plan, IcebergTable &table,
 	                         IcebergCopyOnWriteDeleteFilter &delete_filter)
-	    : IcebergFileRewrite(physical_plan, {LogicalType::BIGINT}, 1), table(table), delete_filter(delete_filter) {
+	    : IcebergFileRewrite(physical_plan, {LogicalType::BIGINT}, 1, IcebergWriteOperation::COPY_ON_WRITE_DELETE),
+	      table(table), delete_filter(delete_filter) {
 	}
 
 	unique_ptr<GlobalSinkState> GetGlobalSinkState(ClientContext &context) const override {

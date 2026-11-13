@@ -9,6 +9,7 @@
 #pragma once
 
 #include "execution/operator/iceberg_insert.hpp"
+#include "execution/operator/iceberg_written_files.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_metadata.hpp"
 #include "core/metadata/snapshot/iceberg_snapshot.hpp"
 
@@ -46,7 +47,8 @@ public:
 //! restrictions live in the maintenance caller, not in this shared execution path.
 class IcebergFileRewrite : public PhysicalOperator {
 public:
-	IcebergFileRewrite(PhysicalPlan &physical_plan, vector<LogicalType> types, idx_t estimated_cardinality);
+	IcebergFileRewrite(PhysicalPlan &physical_plan, vector<LogicalType> types, idx_t estimated_cardinality,
+	                   IcebergWriteOperation write_operation);
 
 	void PlanCopy(ClientContext &context, PhysicalPlanGenerator &planner, const IcebergTableMetadata &metadata,
 	              PhysicalOperator &rows, optional_idx target_file_size = optional_idx());
@@ -73,6 +75,9 @@ protected:
 	virtual void StageRewrite(IcebergTransactionData &transaction_data, const IcebergFileRewriteGlobalState &state,
 	                          IcebergSnapshotOperationType operation, vector<IcebergManifestEntry> &&new_entries,
 	                          IcebergManifestDeletes &&replaced_files) const;
+
+private:
+	const IcebergWriteOperation write_operation;
 };
 
 } // namespace duckdb

@@ -1,0 +1,186 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_written_files.test
+# description: Compaction and copy-on-write DELETE report staged replacement files transactionally
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+SET threads = 1;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.rewrite_written_files;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cow_written_files;
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_written_files (id INTEGER, p INTEGER)
+PARTITIONED BY (p) WITH ('format-version' = '2');
+
+loop i 0 6
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_written_files VALUES ({i}, 0), ({i} + 6, 1);
+
+endloop
+
+statement ok
+SET iceberg_store_written_files = true;
+
+statement ok
+CALL enable_logging('IcebergDataFileWritten', storage := 'memory');
+
+statement ok
+BEGIN;
+
+statement ok
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_written_files');
+
+query III
+SELECT count(*), count(DISTINCT query_id), sum(record_count) FROM temp.main.iceberg_written_files;
+----
+2	1	12
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'temp' AND table_name = 'iceberg_written_files';
+----
+0
+
+query II
+SELECT count(*), sum(record_count) FROM duckdb_logs_parsed('IcebergDataFileWritten');
+----
+2	12
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_written_files');
+
+# After commit, the reported files are exactly the live replacement files.
+statement ok
+BEGIN;
+
+query I
+SELECT count(*) FROM (
+    (SELECT file_path, record_count FROM temp.main.iceberg_written_files
+     EXCEPT ALL
+     SELECT file_path, record_count FROM iceberg_metadata(my_datalake.default.rewrite_written_files)
+     WHERE content = 'DATA' AND status != 'DELETED')
+    UNION ALL
+    (SELECT file_path, record_count FROM iceberg_metadata(my_datalake.default.rewrite_written_files)
+     WHERE content = 'DATA' AND status != 'DELETED'
+     EXCEPT ALL SELECT file_path, record_count FROM temp.main.iceberg_written_files)
+);
+----
+0
+
+statement ok
+SET VARIABLE rewrite_written_paths = (SELECT list(file_path) FROM temp.main.iceberg_written_files);
+
+query I
+SELECT count(*) FROM temp.main.iceberg_written_files w
+JOIN parquet_file_metadata(getvariable('rewrite_written_paths')) p ON w.file_path = p.file_name
+WHERE w.record_count = p.num_rows AND w.file_size_in_bytes = p.file_size_bytes;
+----
+2
+
+statement ok
+COMMIT;
+
+query I
+SELECT count(*) FROM (
+    (SELECT * FROM temp.main.iceberg_written_files
+     EXCEPT ALL
+     SELECT query_id, "table", file_path, record_count, file_size_in_bytes, operation, written_at
+     FROM duckdb_logs_parsed('IcebergDataFileWritten'))
+    UNION ALL
+    (SELECT query_id, "table", file_path, record_count, file_size_in_bytes, operation, written_at
+     FROM duckdb_logs_parsed('IcebergDataFileWritten')
+     EXCEPT ALL SELECT * FROM temp.main.iceberg_written_files)
+);
+----
+0
+
+# A compaction with no eligible groups reports nothing new.
+statement ok
+CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_written_files');
+
+query III
+SELECT count(*), count(DISTINCT query_id), sum(record_count) FROM temp.main.iceberg_written_files;
+----
+2	1	12
+
+query II
+SELECT count(*), sum(id) FROM my_datalake.default.rewrite_written_files;
+----
+12	66
+
+statement ok
+SET iceberg_store_written_files = false;
+
+statement ok
+CREATE TABLE my_datalake.default.cow_written_files (id INTEGER)
+WITH ('format-version' = '2', 'write.delete.mode' = 'copy-on-write');
+
+statement ok
+INSERT INTO my_datalake.default.cow_written_files VALUES (1), (2), (3);
+
+statement ok
+DELETE FROM temp.main.iceberg_written_files;
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+SET iceberg_store_written_files = true;
+
+# A partial-file DELETE reports the surviving rows that it rewrote.
+query I
+DELETE FROM my_datalake.default.cow_written_files WHERE id = 2;
+----
+1
+
+query III
+SELECT count(*), count(DISTINCT query_id), sum(record_count) FROM temp.main.iceberg_written_files;
+----
+1	1	2
+
+query TI
+SELECT "table", record_count FROM duckdb_logs_parsed('IcebergDataFileWritten');
+----
+my_datalake.default.cow_written_files	2
+
+query I
+SELECT id FROM my_datalake.default.cow_written_files ORDER BY id;
+----
+1
+3
+
+# Neither removing a whole file nor deleting zero rows stages a replacement file.
+statement ok
+DELETE FROM my_datalake.default.cow_written_files;
+
+statement ok
+DELETE FROM my_datalake.default.cow_written_files WHERE id = 99;
+
+query II
+SELECT count(*), sum(record_count) FROM temp.main.iceberg_written_files;
+----
+1	2
+
+query II
+SELECT count(*), sum(record_count) FROM duckdb_logs_parsed('IcebergDataFileWritten');
+----
+1	2
+
+statement ok
+DROP TABLE my_datalake.default.cow_written_files;
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_written_files;

@@ -27,6 +27,7 @@
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "execution/operator/iceberg_delete.hpp"
+#include "execution/operator/iceberg_written_files.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "core/metadata/schema/iceberg_column_definition.hpp"
 #include "core/metadata/schema/iceberg_table_schema.hpp"
@@ -388,6 +389,7 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 		lock_guard<mutex> guard(global_state.lock);
 		written_files = std::move(global_state.written_files);
 	}
+	auto files = IcebergWrittenFiles::Collect(written_files);
 
 	if (update_delete_op) {
 		// Stage the UPDATE's deletes and replacement rows together, possibly within a shared MERGE snapshot.
@@ -416,6 +418,15 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 			});
 		}
 	}
+	auto operation = IcebergWriteOperation::INSERT;
+	if (merge_action) {
+		operation = update_delete_op ? IcebergWriteOperation::MERGE_UPDATE : IcebergWriteOperation::MERGE_INSERT;
+	} else if (update_delete_op) {
+		operation = IcebergWriteOperation::UPDATE;
+	} else if (ctas_copy_op) {
+		operation = IcebergWriteOperation::CTAS;
+	}
+	IcebergWrittenFiles::Record(context, table_info, operation, files);
 	return SinkFinalizeType::READY;
 }
 

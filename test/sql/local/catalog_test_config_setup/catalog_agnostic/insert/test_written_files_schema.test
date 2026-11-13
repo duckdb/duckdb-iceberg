@@ -1,0 +1,150 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_written_files_schema.test
+# description: A conflicting or altered tracking-table schema cannot silently mislabel staged files
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.written_files_schema;
+
+statement ok
+CREATE TABLE my_datalake.default.written_files_schema (id INTEGER) WITH ('format-version' = '2');
+
+statement ok
+SET iceberg_store_written_files = true;
+
+statement ok
+CALL enable_logging('IcebergDataFileWritten', storage := 'memory');
+
+# These two VARCHAR columns have the right types but the wrong order.
+statement ok
+CREATE TEMP TABLE iceberg_written_files (
+    query_id UBIGINT, file_path VARCHAR, "table" VARCHAR, record_count BIGINT, file_size_in_bytes BIGINT,
+    operation VARCHAR, written_at TIMESTAMPTZ
+);
+
+statement error
+INSERT INTO my_datalake.default.written_files_schema VALUES (1);
+----
+temp.main.iceberg_written_files has an incompatible schema
+
+query I
+SELECT count(*) FROM my_datalake.default.written_files_schema;
+----
+0
+
+query I
+SELECT count(*) FROM temp.main.iceberg_written_files;
+----
+0
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('IcebergDataFileWritten');
+----
+0
+
+# A successful retry creates the expected schema.
+statement ok
+DROP TABLE temp.main.iceberg_written_files;
+
+statement ok
+INSERT INTO my_datalake.default.written_files_schema VALUES (1);
+
+# Even an implicitly castable type must not change the tracking table's contract.
+statement ok
+ALTER TABLE temp.main.iceberg_written_files ALTER COLUMN record_count TYPE VARCHAR;
+
+statement error
+INSERT INTO my_datalake.default.written_files_schema VALUES (2);
+----
+temp.main.iceberg_written_files has an incompatible schema
+
+query I
+SELECT count(*) FROM temp.main.iceberg_written_files;
+----
+1
+
+statement ok
+ALTER TABLE temp.main.iceberg_written_files ALTER COLUMN record_count TYPE BIGINT;
+
+# A timestamp without a time zone is not the instant exposed by written_at.
+statement ok
+ALTER TABLE temp.main.iceberg_written_files ALTER COLUMN written_at TYPE TIMESTAMP;
+
+statement error
+INSERT INTO my_datalake.default.written_files_schema VALUES (20);
+----
+temp.main.iceberg_written_files has an incompatible schema
+
+statement ok
+ALTER TABLE temp.main.iceberg_written_files ALTER COLUMN written_at TYPE TIMESTAMPTZ;
+
+statement ok
+ALTER TABLE temp.main.iceberg_written_files ADD COLUMN extra INTEGER;
+
+statement error
+INSERT INTO my_datalake.default.written_files_schema VALUES (3);
+----
+temp.main.iceberg_written_files has an incompatible schema
+
+statement ok
+ALTER TABLE temp.main.iceberg_written_files DROP COLUMN extra;
+
+statement ok
+ALTER TABLE temp.main.iceberg_written_files DROP COLUMN record_count;
+
+statement error
+INSERT INTO my_datalake.default.written_files_schema VALUES (4);
+----
+temp.main.iceberg_written_files has an incompatible schema
+
+# Generated columns cannot substitute for physical tracking columns.
+statement ok
+CREATE OR REPLACE TEMP TABLE iceberg_written_files (
+    query_id UBIGINT, "table" VARCHAR, file_path VARCHAR,
+    record_count BIGINT GENERATED ALWAYS AS (1), file_size_in_bytes BIGINT,
+    operation VARCHAR, written_at TIMESTAMPTZ
+);
+
+statement error
+INSERT INTO my_datalake.default.written_files_schema VALUES (5);
+----
+temp.main.iceberg_written_files has an incompatible schema
+
+# The conflict does not affect a write with tracking disabled.
+statement ok
+SET iceberg_store_written_files = false;
+
+statement ok
+INSERT INTO my_datalake.default.written_files_schema VALUES (6);
+
+query I
+SELECT count(*) FROM temp.main.iceberg_written_files;
+----
+0
+
+statement ok
+DROP TABLE temp.main.iceberg_written_files;
+
+statement ok
+SET iceberg_store_written_files = true;
+
+statement ok
+INSERT INTO my_datalake.default.written_files_schema VALUES (7);
+
+query I
+SELECT sum(record_count) FROM temp.main.iceberg_written_files;
+----
+1
+
+query I
+SELECT id FROM my_datalake.default.written_files_schema ORDER BY id;
+----
+1
+6
+7
+
+statement ok
+DROP TABLE my_datalake.default.written_files_schema;
