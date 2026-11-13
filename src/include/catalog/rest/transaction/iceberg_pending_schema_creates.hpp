@@ -35,6 +35,14 @@ public:
 		return entry->second.entry.get();
 	}
 
+	shared_ptr<IcebergSchemaEntry> GetSharedEntry(const string &name) const {
+		auto entry = schemas.find(name);
+		if (entry == schemas.end()) {
+			return nullptr;
+		}
+		return entry->second.entry;
+	}
+
 	//! Returns the pending entry, or nullptr if there is none; throws if it is a conflict for `on_conflict`
 	optional_ptr<IcebergSchemaEntry> CheckPending(const string &name, OnCreateConflict on_conflict) const {
 		auto entry = GetEntry(name);

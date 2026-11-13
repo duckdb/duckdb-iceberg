@@ -64,7 +64,6 @@ optional_ptr<CatalogEntry> IcebergSchemaSet::GetEntry(ClientContext &context, co
 		throw CatalogException("Iceberg namespace by the name of '%s' does not exist", name);
 	}
 	if (entry == entries.end()) {
-		CreateSchemaInfo info;
 		auto default_schema = ic_catalog.GetDefaultSchema();
 		auto lookup_name = Identifier(name);
 		if (lookup_name == default_schema) {
@@ -82,11 +81,9 @@ optional_ptr<CatalogEntry> IcebergSchemaSet::GetEntry(ClientContext &context, co
 				throw CatalogException("Iceberg namespace by the name of '%s' does not exist", name);
 			}
 		}
-		info.SetQualifiedName(
-		    QualifiedName(info.GetQualifiedName().Catalog(), Identifier(name), info.GetQualifiedName().Name()));
-		info.internal = false;
 		// assume schema exists to avoid extra roundtrip
-		auto schema_entry = make_shared_ptr<IcebergSchemaEntry>(catalog, info);
+		auto schema_entry = MakeEntryInternal(iceberg_transaction, IRCAPI::ParseSchemaName(name));
+		schema_entry->assumed = true;
 		auto inserted_entry = CreateEntryInternal(std::move(schema_entry));
 		iceberg_transaction.schemas.emplace(name, inserted_entry);
 		return inserted_entry.get();
@@ -108,6 +105,8 @@ vector<shared_ptr<IcebergSchemaEntry>> IcebergSchemaSet::GetEntries(ClientContex
 	LoadEntriesInternal(context);
 	vector<shared_ptr<IcebergSchemaEntry>> result;
 	result.reserve(entries.size() + iceberg_transaction.created_schemas.Size());
+	// a nested path is looked up level by level, which assumes levels the catalog may not have
+	bool skip_assumed = catalog.SupportsNestedSchemas();
 	for (auto &entry : entries) {
 		if (iceberg_transaction.deleted_schemas.count(entry.first) ||
 		    iceberg_transaction.created_schemas.Contains(entry.first)) {
@@ -117,7 +116,7 @@ vector<shared_ptr<IcebergSchemaEntry>> IcebergSchemaSet::GetEntries(ClientContex
 		if (transaction_entry == iceberg_transaction.schemas.end()) {
 			transaction_entry = iceberg_transaction.schemas.emplace(entry.first, entry.second).first;
 		}
-		if (transaction_entry->second->DoesExist()) {
+		if (transaction_entry->second->DoesExist() && !(skip_assumed && transaction_entry->second->assumed)) {
 			result.push_back(transaction_entry->second);
 		}
 	}
@@ -142,6 +141,40 @@ static string GetSchemaName(const vector<string> &items) {
 	return StringUtil::Join(items, ".");
 }
 
+shared_ptr<IcebergSchemaEntry> IcebergSchemaSet::MakeEntry(ClientContext &context, const string &name) {
+	annotated_lock_guard<annotated_mutex> l(entry_lock);
+	return MakeEntryInternal(IcebergTransaction::Get(context, catalog), IRCAPI::ParseSchemaName(name));
+}
+
+shared_ptr<IcebergSchemaEntry> IcebergSchemaSet::MakeEntryInternal(IcebergTransaction &transaction,
+                                                                   vector<string> namespace_items) {
+	CreateSchemaInfo info;
+	info.internal = false;
+	shared_ptr<IcebergSchemaEntry> parent;
+	auto name = GetSchemaName(namespace_items);
+	if (catalog.SupportsNestedSchemas() && namespace_items.size() > 1) {
+		// a nested namespace is named by its last level and reaches the other levels through its parent
+		name = namespace_items.back();
+		vector<string> parent_items(namespace_items.begin(), namespace_items.end() - 1);
+		auto parent_key = GetSchemaName(parent_items);
+		parent = transaction.created_schemas.GetSharedEntry(parent_key);
+		if (!parent) {
+			auto transaction_parent = transaction.schemas.find(parent_key);
+			auto catalog_parent = entries.find(parent_key);
+			if (transaction_parent != transaction.schemas.end()) {
+				parent = transaction_parent->second;
+			} else if (catalog_parent != entries.end()) {
+				parent = catalog_parent->second;
+			} else {
+				parent = MakeEntryInternal(transaction, std::move(parent_items));
+			}
+		}
+	}
+	info.SetQualifiedName(
+	    QualifiedName(info.GetQualifiedName().Catalog(), Identifier(name), info.GetQualifiedName().Name()));
+	return make_shared_ptr<IcebergSchemaEntry>(catalog, info, std::move(namespace_items), std::move(parent));
+}
+
 void IcebergSchemaSet::LoadEntries(ClientContext &context) {
 	annotated_lock_guard<annotated_mutex> l(entry_lock);
 	LoadEntriesInternal(context);
@@ -161,28 +194,26 @@ void IcebergSchemaSet::LoadEntriesInternal(ClientContext &context) {
 	if (context.IsInterrupted()) {
 		throw InterruptException();
 	}
-	ApplyListResult(std::move(schemas));
+	ApplyListResult(iceberg_transaction, std::move(schemas));
 	iceberg_transaction.called_list_schemas = true;
 }
 
-void IcebergSchemaSet::ApplyListResult(IcebergListSchemasResult schemas) {
+void IcebergSchemaSet::ApplyListResult(IcebergTransaction &transaction, IcebergListSchemasResult schemas) {
+	// parents first, so that a nested namespace links to the entry of its parent
+	std::stable_sort(schemas.begin(), schemas.end(), [](const IRCAPISchema &lhs, const IRCAPISchema &rhs) {
+		return lhs.items.size() < rhs.items.size();
+	});
 	for (auto &schema : schemas) {
 		if (schema.items.empty() ||
 		    std::any_of(schema.items.begin(), schema.items.end(), [](const string &item) { return item.empty(); })) {
 			throw InvalidConfigurationException("Iceberg catalog returned an empty namespace name");
 		}
-		CreateSchemaInfo info;
-		info.SetQualifiedName(QualifiedName(info.GetQualifiedName().Catalog(), Identifier(GetSchemaName(schema.items)),
-		                                    info.GetQualifiedName().Name()));
-		info.internal = false;
-		auto schema_entry = make_shared_ptr<IcebergSchemaEntry>(catalog, info);
-		schema_entry->namespace_items = std::move(schema.items);
-		CreateEntryInternal(std::move(schema_entry));
+		CreateEntryInternal(MakeEntryInternal(transaction, std::move(schema.items)));
 	}
 }
 
 shared_ptr<IcebergSchemaEntry> IcebergSchemaSet::CreateEntryInternal(shared_ptr<IcebergSchemaEntry> entry) {
-	auto &name = entry->name.GetIdentifierName();
+	auto name = entry->GetNamespaceKey();
 	if (name.empty()) {
 		throw InternalException("IcebergSchemaSet::CreateEntry called with empty name");
 	}
@@ -192,6 +223,8 @@ shared_ptr<IcebergSchemaEntry> IcebergSchemaSet::CreateEntryInternal(shared_ptr<
 	}
 	if (!existing_entry->second->DoesExist()) {
 		existing_entry->second = std::move(entry);
+	} else if (!entry->assumed) {
+		existing_entry->second->assumed = false;
 	}
 	return existing_entry->second;
 }

@@ -22,11 +22,15 @@ public:
 	optional_ptr<CatalogEntry> GetEntry(ClientContext &context, const string &name, OnEntryNotFound if_not_found);
 	void Scan(ClientContext &context, const std::function<void(CatalogEntry &)> &callback);
 	vector<shared_ptr<IcebergSchemaEntry>> GetEntries(ClientContext &context);
+	//! Create an entry for the namespace 'name', without adding it to the set
+	shared_ptr<IcebergSchemaEntry> MakeEntry(ClientContext &context, const string &name);
 	void AddEntry(const string &name, shared_ptr<IcebergSchemaEntry> entry);
 	void RemoveEntry(const string &name);
 
 protected:
 	void LoadEntriesInternal(ClientContext &context) DUCKDB_REQUIRES(entry_lock);
+	shared_ptr<IcebergSchemaEntry> MakeEntryInternal(IcebergTransaction &transaction, vector<string> namespace_items)
+	    DUCKDB_REQUIRES(entry_lock);
 	shared_ptr<IcebergSchemaEntry> CreateEntryInternal(shared_ptr<IcebergSchemaEntry> entry)
 	    DUCKDB_REQUIRES(entry_lock);
 
@@ -34,7 +38,7 @@ public:
 	Catalog &catalog;
 
 private:
-	void ApplyListResult(IcebergListSchemasResult schemas) DUCKDB_REQUIRES(entry_lock);
+	void ApplyListResult(IcebergTransaction &transaction, IcebergListSchemasResult schemas) DUCKDB_REQUIRES(entry_lock);
 	annotated_mutex entry_lock;
 	unordered_map<string, shared_ptr<IcebergSchemaEntry>> entries DUCKDB_GUARDED_BY(entry_lock);
 };

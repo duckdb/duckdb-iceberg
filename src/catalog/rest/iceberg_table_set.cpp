@@ -304,15 +304,15 @@ void IcebergTableSet::RenameEntry(const string &name, const string &new_name, Ic
 
 void IcebergTableSet::LoadEntriesInternal(ClientContext &context) {
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
-	bool schema_listed = iceberg_transaction.listed_schemas.find(schema.name.GetIdentifierName()) !=
-	                     iceberg_transaction.listed_schemas.end();
+	bool schema_listed =
+	    iceberg_transaction.listed_schemas.find(schema.GetNamespaceKey()) != iceberg_transaction.listed_schemas.end();
 	if (schema_listed) {
 		return;
 	}
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	// The request owns its namespace; workers never access or mutate this table set.
 	IcebergRequestExecutor executor(context, ic_catalog);
-	bool allow_forbidden = !iceberg_transaction.looked_up_entries.count(schema.name.GetIdentifierName());
+	bool allow_forbidden = !iceberg_transaction.looked_up_entries.count(schema.GetNamespaceKey());
 	auto result = executor.Schedule(IcebergListTablesRequest(schema.namespace_items, allow_forbidden));
 	auto tables = executor.WaitAndTakeResult(*result);
 	if (context.IsInterrupted()) {
@@ -323,7 +323,7 @@ void IcebergTableSet::LoadEntriesInternal(ClientContext &context) {
 		return;
 	}
 	ApplyListResult(std::move(tables));
-	iceberg_transaction.listed_schemas.insert(schema.name.GetIdentifierName());
+	iceberg_transaction.listed_schemas.insert(schema.GetNamespaceKey());
 }
 
 void IcebergTableSet::ApplyListResult(IcebergListTablesResult tables) {
