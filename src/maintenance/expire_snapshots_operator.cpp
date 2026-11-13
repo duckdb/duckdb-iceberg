@@ -91,8 +91,8 @@ ExpireSnapshotsPlan ExecuteSnapshotExpiration(ClientContext &context, const Expi
 		visible_table.transaction_data->VerifySnapshotExpirationAllowed();
 	}
 	auto now = timestamp_ms_t(Timestamp::GetEpochMs(Timestamp::GetCurrentTimestamp()));
-	auto plan = PlanSnapshotExpiration(visible_table.table_metadata, input, now);
-	ValidateGCEnabled(visible_table.table_metadata);
+	auto plan = PlanSnapshotExpiration(visible_table.GetMetadata(), input, now);
+	ValidateGCEnabled(visible_table.GetMetadata());
 
 	if (plan.to_expire.empty()) {
 		return plan;
@@ -103,7 +103,7 @@ ExpireSnapshotsPlan ExecuteSnapshotExpiration(ClientContext &context, const Expi
 		transaction_data.TableRemoveSnapshots(plan.to_expire);
 		//! Mirror the staged update so another call in this transaction replans
 		//! from the remaining snapshots.
-		ApplyExpirationToTransactionMetadata(table.table_metadata, plan.to_expire);
+		ApplyExpirationToTransactionMetadata(table.GetMetadataMutable(), plan.to_expire);
 	});
 	return plan;
 }

@@ -461,7 +461,7 @@ void IcebergTransactionData::TableRemoveSnapshots(const vector<int64_t> &snapsho
 	updates.push_back(make_uniq<RemoveSnapshots>(snapshot_ids));
 	//! The standard requirement detects changes to main, but cannot detect a
 	//! concurrently created ref or retention-only policy changes.
-	auto &metadata = table_info.table_metadata;
+	const auto &metadata = table_info.GetMetadata();
 	requirements.push_back(make_uniq<AssertRefSnapshotId>(metadata.current_snapshot_id));
 }
 
