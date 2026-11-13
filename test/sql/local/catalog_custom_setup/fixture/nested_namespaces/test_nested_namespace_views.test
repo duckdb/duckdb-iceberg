@@ -1,0 +1,181 @@
+# name: test/sql/local/catalog_custom_setup/fixture/nested_namespaces/test_nested_namespace_views.test
+# description: a view in a nested namespace is stored under the full namespace and reads the tables its query names
+# group: [nested_namespaces]
+
+require-env FIXTURE_SERVER_AVAILABLE
+
+include test/sql/init_requires
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    URI 'http://127.0.0.1:8181',
+    SUPPORT_NESTED_NAMESPACES true
+);
+
+foreach view_name v v_path v_local v_txn
+
+statement ok
+drop view if exists my_datalake.fxv_parent.fxv_child.{view_name};
+
+endloop
+
+statement ok
+drop table if exists my_datalake.fxv_parent.fxv_child.t;
+
+statement ok
+drop table if exists my_datalake.fxv_child.t;
+
+statement ok
+drop schema if exists my_datalake.fxv_parent.fxv_child;
+
+statement ok
+drop schema if exists my_datalake.fxv_parent;
+
+statement ok
+drop schema if exists my_datalake.fxv_child;
+
+statement ok
+create schema my_datalake.fxv_parent;
+
+statement ok
+create schema my_datalake.fxv_parent.fxv_child;
+
+statement ok
+create schema my_datalake.fxv_child;
+
+# the same table name in the nested namespace and in its top-level sibling, with different rows
+statement ok
+create table my_datalake.fxv_parent.fxv_child.t (i INTEGER, s VARCHAR);
+
+statement ok
+create table my_datalake.fxv_child.t (i INTEGER, s VARCHAR);
+
+statement ok
+insert into my_datalake.fxv_parent.fxv_child.t values (1, 'nested'), (2, 'nested');
+
+statement ok
+insert into my_datalake.fxv_child.t values (10, 'top');
+
+statement ok
+use my_datalake.fxv_parent.fxv_child;
+
+# a view's query has to name its tables with their namespace, in a nested namespace as anywhere else
+statement error
+create view v_unqualified as select * from t;
+----
+names a table without a namespace
+
+statement ok
+create view my_datalake.fxv_parent.fxv_child.v as select i, s from my_datalake.fxv_parent.fxv_child.t;
+
+# the nested path without the catalog
+statement ok
+create view my_datalake.fxv_parent.fxv_child.v_path as select i, s from fxv_parent.fxv_child.t;
+
+# an unqualified view name lands in the current nested namespace
+statement ok
+create view v_local as select i from my_datalake.fxv_parent.fxv_child.t;
+
+statement ok
+use my_datalake.fxv_child;
+
+# Reading a view back also checks its default namespace, which has to be the full [fxv_parent, fxv_child].
+foreach view_name my_datalake.fxv_parent.fxv_child.v my_datalake."fxv_parent.fxv_child".v my_datalake.fxv_parent.fxv_child.v_path
+
+query IT
+select * from {view_name} order by i;
+----
+1	nested
+2	nested
+
+endloop
+
+query I
+select i from my_datalake.fxv_parent.fxv_child.v_local order by i;
+----
+1
+2
+
+# the views are in the nested namespace only, not in the sibling with the same last name
+query TT
+select schema_name, view_name from duckdb_views() where database_name = 'my_datalake' and schema_name = 'fxv_child' and view_name in ('v', 'v_path', 'v_local') order by all;
+----
+fxv_child	v
+fxv_child	v_local
+fxv_child	v_path
+
+statement error
+select * from my_datalake.fxv_child.v;
+----
+does not exist
+
+query I
+select request_url like '%/namespaces/fxv_parent%1Ffxv_child/views/v' from iceberg_view_metadata('my_datalake.fxv_parent.fxv_child.v');
+----
+true
+
+# a view staged in a transaction is listed in its own namespace, not in the sibling with the same last name
+statement ok
+begin;
+
+statement ok
+create view my_datalake.fxv_parent.fxv_child.v_txn as select i from my_datalake.fxv_parent.fxv_child.t;
+
+query I
+select count(*) from duckdb_views() where database_name = 'my_datalake' and schema_name = 'fxv_child' and view_name = 'v_txn';
+----
+1
+
+query I
+select count(*) from my_datalake.fxv_parent.fxv_child.v_txn;
+----
+2
+
+statement ok
+rollback;
+
+statement error
+select * from my_datalake.fxv_parent.fxv_child.v_txn;
+----
+does not exist
+
+foreach view_name v v_path v_local
+
+statement ok
+drop view my_datalake.fxv_parent.fxv_child.{view_name};
+
+endloop
+
+statement ok
+drop table my_datalake.fxv_parent.fxv_child.t;
+
+statement ok
+drop table my_datalake.fxv_child.t;
+
+statement ok
+use my_datalake.default;
+
+statement ok
+drop schema my_datalake.fxv_parent.fxv_child;
+
+statement ok
+drop schema my_datalake.fxv_parent;
+
+statement ok
+drop schema my_datalake.fxv_child;
