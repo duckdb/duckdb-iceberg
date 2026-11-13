@@ -65,6 +65,23 @@ SELECT id FROM my_datalake.default.add_field_pushdown_cast WHERE s.n.z::VARCHAR 
 ----
 3
 
+# Each projection has its own scan type, including a cast of the missing struct itself.
+query ITITT
+SELECT id, s.y::VARCHAR, s.y::BIGINT, s.n::VARCHAR, s.n.z::VARCHAR
+FROM my_datalake.default.add_field_pushdown_cast ORDER BY id;
+----
+1	NULL	NULL	NULL	NULL
+2	NULL	NULL	NULL	NULL
+3	30	30	{'z': 300}	300
+
+# Reading only missing fields must still preserve all rows from the old files.
+query TT rowsort
+SELECT s.y::VARCHAR, s.n.z::VARCHAR FROM my_datalake.default.add_field_pushdown_cast;
+----
+30	300
+NULL	NULL
+NULL	NULL
+
 # The same on a partitioned table, whose files have partition values
 statement ok
 CREATE TABLE my_datalake.default.add_field_pushdown_cast_partitioned (id INTEGER, p INTEGER, s STRUCT(x INTEGER));
