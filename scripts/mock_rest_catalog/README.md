@@ -87,6 +87,11 @@ snapshot ID or timestamp and rollback to an ancestor snapshot are supported for
 v2 and v3 tables. Historical files remain in the run directory; restarting still creates
 a fresh catalog.
 
+Metadata-only snapshot expiration uses `remove-snapshots`. Both backends remove
+the selected snapshots, discard dangling references, and trim timestamp history
+through the last removed entry. Existing metadata and data files remain intact.
+Run the Python model regressions with `python3 -m unittest scripts.mock_rest_catalog.test_model`.
+
 V3 creation initializes `next-row-id` to zero. Upgrading a v2 table does the same
 without changing historical snapshots or their files. New v3 snapshots must carry
 nonnegative 64-bit `first-row-id` and `added-rows` values, and their allocations

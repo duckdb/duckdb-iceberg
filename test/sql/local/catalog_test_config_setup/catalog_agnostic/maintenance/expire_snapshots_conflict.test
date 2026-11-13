@@ -1,0 +1,63 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/expire_snapshots_conflict.test
+# description: expire_snapshots rejects a main-ref CAS conflict without partial expiry
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+set ignore_error_messages
+
+statement ok
+drop table if exists my_datalake.default.expire_snapshots_conflict;
+
+statement ok
+create table my_datalake.default.expire_snapshots_conflict (id INTEGER);
+
+foreach value 1 2 3
+
+statement ok
+insert into my_datalake.default.expire_snapshots_conflict values ({value});
+
+endloop
+
+statement ok con1
+begin;
+
+query II con1
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_conflict', retain_last => 1, older_than => timestamp '2999-01-01');
+----
+2	1
+
+statement ok con2
+begin;
+
+statement ok con2
+insert into my_datalake.default.expire_snapshots_conflict values (4);
+
+statement ok con2
+commit;
+
+statement error con1
+commit;
+----
+<REGEX>:.*TransactionContext Error.*Conflict_409.*
+
+query II
+select count(*), sum(id) from my_datalake.default.expire_snapshots_conflict;
+----
+4	10
+
+query I
+select count(*) from iceberg_snapshots(my_datalake.default.expire_snapshots_conflict);
+----
+4
+
+statement ok
+drop table my_datalake.default.expire_snapshots_conflict;

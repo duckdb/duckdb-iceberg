@@ -1,0 +1,127 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/add_field_pushdown_cast.test
+# description: A cast on a struct field reads NULL from files written before the field was added
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.add_field_pushdown_cast;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.add_field_pushdown_cast_partitioned;
+
+statement ok
+CREATE TABLE my_datalake.default.add_field_pushdown_cast (id INTEGER, s STRUCT(x INTEGER));
+
+# Row 2 has a NULL struct
+statement ok
+INSERT INTO my_datalake.default.add_field_pushdown_cast VALUES (1, {'x': 1}), (2, NULL);
+
+statement ok
+ALTER TABLE my_datalake.default.add_field_pushdown_cast ADD COLUMN s.y INTEGER;
+
+statement ok
+ALTER TABLE my_datalake.default.add_field_pushdown_cast ADD COLUMN s.n STRUCT(z INTEGER);
+
+statement ok
+INSERT INTO my_datalake.default.add_field_pushdown_cast VALUES (3, {'x': 3, 'y': 30, 'n': {'z': 300}});
+
+query IT
+SELECT id, s.y::VARCHAR FROM my_datalake.default.add_field_pushdown_cast ORDER BY id;
+----
+1	NULL
+2	NULL
+3	30
+
+query I
+SELECT id FROM my_datalake.default.add_field_pushdown_cast WHERE s.y::VARCHAR = '30';
+----
+3
+
+query I
+SELECT id FROM my_datalake.default.add_field_pushdown_cast WHERE s.y IS NULL ORDER BY id;
+----
+1
+2
+
+query II
+SELECT id, s.n.z FROM my_datalake.default.add_field_pushdown_cast ORDER BY id;
+----
+1	NULL
+2	NULL
+3	300
+
+query IT
+SELECT id, s.n.z::VARCHAR FROM my_datalake.default.add_field_pushdown_cast ORDER BY id;
+----
+1	NULL
+2	NULL
+3	300
+
+query I
+SELECT id FROM my_datalake.default.add_field_pushdown_cast WHERE s.n.z::VARCHAR = '300';
+----
+3
+
+# Each projection has its own scan type, including a cast of the missing struct itself.
+query ITITT
+SELECT id, s.y::VARCHAR, s.y::BIGINT, s.n::VARCHAR, s.n.z::VARCHAR
+FROM my_datalake.default.add_field_pushdown_cast ORDER BY id;
+----
+1	NULL	NULL	NULL	NULL
+2	NULL	NULL	NULL	NULL
+3	30	30	{'z': 300}	300
+
+# Reading only missing fields must still preserve all rows from the old files.
+query TT rowsort
+SELECT s.y::VARCHAR, s.n.z::VARCHAR FROM my_datalake.default.add_field_pushdown_cast;
+----
+30	300
+NULL	NULL
+NULL	NULL
+
+# The same on a partitioned table, whose files have partition values
+statement ok
+CREATE TABLE my_datalake.default.add_field_pushdown_cast_partitioned (id INTEGER, p INTEGER, s STRUCT(x INTEGER));
+
+statement ok
+ALTER TABLE my_datalake.default.add_field_pushdown_cast_partitioned SET PARTITIONED BY (p);
+
+statement ok
+INSERT INTO my_datalake.default.add_field_pushdown_cast_partitioned VALUES (1, 10, {'x': 1}), (2, 10, NULL);
+
+statement ok
+ALTER TABLE my_datalake.default.add_field_pushdown_cast_partitioned ADD COLUMN s.y INTEGER;
+
+statement ok
+ALTER TABLE my_datalake.default.add_field_pushdown_cast_partitioned ADD COLUMN s.n STRUCT(z INTEGER);
+
+statement ok
+INSERT INTO my_datalake.default.add_field_pushdown_cast_partitioned VALUES (3, 10, {'x': 3, 'y': 30, 'n': {'z': 300}});
+
+query IT
+SELECT id, s.y::VARCHAR FROM my_datalake.default.add_field_pushdown_cast_partitioned ORDER BY id;
+----
+1	NULL
+2	NULL
+3	30
+
+query IT
+SELECT id, s.n.z::VARCHAR FROM my_datalake.default.add_field_pushdown_cast_partitioned ORDER BY id;
+----
+1	NULL
+2	NULL
+3	300
+
+query I
+SELECT id FROM my_datalake.default.add_field_pushdown_cast_partitioned WHERE s.y::VARCHAR = '30';
+----
+3
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.add_field_pushdown_cast;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.add_field_pushdown_cast_partitioned;
