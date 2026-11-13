@@ -197,7 +197,9 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 	D_ASSERT(context);
 	info.SetQualifiedName(FoldName(info.GetQualifiedName()));
 	auto &iceberg_transaction = IcebergTransaction::Get(*context, *this);
-	auto &schema_name = info.GetQualifiedName().Schema().GetIdentifierName();
+	auto schema_path = info.ParentSchemas();
+	schema_path.push_back(info.SchemaName());
+	auto schema_name = GetNamespaceKey(schema_path);
 	auto created_schema = iceberg_transaction.created_schemas.CheckPending(schema_name, info.on_conflict);
 	if (created_schema) {
 		return created_schema.get();
@@ -239,23 +241,25 @@ void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 	}
 	info.SetQualifiedName(FoldName(info.GetQualifiedName()));
 
+	auto &path = info.GetQualifiedName().Path();
+	auto schema_name = GetNamespaceKey(path, path.size() > 1 ? 1 : 0);
+
 	// Verify schema existence on the server first
-	bool schema_exists =
-	    IRCAPI::VerifySchemaExistence(context, *this, info.GetQualifiedName().Name().GetIdentifierName());
+	bool schema_exists = IRCAPI::VerifySchemaExistence(context, *this, schema_name);
 
 	if (!schema_exists) {
 		if (info.if_not_found == OnEntryNotFound::RETURN_NULL) {
 			// remove the entry if it exists locally
 			// it could have been created during the bind phase.
-			GetSchemas().RemoveEntry(info.GetQualifiedName().Name().GetIdentifierName());
+			GetSchemas().RemoveEntry(schema_name);
 			return;
 		}
-		throw CatalogException("Schema with name %s does not exist", info.GetQualifiedName().Name());
+		throw CatalogException("Schema with name %s does not exist", Identifier(schema_name));
 	}
 
 	// Schema exists - defer the server deletion to commit
 	auto &iceberg_transaction = IcebergTransaction::Get(context, *this);
-	iceberg_transaction.deleted_schemas.insert(info.GetQualifiedName().Name().GetIdentifierName());
+	iceberg_transaction.deleted_schemas.insert(schema_name);
 }
 
 unique_ptr<LogicalOperator> IcebergCatalog::BindCreateIndex(Binder &binder, CreateStatement &stmt,
