@@ -326,6 +326,15 @@ IcebergManifestEntry DeleteEntry(idx_t id, Value partition, optional<string> ref
 	return entry;
 }
 
+void SetFilePathBounds(IcebergDataFile &file, optional<string> lower, optional<string> upper) {
+	if (lower) {
+		file.lower_bounds[MultiFileReader::DELETE_FILE_PATH_FIELD_ID] = Value::BLOB_RAW(*lower);
+	}
+	if (upper) {
+		file.upper_bounds[MultiFileReader::DELETE_FILE_PATH_FIELD_ID] = Value::BLOB_RAW(*upper);
+	}
+}
+
 vector<idx_t> Candidates(const IcebergDeleteCandidateIndex &index, const IcebergDataFile &data, int32_t spec_id) {
 	vector<idx_t> result;
 	for (auto &bucket : index.Lookup(data.file_path, spec_id, IcebergFilePruner::PartitionValueMap(data))) {
@@ -368,14 +377,36 @@ TEST_CASE("Iceberg delete candidate buckets preserve paths partitions and conser
 	entries.back().data_file.partition_info.clear();
 	entries.push_back(DeleteEntry(10, Value::INTEGER(1))); // unlike numeric types can compare equal
 	entries[3].data_file.content = IcebergManifestEntryContentType::EQUALITY_DELETES;
+	// Equal file_path bounds name the one data file a position delete file references.
+	entries.push_back(DeleteEntry(11, Value::DOUBLE(1)));
+	SetFilePathBounds(entries.back().data_file, "original.parquet", "original.parquet");
+	entries.push_back(DeleteEntry(12, Value::DOUBLE(1)));
+	SetFilePathBounds(entries.back().data_file, "other.parquet", "other.parquet");
+	// A range of paths, a one-sided bound, or bounds on an equality delete name no data file.
+	entries.push_back(DeleteEntry(13, Value::DOUBLE(1)));
+	SetFilePathBounds(entries.back().data_file, "other.parquet", "zzz.parquet");
+	entries.push_back(DeleteEntry(14, Value::DOUBLE(1)));
+	SetFilePathBounds(entries.back().data_file, "other.parquet", nullopt);
+	entries.push_back(DeleteEntry(15, Value::DOUBLE(1)));
+	SetFilePathBounds(entries.back().data_file, nullopt, "other.parquet");
+	entries.push_back(DeleteEntry(16, Value::DOUBLE(1)));
+	SetFilePathBounds(entries.back().data_file, "other.parquet", "other.parquet");
+	entries.back().data_file.content = IcebergManifestEntryContentType::EQUALITY_DELETES;
+	// A NULL bound is not a path, whatever the other bound names.
+	entries.push_back(DeleteEntry(17, Value::DOUBLE(1)));
+	SetFilePathBounds(entries.back().data_file, nullopt, "other.parquet");
+	entries.back().data_file.lower_bounds[MultiFileReader::DELETE_FILE_PATH_FIELD_ID] = Value(LogicalType::BLOB);
+	entries.push_back(DeleteEntry(18, Value::DOUBLE(1)));
+	SetFilePathBounds(entries.back().data_file, "other.parquet", nullopt);
+	entries.back().data_file.upper_bounds[MultiFileReader::DELETE_FILE_PATH_FIELD_ID] = Value(LogicalType::BLOB);
 	IcebergDeleteCandidateIndex index(context, std::move(entries), spec);
 	auto data = DeleteEntry(0, Value::DOUBLE(1)).data_file;
 	data.file_path = "original.parquet";
-	REQUIRE(Candidates(index, data, 17) == vector<idx_t> {0, 1, 3, 9, 10});
+	REQUIRE(Candidates(index, data, 17) == vector<idx_t> {0, 1, 3, 9, 10, 11, 13, 14, 15, 16, 17, 18});
 	REQUIRE(index.Entries()[0].data_file.content_offset != index.Entries()[1].data_file.content_offset);
 	// Only the original path participates in reference matching, even if a scan resolves a moved path.
 	data.file_path = "resolved/original.parquet";
-	REQUIRE(Candidates(index, data, 17) == vector<idx_t> {3, 9, 10});
+	REQUIRE(Candidates(index, data, 17) == vector<idx_t> {3, 9, 10, 13, 14, 15, 16, 17, 18});
 	data.partition_info[0].value = Value(LogicalType::INTEGER);
 	REQUIRE(Candidates(index, data, 17) == vector<idx_t> {5, 9, 10});
 	data.partition_info[0].value = Value::DOUBLE(-std::numeric_limits<double>::quiet_NaN());
@@ -385,9 +416,9 @@ TEST_CASE("Iceberg delete candidate buckets preserve paths partitions and conser
 	REQUIRE(Candidates(index, data, 18).empty());
 	// Different types or missing fields cannot safely narrow the unreferenced bucket.
 	data.partition_info[0].value = Value::INTEGER(1);
-	REQUIRE(Candidates(index, data, 17) == vector<idx_t> {3, 4, 5, 6, 7, 9, 10});
+	REQUIRE(Candidates(index, data, 17) == vector<idx_t> {3, 4, 5, 6, 7, 9, 10, 13, 14, 15, 16, 17, 18});
 	data.partition_info.clear();
-	REQUIRE(Candidates(index, data, 17) == vector<idx_t> {3, 4, 5, 6, 7, 9, 10});
+	REQUIRE(Candidates(index, data, 17) == vector<idx_t> {3, 4, 5, 6, 7, 9, 10, 13, 14, 15, 16, 17, 18});
 
 	IcebergDeleteCandidateIndex global(context, {DeleteEntry(0, Value::INTEGER(1)), DeleteEntry(1, Value::INTEGER(2))},
 	                                   IcebergPartitionSpec(0));
@@ -549,6 +580,11 @@ TEST_CASE("Iceberg indexed candidates agree with exhaustive delete applicability
 				entry.data_file.file_format = "parquet";
 				entry.data_file.equality_ids = {1}; // missing bounds must stay conservative
 				entries.push_back(entry);
+				for (auto bounded_path : {"data.parquet", "other.parquet"}) {
+					auto bounded = entry;
+					SetFilePathBounds(bounded.data_file, string(bounded_path), string(bounded_path));
+					entries.push_back(std::move(bounded));
+				}
 				entry.data_file.referenced_data_file = "data.parquet";
 				entries.push_back(std::move(entry));
 			}

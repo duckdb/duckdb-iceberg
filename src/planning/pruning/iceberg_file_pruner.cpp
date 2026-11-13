@@ -501,7 +501,8 @@ bool IcebergFilePruner::DeleteFileMatchesDataFile(const IcebergManifest &delete_
                                                   optional_ptr<IcebergEqualityDeleteBounds> delete_bounds) const {
 	auto &delete_file = delete_manifest_entry.data_file;
 	auto &data_file = data_manifest_entry.data_file;
-	if (delete_file.referenced_data_file && *delete_file.referenced_data_file != data_file.file_path) {
+	auto referenced_data_file = delete_file.SingleReferencedDataFile();
+	if (referenced_data_file && *referenced_data_file != data_file.file_path) {
 		return false;
 	}
 

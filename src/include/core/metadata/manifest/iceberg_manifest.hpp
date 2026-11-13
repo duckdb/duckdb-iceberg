@@ -94,6 +94,9 @@ public:
 	int64_t GetFirstRowId() const;
 	bool IsDeletionVector() const;
 	int64_t GetContentSizeInBytes() const;
+	//! The only data file this delete file holds deletes for: its 'referenced_data_file', or for a position
+	//! delete file the path both of its 'file_path' bounds agree on. Null if it may cover several data files.
+	optional_ptr<const string> SingleReferencedDataFile() const;
 
 public:
 	IcebergManifestEntryContentType content;

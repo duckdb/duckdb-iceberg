@@ -1,0 +1,186 @@
+# name: test/sql/local/native_catalog/position_delete_filename_bounds_pruning.test
+# description: Position deletes whose file_path bounds are equal only apply to the data file the bounds name
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+SET iceberg_use_server_side_scan_planning=false;
+
+statement ok
+CREATE TABLE my_datalake.default.position_delete_bounds_pruning (id INTEGER) WITH ('format-version' = 2);
+
+# Three data files in the same (unpartitioned) partition, told apart by their record count.
+statement ok
+INSERT INTO my_datalake.default.position_delete_bounds_pruning SELECT range FROM range(0, 10);
+
+statement ok
+INSERT INTO my_datalake.default.position_delete_bounds_pruning SELECT range FROM range(100, 111);
+
+statement ok
+INSERT INTO my_datalake.default.position_delete_bounds_pruning SELECT range FROM range(200, 212);
+
+# Model an external writer: DuckDB always writes 'referenced_data_file', other writers only
+# record the file_path bounds. Keep the catalog lookup and direct metadata reads in one transaction.
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE bounds_data = (
+	SELECT {
+		a: max(file_path) FILTER (WHERE record_count = 10),
+		b: max(file_path) FILTER (WHERE record_count = 11),
+		c: max(file_path) FILTER (WHERE record_count = 12)
+	}
+	FROM iceberg_metadata(my_datalake.default.position_delete_bounds_pruning) WHERE content = 'DATA'
+);
+
+statement ok
+SET VARIABLE bounds_data_list = (
+	SELECT manifest_list FROM iceberg_snapshots(my_datalake.default.position_delete_bounds_pruning)
+	WHERE sequence_number = 3
+);
+
+# bounds_x:    every position references data file x, and both bounds name it
+# shared:      positions for two data files, no bounds
+# lower_only:  positions for b, but only a lower bound, which names a
+# null_lower:  positions for b, with a NULL lower bound and an upper bound that names a
+# truncated:   positions for b, with bounds truncated to 16 characters as Iceberg's truncate(16) writes them
+#              (upper bound's last character incremented), so they differ and every data file lies between them
+statement ok
+CREATE TEMP TABLE bounds_positions AS
+SELECT kind, CASE file
+		WHEN 'a' THEN getvariable('bounds_data').a
+		WHEN 'b' THEN getvariable('bounds_data').b
+		ELSE getvariable('bounds_data').c END AS file_path,
+	pos::BIGINT AS pos
+FROM (VALUES
+	('bounds_a', 'a', 1), ('bounds_b', 'b', 1), ('bounds_c', 'c', 1),
+	('shared', 'a', 2), ('shared', 'b', 2),
+	('lower_only', 'b', 3),
+	('null_lower', 'b', 5),
+	('truncated', 'b', 4)
+) t(kind, file, pos);
+
+foreach kind bounds_a bounds_b bounds_c shared lower_only null_lower truncated
+
+statement ok
+COPY (SELECT file_path, pos FROM bounds_positions WHERE kind = '{kind}' ORDER BY file_path, pos)
+TO '{TEST_DIR}/posdel_{kind}.parquet' (
+	FORMAT PARQUET, FIELD_IDS {file_path: 2147483546, pos: 2147483545}
+);
+
+endloop
+
+statement ok
+COPY (
+	SELECT 1::INTEGER AS status, 4::BIGINT AS snapshot_id,
+		4::BIGINT AS sequence_number, 4::BIGINT AS file_sequence_number,
+		{
+			content: 1::INTEGER, file_path: '{TEST_DIR}/posdel_' || kind || '.parquet', file_format: 'PARQUET',
+			partition: {}, record_count: count(*)::BIGINT, file_size_in_bytes: 1000::BIGINT,
+			lower_bounds: CASE
+				WHEN kind LIKE 'bounds_%' THEN MAP {2147483546: encode(min(file_path))}
+				WHEN kind = 'lower_only' THEN MAP {2147483546: encode(getvariable('bounds_data').a)}
+				WHEN kind = 'null_lower' THEN MAP {2147483546: NULL::BLOB}
+				WHEN kind = 'truncated' THEN MAP {2147483546: encode(left(min(file_path), 16))} END,
+			upper_bounds: CASE
+				WHEN kind LIKE 'bounds_%' THEN MAP {2147483546: encode(max(file_path))}
+				WHEN kind = 'null_lower' THEN MAP {2147483546: encode(getvariable('bounds_data').a)}
+				WHEN kind = 'truncated' THEN MAP {2147483546: encode(
+					left(max(file_path), 15) || chr(ascii(substr(max(file_path), 16, 1)) + 1))} END
+		} AS data_file
+	FROM bounds_positions GROUP BY kind
+) TO '{TEST_DIR}/posdel_bounds_deletes.avro' (
+	FORMAT AVRO,
+	METADATA {'schema-id': '0', 'partition-spec-id': '0', 'format-version': '2', 'content': 'deletes'},
+	FIELD_IDS {
+		status: 0, snapshot_id: 1, sequence_number: 3, file_sequence_number: 4,
+		data_file: {__duckdb_field_id: 2, content: 134, file_path: 100, file_format: 101,
+			partition: 102, record_count: 103, file_size_in_bytes: 104,
+			lower_bounds: {__duckdb_field_id: 125, key: 126, value: 127},
+			upper_bounds: {__duckdb_field_id: 128, key: 129, value: 130}}
+	}
+);
+
+statement ok
+CREATE TEMP TABLE bounds_list AS
+SELECT * FROM read_avro(getvariable('bounds_data_list'))
+UNION ALL BY NAME
+SELECT '{TEST_DIR}/posdel_bounds_deletes.avro' AS manifest_path,
+	1000::BIGINT AS manifest_length, 0::INTEGER AS partition_spec_id,
+	1::INTEGER AS content, 4::BIGINT AS sequence_number, 4::BIGINT AS min_sequence_number,
+	4::BIGINT AS added_snapshot_id, 7::INTEGER AS added_files_count,
+	0::INTEGER AS existing_files_count, 0::INTEGER AS deleted_files_count,
+	8::BIGINT AS added_rows_count, 0::BIGINT AS existing_rows_count, 0::BIGINT AS deleted_rows_count;
+
+statement ok
+COPY bounds_list TO '{TEST_DIR}/posdel_bounds_list.avro' (
+	FORMAT AVRO,
+	FIELD_IDS {
+		manifest_path: 500, manifest_length: 501, partition_spec_id: 502,
+		content: 517, sequence_number: 515, min_sequence_number: 516, added_snapshot_id: 503,
+		added_files_count: 504, existing_files_count: 505, deleted_files_count: 506,
+		added_rows_count: 512, existing_rows_count: 513, deleted_rows_count: 514,
+		partitions: {__duckdb_field_id: 507, list: {__duckdb_field_id: 508,
+			contains_null: 509, contains_nan: 518, lower_bound: 510, upper_bound: 511}}
+	}
+);
+
+statement ok
+COMMIT;
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/position_delete_bounds_pruning',
+	json_object('requirements', json_array(), 'updates', json_array(
+		json_object('action', 'add-snapshot', 'snapshot', json_object(
+			'snapshot-id', 4, 'sequence-number', 4, 'schema-id', 0,
+			'timestamp-ms', epoch_ms(current_timestamp), 'manifest-list', '{TEST_DIR}/posdel_bounds_list.avro',
+			'summary', json_object('operation', 'delete', 'total-data-files', '3', 'total-records', '33',
+				'total-delete-files', '7', 'total-position-deletes', '8', 'total-equality-deletes', '0'))),
+		json_object('action', 'set-snapshot-ref', 'ref-name', 'main', 'type', 'branch', 'snapshot-id', 4))));
+----
+200
+
+# Every position is applied, whichever way its delete file is scoped.
+query I
+SELECT id FROM my_datalake.default.position_delete_bounds_pruning
+WHERE id IN (1, 2, 101, 102, 103, 104, 105, 201) ORDER BY id;
+----
+
+query I
+SELECT count(*) FROM my_datalake.default.position_delete_bounds_pruning;
+----
+25
+
+statement ok
+CALL enable_logging('Iceberg');
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Only data file b can match. Its scan needs the delete file bounded to b and the four files
+# whose bounds do not name a single data file; the files bounded to a and c cannot apply.
+query I
+SELECT count(*) FROM my_datalake.default.position_delete_bounds_pruning WHERE id BETWEEN 100 AND 110;
+----
+6
+
+query I
+SELECT DISTINCT regexp_extract(message, 'read ''positional_delete_file'': ''[^'']*posdel_(\w+)\.parquet''', 1) AS kind
+FROM duckdb_logs
+WHERE type = 'Iceberg' AND message LIKE 'Iceberg Delete Scan, read ''positional_delete_file''%'
+ORDER BY kind;
+----
+bounds_b
+lower_only
+null_lower
+shared
+truncated
+
+statement ok
+DROP TABLE my_datalake.default.position_delete_bounds_pruning;
