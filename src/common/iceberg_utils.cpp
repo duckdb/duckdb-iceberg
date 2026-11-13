@@ -4,6 +4,7 @@
 #include "duckdb.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/gzip_file_system.hpp"
+#include "duckdb/common/open_file_info.hpp"
 #include "duckdb/main/database_manager.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
@@ -105,7 +106,21 @@ string IcebergUtils::FileToString(const OpenFileInfo &file, FileSystem &fs) {
 	//
 	// We read directly into the result string's buffer to avoid an intermediate copy,
 	// growing the buffer 2x when space runs out (amortized O(1) per byte).
-	auto handle = fs.OpenFile(file, FileFlags::FILE_FLAGS_READ);
+	//
+	// Opening a remote file normally costs a HEAD request (httpfs needs the size for range reads) before the
+	// first GET. These files are read whole, so ask for a full download instead: httpfs then skips the HEAD and
+	// fetches the object with a single GET, serving the reads below from that download. File systems that do not
+	// know the hint ignore it. A caller that already knows the size (or asked otherwise) is left alone.
+	OpenFileInfo to_open = file;
+	if (!to_open.extended_info) {
+		to_open.extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
+	}
+	auto &open_options = to_open.extended_info->options;
+	if (open_options.find("file_size") == open_options.end() &&
+	    open_options.find("force_full_download") == open_options.end()) {
+		open_options["force_full_download"] = Value::BOOLEAN(true);
+	}
+	auto handle = fs.OpenFile(to_open, FileFlags::FILE_FLAGS_READ);
 	string result;
 	idx_t capacity = 32768;
 	idx_t size = 0;
