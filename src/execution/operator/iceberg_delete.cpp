@@ -91,6 +91,35 @@ optional_ptr<PhysicalTableScan> IcebergDelete::FindIcebergScan(PhysicalOperator 
 	return nullptr;
 }
 
+static IcebergMultiFileList &GetIcebergFileList(PhysicalTableScan &scan) {
+	auto &bind_data = scan.bind_data->Cast<MultiFileBindData>();
+	return bind_data.file_list->Cast<IcebergMultiFileList>();
+}
+
+//! The scan a DELETE reads straight from, or nullptr. Only projections preserve every row selected by the scan;
+//! joins and residual filters may reject them.
+static optional_ptr<PhysicalTableScan> FindMetadataOnlyDeleteScan(PhysicalOperator &plan) {
+	if (plan.type == PhysicalOperatorType::TABLE_SCAN) {
+		auto &scan = plan.Cast<PhysicalTableScan>();
+		return IsScanCreatedByDelete(scan) ? &scan : nullptr;
+	}
+	if (plan.type != PhysicalOperatorType::PROJECTION || plan.children.size() != 1) {
+		return nullptr;
+	}
+	return FindMetadataOnlyDeleteScan(plan.children[0]);
+}
+
+//! A standalone DELETE may drop covered files when its rows come straight from its own scan.
+//! An equality delete never drops files in Finalize, so its scan must keep emitting them.
+static void AllowMetadataOnlyDelete(IcebergDelete &op) {
+	if (op.is_equality_delete) {
+		return;
+	}
+	if (auto scan = FindMetadataOnlyDeleteScan(op.children[0])) {
+		GetIcebergFileList(*scan).GetScanPlanner().SetScanIsDeleteSource();
+	}
+}
+
 IcebergDelete::IcebergDelete(PhysicalPlan &physical_plan, IcebergTableSchemaVersion &table,
                              optional_ptr<IcebergMultiFileList> multi_file_list, PhysicalOperator &child,
                              vector<idx_t> row_id_indexes)
@@ -296,6 +325,32 @@ IcebergDeleteFileInfo IcebergDelete::WritePositionalDeleteFile(ClientContext &co
 static void PopulateAlteredManifests(IcebergManifestDeletes &out, const IcebergDeleteData &delete_data) {
 	for (auto &file : delete_data.source_files) {
 		out.InvalidateFile(file);
+	}
+}
+
+//! Remove covered data files and only the delete files or DV blobs that apply exclusively to them.
+static void DropFullyCoveredDataFiles(ClientContext &context, const IcebergMultiFileList &multi_file_list,
+                                      IcebergDeleteGlobalState &global_state) {
+	idx_t dropped_data_files = 0;
+	idx_t dropped_delete_files = 0;
+	int64_t dropped_records = 0;
+	auto &altered_manifests = global_state.write_result.altered_manifests;
+	for (auto &dropped : multi_file_list.GetScanPlanner().ResolveDroppedDataFiles()) {
+		if (!altered_manifests.InvalidateFile(std::move(dropped.data_file))) {
+			continue;
+		}
+		for (auto &delete_file : dropped.superseded_delete_files) {
+			dropped_delete_files += altered_manifests.InvalidateFile(std::move(delete_file));
+		}
+		dropped_data_files++;
+		dropped_records += dropped.live_record_count;
+	}
+	global_state.total_deleted_count += NumericCast<idx_t>(dropped_records);
+	if (dropped_data_files) {
+		DUCKDB_LOG(context, IcebergLogType,
+		           "Iceberg metadata-only DELETE, dropped %llu data file(s) holding %lld record(s) and %llu delete "
+		           "file(s) that applied only to them, without scanning any of them",
+		           dropped_data_files, dropped_records, dropped_delete_files);
 	}
 }
 
@@ -530,6 +585,10 @@ void IcebergDelete::ScheduleDeletes(Pipeline &pipeline, Event &event, IcebergDel
 		pending_deletes = std::move(*merged_deletes);
 	}
 	if (pending_deletes.IsEmpty()) {
+		//! A metadata-only DELETE still needs a snapshot even though it emitted no rows to the sink.
+		if (stage_snapshot && !global_state.write_result.altered_manifests.IsEmpty()) {
+			AddDeleteSnapshot(event.GetClientContext(), global_state);
+		}
 		// An empty UPDATE may have no source scan after optimization.
 		return;
 	}
@@ -646,6 +705,9 @@ SinkFinalizeType IcebergDelete::Finalize(Pipeline &pipeline, Event &event, Clien
 	auto &global_state = input.global_state.Cast<IcebergDeleteGlobalState>();
 
 	if (!is_equality_delete) {
+		if (multi_file_list) {
+			DropFullyCoveredDataFiles(context, *multi_file_list, global_state);
+		}
 		ScheduleDeletes(pipeline, event, global_state, true);
 		return SinkFinalizeType::READY;
 	}
@@ -669,7 +731,7 @@ SinkFinalizeType IcebergDelete::Finalize(Pipeline &pipeline, Event &event, Clien
 void IcebergDelete::AddDeleteSnapshot(ClientContext &context, IcebergDeleteGlobalState &global_state) const {
 	auto &iceberg_transaction = IcebergTransaction::Get(context, table.catalog);
 	auto iceberg_delete_files = GenerateDeleteManifestEntries(global_state);
-	if (!global_state.write_result.written_files.empty()) {
+	if (!global_state.write_result.written_files.empty() || !global_state.write_result.altered_manifests.IsEmpty()) {
 		ApplyTableUpdate(table.table_info, iceberg_transaction, [&](IcebergTable &tbl) {
 			auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
 			transaction_data.AddDeleteSnapshot(std::move(iceberg_delete_files),
@@ -700,6 +762,9 @@ string IcebergDelete::GetName() const {
 InsertionOrderPreservingMap<string> IcebergDelete::ParamsToString() const {
 	InsertionOrderPreservingMap<string> result;
 	result["Table Name"] = table.name.GetIdentifierName();
+	if (multi_file_list && multi_file_list->GetScanPlanner().CanDropCoveredFiles()) {
+		result["Metadata-Only Delete"] = "enabled";
+	}
 	return result;
 }
 
@@ -712,8 +777,7 @@ PhysicalOperator &IcebergDelete::PlanDelete(ClientContext &context, PhysicalPlan
 
 	optional_ptr<IcebergMultiFileList> multi_file_list;
 	if (scan) {
-		auto &bind_data = scan->bind_data->Cast<MultiFileBindData>();
-		multi_file_list = bind_data.file_list->Cast<IcebergMultiFileList>();
+		multi_file_list = GetIcebergFileList(*scan);
 	} else {
 		DUCKDB_LOG_DEBUG(context, "Could not find IcebergDelete source. Iceberg Multi File list is empty");
 	}
@@ -732,8 +796,9 @@ PhysicalOperator &IcebergDelete::PlanDelete(ClientContext &context, PhysicalPlan
 
 PhysicalOperator &IcebergCatalog::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner,
                                              LogicalDelete &op) {
+	//! Only a standalone DELETE comes through here: a MERGE plans its delete action through the PlanDelete overload
+	//! below, which applies write.merge.mode instead.
 	auto &irc_transaction = IcebergTransaction::Get(context, *this);
-	//! A MERGE plans its delete action through PlanDeleteOperation, which applies write.merge.mode instead
 	if (!op.return_chunk && !irc_transaction.planning_merge_into) {
 		auto &table_entry = op.table.Cast<IcebergTableSchemaVersion>();
 		auto &alter = irc_transaction.GetOrCreateAlter();
@@ -748,7 +813,11 @@ PhysicalOperator &IcebergCatalog::PlanDelete(ClientContext &context, PhysicalPla
 			return IcebergCopyOnWriteDeleteFilter::PlanDelete(context, planner, op, updated_table_entry);
 		}
 	}
-	return Catalog::PlanDelete(context, planner, op);
+	//! The base implementation plans the child and calls the overload below, which always yields an IcebergDelete.
+	auto &iceberg_delete = Catalog::PlanDelete(context, planner, op).Cast<IcebergDelete>();
+	//! UPDATE and MERGE never get here: both reuse the scan for row-producing actions, so it must not skip files.
+	AllowMetadataOnlyDelete(iceberg_delete);
+	return iceberg_delete;
 }
 
 PhysicalOperator &IcebergCatalog::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,

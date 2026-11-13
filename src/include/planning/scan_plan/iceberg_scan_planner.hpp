@@ -10,6 +10,7 @@
 #include "duckdb/common/types/batched_data_collection.hpp"
 #include "duckdb/function/partition_stats.hpp"
 
+#include "core/metadata/iceberg_file_identity.hpp"
 #include "planning/deletes/iceberg_delete_planner.hpp"
 #include "planning/pruning/iceberg_table_filter.hpp"
 #include "planning/scan_order/iceberg_scan_order.hpp"
@@ -21,6 +22,15 @@ namespace duckdb {
 
 class IcebergTableSchemaVersion;
 struct IcebergScanPlanContext;
+
+//! A data file covered by the scan predicate and the delete files (or individual DV blobs)
+//! superseded by its removal.
+struct DroppedDataFile {
+	IcebergFileIdentity data_file;
+	//! Deletes that cannot be attributed to this file alone are not subtracted, so this can over-report.
+	int64_t live_record_count;
+	vector<IcebergFileIdentity> superseded_delete_files;
+};
 
 //! Plans Iceberg data-file scans independently of DuckDB's MultiFileReader API.
 //! A planner represents one filtered view; filtered views share the underlying
@@ -40,6 +50,13 @@ public:
 	void SetScanOrder(unique_ptr<RowGroupOrderOptions> options);
 	void DisableServerSidePlanning();
 	void RequireRowIds();
+	void SetScanIsDeleteSource();
+	void SetFiltersFullyPushed(bool fully_pushed);
+	//! Whether this scan proves coverage per file and skips the files whose rows all match.
+	bool CanDropCoveredFiles() const;
+	//! Resolves the covered files this scan skipped, and the delete files that apply only to them, without opening
+	//! the data or delete files. Hands the files over, so call it once, after the scan has finished.
+	vector<DroppedDataFile> ResolveDroppedDataFiles() const;
 
 	const IcebergTableFilters &Filters() const;
 
@@ -89,6 +106,11 @@ private:
 	ClientContext &context;
 	FileSystem &fs;
 	IcebergTableFilters table_filters;
+	//! Only a standalone DELETE with no residual filters may skip fully covered data files.
+	bool scan_is_delete_source = false;
+	bool filters_fully_pushed = false;
+	//! Bound when the scan reached them, so taking them needs no second bind.
+	mutable vector<BoundIcebergManifestEntry> dropped_data_files DUCKDB_GUARDED_BY(shared_state->lock);
 
 	mutable bool view_initialized DUCKDB_GUARDED_BY(shared_state->lock) = false;
 	//! Written only by InitializeView under the planning lock, then immutable.
