@@ -1,0 +1,145 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/time_travel/at_version_ref_resolution.test
+# description: AT (VERSION => ...) tells snapshot ids from ref names and reads 'main' like a plain read (duckdb-iceberg#1252)
+# group: [time_travel]
+
+# Real branches and tags are covered in test/sql/local/native_catalog/read_branch_tag.test
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env TIMETRAVEL_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+drop table if exists my_datalake.default.at_version_ref;
+
+statement ok
+create table my_datalake.default.at_version_ref (id INTEGER);
+
+statement ok
+insert into my_datalake.default.at_version_ref values (1), (2);
+
+statement ok
+insert into my_datalake.default.at_version_ref values (3);
+
+query I
+select count(*) from my_datalake.default.at_version_ref AT (VERSION => 'main');
+----
+3
+
+# Inside a transaction, an explicit read of 'main' sees the transaction's own writes, like a plain read
+statement ok
+begin;
+
+statement ok
+insert into my_datalake.default.at_version_ref values (4);
+
+query II
+select
+	(select count(*) from my_datalake.default.at_version_ref),
+	(select count(*) from my_datalake.default.at_version_ref AT (VERSION => 'main'));
+----
+4	4
+
+statement ok
+rollback;
+
+# Only an optional sign and ASCII digits in int64 range is a snapshot id; any other string names a ref
+statement error
+select count(*) from my_datalake.default.at_version_ref AT (VERSION => ' 1 ');
+----
+Iceberg ref ' 1 ' does not exist
+
+statement error
+select count(*) from my_datalake.default.at_version_ref AT (VERSION => '0x2A');
+----
+Iceberg ref '0x2A' does not exist
+
+statement error
+select count(*) from my_datalake.default.at_version_ref AT (VERSION => '99999999999999999999');
+----
+Iceberg ref '99999999999999999999' does not exist
+
+statement error
+select count(*) from my_datalake.default.at_version_ref AT (VERSION => '9223372036854775808');
+----
+Iceberg ref '9223372036854775808' does not exist
+
+statement error
+select count(*) from my_datalake.default.at_version_ref AT (VERSION => '+');
+----
+Iceberg ref '+' does not exist
+
+# Digits with a sign or leading zeros are a snapshot id
+statement error
+select count(*) from my_datalake.default.at_version_ref AT (VERSION => '007');
+----
+Could not find snapshot with id 7
+
+statement error
+select count(*) from my_datalake.default.at_version_ref AT (VERSION => '+5');
+----
+Could not find snapshot with id 5
+
+statement error
+select count(*) from my_datalake.default.at_version_ref AT (VERSION => '-9223372036854775808');
+----
+Could not find snapshot with id -9223372036854775808
+
+# A numeric string is still a snapshot id
+statement ok
+set variable first_snapshot = (
+	select snapshot_id from iceberg_snapshots(my_datalake.default.at_version_ref) order by sequence_number limit 1
+);
+
+statement ok
+set variable q = $$ select count(*) from my_datalake.default.at_version_ref AT (VERSION => 'SNAP') $$;
+
+query I
+select * from query(getvariable('q').replace('SNAP', getvariable('first_snapshot')::VARCHAR));
+----
+2
+
+statement error
+select count(*) from my_datalake.default.at_version_ref AT (VERSION => 'audit');
+----
+Iceberg ref 'audit' does not exist
+
+statement ok
+drop table my_datalake.default.at_version_ref;
+
+# A table without snapshots has no 'main' ref yet: AT (VERSION => 'main') reads like a plain read
+statement ok
+drop table if exists my_datalake.default.at_version_ref_empty;
+
+statement ok
+create table my_datalake.default.at_version_ref_empty (id INTEGER);
+
+query I
+select count(*) from my_datalake.default.at_version_ref_empty AT (VERSION => 'main');
+----
+0
+
+statement error
+select count(*) from my_datalake.default.at_version_ref_empty AT (VERSION => 'audit');
+----
+Iceberg ref 'audit' does not exist (available refs: none)
+
+statement ok
+begin;
+
+statement ok
+insert into my_datalake.default.at_version_ref_empty values (1), (2);
+
+query II
+select
+	(select count(*) from my_datalake.default.at_version_ref_empty),
+	(select count(*) from my_datalake.default.at_version_ref_empty AT (VERSION => 'main'));
+----
+2	2
+
+statement ok
+rollback;
+
+statement ok
+drop table my_datalake.default.at_version_ref_empty;

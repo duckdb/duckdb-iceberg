@@ -1,6 +1,9 @@
 #include "core/metadata/iceberg_table_metadata.hpp"
 
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/string_util.hpp"
+
+#include <algorithm>
 
 #include "common/iceberg_utils.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
@@ -162,17 +165,104 @@ optional_ptr<const IcebergSnapshot> IcebergTableMetadata::GetSnapshotById(int64_
 	return snapshot;
 }
 
+//! Ref names and types come from metadata, so keep them bounded in error messages
+static string TruncateForError(const string &value) {
+	static constexpr idx_t MAX_SHOWN_LENGTH = 64;
+	return value.size() > MAX_SHOWN_LENGTH ? value.substr(0, MAX_SHOWN_LENGTH) + "..." : value;
+}
+
+bool IcebergTableMetadata::HasRef(const string &ref_name) const {
+	return refs && refs->additional_properties.find(ref_name) != refs->additional_properties.end();
+}
+
+optional_ptr<const IcebergSnapshot> IcebergTableMetadata::GetSnapshotByRef(const string &ref_name,
+                                                                           bool &is_branch) const {
+	optional<int64_t> snapshot_id;
+	string ref_type;
+	if (refs) {
+		auto entry = refs->additional_properties.find(ref_name);
+		if (entry != refs->additional_properties.end()) {
+			snapshot_id = entry->second.snapshot_id;
+			ref_type = entry->second.type;
+		}
+	}
+	if (!snapshot_id && ref_name == "main" && current_snapshot_id) {
+		//! Older metadata has no refs: there is always a 'main' branch at current-snapshot-id, even if
+		//! 'refs' is null (Iceberg table spec, "Table Metadata Fields", 'refs'; format/spec.md:953 at 1.10.0).
+		//! Java's parser only adds 'main' when 'refs' is absent (TableMetadataParser.java:501-510 at 1.10.0,
+		//! client-side); this also accepts a 'refs' map that lacks 'main', which is more lenient and harmless.
+		snapshot_id = *current_snapshot_id;
+		ref_type = "branch";
+	}
+	if (!snapshot_id) {
+		static constexpr idx_t MAX_LISTED_REFS = 10;
+		vector<string> available;
+		if (refs) {
+			for (auto &entry : refs->additional_properties) {
+				available.push_back(entry.first);
+			}
+		}
+		std::sort(available.begin(), available.end());
+		string listed = available.empty() ? "none" : "";
+		for (idx_t i = 0; i < available.size() && i < MAX_LISTED_REFS; i++) {
+			listed += (i ? ", " : "") + TruncateForError(available[i]);
+		}
+		if (available.size() > MAX_LISTED_REFS) {
+			listed += StringUtil::Format(" and %d more", available.size() - MAX_LISTED_REFS);
+		}
+		throw InvalidInputException("Iceberg ref '%s' does not exist (available refs: %s)", ref_name, listed);
+	}
+	//! The type is matched case-insensitively, like the Java client's SnapshotRefType.fromString
+	//! (apache-iceberg-1.10.0, api/src/main/java/org/apache/iceberg/SnapshotRefType.java:31)
+	auto lower_type = StringUtil::Lower(ref_type);
+	if (lower_type != "branch" && lower_type != "tag") {
+		throw InvalidConfigurationException("Iceberg ref '%s' has unknown type '%s', expected 'branch' or 'tag'",
+		                                    ref_name, TruncateForError(ref_type));
+	}
+	is_branch = lower_type == "branch";
+	auto snapshot = FindSnapshotByIdInternal(*snapshot_id);
+	if (!snapshot) {
+		throw InvalidConfigurationException(
+		    "Iceberg ref '%s' points at snapshot %d, which is not in the table metadata", ref_name, *snapshot_id);
+	}
+	return snapshot;
+}
+
 IcebergSnapshotScanInfo IcebergTableMetadata::GetSnapshot(const IcebergSnapshotLookup &lookup) const {
 	IcebergSnapshotScanInfo snapshot_info;
 	switch (lookup.GetSource()) {
 	case SnapshotSource::LATEST:
 		snapshot_info.snapshot = GetLatestSnapshot();
 		snapshot_info.schema_id = GetCurrentSchemaId();
+		snapshot_info.is_transaction_head = true;
 		return snapshot_info;
 	case SnapshotSource::FROM_ID:
 		snapshot_info.snapshot = GetSnapshotById(lookup.GetSnapshotId());
 		snapshot_info.schema_id = snapshot_info.snapshot->GetSchemaId();
 		return snapshot_info;
+	case SnapshotSource::FROM_REF: {
+		auto &ref = lookup.GetSnapshotRef();
+		if (ref.name == "main" && !current_snapshot_id && !HasRef("main")) {
+			//! A table without snapshots has no 'main' yet: read it like a plain read, so the result
+			//! (empty, or this transaction's own writes) matches
+			snapshot_info.snapshot = nullptr;
+			snapshot_info.schema_id = GetCurrentSchemaId();
+			snapshot_info.is_transaction_head = true;
+			return snapshot_info;
+		}
+		bool is_branch;
+		snapshot_info.snapshot = GetSnapshotByRef(ref.name, is_branch);
+		//! Iceberg docs, "Branching and Tagging" > "Schema selection with branches and tags"
+		//! (apache-iceberg-1.10.0, docs/docs/branching.md:118-122; a read-side, client rule): a branch
+		//! reads with the table's current schema, a tag with the schema of its snapshot
+		snapshot_info.schema_id = is_branch ? GetCurrentSchemaId() : snapshot_info.snapshot->GetSchemaId();
+		//! Reading 'main' explicitly must match a plain read, including this transaction's own writes.
+		//! Only when 'main' really is the transaction's base: out-of-spec metadata can have refs.main differ
+		//! from current-snapshot-id, and mixing the two would give an inconsistent read.
+		snapshot_info.is_transaction_head = is_branch && ref.name == "main" && current_snapshot_id &&
+		                                    snapshot_info.snapshot->snapshot_id == *current_snapshot_id;
+		return snapshot_info;
+	}
 	case SnapshotSource::FROM_TIMESTAMP:
 		snapshot_info.snapshot = GetSnapshotByTimestampMS(lookup.GetSnapshotTimestamp());
 		if (!snapshot_info.snapshot) {

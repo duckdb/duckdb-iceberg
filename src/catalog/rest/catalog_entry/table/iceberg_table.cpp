@@ -674,21 +674,22 @@ void IcebergTable::SetSortedBy(IcebergTransaction &transaction, const vector<Ord
 }
 
 optional_ptr<CatalogEntry> IcebergTable::GetSchemaVersion(optional_ptr<BoundAtClause> at) {
-	if (GetMetadata().snapshots.empty()) {
-		return schema_versions[GetMetadata().GetCurrentSchemaId()].get();
-	}
-
-	D_ASSERT(!schema_versions.empty());
-	auto snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
-	auto snapshot_info = GetMetadata().GetSnapshot(snapshot_lookup);
-
 	int32_t schema_id;
-	if (!snapshot_lookup.IsLatest() && snapshot_info.snapshot) {
-		schema_id = snapshot_info.snapshot->GetSchemaId();
-	} else {
+	if (GetMetadata().snapshots.empty()) {
 		schema_id = GetMetadata().GetCurrentSchemaId();
+	} else {
+		D_ASSERT(!schema_versions.empty());
+		auto snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
+		auto snapshot_info = GetMetadata().GetSnapshot(snapshot_lookup);
+		//! GetSnapshot picks the schema per source: current for latest and branches, the snapshot's for ids,
+		//! timestamps and tags
+		schema_id = snapshot_info.snapshot ? snapshot_info.schema_id : GetMetadata().GetCurrentSchemaId();
 	}
-	return schema_versions[schema_id].get();
+	auto entry = schema_versions.find(schema_id);
+	if (entry == schema_versions.end() || !entry->second) {
+		throw InvalidConfigurationException("Schema id %d not found in Iceberg metadata", schema_id);
+	}
+	return entry->second.get();
 }
 
 idx_t IcebergTable::GetIcebergVersion() const {

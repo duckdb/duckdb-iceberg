@@ -1,0 +1,171 @@
+# name: test/sql/local/native_catalog/read_branch_tag.test
+# description: AT (VERSION => '<ref>') reads real branches and tags of a catalog table (duckdb-iceberg#1252)
+# group: [native_catalog]
+
+# Branches read with the table's current schema, tags with their snapshot's schema (Iceberg docs
+# branching.md, "Schema selection with branches and tags"); non-main refs never see pending row changes.
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+foreach version 2 3
+
+statement ok
+CREATE TABLE my_datalake.default.refs_v{version} (id INTEGER) WITH ('format-version' = '{version}');
+
+statement ok
+INSERT INTO my_datalake.default.refs_v{version} VALUES (1), (2);
+
+statement ok
+SET VARIABLE old_snapshot = (
+	SELECT json_extract(body, '$.metadata."current-snapshot-id"')::BIGINT
+	FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/refs_v{version}', NULL)
+);
+
+# Schema evolution after the old snapshot, then a newer snapshot on main
+statement ok
+ALTER TABLE my_datalake.default.refs_v{version} ADD COLUMN extra VARCHAR;
+
+statement ok
+INSERT INTO my_datalake.default.refs_v{version} VALUES (3, 'c');
+
+# A branch and a tag on the old snapshot, created by an external writer such as Spark would
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/refs_v{version}',
+	json_object('requirements', json_array(), 'updates', json_array(
+		json_object('action', 'set-snapshot-ref', 'ref-name', 'audit', 'type', 'branch',
+			'snapshot-id', getvariable('old_snapshot')),
+		json_object('action', 'set-snapshot-ref', 'ref-name', 'v1', 'type', 'tag',
+			'snapshot-id', getvariable('old_snapshot')))));
+----
+200
+
+# A second branch at main's current snapshot: it shares main's data but not main's pending writes
+statement ok
+SET VARIABLE head_snapshot = (
+	SELECT json_extract(body, '$.metadata."current-snapshot-id"')::BIGINT
+	FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/refs_v{version}', NULL)
+);
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/refs_v{version}',
+	json_object('requirements', json_array(), 'updates', json_array(
+		json_object('action', 'set-snapshot-ref', 'ref-name', 'dev', 'type', 'branch',
+			'snapshot-id', getvariable('head_snapshot')))));
+----
+200
+
+query II
+SELECT name, type FROM iceberg_refs(my_datalake.default.refs_v{version}) ORDER BY name COLLATE "binary";
+----
+audit	BRANCH
+dev	BRANCH
+main	BRANCH
+v1	TAG
+
+query I
+SELECT count(*) FROM my_datalake.default.refs_v{version};
+----
+3
+
+query I
+SELECT count(*) FROM my_datalake.default.refs_v{version} AT (VERSION => 'main');
+----
+3
+
+# The branch reads the old snapshot with the current schema: 'extra' exists and is NULL
+query III
+SELECT count(*), count(extra), sum(id) FROM my_datalake.default.refs_v{version} AT (VERSION => 'audit');
+----
+2	0	3
+
+query I
+SELECT string_agg(column_name, ',' ORDER BY column_name)
+FROM (DESCRIBE SELECT * FROM my_datalake.default.refs_v{version} AT (VERSION => 'audit'));
+----
+extra,id
+
+# The tag reads the old snapshot with that snapshot's schema: no 'extra'
+query II
+SELECT count(*), sum(id) FROM my_datalake.default.refs_v{version} AT (VERSION => 'v1');
+----
+2	3
+
+query I
+SELECT string_agg(column_name, ',' ORDER BY column_name)
+FROM (DESCRIBE SELECT * FROM my_datalake.default.refs_v{version} AT (VERSION => 'v1'));
+----
+id
+
+statement error
+SELECT extra FROM my_datalake.default.refs_v{version} AT (VERSION => 'v1');
+----
+Referenced column "extra" not found
+
+# Ref names are case-sensitive
+statement error
+SELECT count(*) FROM my_datalake.default.refs_v{version} AT (VERSION => 'Audit');
+----
+Iceberg ref 'Audit' does not exist (available refs: audit, dev, main, v1)
+
+query I
+SELECT count(*) FROM my_datalake.default.refs_v{version} AT (VERSION => 'dev');
+----
+3
+
+# Inside a write transaction only plain reads and 'main' see the pending row changes, even a branch
+# that points at main's snapshot ('dev')
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.refs_v{version} VALUES (4, 'd');
+
+query IIIII
+SELECT
+	(SELECT count(*) FROM my_datalake.default.refs_v{version}),
+	(SELECT count(*) FROM my_datalake.default.refs_v{version} AT (VERSION => 'main')),
+	(SELECT count(*) FROM my_datalake.default.refs_v{version} AT (VERSION => 'dev')),
+	(SELECT count(*) FROM my_datalake.default.refs_v{version} AT (VERSION => 'audit')),
+	(SELECT count(*) FROM my_datalake.default.refs_v{version} AT (VERSION => 'v1'));
+----
+4	4	3	2	2
+
+query II
+SELECT
+	(SELECT count(extra) FROM my_datalake.default.refs_v{version} AT (VERSION => 'audit')),
+	(SELECT sum(id) FROM my_datalake.default.refs_v{version} AT (VERSION => 'v1'));
+----
+0	3
+
+statement ok
+ROLLBACK;
+
+# A pending schema change is visible to branch reads (they use the table's current schema), not tag reads
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.refs_v{version} ADD COLUMN more INTEGER;
+
+query II
+SELECT
+	(SELECT string_agg(column_name, ',' ORDER BY column_name)
+	 FROM (DESCRIBE SELECT * FROM my_datalake.default.refs_v{version} AT (VERSION => 'audit'))),
+	(SELECT string_agg(column_name, ',' ORDER BY column_name)
+	 FROM (DESCRIBE SELECT * FROM my_datalake.default.refs_v{version} AT (VERSION => 'v1')));
+----
+extra,id,more	id
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT count(*) FROM my_datalake.default.refs_v{version};
+----
+3
+
+endloop

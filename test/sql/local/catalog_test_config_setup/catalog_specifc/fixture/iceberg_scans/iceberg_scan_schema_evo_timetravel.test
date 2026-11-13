@@ -63,7 +63,7 @@ select
 from
 	my_datalake.default.pyspark_iceberg_table_v2 AT (VERSION => 'hi there') WHERE schema_evol_added_col_1 IS NOT NULL;
 ----
-Invalid Input Error: Failed to cast value
+Iceberg ref 'hi there' does not exist
 
 statement error
 select

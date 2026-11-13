@@ -215,7 +215,8 @@ TableFunctionSet IcebergFunctions::GetIcebergMetadataFunction() {
 		    .Add("version_name_format", LogicalType::VARCHAR)
 		    .Add("snapshot_from_timestamp", LogicalType::ANY)
 		    .Add("snapshot_from_id", LogicalType::UBIGINT)
-		    .Add("expected_table_uuid", LogicalType::VARCHAR);
+		    .Add("expected_table_uuid", LogicalType::VARCHAR)
+		    .Add("snapshot_from_ref", LogicalType::VARCHAR);
 	});
 	function_set.AddFunction(fun);
 

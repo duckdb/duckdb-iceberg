@@ -125,7 +125,7 @@ static unique_ptr<FunctionData> IcebergScanPlanBind(ClientContext &context, Tabl
 		scan_info = make_shared_ptr<IcebergScanInfo>(
 		    metadata.GetMetadataPath(fs), table_entry->table_info.GetMetadataOwner(), snapshot, schema,
 		    IcebergFileSecret("", std::to_string(table_entry->catalog.GetOid())));
-		if (options.snapshot_lookup->IsLatest() && table_entry->table_info.transaction_data) {
+		if (snapshot.is_transaction_head && table_entry->table_info.transaction_data) {
 			scan_info->transaction_data = table_entry->table_info.transaction_data.get();
 		}
 	} else {
@@ -210,6 +210,7 @@ TableFunctionSet IcebergFunctions::GetIcebergScanPlanFunction() {
 		options.Add("row_filter", LogicalType::VARCHAR)
 		    .Add("produce_sequence_number", LogicalType::BOOLEAN)
 		    .Add("snapshot_from_id", LogicalType::UBIGINT)
+		    .Add("snapshot_from_ref", LogicalType::VARCHAR)
 		    .Add("snapshot_from_timestamp", LogicalType::TIMESTAMP_MS)
 		    // The location options iceberg_scan takes, for a table given by its
 		    // location.
