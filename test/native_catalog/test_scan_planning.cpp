@@ -158,6 +158,7 @@ TEST_CASE("Iceberg file counts use manifest metadata without starting manifest s
 	Query(test.connection, "CALL enable_logging('Iceberg', storage='memory')");
 	auto bound = test.Bind();
 	auto &files = *bound->Cast<MultiFileBindData>().file_list;
+	REQUIRE(files.GetExpandResult() == FileExpandResult::MULTIPLE_FILES);
 	REQUIRE(files.GetTotalFileCount() == expected);
 	REQUIRE(files.GetTotalFileCount() == expected);
 	auto logs = test.connection.Query(
@@ -172,6 +173,38 @@ TEST_CASE("Iceberg file counts use manifest metadata without starting manifest s
 	REQUIRE(chunk->GetValue(1, 0).GetValue<int64_t>() == 0);
 	REQUIRE(files.GetAllFiles().size() == expected);
 	REQUIRE(files.GetTotalFileCount() == expected);
+}
+
+TEST_CASE("Iceberg expansion checks do not enumerate an unfiltered view of a pruned scan",
+          "[iceberg_planning][iceberg_file_count]") {
+	bool has_null = false;
+	SECTION("No matching manifests") {
+		has_null = false;
+	}
+	SECTION("One matching manifest") {
+		has_null = true;
+	}
+	PlanningTest test;
+	Query(test.connection, "CREATE TABLE lake.default.t (id INTEGER, p INTEGER) PARTITIONED BY (p) WITH "
+	                       "('format-version'=2, 'commit.manifest-merge.enabled'='false')");
+	Query(test.connection, "INSERT INTO lake.default.t VALUES (1,1)");
+	Query(test.connection, "INSERT INTO lake.default.t VALUES (2,2)");
+	if (has_null) {
+		Query(test.connection, "INSERT INTO lake.default.t VALUES (3,NULL)");
+	}
+	auto bound = test.Bind();
+	auto &files = bound->Cast<MultiFileBindData>().file_list->Cast<IcebergMultiFileList>();
+	IcebergTableFilters filters;
+	filters.PushFilter(ColumnIndex(1), make_uniq<ExpressionFilter>(ExpressionFilter::CreateNullCheckExpression(
+	                                       make_uniq<BoundReferenceExpression>(LogicalType::INTEGER, 0ULL),
+	                                       ExpressionType::OPERATOR_IS_NULL)));
+	auto filtered = files.WithPlannerFilters(std::move(filters));
+	REQUIRE(filtered->GetAllFiles().size() == (has_null ? 1 : 0));
+	// Global scan initialization still asks the original list for its expansion result.
+	REQUIRE(files.GetExpandResult() == FileExpandResult::MULTIPLE_FILES);
+	REQUIRE(files.GetTotalFileCount() == (has_null ? 3 : 2));
+	REQUIRE(filtered->GetExpandResult() == FileExpandResult::MULTIPLE_FILES);
+	REQUIRE(filtered->GetTotalFileCount() == (has_null ? 1 : 0));
 }
 
 TEST_CASE("Iceberg file counts retain file filtering and scan order pruning",

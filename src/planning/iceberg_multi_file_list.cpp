@@ -188,9 +188,7 @@ vector<OpenFileInfo> IcebergMultiFileList::GetAllFiles() const {
 }
 
 FileExpandResult IcebergMultiFileList::GetExpandResult() const {
-	if (have_bound) {
-		GetFileInternal(1);
-	}
+	// DuckDB also calls this on the original list after a filtered view starts the shared scan.
 	return FileExpandResult::MULTIPLE_FILES;
 }
 
