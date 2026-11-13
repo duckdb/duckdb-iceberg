@@ -53,7 +53,8 @@
 			"paths": [
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_or_replace_table.test",
 				"test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_or_replace_options.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_or_replace_lists.test"
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_or_replace_lists.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/test_drop_and_create_table_in_a_transaction.test"
 			]
 		},
 		{
