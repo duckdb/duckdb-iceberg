@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb/common/string.hpp"
+#include "duckdb/common/types/timestamp_base.hpp"
 #include "duckdb/common/vector.hpp"
 
 namespace duckdb {
@@ -8,6 +9,16 @@ namespace duckdb {
 class ClientContext;
 struct IcebergManifestEntry;
 struct IcebergTable;
+
+enum class IcebergWriteOperation : uint8_t {
+	INSERT,
+	CTAS,
+	UPDATE,
+	MERGE_INSERT,
+	MERGE_UPDATE,
+	COPY_ON_WRITE_DELETE,
+	REWRITE_DATA_FILES
+};
 
 struct IcebergWrittenFile {
 	string file_path;
@@ -23,10 +34,14 @@ struct IcebergWrittenFiles {
 
 	//! Capture statistics before the manifest entries move into transaction state.
 	static vector<IcebergWrittenFile> Collect(const vector<IcebergManifestEntry> &entries);
-	//! Publish only after the write has successfully staged its files.
-	static void Record(ClientContext &context, const IcebergTable &table, const vector<IcebergWrittenFile> &files);
+	//! Publish after staging, with the operation and one wall-clock timestamp for this batch of files.
+	static void Record(ClientContext &context, const IcebergTable &table, IcebergWriteOperation operation,
+	                   const vector<IcebergWrittenFile> &files);
 	static bool IsEnabled(ClientContext &context);
-	static void Append(ClientContext &context, const string &table, const vector<IcebergWrittenFile> &files);
+
+private:
+	static void Append(ClientContext &context, const string &table, const string &operation, timestamp_tz_t written_at,
+	                   const vector<IcebergWrittenFile> &files);
 };
 
 } // namespace duckdb

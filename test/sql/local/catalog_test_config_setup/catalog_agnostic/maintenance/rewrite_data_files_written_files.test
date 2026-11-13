@@ -97,10 +97,10 @@ query I
 SELECT count(*) FROM (
     (SELECT * FROM temp.main.iceberg_written_files
      EXCEPT ALL
-     SELECT query_id, "table", file_path, record_count, file_size_in_bytes
+     SELECT query_id, "table", file_path, record_count, file_size_in_bytes, operation, written_at
      FROM duckdb_logs_parsed('IcebergDataFileWritten'))
     UNION ALL
-    (SELECT query_id, "table", file_path, record_count, file_size_in_bytes
+    (SELECT query_id, "table", file_path, record_count, file_size_in_bytes, operation, written_at
      FROM duckdb_logs_parsed('IcebergDataFileWritten')
      EXCEPT ALL SELECT * FROM temp.main.iceberg_written_files)
 );

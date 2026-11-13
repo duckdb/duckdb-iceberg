@@ -21,7 +21,8 @@ CALL enable_logging('IcebergDataFileWritten', storage := 'memory');
 # These two VARCHAR columns have the right types but the wrong order.
 statement ok
 CREATE TEMP TABLE iceberg_written_files (
-    query_id UBIGINT, file_path VARCHAR, "table" VARCHAR, record_count BIGINT, file_size_in_bytes BIGINT
+    query_id UBIGINT, file_path VARCHAR, "table" VARCHAR, record_count BIGINT, file_size_in_bytes BIGINT,
+    operation VARCHAR, written_at TIMESTAMPTZ
 );
 
 statement error
@@ -68,6 +69,18 @@ SELECT count(*) FROM temp.main.iceberg_written_files;
 statement ok
 ALTER TABLE temp.main.iceberg_written_files ALTER COLUMN record_count TYPE BIGINT;
 
+# A timestamp without a time zone is not the instant exposed by written_at.
+statement ok
+ALTER TABLE temp.main.iceberg_written_files ALTER COLUMN written_at TYPE TIMESTAMP;
+
+statement error
+INSERT INTO my_datalake.default.written_files_schema VALUES (20);
+----
+temp.main.iceberg_written_files has an incompatible schema
+
+statement ok
+ALTER TABLE temp.main.iceberg_written_files ALTER COLUMN written_at TYPE TIMESTAMPTZ;
+
 statement ok
 ALTER TABLE temp.main.iceberg_written_files ADD COLUMN extra INTEGER;
 
@@ -91,7 +104,8 @@ temp.main.iceberg_written_files has an incompatible schema
 statement ok
 CREATE OR REPLACE TEMP TABLE iceberg_written_files (
     query_id UBIGINT, "table" VARCHAR, file_path VARCHAR,
-    record_count BIGINT GENERATED ALWAYS AS (1), file_size_in_bytes BIGINT
+    record_count BIGINT GENERATED ALWAYS AS (1), file_size_in_bytes BIGINT,
+    operation VARCHAR, written_at TIMESTAMPTZ
 );
 
 statement error

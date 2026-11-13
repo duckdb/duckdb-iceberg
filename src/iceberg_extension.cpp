@@ -145,10 +145,11 @@ static void LoadInternal(ExtensionLoader &loader) {
 	    "The maximum number of manifest entries the manifest-list file counts may reserve up front for a single "
 	    "manifest. Scanning a manifest that declares more entries fails; the setting can be raised up to 100000000.",
 	    LogicalType::UBIGINT, Value::UBIGINT(DEFAULT_MAX_RESERVED_MANIFEST_ENTRIES), SetMaxReservedManifestEntries);
-	config.AddExtensionOption(IcebergWrittenFiles::SETTING,
-	                          "Add the data files each Iceberg write stages to the temporary table "
-	                          "iceberg_written_files, in the write's transaction",
-	                          LogicalType::BOOLEAN, Value::BOOLEAN(false));
+	config.AddExtensionOption(
+	    IcebergWrittenFiles::SETTING,
+	    "Add the data files each Iceberg write stages to the temporary table "
+	    "iceberg_written_files, with their operation and written_at time, in the write's transaction",
+	    LogicalType::BOOLEAN, Value::BOOLEAN(false));
 	config.AddExtensionOption(ENABLE_MANIFEST_CACHE_CONFIG_VARIABLE,
 	                          "Cache immutable parsed Iceberg manifests and delete candidate indexes",
 	                          LogicalType::BOOLEAN, Value::BOOLEAN(true));

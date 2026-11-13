@@ -420,7 +420,15 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 			});
 		}
 	}
-	IcebergWrittenFiles::Record(context, table_info, files);
+	auto operation = IcebergWriteOperation::INSERT;
+	if (merge_action) {
+		operation = update_delete_op ? IcebergWriteOperation::MERGE_UPDATE : IcebergWriteOperation::MERGE_INSERT;
+	} else if (update_delete_op) {
+		operation = IcebergWriteOperation::UPDATE;
+	} else if (ctas_copy_op) {
+		operation = IcebergWriteOperation::CTAS;
+	}
+	IcebergWrittenFiles::Record(context, table_info, operation, files);
 	return SinkFinalizeType::READY;
 }
 

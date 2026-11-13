@@ -77,15 +77,22 @@ query I
 SELECT count(*) FROM (
     (SELECT * FROM temp.main.iceberg_written_files
      EXCEPT ALL
-     SELECT query_id, "table", file_path, record_count, file_size_in_bytes
+     SELECT query_id, "table", file_path, record_count, file_size_in_bytes, operation, written_at
      FROM duckdb_logs_parsed('IcebergDataFileWritten'))
     UNION ALL
-    (SELECT query_id, "table", file_path, record_count, file_size_in_bytes
+    (SELECT query_id, "table", file_path, record_count, file_size_in_bytes, operation, written_at
      FROM duckdb_logs_parsed('IcebergDataFileWritten')
      EXCEPT ALL SELECT * FROM temp.main.iceberg_written_files)
 );
 ----
 0
+
+# All partitions produced by this write share its operation and staging timestamp.
+query TII
+SELECT operation, count(DISTINCT written_at), sum(record_count)
+FROM temp.main.iceberg_written_files GROUP BY operation;
+----
+INSERT	1	2
 
 # Disabling, clearing, or resetting storage leaves existing rows alone and still logs writes.
 statement ok
@@ -115,6 +122,12 @@ query I
 SELECT sum(record_count) FROM duckdb_logs_parsed('IcebergDataFileWritten');
 ----
 5
+
+query TI
+SELECT operation, bool_and(written_at IS NOT NULL)
+FROM duckdb_logs_parsed('IcebergDataFileWritten') GROUP BY operation;
+----
+INSERT	true
 
 # A second connection can independently enable storage and write to the same Iceberg table.
 query I con2

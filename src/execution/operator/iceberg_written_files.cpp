@@ -4,6 +4,7 @@
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/mutex.hpp"
+#include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "duckdb/main/appender.hpp"
 #include "duckdb/main/client_context.hpp"
@@ -26,19 +27,43 @@ vector<IcebergWrittenFile> IcebergWrittenFiles::Collect(const vector<IcebergMani
 	return files;
 }
 
-void IcebergWrittenFiles::Record(ClientContext &context, const IcebergTable &table,
+static const char *WriteOperationName(IcebergWriteOperation operation) {
+	switch (operation) {
+	case IcebergWriteOperation::INSERT:
+		return "INSERT";
+	case IcebergWriteOperation::CTAS:
+		return "CTAS";
+	case IcebergWriteOperation::UPDATE:
+		return "UPDATE";
+	case IcebergWriteOperation::MERGE_INSERT:
+		return "MERGE_INSERT";
+	case IcebergWriteOperation::MERGE_UPDATE:
+		return "MERGE_UPDATE";
+	case IcebergWriteOperation::COPY_ON_WRITE_DELETE:
+		return "COPY_ON_WRITE_DELETE";
+	case IcebergWriteOperation::REWRITE_DATA_FILES:
+		return "REWRITE_DATA_FILES";
+	default:
+		throw InternalException("Unrecognized Iceberg write operation");
+	}
+}
+
+void IcebergWrittenFiles::Record(ClientContext &context, const IcebergTable &table, IcebergWriteOperation operation,
                                  const vector<IcebergWrittenFile> &files) {
 	if (files.empty()) {
 		return;
 	}
 	auto table_name = StringUtil::Format("%s.%s.%s", table.catalog.GetName().GetIdentifierName(),
 	                                     table.schema.name.GetIdentifierName(), table.name);
+	const string operation_name = WriteOperationName(operation);
+	// A transaction may stage several statements. Its start timestamp would give all of them the same time.
+	const timestamp_tz_t written_at(Timestamp::GetCurrentTimestamp());
 	if (IsEnabled(context)) {
-		Append(context, table_name, files);
+		Append(context, table_name, operation_name, written_at, files);
 	}
 	for (auto &file : files) {
 		DUCKDB_LOG(context, IcebergDataFileWrittenLogType, table_name, file.file_path, file.record_count,
-		           file.file_size_in_bytes);
+		           file.file_size_in_bytes, operation_name, written_at);
 	}
 }
 
@@ -47,7 +72,8 @@ bool IcebergWrittenFiles::IsEnabled(ClientContext &context) {
 	return context.TryGetCurrentSetting(SETTING, enabled) && !enabled.IsNull() && BooleanValue::Get(enabled);
 }
 
-void IcebergWrittenFiles::Append(ClientContext &context, const string &table, const vector<IcebergWrittenFile> &files) {
+void IcebergWrittenFiles::Append(ClientContext &context, const string &table, const string &operation,
+                                 timestamp_tz_t written_at, const vector<IcebergWrittenFile> &files) {
 	// a query may finalize more than one write at once
 	static mutex append_lock;
 	lock_guard<mutex> guard(append_lock);
@@ -62,6 +88,8 @@ void IcebergWrittenFiles::Append(ClientContext &context, const string &table, co
 	info->columns.AddColumn(ColumnDefinition("file_path", LogicalType::VARCHAR));
 	info->columns.AddColumn(ColumnDefinition("record_count", LogicalType::BIGINT));
 	info->columns.AddColumn(ColumnDefinition("file_size_in_bytes", LogicalType::BIGINT));
+	info->columns.AddColumn(ColumnDefinition("operation", LogicalType::VARCHAR));
+	info->columns.AddColumn(ColumnDefinition("written_at", LogicalType::TIMESTAMP_TZ));
 	auto expected_columns = info->columns.Copy();
 	temp_catalog.CreateTable(context, std::move(info));
 
@@ -89,6 +117,8 @@ void IcebergWrittenFiles::Append(ClientContext &context, const string &table, co
 		appender.Append(string_t(file.file_path));
 		appender.Append<int64_t>(file.record_count);
 		appender.Append<int64_t>(file.file_size_in_bytes);
+		appender.Append(string_t(operation));
+		appender.Append(Value::TIMESTAMPTZ(written_at));
 		appender.EndRow();
 	}
 	appender.Close();

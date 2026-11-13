@@ -25,19 +25,22 @@ IcebergDataFileWrittenLogType::IcebergDataFileWrittenLogType() : LogType(NAME, L
 }
 
 LogicalType IcebergDataFileWrittenLogType::GetLogType() {
-	child_list_t<LogicalType> children = {{"table", LogicalType::VARCHAR},
-	                                      {"file_path", LogicalType::VARCHAR},
-	                                      {"record_count", LogicalType::BIGINT},
-	                                      {"file_size_in_bytes", LogicalType::BIGINT}};
+	child_list_t<LogicalType> children = {
+	    {"table", LogicalType::VARCHAR},       {"file_path", LogicalType::VARCHAR},
+	    {"record_count", LogicalType::BIGINT}, {"file_size_in_bytes", LogicalType::BIGINT},
+	    {"operation", LogicalType::VARCHAR},   {"written_at", LogicalType::TIMESTAMP_TZ}};
 	return LogicalType::STRUCT(children);
 }
 
 string IcebergDataFileWrittenLogType::ConstructLogMessage(const string &table, const string &file_path,
-                                                          int64_t record_count, int64_t file_size_in_bytes) {
+                                                          int64_t record_count, int64_t file_size_in_bytes,
+                                                          const string &operation, timestamp_tz_t written_at) {
 	child_list_t<Value> children = {{"table", Value(table)},
 	                                {"file_path", Value(file_path)},
 	                                {"record_count", Value::BIGINT(record_count)},
-	                                {"file_size_in_bytes", Value::BIGINT(file_size_in_bytes)}};
+	                                {"file_size_in_bytes", Value::BIGINT(file_size_in_bytes)},
+	                                {"operation", Value(operation)},
+	                                {"written_at", Value::TIMESTAMPTZ(written_at)}};
 	return Value::STRUCT(std::move(children)).ToString();
 }
 

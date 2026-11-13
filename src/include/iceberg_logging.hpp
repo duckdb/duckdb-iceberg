@@ -3,6 +3,7 @@
 #include "duckdb/logging/logging.hpp"
 #include "duckdb/logging/log_type.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/types/timestamp_base.hpp"
 
 namespace duckdb {
 
@@ -38,7 +39,7 @@ struct IcebergDataFileWrittenLogType : public LogType {
 
 	static LogicalType GetLogType();
 	static string ConstructLogMessage(const string &table, const string &file_path, int64_t record_count,
-	                                  int64_t file_size_in_bytes);
+	                                  int64_t file_size_in_bytes, const string &operation, timestamp_tz_t written_at);
 };
 
 } // namespace duckdb

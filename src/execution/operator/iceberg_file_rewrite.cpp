@@ -33,8 +33,9 @@ IcebergFileRewriteGlobalState::~IcebergFileRewriteGlobalState() {
 }
 
 IcebergFileRewrite::IcebergFileRewrite(PhysicalPlan &physical_plan, vector<LogicalType> types,
-                                       idx_t estimated_cardinality)
-    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, std::move(types), estimated_cardinality) {
+                                       idx_t estimated_cardinality, IcebergWriteOperation write_operation)
+    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, std::move(types), estimated_cardinality),
+      write_operation(write_operation) {
 }
 
 void IcebergFileRewrite::PlanCopy(ClientContext &context, PhysicalPlanGenerator &planner,
@@ -120,7 +121,7 @@ SinkFinalizeType IcebergFileRewrite::Finalize(Pipeline &pipeline, Event &event, 
 		});
 	}
 	state.staged = true;
-	IcebergWrittenFiles::Record(context, state.table_info, files);
+	IcebergWrittenFiles::Record(context, state.table_info, write_operation, files);
 	return SinkFinalizeType::READY;
 }
 

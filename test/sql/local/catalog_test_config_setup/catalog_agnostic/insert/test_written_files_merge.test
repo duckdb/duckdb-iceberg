@@ -55,14 +55,20 @@ FROM temp.main.iceberg_written_files;
 ----
 1	3	true
 
+query TI
+SELECT operation, sum(record_count) FROM temp.main.iceberg_written_files GROUP BY operation ORDER BY operation;
+----
+MERGE_INSERT	1
+MERGE_UPDATE	2
+
 query I
 SELECT count(*) FROM (
     (SELECT * FROM temp.main.iceberg_written_files
      EXCEPT ALL
-     SELECT query_id, "table", file_path, record_count, file_size_in_bytes
+     SELECT query_id, "table", file_path, record_count, file_size_in_bytes, operation, written_at
      FROM duckdb_logs_parsed('IcebergDataFileWritten'))
     UNION ALL
-    (SELECT query_id, "table", file_path, record_count, file_size_in_bytes
+    (SELECT query_id, "table", file_path, record_count, file_size_in_bytes, operation, written_at
      FROM duckdb_logs_parsed('IcebergDataFileWritten')
      EXCEPT ALL SELECT * FROM temp.main.iceberg_written_files)
 );
