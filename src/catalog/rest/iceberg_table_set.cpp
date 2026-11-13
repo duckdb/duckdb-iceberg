@@ -261,6 +261,21 @@ void IcebergTableSet::Scan(ClientContext &context, const std::function<void(Cata
 				}
 			}
 		}
+		// Staged creates and rename destinations are visible before the server lists them.
+		for (auto &entry : transaction.current_table_data) {
+			auto &state = entry.second;
+			if (!state.IsAlive()) {
+				continue;
+			}
+			auto &table = state.GetInfo();
+			if (&table.schema != &schema || entries.count(table.name)) {
+				continue;
+			}
+			auto scan_entry = GetScanEntry(transaction, table);
+			if (scan_entry) {
+				scan_entries.push_back(*scan_entry);
+			}
+		}
 	}
 	// Invoke the callbacks without holding the locks: reading the columns of a lazy entry loads its table.
 	for (auto &scan_entry : scan_entries) {

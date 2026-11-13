@@ -40,6 +40,12 @@ WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name =
 ----
 2
 
+query I
+SELECT contains(sql, 'id INTEGER NOT NULL') FROM duckdb_tables()
+WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'listing_lazy';
+----
+true
+
 # Both system functions must return the same table OID, including on repeated scans.
 loop i 0 2
 
@@ -100,7 +106,59 @@ extra
 local_change
 
 statement ok
+ALTER TABLE my_datalake.default.listing_lazy ALTER COLUMN id DROP NOT NULL;
+
+statement ok
+COMMENT ON COLUMN my_datalake.default.listing_lazy.id IS 'Changed identifier';
+
+# Previously returned listing entries must expose updated constraints and comments as well as columns.
+query II
+SELECT is_nullable, comment FROM duckdb_columns()
+WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'listing_lazy' AND column_name = 'id';
+----
+true	Changed identifier
+
+query I
+SELECT count(*) FROM duckdb_constraints()
+WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'listing_lazy';
+----
+0
+
+query I
+SELECT contains(sql, 'NOT NULL') FROM duckdb_tables()
+WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'listing_lazy';
+----
+false
+
+statement ok
 ROLLBACK;
+
+query III
+SELECT column_name, is_nullable, comment FROM duckdb_columns()
+WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'listing_lazy'
+ORDER BY column_index;
+----
+id	false	Identifier
+payload	true	NULL
+extra	true	NULL
+
+# Looking the table up before listing it also preserves the identity used by SHOW ALL TABLES.
+statement ok
+BEGIN;
+
+query I
+SELECT count(*) FROM my_datalake.default.listing_lazy;
+----
+0
+
+query II
+SELECT name, column_names FROM (SHOW ALL TABLES)
+WHERE database = 'my_datalake' AND schema = 'default' AND name = 'listing_lazy';
+----
+listing_lazy	[id, payload, extra]
+
+statement ok
+COMMIT;
 
 # A table dropped by the transaction is no longer listed, also after an earlier listing handed out its entry.
 statement ok
@@ -123,6 +181,40 @@ WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name =
 
 statement ok
 ROLLBACK;
+
+# A rename changes the visible name before it is published to the catalog.
+statement ok
+BEGIN;
+
+query I
+SELECT column_count FROM duckdb_tables()
+WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'listing_lazy';
+----
+3
+
+statement ok
+ALTER TABLE my_datalake.default.listing_lazy RENAME TO listing_lazy_renamed;
+
+query I
+SELECT count(*) FROM my_datalake.default.listing_lazy_renamed;
+----
+0
+
+query II
+SELECT name, column_names FROM (SHOW ALL TABLES)
+WHERE database = 'my_datalake' AND schema = 'default' AND name IN ('listing_lazy', 'listing_lazy_renamed');
+----
+listing_lazy_renamed	[id, payload, extra]
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT table_name FROM duckdb_tables()
+WHERE database_name = 'my_datalake' AND schema_name = 'default'
+	AND table_name IN ('listing_lazy', 'listing_lazy_renamed');
+----
+listing_lazy
 
 statement ok
 DROP TABLE my_datalake.default.listing_lazy;
