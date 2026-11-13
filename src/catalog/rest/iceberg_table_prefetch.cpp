@@ -121,6 +121,17 @@ private:
 vector<CatalogSearchEntry> GetCandidates(ClientContext &context, const QualifiedName &name) {
 	auto &search_path = *ClientData::Get(context).catalog_search_path;
 	vector<CatalogSearchEntry> candidates;
+	if (name.Path().size() > 3) {
+		//! A nested schema path names one schema: in its leading catalog, or else in the default catalog
+		auto schema_path = name.SchemaPath();
+		auto catalog_name = name.Catalog();
+		if (!Catalog::GetCatalogEntry(context, catalog_name)) {
+			schema_path.insert(schema_path.begin(), catalog_name);
+			catalog_name = search_path.GetDefault().GetCatalog();
+		}
+		candidates.push_back(CatalogSearchEntry::FromSchemaPath(catalog_name, std::move(schema_path)));
+		return candidates;
+	}
 	if (!name.Catalog().empty()) {
 		if (!name.Schema().empty()) {
 			candidates.emplace_back(name.Catalog(), name.Schema());
@@ -162,10 +173,14 @@ void PrefetchStatementTablesInternal(ClientContext &context, SQLStatement &state
 			if (!catalog || catalog->IsDuckCatalog() || candidate.GetSchema().empty()) {
 				continue;
 			}
+			if (candidate.IsNested() && !catalog->SupportsNestedSchemas()) {
+				//! Binding rejects the name, so there is nothing to load
+				continue;
+			}
 			if (catalog->GetCatalogType() == "iceberg") {
 				auto &ic_catalog = catalog->Cast<IcebergCatalog>();
 				catalog_tables[ic_catalog].push_back(
-				    QualifiedName(candidate.GetCatalog(), candidate.GetSchema(), name.Name()));
+				    QualifiedName::FromCatalogSchema(candidate.GetCatalog(), candidate.GetSchemaPath(), name.Name()));
 			}
 			break;
 		}
@@ -221,8 +236,8 @@ void IcebergTablePrefetch::ScheduleTables(ClientContext &context, IcebergCatalog
 			//! treats these names the same way
 			continue;
 		}
-		auto schema_entry =
-		    catalog.GetSchemas().GetEntry(context, name.Schema().GetIdentifierName(), OnEntryNotFound::RETURN_NULL);
+		auto schema_entry = catalog.GetSchemas().GetEntry(context, IcebergCatalog::GetNamespaceKey(name.SchemaPath()),
+		                                                  OnEntryNotFound::RETURN_NULL);
 		if (!schema_entry) {
 			continue;
 		}
