@@ -801,10 +801,11 @@ void IcebergTransaction::DoViewCreates(ClientContext &context) {
 		auto &view_info = view_entry.second;
 		auto &view_name = view_info->GetViewName().GetIdentifierName();
 		// Look up the schema entry from the catalog by name
-		auto &schema_entry = ic_catalog.schemas
-		                         .GetEntry(context, view_info->GetQualifiedName().Schema().GetIdentifierName(),
-		                                   OnEntryNotFound::THROW_EXCEPTION)
-		                         ->Cast<IcebergSchemaEntry>();
+		auto &schema_entry =
+		    ic_catalog.schemas
+		        .GetEntry(context, IcebergCatalog::GetNamespaceKey(view_info->GetQualifiedName().SchemaPath()),
+		                  OnEntryNotFound::THROW_EXCEPTION)
+		        ->Cast<IcebergSchemaEntry>();
 
 		// query may have been moved by ViewCatalogEntry::Initialize(), so use sql field or reconstruct
 		string view_sql;
