@@ -12,26 +12,6 @@ IcebergScanStatistics::IcebergScanStatistics(const vector<BoundIcebergManifestLi
 	D_ASSERT(delete_manifests.size() == delete_manifest_matches.size());
 }
 
-optional<idx_t> IcebergScanStatistics::CountDataFiles() const {
-	idx_t count = 0;
-	for (idx_t i = 0; i < data_manifests.size(); i++) {
-		if (!data_manifest_matches[i]) {
-			continue;
-		}
-		auto &counts = data_manifests[i].entry.GetManifest().counts;
-		if (!counts || !counts->added_files_count || !counts->existing_files_count) {
-			return nullopt;
-		}
-		for (auto files : {*counts->added_files_count, *counts->existing_files_count}) {
-			if (files > NumericLimits<idx_t>::Maximum() - count) {
-				return nullopt;
-			}
-			count += files;
-		}
-	}
-	return count;
-}
-
 optional<idx_t> IcebergScanStatistics::CountDataRows() const {
 	idx_t count = 0;
 	for (idx_t i = 0; i < data_manifests.size(); i++) {

@@ -22,6 +22,11 @@ namespace duckdb {
 class IcebergTableSchemaVersion;
 struct IcebergScanPlanContext;
 
+struct IcebergFileCount {
+	idx_t count;
+	bool all_files_known;
+};
+
 //! Plans Iceberg data-file scans independently of DuckDB's MultiFileReader API.
 //! A planner represents one filtered view; filtered views share the underlying
 //! provider and manifest read state but own their pruning, ordering, and cursors.
@@ -57,6 +62,9 @@ public:
 	//! File enumeration only: does not resolve partition constants or load delete manifests.
 	optional<IcebergDataFileDescriptor> GetDataFileDescriptor(idx_t file_id) const;
 	idx_t GetTotalFileCount() const;
+	//! Discover at least min_count files, or stop at the end. Zero never starts discovery.
+	IcebergFileCount GetFileCount(idx_t min_count) const;
+	bool FileIsAvailable(idx_t file_id) const;
 	unique_ptr<NodeStatistics> GetCardinality() const;
 	void GetStatistics(vector<PartitionStatistics> &result) const;
 	IcebergPartition GetPartitionForDataFile(const string &file_path) const;
@@ -71,7 +79,6 @@ private:
 	                               idx_t entry_idx, const IcebergManifestEntry &entry) const;
 	//! Whether an earlier statement of this transaction replaced files that the committed manifests still list
 	bool HasInvalidatedFiles() const;
-	optional<idx_t> GetMetadataFileCount() const DUCKDB_REQUIRES(shared_state->lock);
 
 	void InitializeView(annotated_lock_guard<annotated_mutex> &guard) const DUCKDB_REQUIRES(shared_state->lock);
 	void EnsureScanOrderApplied(annotated_lock_guard<annotated_mutex> &guard) const DUCKDB_REQUIRES(shared_state->lock);
@@ -107,6 +114,7 @@ private:
 	mutable atomic<bool> has_matching_delete_manifests {true};
 	mutable IcebergDataViewCursor data_view_cursor DUCKDB_GUARDED_BY(shared_state->lock);
 	mutable vector<BoundIcebergManifestEntry> data_manifest_entries DUCKDB_GUARDED_BY(shared_state->lock);
+	mutable bool all_data_files_known DUCKDB_GUARDED_BY(shared_state->lock) = false;
 	//! Like delete_manifests, the descriptor vector is frozen after initialization.
 	mutable vector<BoundIcebergManifestListEntry> data_manifests;
 	mutable vector<bool> data_manifest_matches DUCKDB_GUARDED_BY(shared_state->lock);

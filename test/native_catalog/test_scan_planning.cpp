@@ -8,6 +8,7 @@
 #include "duckdb/main/database_manager.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/filter/table_filter_functions.hpp"
+#include "duckdb/storage/statistics/node_statistics.hpp"
 #include "duckdb/storage/table/row_group_order_options.hpp"
 #include "duckdb/transaction/meta_transaction.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
@@ -101,22 +102,45 @@ struct PlanningTest {
 	Connection connection;
 };
 
-string WriteFileCountMetadata(PlanningTest &test, const IcebergScanPlanner &base, const string &added,
-                              const string &existing, const string &deleted) {
+void CheckFileCount(const MultiFileList &files, idx_t minimum, idx_t expected, FileExpansionType expansion) {
+	CAPTURE(minimum);
+	auto count = files.GetFileCount(minimum);
+	REQUIRE(count.count == expected);
+	REQUIRE(count.type == expansion);
+}
+
+void RequireNoManifestScans(Connection &connection) {
+	auto logs = connection.Query("SELECT count(*) FROM duckdb_logs() WHERE type='Iceberg' AND "
+	                             "(message LIKE 'Iceberg metadata phase=%manifest_scan_started%' "
+	                             "OR message LIKE 'Iceberg metadata phase=manifest_parse%')");
+	REQUIRE_FALSE(logs->HasError());
+	auto chunk = logs->Fetch();
+	REQUIRE(chunk);
+	REQUIRE(chunk->GetValue(0, 0).GetValue<int64_t>() == 0);
+}
+
+string WriteCountMetadata(PlanningTest &test, const IcebergScanPlanner &base, const string &added,
+                          const string &existing, const string &deleted, const string &added_rows = "added_rows_count",
+                          const string &existing_rows = "existing_rows_count",
+                          optional<IcebergSnapshotMetrics> snapshot_metrics = nullopt) {
 	auto list_path = test.root + "/file-counts.avro";
 	Query(test.connection,
 	      "COPY (SELECT manifest_path, manifest_length, partition_spec_id, content, sequence_number, "
 	      "min_sequence_number, added_snapshot_id, " +
 	          added + "::INTEGER AS added_files_count, " + existing + "::INTEGER AS existing_files_count, " + deleted +
-	          "::INTEGER AS deleted_files_count, added_rows_count, existing_rows_count, deleted_rows_count "
-	          "FROM read_avro('" +
+	          "::INTEGER AS deleted_files_count, " + added_rows + "::BIGINT AS added_rows_count, " + existing_rows +
+	          "::BIGINT AS existing_rows_count, deleted_rows_count FROM read_avro('" +
 	          base.GetSnapshot().snapshot->manifest_list + "')) TO '" + list_path +
 	          "' (FORMAT AVRO, FIELD_IDS {manifest_path:500, manifest_length:501, partition_spec_id:502, "
 	          "content:517, sequence_number:515, min_sequence_number:516, added_snapshot_id:503, "
 	          "added_files_count:504, existing_files_count:505, deleted_files_count:506, "
 	          "added_rows_count:512, existing_rows_count:513, deleted_rows_count:514})");
 	auto metadata = base.GetMetadata().Copy();
-	metadata.snapshots.at(*metadata.current_snapshot_id).manifest_list = list_path;
+	auto &snapshot = metadata.snapshots.at(*metadata.current_snapshot_id);
+	snapshot.manifest_list = list_path;
+	if (snapshot_metrics) {
+		snapshot.metrics = *snapshot_metrics;
+	}
 	auto path = test.root + "/file-counts.metadata.json";
 	metadata.WriteMetadata(*test.connection.context, path);
 	return path;
@@ -124,8 +148,7 @@ string WriteFileCountMetadata(PlanningTest &test, const IcebergScanPlanner &base
 
 } // namespace
 
-TEST_CASE("Iceberg file counts use manifest metadata without starting manifest scans",
-          "[iceberg_planning][iceberg_file_count]") {
+TEST_CASE("Iceberg file counts defer discovery until files are requested", "[iceberg_planning][iceberg_file_count]") {
 	bool merge = false;
 	bool rewrite = false;
 	SECTION("Separate manifests") {
@@ -159,8 +182,9 @@ TEST_CASE("Iceberg file counts use manifest metadata without starting manifest s
 	auto bound = test.Bind();
 	auto &files = *bound->Cast<MultiFileBindData>().file_list;
 	REQUIRE(files.GetExpandResult() == FileExpandResult::MULTIPLE_FILES);
-	REQUIRE(files.GetTotalFileCount() == expected);
-	REQUIRE(files.GetTotalFileCount() == expected);
+	CheckFileCount(files, 0, 0, FileExpansionType::NOT_ALL_FILES_KNOWN);
+	REQUIRE(files.GetCardinality(*test.connection.context));
+	CheckFileCount(files, 0, 0, FileExpansionType::NOT_ALL_FILES_KNOWN);
 	auto logs = test.connection.Query(
 	    "SELECT count(*) FILTER (WHERE message LIKE 'Iceberg metadata phase=manifest_list_loaded%'), "
 	    "count(*) FILTER (WHERE message LIKE 'Iceberg metadata phase=%manifest_scan_started%' "
@@ -171,8 +195,61 @@ TEST_CASE("Iceberg file counts use manifest metadata without starting manifest s
 	REQUIRE(chunk);
 	REQUIRE(chunk->GetValue(0, 0).GetValue<int64_t>() == 1);
 	REQUIRE(chunk->GetValue(1, 0).GetValue<int64_t>() == 0);
+	// Only an explicit total forces discovery of every live data file.
+	REQUIRE(files.GetTotalFileCount() == expected);
+	CheckFileCount(files, 0, expected, FileExpansionType::ALL_FILES_EXPANDED);
 	REQUIRE(files.GetAllFiles().size() == expected);
 	REQUIRE(files.GetTotalFileCount() == expected);
+}
+
+TEST_CASE("Iceberg partial file counts grow with discovery", "[iceberg_planning][iceberg_file_count]") {
+	for (auto threads : {1, 4}) {
+		CAPTURE(threads);
+		PlanningTest test;
+		Query(test.connection, "SET threads=" + to_string(threads));
+		Query(test.connection, "CREATE TABLE lake.default.t (id INTEGER) WITH "
+		                       "('format-version'=2, 'commit.manifest-merge.enabled'='false')");
+		for (idx_t i = 0; i < 3; i++) {
+			Query(test.connection, "INSERT INTO lake.default.t VALUES (" + to_string(i) + ")");
+		}
+		auto bound = test.Bind();
+		auto &files = *bound->Cast<MultiFileBindData>().file_list;
+		MultiFileListScanData cursor;
+		files.InitializeScan(cursor);
+		OpenFileInfo file;
+		DYNAMIC_SECTION("Available files never start discovery, threads=" << threads) {
+			Query(test.connection, "CALL enable_logging('Iceberg', storage='memory')");
+			cursor.scan_type = MultiFileListScanType::FETCH_IF_AVAILABLE;
+			REQUIRE_FALSE(files.Scan(cursor, file));
+			REQUIRE(cursor.current_file_idx == 0);
+			RequireNoManifestScans(test.connection);
+		}
+		DYNAMIC_SECTION("Bounded counts and iteration share discovered files, threads=" << threads) {
+			CheckFileCount(files, 0, 0, FileExpansionType::NOT_ALL_FILES_KNOWN);
+			cursor.scan_type = MultiFileListScanType::FETCH_IF_AVAILABLE;
+			for (idx_t minimum = 1; minimum <= 2; minimum++) {
+				CheckFileCount(files, minimum, minimum, FileExpansionType::NOT_ALL_FILES_KNOWN);
+				CheckFileCount(files, 0, minimum, FileExpansionType::NOT_ALL_FILES_KNOWN);
+				REQUIRE(files.Scan(cursor, file));
+				REQUIRE_FALSE(file.path.empty());
+				REQUIRE_FALSE(files.Scan(cursor, file));
+				REQUIRE(cursor.current_file_idx == minimum);
+			}
+			cursor.scan_type = MultiFileListScanType::ALWAYS_FETCH;
+			REQUIRE(files.Scan(cursor, file));
+			CheckFileCount(files, 0, 3, FileExpansionType::NOT_ALL_FILES_KNOWN);
+			REQUIRE_FALSE(files.Scan(cursor, file));
+			REQUIRE(cursor.current_file_idx == 3);
+			CheckFileCount(files, 0, 3, FileExpansionType::ALL_FILES_EXPANDED);
+			REQUIRE_FALSE(files.Scan(cursor, file));
+			REQUIRE(files.GetTotalFileCount() == 3);
+		}
+		DYNAMIC_SECTION("A threshold beyond the end returns the exact count, threads=" << threads) {
+			CheckFileCount(files, 10, 3, FileExpansionType::ALL_FILES_EXPANDED);
+			CheckFileCount(files, 1, 3, FileExpansionType::ALL_FILES_EXPANDED);
+			REQUIRE(files.GetAllFiles().size() == 3);
+		}
+	}
 }
 
 TEST_CASE("Iceberg expansion checks do not enumerate an unfiltered view of a pruned scan",
@@ -202,8 +279,9 @@ TEST_CASE("Iceberg expansion checks do not enumerate an unfiltered view of a pru
 	REQUIRE(filtered->GetAllFiles().size() == (has_null ? 1 : 0));
 	// Global scan initialization still asks the original list for its expansion result.
 	REQUIRE(files.GetExpandResult() == FileExpandResult::MULTIPLE_FILES);
-	REQUIRE(files.GetTotalFileCount() == (has_null ? 3 : 2));
+	CheckFileCount(files, 0, 0, FileExpansionType::NOT_ALL_FILES_KNOWN);
 	REQUIRE(filtered->GetExpandResult() == FileExpandResult::MULTIPLE_FILES);
+	CheckFileCount(*filtered, 0, has_null ? 1 : 0, FileExpansionType::ALL_FILES_EXPANDED);
 	REQUIRE(filtered->GetTotalFileCount() == (has_null ? 1 : 0));
 }
 
@@ -217,23 +295,35 @@ TEST_CASE("Iceberg file counts retain file filtering and scan order pruning",
 		                           to_string(i * 2 + 2) + ")");
 	}
 	auto bound = test.Bind();
-	auto &base = bound->Cast<MultiFileBindData>().file_list->Cast<IcebergMultiFileList>().GetScanPlanner();
+	auto &files = bound->Cast<MultiFileBindData>().file_list->Cast<IcebergMultiFileList>();
+	auto &base = files.GetScanPlanner();
 	REQUIRE(base.GetTotalFileCount() == 3);
 	SECTION("File metrics prune an unpartitioned manifest") {
 		auto schema = LogicalType::STRUCT({{"id", LogicalType::INTEGER}});
-		auto filtered = base.CreateView(Filters(*test.connection.context, schema, "id>=2 AND id<4"));
+		auto filtered = files.WithPlannerFilters(Filters(*test.connection.context, schema, "id>=2 AND id<4"));
+		CheckFileCount(*filtered, 0, 0, FileExpansionType::NOT_ALL_FILES_KNOWN);
+		CheckFileCount(*filtered, 1, 1, FileExpansionType::NOT_ALL_FILES_KNOWN);
+		CheckFileCount(*filtered, 2, 1, FileExpansionType::ALL_FILES_EXPANDED);
 		REQUIRE(filtered->GetTotalFileCount() == 1);
-		REQUIRE(filtered->GetDataFileDescriptor(0));
-		REQUIRE_FALSE(filtered->GetDataFileDescriptor(1));
+		REQUIRE_FALSE(filtered->GetFile(0).path.empty());
+		REQUIRE(filtered->GetFile(1).path.empty());
 		REQUIRE(filtered->GetTotalFileCount() == 1);
-		auto empty = base.CreateView(Filters(*test.connection.context, schema, "id>100"));
+		auto empty = files.WithPlannerFilters(Filters(*test.connection.context, schema, "id>100"));
+		CheckFileCount(*empty, 1, 0, FileExpansionType::ALL_FILES_EXPANDED);
 		REQUIRE(empty->GetTotalFileCount() == 0);
-		REQUIRE_FALSE(empty->GetDataFileDescriptor(0));
+		REQUIRE(empty->GetFile(0).path.empty());
 	}
 	SECTION("ORDER BY LIMIT prunes files before and after enumeration") {
 		base.SetScanOrder(make_uniq<RowGroupOrderOptions>(StorageIndex(0), OrderByStatistics::MIN, OrderType::ASCENDING,
 		                                                  OrderByNullType::NULLS_LAST, OrderByColumnType::NUMERIC,
 		                                                  optional_idx(1)));
+		CheckFileCount(files, 0, 0, FileExpansionType::NOT_ALL_FILES_KNOWN);
+		MultiFileListScanData cursor;
+		files.InitializeScan(cursor);
+		cursor.scan_type = MultiFileListScanType::FETCH_IF_AVAILABLE;
+		OpenFileInfo file;
+		REQUIRE_FALSE(files.Scan(cursor, file));
+		CheckFileCount(files, 1, 1, FileExpansionType::ALL_FILES_EXPANDED);
 		REQUIRE(base.GetTotalFileCount() == 1);
 		REQUIRE(base.GetDataFileDescriptor(0));
 		REQUIRE_FALSE(base.GetDataFileDescriptor(1));
@@ -260,7 +350,9 @@ TEST_CASE("Iceberg file counts include pending appends and exclude replaced file
 	}
 	auto bound = test.Bind(false);
 	auto &files = *bound->Cast<MultiFileBindData>().file_list;
+	CheckFileCount(files, 0, 0, FileExpansionType::NOT_ALL_FILES_KNOWN);
 	REQUIRE(files.GetTotalFileCount() == expected);
+	CheckFileCount(files, expected + 1, expected, FileExpansionType::ALL_FILES_EXPANDED);
 	REQUIRE(files.GetAllFiles().size() == expected);
 	REQUIRE(files.GetTotalFileCount() == expected);
 }
@@ -270,6 +362,8 @@ TEST_CASE("Iceberg file counts handle an empty table", "[iceberg_planning][icebe
 	Query(test.connection, "CREATE TABLE lake.default.t (id INTEGER)");
 	auto bound = test.Bind();
 	auto &files = *bound->Cast<MultiFileBindData>().file_list;
+	CheckFileCount(files, 0, 0, FileExpansionType::NOT_ALL_FILES_KNOWN);
+	CheckFileCount(files, 1, 0, FileExpansionType::ALL_FILES_EXPANDED);
 	REQUIRE(files.GetTotalFileCount() == 0);
 	REQUIRE(files.GetAllFiles().empty());
 }
@@ -281,27 +375,32 @@ TEST_CASE("Iceberg corrupt file counts recover or fail without poisoning later s
 		const char *added;
 		const char *existing;
 		const char *deleted;
-		idx_t initial_count;
 		const char *error;
-		bool metadata_error = false;
 		idx_t reservation_limit = 0;
 	};
 	const vector<CountCase> cases {
-	    {"missing added", "NULL", "0", "0", 2, ""},
-	    {"missing existing", "1", "NULL", "0", 2, ""},
-	    {"missing deleted", "1", "0", "NULL", 2, ""},
-	    {"all missing", "NULL", "NULL", "NULL", 2, ""},
-	    {"implausibly large", "2147483647", "2147483647", "2147483647", 2, ""},
-	    {"zero", "0", "0", "0", 0, "more entries than its manifest-list counts"},
-	    {"overreported added", "2", "0", "0", 4, "manifest-list counts"},
-	    {"overreported existing", "1", "1", "0", 4, "manifest-list counts"},
-	    {"overreported deleted", "1", "0", "1", 2, ""},
-	    {"live files marked deleted", "0", "0", "1", 0, "manifest-list counts"},
-	    {"negative added", "-1", "0", "0", 0, "cannot be negative", true},
-	    {"negative existing", "1", "-1", "0", 0, "cannot be negative", true},
-	    {"negative deleted", "1", "0", "-1", 0, "cannot be negative", true},
-	    {"reservation limit", "2", "0", "0", 0, "exceeds the current limit", true, 1},
+	    {"missing added", "NULL", "0", "0", ""},
+	    {"missing existing", "1", "NULL", "0", ""},
+	    {"missing deleted", "1", "0", "NULL", ""},
+	    {"all missing", "NULL", "NULL", "NULL", ""},
+	    {"implausibly large", "2147483647", "2147483647", "2147483647", ""},
+	    {"zero", "0", "0", "0", "more entries than its manifest-list counts"},
+	    {"overreported added", "2", "0", "0", ""},
+	    {"overreported existing", "1", "1", "0", ""},
+	    {"overreported deleted", "1", "0", "1", ""},
+	    {"live files marked deleted", "0", "0", "1", ""},
+	    {"negative added", "-1", "0", "0", "cannot be negative"},
+	    {"negative existing", "1", "-1", "0", "cannot be negative"},
+	    {"negative deleted", "1", "0", "-1", "cannot be negative"},
+	    {"reservation limit", "2", "0", "0", "exceeds the current limit", 1},
 	};
+	bool count_first = false;
+	SECTION("Iteration discovers the total") {
+		count_first = false;
+	}
+	SECTION("An explicit total finishes discovery") {
+		count_first = true;
+	}
 	auto check_rows = [](QueryResult &result) {
 		INFO((result.HasError() ? result.GetError() : ""));
 		REQUIRE_FALSE(result.HasError());
@@ -333,7 +432,7 @@ TEST_CASE("Iceberg corrupt file counts recover or fail without poisoning later s
 				if (string(cache_mode) == "warm") {
 					REQUIRE(bound->Cast<MultiFileBindData>().file_list->GetAllFiles().size() == 2);
 				}
-				auto path = WriteFileCountMetadata(test, base, test_case.added, test_case.existing, test_case.deleted);
+				auto path = WriteCountMetadata(test, base, test_case.added, test_case.existing, test_case.deleted);
 				if (test_case.reservation_limit) {
 					Query(test.connection,
 					      "SET iceberg_max_reserved_manifest_entries=" + to_string(test_case.reservation_limit));
@@ -343,6 +442,7 @@ TEST_CASE("Iceberg corrupt file counts recover or fail without poisoning later s
 					vector<LogicalType> types;
 					vector<Identifier> names;
 					files.Bind(types, names);
+					CheckFileCount(files, 0, 0, FileExpansionType::NOT_ALL_FILES_KNOWN);
 					auto enumerate = [&files] {
 						MultiFileListScanData cursor;
 						files.InitializeScan(cursor);
@@ -351,17 +451,19 @@ TEST_CASE("Iceberg corrupt file counts recover or fail without poisoning later s
 						}
 						return cursor.current_file_idx;
 					};
-					if (test_case.metadata_error) {
-						REQUIRE_THROWS_WITH(files.GetTotalFileCount(), Catch::Contains(test_case.error));
-					} else {
-						// Plausible corruption cannot be detected until the manifests are actually read.
-						REQUIRE(files.GetTotalFileCount() == test_case.initial_count);
-						if (test_case.error[0]) {
-							REQUIRE_THROWS_WITH(enumerate(), Catch::Contains(test_case.error));
+					if (test_case.error[0]) {
+						if (count_first) {
+							REQUIRE_THROWS_WITH(files.GetTotalFileCount(), Catch::Contains(test_case.error));
 						} else {
-							REQUIRE(enumerate() == 2);
+							REQUIRE_THROWS_WITH(enumerate(), Catch::Contains(test_case.error));
+						}
+					} else {
+						if (count_first) {
 							REQUIRE(files.GetTotalFileCount() == 2);
 						}
+						REQUIRE(enumerate() == 2);
+						CheckFileCount(files, 0, 2, FileExpansionType::ALL_FILES_EXPANDED);
+						REQUIRE(files.GetTotalFileCount() == 2);
 					}
 				}
 				bound.reset();
@@ -383,6 +485,74 @@ TEST_CASE("Iceberg corrupt file counts recover or fail without poisoning later s
 			}
 		}
 	}
+}
+
+TEST_CASE("Iceberg cardinality fallback never enumerates files", "[iceberg_planning][iceberg_file_count]") {
+	for (auto warm_cache : {false, true}) {
+		for (auto summary_count : {"2", "", "0"}) {
+			CAPTURE(warm_cache, summary_count);
+			PlanningTest test;
+			Query(test.connection, "SET iceberg_enable_manifest_cache=false");
+			Query(test.connection, "SET parquet_metadata_cache=" + string(warm_cache ? "true" : "false"));
+			Query(test.connection, "CREATE TABLE lake.default.t (id INTEGER) WITH "
+			                       "('format-version'=2, 'commit.manifest-merge.enabled'='false')");
+			Query(test.connection, "INSERT INTO lake.default.t VALUES (1)");
+			Query(test.connection, "INSERT INTO lake.default.t VALUES (2)");
+			if (warm_cache) {
+				Query(test.connection, "SELECT id FROM lake.default.t");
+			}
+			auto bound = test.Bind();
+			auto &base = bound->Cast<MultiFileBindData>().file_list->Cast<IcebergMultiFileList>().GetScanPlanner();
+			auto path = WriteCountMetadata(
+			    test, base, "added_files_count", "existing_files_count", "deleted_files_count", "NULL", "NULL",
+			    IcebergSnapshotMetrics(case_insensitive_map_t<string> {{"total-records", summary_count}}));
+			Query(test.connection, "CALL enable_logging('Iceberg', storage='memory')");
+			IcebergMultiFileList files(*test.connection.context, nullptr, path, base.GetOptions());
+			vector<LogicalType> types;
+			vector<Identifier> names;
+			files.Bind(types, names);
+			auto cardinality = files.GetCardinality(*test.connection.context);
+			REQUIRE(cardinality);
+			REQUIRE(cardinality->has_estimated_cardinality);
+			REQUIRE_FALSE(cardinality->has_max_cardinality);
+			if (string(summary_count) == "2") {
+				REQUIRE(cardinality->estimated_cardinality == 2);
+			}
+			CheckFileCount(files, 0, 0, FileExpansionType::NOT_ALL_FILES_KNOWN);
+			Query(test.connection, "EXPLAIN SELECT id FROM iceberg_scan('" + path + "')");
+			RequireNoManifestScans(test.connection);
+			// Even a zero snapshot estimate cannot prove that the scan is empty.
+			auto result = test.connection.Query("SELECT id FROM iceberg_scan('" + path + "') ORDER BY id");
+			REQUIRE_FALSE(result->HasError());
+			vector<int32_t> values;
+			while (auto chunk = result->Fetch()) {
+				for (idx_t i = 0; i < chunk->size(); i++) {
+					values.push_back(chunk->GetValue(0, i).GetValue<int32_t>());
+				}
+			}
+			REQUIRE(values == vector<int32_t> {1, 2});
+		}
+	}
+}
+
+TEST_CASE("Iceberg cardinality after uncommitted rewrites stays an estimate",
+          "[iceberg_planning][iceberg_file_count]") {
+	PlanningTest test;
+	Query(test.connection, "CREATE TABLE lake.default.t (id INTEGER)");
+	Query(test.connection, "INSERT INTO lake.default.t VALUES (1), (2)");
+	Query(test.connection, "BEGIN");
+	Query(test.connection, "CALL iceberg_rewrite_data_files('lake.default.t', rewrite_all=true)");
+	auto bound = test.Bind(false);
+	auto &files = *bound->Cast<MultiFileBindData>().file_list;
+	Query(test.connection, "CALL enable_logging('Iceberg', storage='memory')");
+	auto cardinality = files.GetCardinality(*test.connection.context);
+	REQUIRE(cardinality);
+	REQUIRE(cardinality->has_estimated_cardinality);
+	REQUIRE_FALSE(cardinality->has_max_cardinality);
+	CheckFileCount(files, 0, 0, FileExpansionType::NOT_ALL_FILES_KNOWN);
+	Query(test.connection, "EXPLAIN SELECT id FROM lake.default.t");
+	RequireNoManifestScans(test.connection);
+	REQUIRE(files.GetTotalFileCount() == 1);
 }
 
 TEST_CASE("Iceberg underreported counts preserve streamed references and allow a corrected retry",

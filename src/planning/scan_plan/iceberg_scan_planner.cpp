@@ -187,21 +187,19 @@ void IcebergScanPlanner::FinishScanTasks(annotated_lock_guard<annotated_mutex> &
 
 optional_ptr<const BoundIcebergManifestEntry>
 IcebergScanPlanner::GetDataFile(idx_t file_id, annotated_lock_guard<annotated_mutex> &guard) const {
-	InitializeView(guard);
-	StartDataManifestScan(guard);
-	auto &transaction_data = shared_state->Configuration().scan_info->transaction_data;
 	if (file_id < data_manifest_entries.size()) {
 		return data_manifest_entries[file_id];
 	}
+	if (all_data_files_known) {
+		return nullptr;
+	}
+	InitializeView(guard);
+	StartDataManifestScan(guard);
+	auto &transaction_data = shared_state->Configuration().scan_info->transaction_data;
 	while (file_id >= data_manifest_entries.size()) {
 		if (!TryGetNextBatch(guard)) {
 			FinishScanTasks(guard);
-			auto count = GetMetadataFileCount();
-			if (count && *count != data_manifest_entries.size()) {
-				throw InvalidConfigurationException(
-				    "Iceberg manifest-list counts declare %llu live data files, but the scan found %llu", *count,
-				    data_manifest_entries.size());
-			}
+			all_data_files_known = true;
 			return nullptr;
 		}
 		auto &batch = data_view_cursor.current_batch;
@@ -311,11 +309,6 @@ optional<IcebergFileScanTask> IcebergScanPlanner::GetScanTask(idx_t file_id) con
 
 idx_t IcebergScanPlanner::GetTotalFileCount() const {
 	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
-	InitializeView(guard);
-	auto count = GetMetadataFileCount();
-	if (count) {
-		return *count;
-	}
 	idx_t file_id = data_manifest_entries.size();
 	while (GetDataFile(file_id, guard)) {
 		file_id++;
@@ -324,14 +317,24 @@ idx_t IcebergScanPlanner::GetTotalFileCount() const {
 	return data_manifest_entries.size();
 }
 
-optional<idx_t> IcebergScanPlanner::GetMetadataFileCount() const {
-	D_ASSERT(view_initialized);
-	// Filters, transaction-local replacements and scan ordering can prune individual files.
-	if (table_filters.HasFilters() || HasInvalidatedFiles() || scan_order.GetOptions()) {
-		return nullopt;
+IcebergFileCount IcebergScanPlanner::GetFileCount(idx_t min_count) const {
+	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
+	if (scan_order.IsPending()) {
+		// Ordering can prune previously discovered files. Do not expose them before it is applied.
+		if (min_count == 0) {
+			return {0, false};
+		}
+		EnsureScanOrderApplied(guard);
 	}
-	return IcebergScanStatistics(data_manifests, data_manifest_matches, delete_manifests, delete_manifest_matches)
-	    .CountDataFiles();
+	if (data_manifest_entries.size() < min_count) {
+		GetDataFile(min_count - 1, guard);
+	}
+	return {data_manifest_entries.size(), all_data_files_known};
+}
+
+bool IcebergScanPlanner::FileIsAvailable(idx_t file_id) const {
+	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
+	return !scan_order.IsPending() && file_id < data_manifest_entries.size();
 }
 
 bool IcebergScanPlanner::HasInvalidatedFiles() const {
@@ -341,18 +344,27 @@ bool IcebergScanPlanner::HasInvalidatedFiles() const {
 
 unique_ptr<NodeStatistics> IcebergScanPlanner::GetCardinality() const {
 	//! The manifest counts still include the files replaced earlier in this transaction
-	if (GetMetadata().iceberg_version == 1 || HasInvalidatedFiles()) {
-		return nullptr;
+	if (GetMetadata().iceberg_version != 1 && !HasInvalidatedFiles()) {
+		annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
+		InitializeView(guard);
+		auto cardinality =
+		    IcebergScanStatistics(data_manifests, data_manifest_matches, delete_manifests, delete_manifest_matches)
+		        .EstimateCardinality();
+		if (cardinality) {
+			return make_uniq<NodeStatistics>(*cardinality, *cardinality);
+		}
 	}
-	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
-	InitializeView(guard);
-	auto cardinality =
-	    IcebergScanStatistics(data_manifests, data_manifest_matches, delete_manifests, delete_manifest_matches)
-	        .EstimateCardinality();
-	if (!cardinality) {
-		return nullptr;
+	// Returning nullptr invokes Parquet's fallback, which can enumerate every file to inspect its cache.
+	// Snapshot totals ignore file pruning and transaction-local changes, so they are only estimates.
+	auto &snapshot = GetSnapshot().snapshot;
+	if (snapshot) {
+		auto &metrics = snapshot->metrics.GetMetrics();
+		auto records = metrics.find(IcebergSnapshotMetricType::TOTAL_RECORDS);
+		if (records != metrics.end()) {
+			return make_uniq<NodeStatistics>(NumericCast<idx_t>(records->second));
+		}
 	}
-	return make_uniq<NodeStatistics>(*cardinality, *cardinality);
+	return make_uniq<NodeStatistics>(1000);
 }
 
 void IcebergScanPlanner::GetStatistics(vector<PartitionStatistics> &result) const {
