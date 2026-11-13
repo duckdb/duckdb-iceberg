@@ -66,4 +66,4 @@ Catalog Error: Column with name 'missing' does not exist on the table 'comment_t
 statement error
 COMMENT ON COLUMN my_datalake.default.comment_table.payload.city IS 'nested city';
 ----
-<REGEX>:(.*Parser Error.*Too many qualifications found.*|.*Parser Error.*Invalid column reference.*|.*Table with name payload does not exist.*)
+<REGEX>:(.*Parser Error.*Too many qualifications found.*|.*Parser Error.*Invalid column reference.*|.*Table with name payload does not exist.*|.*does not support nested schemas.*)
