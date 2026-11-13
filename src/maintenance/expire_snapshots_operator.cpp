@@ -24,7 +24,7 @@ vector<LogicalType> ExpireSnapshotsResultTypes() {
 
 IcebergTable &LoadTransactionVisibleTable(ClientContext &context, const QualifiedName &table_name,
                                           IcebergCatalog &catalog, IcebergTransaction &transaction) {
-	auto namespace_items = IRCAPI::ParseSchemaName(table_name.Schema().GetIdentifierName());
+	auto namespace_items = IRCAPI::ParseSchemaName(IcebergCatalog::GetNamespaceKey(table_name.SchemaPath()));
 	auto table_key = IcebergTable::GetTableKey(catalog, namespace_items, table_name.Name().GetIdentifierName());
 	auto transaction_state = transaction.GetLatestTableState(table_key);
 	if (!transaction_state) {
