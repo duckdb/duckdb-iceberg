@@ -8,6 +8,7 @@
 #include "duckdb/main/database_manager.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/filter/table_filter_functions.hpp"
+#include "duckdb/storage/table/row_group_order_options.hpp"
 #include "duckdb/transaction/meta_transaction.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "core/expression/iceberg_value.hpp"
@@ -81,8 +82,10 @@ struct PlanningTest {
 		FileSystem::CreateLocal()->RemoveDirectory(root);
 	}
 
-	unique_ptr<FunctionData> Bind() {
-		Query(connection, "BEGIN");
+	unique_ptr<FunctionData> Bind(bool begin_transaction = true) {
+		if (begin_transaction) {
+			Query(connection, "BEGIN");
+		}
 		auto &context = *connection.context;
 		MetaTransaction::Get(context).SetActiveQuery(DatabaseManager::Get(context).GetNewQueryNumber());
 		EntryLookupInfo lookup(CatalogType::TABLE_ENTRY,
@@ -98,7 +101,330 @@ struct PlanningTest {
 	Connection connection;
 };
 
+string WriteFileCountMetadata(PlanningTest &test, const IcebergScanPlanner &base, const string &added,
+                              const string &existing, const string &deleted) {
+	auto list_path = test.root + "/file-counts.avro";
+	Query(test.connection,
+	      "COPY (SELECT manifest_path, manifest_length, partition_spec_id, content, sequence_number, "
+	      "min_sequence_number, added_snapshot_id, " +
+	          added + "::INTEGER AS added_files_count, " + existing + "::INTEGER AS existing_files_count, " + deleted +
+	          "::INTEGER AS deleted_files_count, added_rows_count, existing_rows_count, deleted_rows_count "
+	          "FROM read_avro('" +
+	          base.GetSnapshot().snapshot->manifest_list + "')) TO '" + list_path +
+	          "' (FORMAT AVRO, FIELD_IDS {manifest_path:500, manifest_length:501, partition_spec_id:502, "
+	          "content:517, sequence_number:515, min_sequence_number:516, added_snapshot_id:503, "
+	          "added_files_count:504, existing_files_count:505, deleted_files_count:506, "
+	          "added_rows_count:512, existing_rows_count:513, deleted_rows_count:514})");
+	auto metadata = base.GetMetadata().Copy();
+	metadata.snapshots.at(*metadata.current_snapshot_id).manifest_list = list_path;
+	auto path = test.root + "/file-counts.metadata.json";
+	metadata.WriteMetadata(*test.connection.context, path);
+	return path;
+}
+
 } // namespace
+
+TEST_CASE("Iceberg file counts use manifest metadata without starting manifest scans",
+          "[iceberg_planning][iceberg_file_count]") {
+	bool merge = false;
+	bool rewrite = false;
+	SECTION("Separate manifests") {
+		merge = false;
+	}
+	SECTION("Compacted manifests with existing files") {
+		merge = true;
+	}
+	SECTION("Rewritten data files with deleted entries") {
+		rewrite = true;
+	}
+	PlanningTest test;
+	Query(test.connection, "SET iceberg_enable_manifest_cache=false");
+	Query(test.connection, "CREATE TABLE lake.default.t (id INTEGER) WITH "
+	                       "('format-version'=2, 'commit.manifest.min-count-to-merge'='2', "
+	                       "'commit.manifest-merge.enabled'='" +
+	                           string(merge ? "true" : "false") + "')");
+	for (idx_t i = 0; i < 3; i++) {
+		Query(test.connection, "INSERT INTO lake.default.t SELECT range FROM range(" + to_string(i * 2) + "," +
+		                           to_string(i * 2 + 2) + ")");
+	}
+	// Row deletes retain their data files and add separate delete manifests.
+	Query(test.connection, "DELETE FROM lake.default.t WHERE id=0");
+	Query(test.connection, "DELETE FROM lake.default.t WHERE id>=2 AND id<4");
+	idx_t expected = 3;
+	if (rewrite) {
+		Query(test.connection, "CALL iceberg_rewrite_data_files('lake.default.t', rewrite_all=true)");
+		expected = 1;
+	}
+	Query(test.connection, "CALL enable_logging('Iceberg', storage='memory')");
+	auto bound = test.Bind();
+	auto &files = *bound->Cast<MultiFileBindData>().file_list;
+	REQUIRE(files.GetTotalFileCount() == expected);
+	REQUIRE(files.GetTotalFileCount() == expected);
+	auto logs = test.connection.Query(
+	    "SELECT count(*) FILTER (WHERE message LIKE 'Iceberg metadata phase=manifest_list_loaded%'), "
+	    "count(*) FILTER (WHERE message LIKE 'Iceberg metadata phase=%manifest_scan_started%' "
+	    "OR message LIKE 'Iceberg metadata phase=manifest_parse%') "
+	    "FROM duckdb_logs() WHERE type='Iceberg'");
+	REQUIRE_FALSE(logs->HasError());
+	auto chunk = logs->Fetch();
+	REQUIRE(chunk);
+	REQUIRE(chunk->GetValue(0, 0).GetValue<int64_t>() == 1);
+	REQUIRE(chunk->GetValue(1, 0).GetValue<int64_t>() == 0);
+	REQUIRE(files.GetAllFiles().size() == expected);
+	REQUIRE(files.GetTotalFileCount() == expected);
+}
+
+TEST_CASE("Iceberg file counts retain file filtering and scan order pruning",
+          "[iceberg_planning][iceberg_file_count]") {
+	PlanningTest test;
+	Query(test.connection, "CREATE TABLE lake.default.t (id INTEGER) WITH "
+	                       "('format-version'=2, 'commit.manifest-merge.enabled'='false')");
+	for (idx_t i = 0; i < 3; i++) {
+		Query(test.connection, "INSERT INTO lake.default.t SELECT range FROM range(" + to_string(i * 2) + "," +
+		                           to_string(i * 2 + 2) + ")");
+	}
+	auto bound = test.Bind();
+	auto &base = bound->Cast<MultiFileBindData>().file_list->Cast<IcebergMultiFileList>().GetScanPlanner();
+	REQUIRE(base.GetTotalFileCount() == 3);
+	SECTION("File metrics prune an unpartitioned manifest") {
+		auto schema = LogicalType::STRUCT({{"id", LogicalType::INTEGER}});
+		auto filtered = base.CreateView(Filters(*test.connection.context, schema, "id>=2 AND id<4"));
+		REQUIRE(filtered->GetTotalFileCount() == 1);
+		REQUIRE(filtered->GetDataFileDescriptor(0));
+		REQUIRE_FALSE(filtered->GetDataFileDescriptor(1));
+		REQUIRE(filtered->GetTotalFileCount() == 1);
+		auto empty = base.CreateView(Filters(*test.connection.context, schema, "id>100"));
+		REQUIRE(empty->GetTotalFileCount() == 0);
+		REQUIRE_FALSE(empty->GetDataFileDescriptor(0));
+	}
+	SECTION("ORDER BY LIMIT prunes files before and after enumeration") {
+		base.SetScanOrder(make_uniq<RowGroupOrderOptions>(StorageIndex(0), OrderByStatistics::MIN, OrderType::ASCENDING,
+		                                                  OrderByNullType::NULLS_LAST, OrderByColumnType::NUMERIC,
+		                                                  optional_idx(1)));
+		REQUIRE(base.GetTotalFileCount() == 1);
+		REQUIRE(base.GetDataFileDescriptor(0));
+		REQUIRE_FALSE(base.GetDataFileDescriptor(1));
+		REQUIRE(base.GetTotalFileCount() == 1);
+	}
+}
+
+TEST_CASE("Iceberg file counts include pending appends and exclude replaced files",
+          "[iceberg_planning][iceberg_file_count]") {
+	PlanningTest test;
+	Query(test.connection, "CREATE TABLE lake.default.t (id INTEGER) WITH "
+	                       "('format-version'=2, 'commit.manifest-merge.enabled'='false')");
+	Query(test.connection, "INSERT INTO lake.default.t VALUES (1), (2)");
+	Query(test.connection, "INSERT INTO lake.default.t VALUES (3), (4)");
+	Query(test.connection, "BEGIN");
+	idx_t expected = 0;
+	SECTION("Uncommitted append") {
+		Query(test.connection, "INSERT INTO lake.default.t VALUES (5)");
+		expected = 3;
+	}
+	SECTION("Uncommitted rewrite") {
+		Query(test.connection, "CALL iceberg_rewrite_data_files('lake.default.t', rewrite_all=true)");
+		expected = 1;
+	}
+	auto bound = test.Bind(false);
+	auto &files = *bound->Cast<MultiFileBindData>().file_list;
+	REQUIRE(files.GetTotalFileCount() == expected);
+	REQUIRE(files.GetAllFiles().size() == expected);
+	REQUIRE(files.GetTotalFileCount() == expected);
+}
+
+TEST_CASE("Iceberg file counts handle an empty table", "[iceberg_planning][iceberg_file_count]") {
+	PlanningTest test;
+	Query(test.connection, "CREATE TABLE lake.default.t (id INTEGER)");
+	auto bound = test.Bind();
+	auto &files = *bound->Cast<MultiFileBindData>().file_list;
+	REQUIRE(files.GetTotalFileCount() == 0);
+	REQUIRE(files.GetAllFiles().empty());
+}
+
+TEST_CASE("Iceberg corrupt file counts recover or fail without poisoning later scans",
+          "[iceberg_planning][iceberg_file_count][iceberg_corrupt_file_count]") {
+	struct CountCase {
+		const char *name;
+		const char *added;
+		const char *existing;
+		const char *deleted;
+		idx_t initial_count;
+		const char *error;
+		bool metadata_error = false;
+		idx_t reservation_limit = 0;
+	};
+	const vector<CountCase> cases {
+	    {"missing added", "NULL", "0", "0", 2, ""},
+	    {"missing existing", "1", "NULL", "0", 2, ""},
+	    {"missing deleted", "1", "0", "NULL", 2, ""},
+	    {"all missing", "NULL", "NULL", "NULL", 2, ""},
+	    {"implausibly large", "2147483647", "2147483647", "2147483647", 2, ""},
+	    {"zero", "0", "0", "0", 0, "more entries than its manifest-list counts"},
+	    {"overreported added", "2", "0", "0", 4, "manifest-list counts"},
+	    {"overreported existing", "1", "1", "0", 4, "manifest-list counts"},
+	    {"overreported deleted", "1", "0", "1", 2, ""},
+	    {"live files marked deleted", "0", "0", "1", 0, "manifest-list counts"},
+	    {"negative added", "-1", "0", "0", 0, "cannot be negative", true},
+	    {"negative existing", "1", "-1", "0", 0, "cannot be negative", true},
+	    {"negative deleted", "1", "0", "-1", 0, "cannot be negative", true},
+	    {"reservation limit", "2", "0", "0", 0, "exceeds the current limit", true, 1},
+	};
+	auto check_rows = [](QueryResult &result) {
+		INFO((result.HasError() ? result.GetError() : ""));
+		REQUIRE_FALSE(result.HasError());
+		vector<int32_t> values;
+		while (auto chunk = result.Fetch()) {
+			for (idx_t i = 0; i < chunk->size(); i++) {
+				values.push_back(chunk->GetValue(0, i).GetValue<int32_t>());
+			}
+		}
+		std::sort(values.begin(), values.end());
+		REQUIRE(values == vector<int32_t> {1, 2});
+	};
+	for (auto threads : {1, 4}) {
+		for (auto cache_mode : {"disabled", "cold", "warm"}) {
+			for (auto &test_case : cases) {
+				INFO(test_case.name);
+				INFO(cache_mode);
+				INFO(threads);
+				PlanningTest test;
+				Query(test.connection, "SET threads=" + to_string(threads));
+				Query(test.connection, "SET iceberg_enable_manifest_cache=" +
+				                           string(string(cache_mode) == "disabled" ? "false" : "true"));
+				Query(test.connection, "CREATE TABLE lake.default.t (id INTEGER) WITH "
+				                       "('format-version'=2, 'commit.manifest-merge.enabled'='false')");
+				Query(test.connection, "INSERT INTO lake.default.t VALUES (1)");
+				Query(test.connection, "INSERT INTO lake.default.t VALUES (2)");
+				auto bound = test.Bind();
+				auto &base = bound->Cast<MultiFileBindData>().file_list->Cast<IcebergMultiFileList>().GetScanPlanner();
+				if (string(cache_mode) == "warm") {
+					REQUIRE(bound->Cast<MultiFileBindData>().file_list->GetAllFiles().size() == 2);
+				}
+				auto path = WriteFileCountMetadata(test, base, test_case.added, test_case.existing, test_case.deleted);
+				if (test_case.reservation_limit) {
+					Query(test.connection,
+					      "SET iceberg_max_reserved_manifest_entries=" + to_string(test_case.reservation_limit));
+				}
+				{
+					IcebergMultiFileList files(*test.connection.context, nullptr, path, base.GetOptions());
+					vector<LogicalType> types;
+					vector<Identifier> names;
+					files.Bind(types, names);
+					auto enumerate = [&files] {
+						MultiFileListScanData cursor;
+						files.InitializeScan(cursor);
+						OpenFileInfo file;
+						while (files.Scan(cursor, file)) {
+						}
+						return cursor.current_file_idx;
+					};
+					if (test_case.metadata_error) {
+						REQUIRE_THROWS_WITH(files.GetTotalFileCount(), Catch::Contains(test_case.error));
+					} else {
+						// Plausible corruption cannot be detected until the manifests are actually read.
+						REQUIRE(files.GetTotalFileCount() == test_case.initial_count);
+						if (test_case.error[0]) {
+							REQUIRE_THROWS_WITH(enumerate(), Catch::Contains(test_case.error));
+						} else {
+							REQUIRE(enumerate() == 2);
+							REQUIRE(files.GetTotalFileCount() == 2);
+						}
+					}
+				}
+				bound.reset();
+				Query(test.connection, "COMMIT");
+				// Exercise the SQL error path too, including retry and recovery on the same connection.
+				for (idx_t attempt = 0; attempt < 2; attempt++) {
+					auto result = test.connection.Query("SELECT id FROM iceberg_scan('" + path + "')");
+					INFO((result->HasError() ? result->GetError() : ""));
+					if (test_case.error[0]) {
+						REQUIRE(result->HasError());
+						REQUIRE(result->GetErrorType() == ExceptionType::INVALID_CONFIGURATION);
+						REQUIRE(result->GetError().find(test_case.error) != string::npos);
+					} else {
+						check_rows(*result);
+					}
+					auto healthy = test.connection.Query("SELECT id FROM lake.default.t ORDER BY id");
+					check_rows(*healthy);
+				}
+			}
+		}
+	}
+}
+
+TEST_CASE("Iceberg underreported counts preserve streamed references and allow a corrected retry",
+          "[iceberg_planning][iceberg_file_count][iceberg_corrupt_file_count]") {
+	PlanningTest test;
+	Query(test.connection, "SET threads=1");
+	Query(test.connection, "SET iceberg_enable_manifest_cache=true");
+	Query(test.connection, "CREATE TABLE lake.default.t (id INTEGER) WITH ('format-version'=2)");
+	Query(test.connection, "INSERT INTO lake.default.t VALUES (42)");
+	auto bound = test.Bind();
+	auto &base = bound->Cast<MultiFileBindData>().file_list->Cast<IcebergMultiFileList>().GetScanPlanner();
+	auto &context = *test.connection.context;
+	auto &fs = FileSystem::GetFileSystem(context);
+	vector<IcebergManifestListEntry> descriptors;
+	IcebergManifestList::LoadManifestFiles(base.GetSnapshot(), base.GetMetadata(), context, descriptors);
+	REQUIRE(descriptors.size() == 1);
+	auto file = descriptors[0].GetFile();
+	auto path = test.root + "/many-entries.avro";
+	const idx_t declared = STANDARD_VECTOR_SIZE * 2;
+	const idx_t actual = declared + 1;
+	Query(test.connection,
+	      "COPY (SELECT status, snapshot_id, sequence_number, file_sequence_number, "
+	      "{content:data_file.content, file_path:data_file.file_path, file_format:data_file.file_format, "
+	      "partition:{}, record_count:data_file.record_count, file_size_in_bytes:data_file.file_size_in_bytes} AS "
+	      "data_file "
+	      "FROM read_avro('" +
+	          file.manifest_path + "'), range(" + to_string(actual) + ")) TO '" + path +
+	          "' (FORMAT AVRO, METADATA {'schema-id':'0', 'partition-spec-id':'0', 'format-version':'2', "
+	          "'content':'data'}, "
+	          "FIELD_IDS {status:0, snapshot_id:1, sequence_number:3, file_sequence_number:4, "
+	          "data_file:{__duckdb_field_id:2, content:134, file_path:100, file_format:101, "
+	          "partition:102, record_count:103, file_size_in_bytes:104}})");
+	file.manifest_path = path;
+	file.manifest_length = fs.GetFileSize(*fs.OpenFile(path, FileFlags::FILE_FLAGS_READ));
+	file.counts = IcebergManifestCounts::Zero();
+	file.counts->added_files_count = declared;
+	file.counts->added_rows_count = actual;
+	vector<IcebergManifestListEntry> files {IcebergManifestListEntry(file)};
+	ManifestEntryReadState batches;
+	auto scan = AvroScan::ScanManifest(base.GetSnapshot(), files, base.GetOptions(), fs, base.GetPath(),
+	                                   base.GetMetadata(), context, &batches, {0});
+	auto key = ManifestCacheKey(scan->scan_info->Cast<IcebergManifestFileScanInfo>(), 0);
+	auto &cache = ObjectCache::GetObjectCache(context);
+	{
+		manifest_file::ManifestReader reader(*scan);
+		reader.Read();
+		REQUIRE_FALSE(files[0].GetManifestEntries().empty());
+		auto retained = &files[0].GetManifestEntries()[0];
+		auto original_path = retained->data_file.file_path;
+		auto finish = [&] {
+			while (!reader.Finished()) {
+				reader.Read();
+			}
+		};
+		REQUIRE_THROWS_WITH(finish(), Catch::Contains("more entries than its manifest-list counts"));
+		REQUIRE(&files[0].GetManifestEntries()[0] == retained);
+		REQUIRE(retained->data_file.file_path == original_path);
+		REQUIRE_THROWS_WITH(scan->Complete(), Catch::Contains("incomplete manifest scan"));
+		REQUIRE_FALSE(cache.GetWithTypePrefix<IcebergParsedManifest>(key));
+	}
+	scan.reset();
+	// The same Avro file succeeds after its descriptor is corrected, without recreating the database.
+	file.counts->added_files_count = actual;
+	vector<IcebergManifestListEntry> corrected {IcebergManifestListEntry(file)};
+	ManifestEntryReadState retry_batches;
+	auto retry = AvroScan::ScanManifest(base.GetSnapshot(), corrected, base.GetOptions(), fs, base.GetPath(),
+	                                    base.GetMetadata(), context, &retry_batches, {0});
+	manifest_file::ManifestReader reader(*retry);
+	while (!reader.Finished()) {
+		reader.Read();
+	}
+	retry->Complete();
+	REQUIRE(corrected[0].GetManifestEntries().size() == actual);
+	REQUIRE(cache.GetWithTypePrefix<IcebergParsedManifest>(key));
+}
 
 TEST_CASE("Iceberg partition filters borrow originals and own extracted paths", "[iceberg_planning]") {
 	DuckDB database(nullptr);

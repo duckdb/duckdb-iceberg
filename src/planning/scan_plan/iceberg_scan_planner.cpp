@@ -196,6 +196,12 @@ IcebergScanPlanner::GetDataFile(idx_t file_id, annotated_lock_guard<annotated_mu
 	while (file_id >= data_manifest_entries.size()) {
 		if (!TryGetNextBatch(guard)) {
 			FinishScanTasks(guard);
+			auto count = GetMetadataFileCount();
+			if (count && *count != data_manifest_entries.size()) {
+				throw InvalidConfigurationException(
+				    "Iceberg manifest-list counts declare %llu live data files, but the scan found %llu", *count,
+				    data_manifest_entries.size());
+			}
 			return nullptr;
 		}
 		auto &batch = data_view_cursor.current_batch;
@@ -304,11 +310,28 @@ optional<IcebergFileScanTask> IcebergScanPlanner::GetScanTask(idx_t file_id) con
 }
 
 idx_t IcebergScanPlanner::GetTotalFileCount() const {
-	idx_t file_id = 0;
-	while (GetDataFileDescriptor(file_id)) {
+	annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
+	InitializeView(guard);
+	auto count = GetMetadataFileCount();
+	if (count) {
+		return *count;
+	}
+	idx_t file_id = data_manifest_entries.size();
+	while (GetDataFile(file_id, guard)) {
 		file_id++;
 	}
-	return file_id;
+	EnsureScanOrderApplied(guard);
+	return data_manifest_entries.size();
+}
+
+optional<idx_t> IcebergScanPlanner::GetMetadataFileCount() const {
+	D_ASSERT(view_initialized);
+	// Filters, transaction-local replacements and scan ordering can prune individual files.
+	if (table_filters.HasFilters() || HasInvalidatedFiles() || scan_order.GetOptions()) {
+		return nullopt;
+	}
+	return IcebergScanStatistics(data_manifests, data_manifest_matches, delete_manifests, delete_manifest_matches)
+	    .CountDataFiles();
 }
 
 bool IcebergScanPlanner::HasInvalidatedFiles() const {
