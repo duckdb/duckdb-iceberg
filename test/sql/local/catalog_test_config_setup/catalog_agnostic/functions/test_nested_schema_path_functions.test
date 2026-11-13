@@ -1,0 +1,87 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/functions/test_nested_schema_path_functions.test
+# description: functions that take a table name reject a name with more than one schema part
+# group: [functions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+drop table if exists my_datalake.default.nested_path_functions;
+
+statement ok
+create table my_datalake.default.nested_path_functions (i INTEGER);
+
+statement ok
+insert into my_datalake.default.nested_path_functions values (1), (2), (3);
+
+# these also accept a table location, so the name must not be read as a file path
+foreach function iceberg_scan iceberg_snapshots iceberg_metadata iceberg_history iceberg_files iceberg_manifests iceberg_schemas iceberg_refs iceberg_partitions iceberg_partition_specs iceberg_partition_stats iceberg_column_stats iceberg_scan_plan
+
+statement error
+select * from {function}('my_datalake.x.default.nested_path_functions');
+----
+does not support nested schemas
+
+endloop
+
+# these only accept a table name
+foreach function iceberg_table_properties iceberg_load_table_response iceberg_view_metadata iceberg_rewrite_data_files
+
+statement error
+select * from {function}('my_datalake.x.default.nested_path_functions');
+----
+does not support nested schemas
+
+endloop
+
+statement error
+select * from set_iceberg_table_properties('my_datalake.x.default.nested_path_functions', {'nested.path': 'true'});
+----
+does not support nested schemas
+
+statement error
+select * from remove_iceberg_table_properties('my_datalake.x.default.nested_path_functions', ['nested.path']);
+----
+does not support nested schemas
+
+statement error
+select * from iceberg_rollback_to_snapshot('my_datalake.x.default.nested_path_functions', 1);
+----
+does not support nested schemas
+
+# a longer name that does not start with an attached catalog is still not a table name
+statement error
+select * from iceberg_table_properties('x.my_datalake.default.nested_path_functions');
+----
+Too many identifiers in table name
+
+# a path separator keeps the string a table location, whatever it starts with
+statement error
+select * from iceberg_snapshots('my_datalake.x/y.default.nested_path_functions');
+----
+no version-hint could be found
+
+# the table in the top-level schema is untouched and still resolves by its three-part name
+query II
+select count(*), sum(i) from my_datalake.default.nested_path_functions;
+----
+3	6
+
+query I
+select count(*) > 0 from iceberg_snapshots('my_datalake.default.nested_path_functions');
+----
+true
+
+query I
+select count(*) from iceberg_table_properties('my_datalake.default.nested_path_functions') where key = 'nested.path';
+----
+0
+
+query I
+select count(*) from iceberg_load_table_response('my_datalake.default.nested_path_functions');
+----
+1
+
+statement ok
+drop table my_datalake.default.nested_path_functions;

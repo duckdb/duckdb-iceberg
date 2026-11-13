@@ -44,8 +44,8 @@ public:
 	static string GetStorageLocation(ClientContext &context, const string &input);
 	static IcebergResolvedMetadata ResolveTableMetadata(ClientContext &context, const string &input,
 	                                                    const IcebergOptions &options);
-	//! Parse a 'table', 'schema.table' or 'catalog.schema.table' string
-	static QualifiedName ParseTableName(const string &input_string);
+	//! Parse a 'table', 'schema.table' or 'catalog.schema.table' string, or a longer path into an attached catalog
+	static QualifiedName ParseTableName(ClientContext &context, const string &input_string);
 	//! Look up a table named by a 'table', 'schema.table' or 'catalog.schema.table' string
 	static optional_ptr<CatalogEntry> GetTableEntry(ClientContext &context, string &input_string);
 	//! Look up a catalog entry of 'type' named by a 'name', 'schema.name' or 'catalog.schema.name' string
