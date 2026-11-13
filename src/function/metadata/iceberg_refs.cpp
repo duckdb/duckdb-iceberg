@@ -32,14 +32,14 @@ static vector<IcebergRefEntry> GetRefs(const IcebergTableMetadata &metadata) {
 
 struct IcebergRefsBindData : public TableFunctionData {
 	IcebergRefsBindData() {};
-	IcebergTableMetadata metadata {IcebergTableMetadataSchemas {}};
+	shared_ptr<const IcebergTableMetadata> metadata;
 };
 
 struct IcebergRefsGlobalState : public GlobalTableFunctionState {
 	static unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionInitInput &input) {
 		auto &bind_data = input.bind_data->Cast<IcebergRefsBindData>();
 		auto global_state = make_uniq<IcebergRefsGlobalState>();
-		global_state->refs = GetRefs(bind_data.metadata);
+		global_state->refs = GetRefs(*bind_data.metadata);
 		return std::move(global_state);
 	}
 

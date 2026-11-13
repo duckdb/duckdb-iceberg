@@ -50,6 +50,18 @@ Unlike the Python config, it does not skip unexpected unsupported errors.
 Filters use repository-relative paths so each test runs once and the config's
 relative skip paths also apply on Windows.
 
+DuckDB's core CI registers `test/sql/local/native_catalog` with
+`test/configs/mock_native.json` as its scoped `TEST_CONFIG`. It includes
+`test/native_catalog/extension_config.cmake` to build the mock and builds Avro
+alongside Iceberg in the cloud extension group. Core CI sets
+`ICEBERG_MOCK_BUILD_LOADABLE=OFF` and links the mock statically into its test build,
+so it is not published with the cloud extensions. Iceberg and its dependencies
+are also linked to support the credential callback tests. These tests run through
+the ordinary core test runner without invoking this repository's Makefile.
+The config applies only to the registered native tests; other extensions keep
+their own test setup. WebAssembly and the deployment autoloading checks do not
+register the native suite.
+
 The standalone API tests exercise independent database lifetimes and publication
 failure after completing the first file of a multi-table commit:
 
@@ -71,7 +83,11 @@ test runner.
 The LoadTable cache API tests deterministically interleave request construction,
 publication, and eviction, and check the credential-refresh fallback. They also
 cover expired Azure SAS credentials and S3 credential refresh after an HTTP 304,
-without contacting cloud storage:
+without contacting cloud storage. Parsed metadata cases check response-generation
+identity, concurrent initialization, owner release after replacement, and
+copy-on-write isolation from readers. Authoritative-file fallback is retried, and
+historical metadata-log reconstruction keeps a separate owner from the cached
+head:
 
 ```sh
 ./build/reldebug/test/unittest_iceberg_cache
@@ -90,6 +106,16 @@ I/O/cancellation errors. The equality-delete view cases require equality-delete 
 ```sh
 ./build/reldebug/test/unittest_iceberg_planning
 ```
+
+Parsed-manifest cases check shared entry addresses, list-specific inheritance,
+copy-on-write rewrites, key compatibility, eviction, interleaved misses and
+failed publication without invalidating streamed references. Frozen partition
+indexes are also probed after the creating connection closes.
+`test/sql/local/native_catalog/parsed_manifest_cache.test` checks cold/warm
+counters, selective then broader scans, dynamic filters, new snapshots,
+rollback, ETag/304 and early LIMIT cleanup. The standalone
+`test/sql/local/iceberg_scans/parsed_manifest_cache.test` covers warm v1 header
+fallback and day partition values.
 
 CI runs these tests in both the assertion build and the release build. The release
 build enables equality-delete writes, so the shared-provider case executes there.

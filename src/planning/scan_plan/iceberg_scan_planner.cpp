@@ -56,6 +56,10 @@ const IcebergOptions &IcebergScanPlanner::GetOptions() const {
 	return shared_state->Configuration().options;
 }
 
+const IcebergFileSecret &IcebergScanPlanner::GetFileSecret() const {
+	return shared_state->Configuration().scan_info->file_secret;
+}
+
 const IcebergTableMetadata &IcebergScanPlanner::GetMetadata() const {
 	return shared_state->Configuration().scan_info->metadata;
 }
@@ -205,12 +209,13 @@ IcebergScanPlanner::GetDataFile(idx_t file_id, annotated_lock_guard<annotated_mu
 		     data_view_cursor.current_batch_offset++) {
 			auto &manifest_entry = manifest_entries[data_view_cursor.current_batch_offset];
 			auto &data_file = manifest_entry.data_file;
-			auto entry_path = data_file.file_path;
-			if (GetOptions().allow_moved_paths) {
-				entry_path = IcebergUtils::GetFullPath(GetPath(), entry_path, fs);
-			}
 			IcebergPartition partition {manifest_file.partition_spec_id, data_file.partition_info};
-			shared_state->data_file_partitions[entry_path] = partition;
+			if (GetOptions().allow_moved_paths) {
+				auto entry_path = IcebergUtils::GetFullPath(GetPath(), data_file.file_path, fs);
+				if (entry_path != data_file.file_path) {
+					shared_state->data_file_partitions[entry_path] = partition;
+				}
+			}
 			shared_state->data_file_partitions[data_file.file_path] = std::move(partition);
 			auto bound_entry = bound_manifest.BindEntry(manifest_entry);
 			if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
@@ -221,8 +226,9 @@ IcebergScanPlanner::GetDataFile(idx_t file_id, annotated_lock_guard<annotated_mu
 			    transaction_data->IsFileInvalidated({data_file.file_path, data_file.content_offset})) {
 				continue;
 			}
-			if (table_filters.HasFilters() && !IcebergFilePruner(context, GetMetadata(), GetSchema(), table_filters)
-			                                       .FileMatchesFilter(manifest_file, manifest_entry)) {
+			if (table_filters.HasFilters() &&
+			    IcebergFilePruner(context, GetMetadata(), GetSchema(), table_filters)
+			            .FileMatchesFilter(manifest_file, manifest_entry) == IcebergMetricsMatch::ROWS_CANNOT_MATCH) {
 				continue;
 			}
 			if (StringUtil::CIEquals(data_file.file_format, "puffin")) {

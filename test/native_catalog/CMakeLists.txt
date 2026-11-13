@@ -4,8 +4,15 @@ project(IcebergMockExtension)
 
 # This extension depends only on DuckDB's extension interfaces. In particular,
 # none of its sources or include paths belong to the Iceberg extension.
-build_extension_library(iceberg_mock catalog_json.cpp catalog_model.cpp
-                        catalog_router.cpp catalog_transport.cpp)
+option(ICEBERG_MOCK_BUILD_LOADABLE
+       "Build the native catalog as a loadable test extension" ON)
+set(ICEBERG_MOCK_BUILD_OPTIONS)
+if(NOT ICEBERG_MOCK_BUILD_LOADABLE)
+  list(APPEND ICEBERG_MOCK_BUILD_OPTIONS NO_LOADABLE)
+endif()
+build_extension_library(
+  iceberg_mock ${ICEBERG_MOCK_BUILD_OPTIONS} catalog_json.cpp catalog_model.cpp
+  catalog_router.cpp catalog_transport.cpp)
 
 add_executable(unittest_iceberg_native test_native_catalog.cpp)
 target_include_directories(unittest_iceberg_native

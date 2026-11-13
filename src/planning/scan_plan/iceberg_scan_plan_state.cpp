@@ -76,7 +76,8 @@ IcebergScanPlanProvider &IcebergScanPlanState::GetScanPlanProvider(const Iceberg
 		                                     scan_info.snapshot_info,
 		                                     scan_info.metadata,
 		                                     scan_info.schema,
-		                                     scan_info.transaction_data.get()};
+		                                     scan_info.transaction_data.get(),
+		                                     scan_info.file_secret};
 		scan_plan_provider =
 		    IcebergScanPlanProvider::Create(*this, std::move(plan_context), configuration.table, filters, scan_order,
 		                                    configuration.server_side_planning_enabled);

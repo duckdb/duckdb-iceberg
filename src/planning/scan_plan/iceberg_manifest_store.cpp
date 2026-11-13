@@ -8,6 +8,7 @@
 #include "planning/metadata_io/avro/avro_scan.hpp"
 #include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
 #include "planning/metadata_io/manifest_list/iceberg_manifest_list_reader.hpp"
+#include "planning/metadata_io/avro/iceberg_manifest_cache.hpp"
 
 #include <condition_variable>
 
@@ -83,13 +84,15 @@ void IcebergManifestStore::LoadManifestList() {
 			manifest_list_entries = context.transaction_data->existing_manifest_list;
 		} else {
 			if (!snapshot.manifests.empty()) {
-				IcebergManifestList::LoadManifestFiles(snapshot_info, metadata, context.context, manifest_list_entries);
+				IcebergManifestList::LoadManifestFiles(snapshot_info, metadata, context.context, manifest_list_entries,
+				                                       context.file_secret);
 			} else {
 				auto manifest_list_full_path = context.options.allow_moved_paths
 				                                   ? IcebergUtils::GetFullPath(iceberg_path, snapshot.manifest_list, fs)
 				                                   : snapshot.manifest_list;
-				auto scan = AvroScan::ScanManifestList(snapshot_info, metadata, context.context,
-				                                       manifest_list_full_path, manifest_list_entries);
+				auto scan =
+				    AvroScan::ScanManifestList(snapshot_info, metadata, context.context, manifest_list_full_path,
+				                               manifest_list_entries, context.file_secret);
 				auto manifest_list_reader = make_uniq<manifest_list::ManifestListReader>(*scan);
 				while (!manifest_list_reader->Finished()) {
 					manifest_list_reader->Read();
@@ -149,17 +152,18 @@ void IcebergManifestStore::LoadManifestList() {
 				    list_entry.GetFile().manifest_path, reserve_size, max_reserved_entries,
 				    MAX_RESERVED_MANIFEST_ENTRIES_CONFIG_VARIABLE, MAX_MAX_RESERVED_MANIFEST_ENTRIES);
 			}
-			list_entry.GetOrCreateManifestEntries().reserve(reserve_size);
+			// Reserve only selected cache misses, immediately before their Avro scan.
 		}
 
 		if (!manifests_to_eagerly_load.empty()) {
-			auto scan =
-			    AvroScan::ScanManifest(context.snapshot, data_manifests, context.options, context.fs, context.path,
-			                           context.metadata, context.context, nullptr, manifests_to_eagerly_load);
+			auto scan = AvroScan::ScanManifest(context.snapshot, data_manifests, context.options, context.fs,
+			                                   context.path, context.metadata, context.context, nullptr,
+			                                   manifests_to_eagerly_load, context.file_secret);
 			auto reader = make_uniq<manifest_file::ManifestReader>(*scan);
 			while (!reader->Finished()) {
 				reader->Read();
 			}
+			scan->Complete();
 			for (auto manifest_idx : manifests_to_eagerly_load) {
 				auto &manifest = data_manifests[manifest_idx];
 				manifest.GetManifest().SetCountsFromEntries(manifest.GetManifestEntries());
@@ -235,7 +239,7 @@ void IcebergManifestStore::StartDataManifestScan(const vector<bool> &matching_ma
 	if (!selected_committed_manifests.empty()) {
 		auto data_scan = AvroScan::ScanManifest(context.snapshot, committed_data_manifests, context.options, context.fs,
 		                                        context.path, context.metadata, context.context, &read_state,
-		                                        selected_committed_manifests);
+		                                        selected_committed_manifests, context.file_secret);
 		data_manifest_read_state =
 		    make_uniq<IcebergManifestScanningState>(context.context, std::move(data_scan), committed_data_manifests);
 
@@ -333,7 +337,8 @@ void IcebergManifestStore::ReadDeleteManifests(const vector<idx_t> &manifest_ind
 			}
 			if (!to_read.empty()) {
 				auto scan = AvroScan::ScanManifest(context.snapshot, new_load->manifests, context.options, context.fs,
-				                                   context.path, context.metadata, context.context, nullptr, to_read);
+				                                   context.path, context.metadata, context.context, nullptr, to_read,
+				                                   context.file_secret);
 				new_load->scan_state = make_shared_ptr<IcebergManifestScanningState>(context.context, std::move(scan),
 				                                                                     new_load->manifests);
 				auto &executor = new_load->scan_state->executor;
@@ -347,14 +352,21 @@ void IcebergManifestStore::ReadDeleteManifests(const vector<idx_t> &manifest_ind
 				           "total_delete_manifests=%llu filters=%llu",
 				           to_read.size(), committed_manifest_count, filter_count);
 				executor.WorkOnTasks();
+				new_load->scan_state->scan->Complete();
 			}
 			// Build the entire load before publication. On failure all overlapping waiters
 			// observe the same error, and no partial set of indexes becomes visible.
 			vector<shared_ptr<const IcebergDeleteCandidateIndex>> indexes;
+			idx_t index_builds = 0;
 			for (auto &manifest : new_load->manifests) {
-				auto &spec = context.metadata.partition_specs.at(manifest.GetManifest().partition_spec_id);
-				indexes.push_back(make_shared_ptr<IcebergDeleteCandidateIndex>(
-				    context.context, std::move(manifest.GetManifestEntries()), spec));
+				if (manifest.parsed_manifest && manifest.parsed_manifest->DeleteIndex()) {
+					indexes.push_back(manifest.parsed_manifest->DeleteIndex());
+				} else {
+					auto &spec = context.metadata.partition_specs.at(manifest.GetManifest().partition_spec_id);
+					indexes.push_back(make_shared_ptr<IcebergDeleteCandidateIndex>(
+					    context.context, manifest.TakeManifestEntries(), spec));
+					index_builds++;
+				}
 			}
 			{
 				annotated_lock_guard<annotated_mutex> guard(lock);
@@ -364,7 +376,7 @@ void IcebergManifestStore::ReadDeleteManifests(const vector<idx_t> &manifest_ind
 			}
 			DUCKDB_LOG(context.context, IcebergLogType,
 			           "Iceberg metadata phase=delete_candidate_index scope=manifest_load delete_index_builds=%llu",
-			           new_load->manifest_indexes.size());
+			           index_builds);
 		} catch (std::exception &ex) {
 			load_error = ErrorData(ex);
 		} catch (...) { // LCOV_EXCL_START
@@ -433,12 +445,14 @@ bool IcebergManifestStore::TryGetNextBatch(IcebergDataViewCursor &cursor) {
 	}
 	//! The executor tracks completion and errors; a finished task can be destroyed after the scan state.
 	executor.WorkOnTasks();
+	data_manifest_read_state->scan->Complete();
 	return read_state.TryReadBatch(cursor);
 }
 
 void IcebergManifestStore::FinishScanTasks() {
 	if (data_manifest_read_state) {
 		data_manifest_read_state->executor.WorkOnTasks();
+		data_manifest_read_state->scan->Complete();
 	}
 }
 
@@ -454,6 +468,10 @@ IcebergManifestStore::~IcebergManifestStore() {
 	if (data_manifest_read_state) {
 		try {
 			data_manifest_read_state->executor.WorkOnTasks();
+			// LIMIT may stop consuming batches early. The existing drain still finishes
+			// the selected manifests; publish only if all readers succeeded and the
+			// context was not interrupted.
+			data_manifest_read_state->scan->Complete();
 		} catch (...) {
 			//! WorkOnTasks rethrows errors pushed by the manifest-read tasks. Destructors are implicitly
 			//! noexcept (and this one can run while another exception is already unwinding), so letting the

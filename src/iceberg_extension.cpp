@@ -144,6 +144,9 @@ static void LoadInternal(ExtensionLoader &loader) {
 	    "The maximum number of manifest entries the manifest-list file counts may reserve up front for a single "
 	    "manifest. Scanning a manifest that declares more entries fails; the setting can be raised up to 100000000.",
 	    LogicalType::UBIGINT, Value::UBIGINT(DEFAULT_MAX_RESERVED_MANIFEST_ENTRIES), SetMaxReservedManifestEntries);
+	config.AddExtensionOption(ENABLE_MANIFEST_CACHE_CONFIG_VARIABLE,
+	                          "Cache immutable parsed Iceberg manifests and delete candidate indexes",
+	                          LogicalType::BOOLEAN, Value::BOOLEAN(true));
 	config.AddExtensionOption("iceberg_use_server_side_scan_planning",
 	                          "Whether or not to use server-side scanning planning (if available)",
 	                          LogicalType::BOOLEAN, Value::BOOLEAN(false), nullptr, SetScope::GLOBAL);

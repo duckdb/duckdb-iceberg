@@ -59,14 +59,14 @@ static vector<IcebergPartitionSpecEntry> GetPartitionSpecFields(const IcebergTab
 
 struct IcebergPartitionSpecsBindData : public TableFunctionData {
 	IcebergPartitionSpecsBindData() {};
-	IcebergTableMetadata metadata {IcebergTableMetadataSchemas {}};
+	shared_ptr<const IcebergTableMetadata> metadata;
 };
 
 struct IcebergPartitionSpecsGlobalState : public GlobalTableFunctionState {
 	static unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionInitInput &input) {
 		auto &bind_data = input.bind_data->Cast<IcebergPartitionSpecsBindData>();
 		auto global_state = make_uniq<IcebergPartitionSpecsGlobalState>();
-		global_state->fields = GetPartitionSpecFields(bind_data.metadata);
+		global_state->fields = GetPartitionSpecFields(*bind_data.metadata);
 		return std::move(global_state);
 	}
 

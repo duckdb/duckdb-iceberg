@@ -10,7 +10,7 @@ IcebergAddSnapshot::IcebergAddSnapshot(const IcebergTable &table_info, IcebergSn
 	//! FIXME: Do we also need to capture the current partition spec and sort order?
 	//! This is a bit of a code smell, the `IcebergTable` should instead be const
 	//! and all transactional changes should live in the IcebergTransactionData
-	schema_id = table_info.table_metadata.GetCurrentSchemaId();
+	schema_id = table_info.GetMetadata().GetCurrentSchemaId();
 }
 
 bool IcebergAddSnapshot::IsRetryable() const {

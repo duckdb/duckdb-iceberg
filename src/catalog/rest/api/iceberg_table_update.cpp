@@ -43,7 +43,7 @@ static unique_ptr<IcebergTableMetadata> CreateFormatMetadata(const IcebergTable 
 			}
 			// Replay local format changes where they occurred, rather than serializing
 			// earlier snapshots with the final version already stored on table_info.
-			auto format_metadata = make_uniq<IcebergTableMetadata>(table_info.table_metadata.Copy());
+			auto format_metadata = make_uniq<IcebergTableMetadata>(table_info.GetMetadata().Copy());
 			format_metadata->iceberg_version = transaction_data.initial_format_version;
 			if (format_metadata->iceberg_version < 3) {
 				format_metadata->next_row_id.reset();
@@ -63,7 +63,7 @@ IcebergCommitState::IcebergCommitState(const IcebergTable &table_info, ClientCon
 IcebergCommitState::~IcebergCommitState() = default;
 
 const IcebergTableMetadata &IcebergCommitState::GetTableMetadata() const {
-	return format_metadata ? *format_metadata : table_info.table_metadata;
+	return format_metadata ? *format_metadata : table_info.GetMetadata();
 }
 
 optional_ptr<const IcebergSnapshot> IcebergCommitState::GetLatestSnapshot() const {
@@ -100,7 +100,7 @@ static optional<IcebergManifestListEntry> RewriteManifestFile(const IcebergManif
 	D_ASSERT(loaded_manifest.manifest_metadata);
 	const auto &file = loaded_manifest.GetFile();
 
-	auto rewritten_entries = file.PrepareEntriesForRewrite(std::move(loaded_manifest.GetManifestEntries()));
+	auto rewritten_entries = file.PrepareEntriesForRewrite(loaded_manifest.TakeManifestEntries());
 	bool removed_any_entries = false;
 	for (auto &manifest_entry : rewritten_entries) {
 		if (!deletes.IsInvalidated({manifest_entry.data_file.file_path, manifest_entry.data_file.content_offset})) {
@@ -193,7 +193,7 @@ void IcebergCommitState::SetFormatVersion(int32_t format_version) {
 		return;
 	}
 	if (!format_metadata) {
-		format_metadata = make_uniq<IcebergTableMetadata>(table_info.table_metadata.Copy());
+		format_metadata = make_uniq<IcebergTableMetadata>(table_info.GetMetadata().Copy());
 	}
 	format_metadata->iceberg_version = format_version;
 	if (previous_version < 3 && format_version >= 3) {

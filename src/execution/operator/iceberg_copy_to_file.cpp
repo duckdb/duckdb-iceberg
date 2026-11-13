@@ -41,6 +41,7 @@ void IcebergCopyToFile::ApplyCopyOptions(IcebergCopyOptions &copy_options) {
 	names = std::move(copy_options.names);
 	expected_types = std::move(copy_options.expected_types);
 	hive_file_pattern = copy_options.partitioned_paths;
+	partition_path_expression = std::move(copy_options.partition_path_expression);
 	// PlanCopyForInsert moves these out into a PhysicalOrder when the write is not partitioned, leaving an
 	// empty vector here; for a partitioned write the copy operator sorts within each partition itself.
 	order_columns = std::move(copy_options.order_columns);
@@ -81,7 +82,7 @@ void IcebergCopyToFile::EnsureTableCreated(ClientContext &context) const {
 	// Load any per-table credentials (e.g. SigV4 for the data location).
 	ic_table.PrepareIcebergScanFromEntry(context);
 
-	auto &table_metadata = ic_table.table_info.table_metadata;
+	auto &table_metadata = ic_table.table_info.GetMetadata();
 	auto &table_schema = table_metadata.GetLatestSchema();
 
 	// Replace the plan-time options, which were derived from placeholder metadata without a location.

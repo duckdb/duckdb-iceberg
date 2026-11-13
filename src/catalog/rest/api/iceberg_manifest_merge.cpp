@@ -176,7 +176,7 @@ IcebergManifestListEntry IcebergManifestMerge::ScanManifestEntries(const Iceberg
                                                                    int32_t schema_id) {
 	vector<IcebergManifestListEntry> manifest_files;
 	manifest_files.push_back(list_entry);
-	manifest_files[0].manifest_entries.reset();
+	manifest_files[0].ResetManifestEntries();
 
 	IcebergOptions options;
 	auto &fs = FileSystem::GetFileSystem(commit_state.context);
@@ -192,6 +192,7 @@ IcebergManifestListEntry IcebergManifestMerge::ScanManifestEntries(const Iceberg
 	while (!reader->Finished()) {
 		reader->Read();
 	}
+	manifest_scan->Complete();
 	auto result = std::move(manifest_files[0]);
 	result.GetManifest().SetCountsFromEntries(result.GetManifestEntries());
 	return result;
@@ -228,7 +229,7 @@ optional<IcebergManifestListEntry> MergeBin(const vector<IcebergManifestListEntr
 		auto loaded = member.HasManifestEntries()
 		                  ? member
 		                  : IcebergManifestMerge::ScanManifestEntries(member, commit_state, schema_id);
-		auto prepared = loaded.GetFile().PrepareEntriesForRewrite(std::move(loaded.GetManifestEntries()));
+		auto prepared = loaded.GetFile().PrepareEntriesForRewrite(loaded.TakeManifestEntries());
 		for (auto &entry : prepared) {
 			merged_entries.push_back(std::move(entry));
 		}

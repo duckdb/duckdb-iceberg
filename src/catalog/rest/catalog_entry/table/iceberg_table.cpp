@@ -12,6 +12,7 @@
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/operator/add.hpp"
 #include "duckdb/parser/column_definition.hpp"
+#include "duckdb/parser/constraints/not_null_constraint.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "duckdb/main/config.hpp"
 #include "duckdb/common/types/uuid.hpp"
@@ -40,7 +41,7 @@
 namespace duckdb {
 
 const string &IcebergTable::BaseFilePath() const {
-	return table_metadata.location;
+	return GetMetadata().location;
 }
 
 void IcebergTable::VerifyReadEncryptionSupported() const {
@@ -65,7 +66,7 @@ void IcebergTable::VerifyWriteEncryptionSupported() const {
 
 vector<string> IcebergTable::GetS3EncryptionTypes() const {
 	vector<string> sse_types;
-	if (DetectStorageType(table_metadata.GetLocation()) != "s3") {
+	if (DetectStorageType(GetMetadata().GetLocation()) != "s3") {
 		return sse_types;
 	}
 	// table config overrides the catalog config, and each storage credential overrides both.
@@ -287,7 +288,7 @@ IcebergTable::GetVendedCredentials(ClientContext &context,
 	}
 
 	// Detect storage type from metadata location
-	const auto &table_location = table_metadata.GetLocation();
+	const auto &table_location = GetMetadata().GetLocation();
 	string storage_type = DetectStorageType(table_location);
 	auto log_table_name =
 	    IcebergLogType::Redact(context, StringUtil::Format("%s.%s.%s", catalog.GetName(), schema.name, name));
@@ -418,7 +419,13 @@ optional_ptr<CatalogEntry> IcebergTable::CreateSchemaVersion(const IcebergTableS
 	CreateTableInfo info;
 	info.SetTableName(Identifier(name));
 	for (auto &col : table_schema.columns) {
+		LogicalIndex column_index(info.columns.LogicalColumnCount());
 		info.columns.AddColumn(col->GetColumnDefinition());
+		//! Expose required top-level fields as NOT NULL, so DESCRIBE, information_schema and duckdb_constraints()
+		//! report them correctly. Required fields inside structs have no DuckDB constraint to map to.
+		if (col->required) {
+			info.constraints.push_back(make_uniq<NotNullConstraint>(column_index));
+		}
 	}
 
 	auto table_entry = make_uniq<IcebergTableSchemaVersion>(*this, catalog, schema, info, table_schema.schema_id);
@@ -448,8 +455,8 @@ idx_t IcebergTable::GetMaxSchemaId() {
 }
 
 idx_t IcebergTable::GetNextPartitionSpecId() {
-	idx_t max_partition_spec_id = table_metadata.default_spec_id;
-	for (auto &partition_spec : table_metadata.GetPartitionSpecs()) {
+	idx_t max_partition_spec_id = GetMetadata().default_spec_id;
+	for (auto &partition_spec : GetMetadata().GetPartitionSpecs()) {
 		auto &partition_spec_id = partition_spec.first;
 		if (partition_spec_id > max_partition_spec_id) {
 			max_partition_spec_id = partition_spec_id;
@@ -460,11 +467,11 @@ idx_t IcebergTable::GetNextPartitionSpecId() {
 
 idx_t IcebergTable::GetNextPartitionFieldId() {
 	idx_t next_partition_field_id = 1000;
-	if (table_metadata.HasLastPartitionId()) {
-		next_partition_field_id = table_metadata.GetLastPartitionFieldId() + 1;
+	if (GetMetadata().HasLastPartitionId()) {
+		next_partition_field_id = GetMetadata().GetLastPartitionFieldId() + 1;
 	}
 	// Include specs added in this transaction, which are not yet reflected in last-partition-id.
-	for (auto &entry : table_metadata.GetPartitionSpecs()) {
+	for (auto &entry : GetMetadata().GetPartitionSpecs()) {
 		for (auto &field : entry.second.fields) {
 			next_partition_field_id = MaxValue<idx_t>(next_partition_field_id, field.partition_field_id + 1);
 		}
@@ -474,10 +481,10 @@ idx_t IcebergTable::GetNextPartitionFieldId() {
 
 idx_t IcebergTable::GetNextSortOrderId() {
 	idx_t max_sort_order_id = 0;
-	if (table_metadata.default_sort_order_id.IsValid()) {
-		max_sort_order_id = table_metadata.default_sort_order_id.GetIndex();
+	if (GetMetadata().default_sort_order_id.IsValid()) {
+		max_sort_order_id = GetMetadata().default_sort_order_id.GetIndex();
 	}
-	for (auto &sort_order : table_metadata.GetSortOrderSpecs()) {
+	for (auto &sort_order : GetMetadata().GetSortOrderSpecs()) {
 		auto &sort_order_id = sort_order.first;
 		if (sort_order_id > max_sort_order_id) {
 			max_sort_order_id = sort_order_id;
@@ -487,7 +494,7 @@ idx_t IcebergTable::GetNextSortOrderId() {
 }
 
 optional<int64_t> IcebergTable::GetExistingSpecId(IcebergPartitionSpec &spec) {
-	for (auto &existing_spec : table_metadata.GetPartitionSpecs()) {
+	for (auto &existing_spec : GetMetadata().GetPartitionSpecs()) {
 		if (spec.Equals(existing_spec.second)) {
 			return existing_spec.first;
 		}
@@ -496,7 +503,7 @@ optional<int64_t> IcebergTable::GetExistingSpecId(IcebergPartitionSpec &spec) {
 }
 
 optional<int64_t> IcebergTable::GetExistingSortOrderId(IcebergSortOrder &spec) {
-	for (auto &existing_sort_order : table_metadata.GetSortOrderSpecs()) {
+	for (auto &existing_sort_order : GetMetadata().GetSortOrderSpecs()) {
 		if (spec.Equals(existing_sort_order.second)) {
 			return existing_sort_order.first;
 		}
@@ -580,6 +587,7 @@ IcebergSortOrder IcebergTable::BuildSortOrder(ClientContext &context,
 void IcebergTable::SetPartitionedBy(IcebergTransaction &transaction,
                                     const vector<unique_ptr<ParsedExpression>> &partition_keys,
                                     const IcebergTableSchema &schema) {
+	auto &metadata = GetMetadataMutable();
 	auto base_partition_field_id = GetNextPartitionFieldId();
 	auto new_spec_id = static_cast<int32_t>(GetNextPartitionSpecId());
 
@@ -588,13 +596,13 @@ void IcebergTable::SetPartitionedBy(IcebergTransaction &transaction,
 	// V1 did not require explicit field IDs: they were assigned by position starting at 1000 in each spec.
 	// Its evolution rules preserve positions (using void transforms for removed fields), so the reference
 	// implementation does not recycle historical fields in V1.
-	if (table_metadata.iceberg_version >= 2) {
+	if (metadata.iceberg_version >= 2) {
 		for (auto &field : new_spec.fields) {
 			optional_ptr<const IcebergPartitionSpecField> existing_field;
 			// Like Iceberg's BaseUpdatePartitionSpec.recycleOrCreatePartitionField, match the source
 			// ID and complete transform (including parameters). SET PARTITIONED BY supplies no
 			// explicit partition field name, so retain the historical name along with its ID.
-			for (auto &entry : table_metadata.GetPartitionSpecs()) {
+			for (auto &entry : metadata.GetPartitionSpecs()) {
 				for (auto &candidate : entry.second.fields) {
 					if (candidate.Equals(field) &&
 					    (!existing_field || candidate.partition_field_id < existing_field->partition_field_id)) {
@@ -603,7 +611,7 @@ void IcebergTable::SetPartitionedBy(IcebergTransaction &transaction,
 				}
 			}
 			// Preserve active fields even when older writers assigned multiple IDs to the same transform.
-			for (auto &candidate : table_metadata.GetLatestPartitionSpec().fields) {
+			for (auto &candidate : metadata.GetLatestPartitionSpec().fields) {
 				if (candidate.Equals(field)) {
 					existing_field = candidate;
 					break;
@@ -622,19 +630,20 @@ void IcebergTable::SetPartitionedBy(IcebergTransaction &transaction,
 	auto existing_spec_id = GetExistingSpecId(new_spec);
 	auto &transaction_data = GetOrCreateTransactionData(transaction);
 	if (existing_spec_id) {
-		table_metadata.default_spec_id = *existing_spec_id;
+		metadata.default_spec_id = *existing_spec_id;
 		transaction_data.TableSetDefaultSpec();
 		return;
 	}
 
-	table_metadata.partition_specs.emplace(new_spec_id, std::move(new_spec));
-	table_metadata.default_spec_id = new_spec_id;
+	metadata.partition_specs.emplace(new_spec_id, std::move(new_spec));
+	metadata.default_spec_id = new_spec_id;
 	transaction_data.TableAddPartitionSpec();
 	transaction_data.TableSetDefaultSpec();
 }
 
 void IcebergTable::SetSortedBy(IcebergTransaction &transaction, const vector<OrderByNode> &orders,
                                const IcebergTableSchema &schema, bool first_sort_spec) {
+	auto &metadata = GetMetadataMutable();
 	idx_t new_sort_order_id = UNSORTED_SORT_ORDER_ID;
 	if (!first_sort_spec && !orders.empty()) {
 		new_sort_order_id = GetNextSortOrderId();
@@ -647,7 +656,7 @@ void IcebergTable::SetSortedBy(IcebergTransaction &transaction, const vector<Ord
 	// (some catalog may allow duplicate definitions, others not)
 	auto existing_sort_order_id = GetExistingSortOrderId(new_sort_order);
 	if (existing_sort_order_id) {
-		table_metadata.default_sort_order_id = *existing_sort_order_id;
+		metadata.default_sort_order_id = *existing_sort_order_id;
 		if (!first_sort_spec) {
 			auto &transaction_data = GetOrCreateTransactionData(transaction);
 			transaction_data.TableSetDefaultSortOrder();
@@ -655,8 +664,8 @@ void IcebergTable::SetSortedBy(IcebergTransaction &transaction, const vector<Ord
 		return;
 	}
 
-	table_metadata.sort_specs.emplace(new_sort_order_id, std::move(new_sort_order));
-	table_metadata.default_sort_order_id = new_sort_order_id;
+	metadata.sort_specs.emplace(new_sort_order_id, std::move(new_sort_order));
+	metadata.default_sort_order_id = new_sort_order_id;
 	if (!first_sort_spec) {
 		auto &transaction_data = GetOrCreateTransactionData(transaction);
 		transaction_data.TableAddSortOrder();
@@ -665,25 +674,25 @@ void IcebergTable::SetSortedBy(IcebergTransaction &transaction, const vector<Ord
 }
 
 optional_ptr<CatalogEntry> IcebergTable::GetSchemaVersion(optional_ptr<BoundAtClause> at) {
-	if (table_metadata.snapshots.empty()) {
-		return schema_versions[table_metadata.GetCurrentSchemaId()].get();
+	if (GetMetadata().snapshots.empty()) {
+		return schema_versions[GetMetadata().GetCurrentSchemaId()].get();
 	}
 
 	D_ASSERT(!schema_versions.empty());
 	auto snapshot_lookup = IcebergSnapshotLookup::FromAtClause(at);
-	auto snapshot_info = table_metadata.GetSnapshot(snapshot_lookup);
+	auto snapshot_info = GetMetadata().GetSnapshot(snapshot_lookup);
 
 	int32_t schema_id;
 	if (!snapshot_lookup.IsLatest() && snapshot_info.snapshot) {
 		schema_id = snapshot_info.snapshot->GetSchemaId();
 	} else {
-		schema_id = table_metadata.GetCurrentSchemaId();
+		schema_id = GetMetadata().GetCurrentSchemaId();
 	}
 	return schema_versions[schema_id].get();
 }
 
 idx_t IcebergTable::GetIcebergVersion() const {
-	return table_metadata.iceberg_version;
+	return GetMetadata().iceberg_version;
 }
 
 static void AddHTTPSecretsToOptions(SecretEntry &http_secret_entry, case_insensitive_map_t<Value> &options) {
@@ -715,7 +724,7 @@ void IcebergTable::LoadCredentials(ClientContext &context, IRCAPITableCredential
 	}
 	// Get Credentials from IRC API
 	auto &fs = FileSystem::GetFileSystem(context);
-	auto metadata_path = table_metadata.GetMetadataPath(fs);
+	auto metadata_path = GetMetadata().GetMetadataPath(fs);
 
 	auto http_secret_entry = IcebergTableSecretProvider::GetHTTPSecretForCatalog(context, catalog);
 
@@ -735,12 +744,12 @@ void IcebergTable::LoadCredentials(ClientContext &context, IRCAPITableCredential
 	    IcebergLogType::Redact(context, StringUtil::Format("%s.%s.%s", catalog.GetName(), schema.name, name));
 	string storage_scope;
 	const char *scope_source;
-	auto data_path = table_metadata.table_properties.find("write.data.path");
-	if (data_path != table_metadata.table_properties.end()) {
+	auto data_path = GetMetadata().table_properties.find("write.data.path");
+	if (data_path != GetMetadata().table_properties.end()) {
 		storage_scope = data_path->second;
 		scope_source = "write.data.path";
 	} else {
-		storage_scope = table_metadata.GetLocation();
+		storage_scope = GetMetadata().GetLocation();
 		scope_source = "table location";
 	}
 	if (!storage_scope.empty()) {
@@ -860,7 +869,7 @@ void IcebergTable::ApplyRefreshResult(ClientContext &context, IcebergLoadTableRe
 		    StringUtil::Format("GetTableInformation endpoint returned response code %s with message \"%s\"",
 		                       EnumUtil::ToString(get_table_result.status_), get_table_result.error_->_error.message));
 	}
-	auto &load_table_result = *get_table_result.result_;
+	auto load_table_result = get_table_result.result_;
 	schema_versions.clear();
 	dummy_entry.reset();
 	InitializeFromCatalogResponse(context, load_table_result);
@@ -871,7 +880,7 @@ void IcebergTable::ApplyRefreshResult(ClientContext &context, IcebergLoadTableRe
 }
 
 IcebergTable IcebergTable::Copy() const {
-	auto clone = IcebergTable(catalog, schema, name, table_metadata.Copy());
+	auto clone = IcebergTable(catalog, schema, name, GetMetadataOwner());
 	clone.config = config;
 	clone.initialization_source = initialization_source;
 	for (auto &credential : storage_credentials) {
@@ -882,7 +891,7 @@ IcebergTable IcebergTable::Copy() const {
 
 IcebergTableMetadata IcebergTable::CreateMetadataFromLog(ClientContext &context, timestamp_ms_t transaction_start_ms,
                                                          timestamp_ms_t metadata_cutoff_ms) const {
-	auto &log = table_metadata.metadata_log;
+	auto &log = GetMetadata().metadata_log;
 
 	optional_idx log_item_index;
 	for (idx_t i = log.size(); i-- > 0;) {
@@ -924,7 +933,7 @@ IcebergTable IcebergTable::Copy(IcebergTransaction &iceberg_transaction) const {
 		metadata_cutoff_ms.value = NumericLimits<int64_t>::Maximum();
 	}
 
-	if (table_metadata.last_updated_ms <= metadata_cutoff_ms) {
+	if (GetMetadata().last_updated_ms <= metadata_cutoff_ms) {
 		return ret;
 	}
 	bool use_metadata_log = true;
@@ -937,7 +946,7 @@ IcebergTable IcebergTable::Copy(IcebergTransaction &iceberg_transaction) const {
 	if (!use_metadata_log) {
 		return ret;
 	}
-	if (table_metadata.metadata_log.empty()) {
+	if (GetMetadata().metadata_log.empty()) {
 		throw InvalidConfigurationException(
 		    "Cannot reconstruct table '%s' at the transaction start because iceberg_use_metadata_log is enabled, "
 		    "but the table metadata does not contain a metadata-log. Set iceberg_use_metadata_log = false to "
@@ -946,25 +955,50 @@ IcebergTable IcebergTable::Copy(IcebergTransaction &iceberg_transaction) const {
 	}
 
 	LoadCredentials(context);
-	ret.table_metadata = ret.CreateMetadataFromLog(context, transaction_start_ms, metadata_cutoff_ms);
+	ret.table_metadata = make_shared_ptr<const IcebergTableMetadata>(
+	    ret.CreateMetadataFromLog(context, transaction_start_ms, metadata_cutoff_ms));
 	return ret;
 }
 
 void IcebergTable::InitSchemaVersions() {
 	schema_versions.clear();
-	auto &schemas = table_metadata.GetSchemas();
+	auto &schemas = GetMetadata().GetSchemas();
 	schemas.ForEachSchema([&](const IcebergTableSchema &schema) { CreateSchemaVersion(schema); });
+}
+
+const IcebergTableMetadata &IcebergTable::GetMetadata() const {
+	return mutable_metadata ? *mutable_metadata : *table_metadata;
+}
+
+shared_ptr<const IcebergTableMetadata> IcebergTable::GetMetadataOwner() const {
+	return mutable_metadata ? mutable_metadata : table_metadata;
+}
+
+IcebergTableMetadata &IcebergTable::GetMetadataMutable() {
+	if (!mutable_metadata || mutable_metadata.use_count() != 1) {
+		mutable_metadata = make_shared_ptr<IcebergTableMetadata>(GetMetadata().Copy());
+		DUCKDB_LOG(catalog.GetDatabase(), IcebergLogType,
+		           "Iceberg metadata phase=table_metadata_copy scope=table_mutation "
+		           "table_metadata_copies=1 snapshots_copied=%llu",
+		           mutable_metadata->snapshots.size());
+	}
+	return *mutable_metadata;
 }
 
 IcebergTable::IcebergTable(IcebergCatalog &catalog, IcebergSchemaEntry &schema, const string &name,
                            IcebergTableMetadata metadata)
+    : IcebergTable(catalog, schema, name, make_shared_ptr<const IcebergTableMetadata>(std::move(metadata))) {
+}
+
+IcebergTable::IcebergTable(IcebergCatalog &catalog, IcebergSchemaEntry &schema, const string &name,
+                           shared_ptr<const IcebergTableMetadata> metadata)
     : catalog(catalog), schema(schema), name(name), table_metadata(std::move(metadata)), original_name(name) {
 }
 
 IcebergTable::IcebergTable(IcebergCatalog &catalog, IcebergSchemaEntry &schema, const string &name,
-                           const rest_api_objects::LoadTableResult &load_table_result)
-    : IcebergTable(catalog, schema, name, IcebergTableMetadata::FromTableMetadata(load_table_result.metadata)) {
-	SetLoadTableResult(load_table_result);
+                           shared_ptr<const IcebergLoadTableResponse> load_table_result)
+    : IcebergTable(catalog, schema, name, IcebergTableMetadata::FromTableMetadata(load_table_result->result.metadata)) {
+	SetLoadTableResult(std::move(load_table_result));
 }
 
 shared_ptr<IcebergTable> IcebergTable::CreatePlaceholder(IcebergCatalog &catalog, IcebergSchemaEntry &schema,
@@ -981,57 +1015,74 @@ IcebergTransactionData &IcebergTable::GetOrCreateTransactionData(IcebergTransact
 	return *transaction_data;
 }
 
-void IcebergTable::InitializeFromLoadTableResult(
-    ClientContext &context, const rest_api_objects::LoadTableResult &load_table_result,
-    optional_ptr<const rest_api_objects::TableMetadata> metadata_override) {
-	table_metadata =
-	    IcebergTableMetadata::FromTableMetadata(metadata_override ? *metadata_override : load_table_result.metadata);
-	DUCKDB_LOG(context, IcebergLogType,
-	           "Iceberg metadata phase=table_metadata_conversion scope=catalog_initialization "
-	           "table_metadata_conversions=1 snapshots_converted=%llu",
-	           table_metadata.snapshots.size());
-	SetLoadTableResult(load_table_result);
-	D_ASSERT(!table_metadata.GetSchemas().IsEmpty());
-	InitSchemaVersions();
-}
-
-void IcebergTable::InitializeFromCatalogResponse(ClientContext &context,
-                                                 const rest_api_objects::LoadTableResult &load_table_result) {
-	//! Some catalogs (e.g. AWS Glue's Iceberg REST endpoint) reconstruct the response metadata from their own
-	//! catalog state instead of returning the metadata file contents, which can lose nested field ids or
-	//! properties such as 'schema.name-mapping.default'. With 'use_metadata_location', the file at
-	//! 'metadata-location' is treated as authoritative instead. The IRC spec requires the embedded metadata to
-	//! match the metadata file, so this deviates from the spec and only happens when the option is set.
-	if (catalog.attach_options.use_metadata_location && load_table_result.metadata_location.has_value()) {
-		auto &metadata_location = *load_table_result.metadata_location;
-		unique_ptr<const rest_api_objects::TableMetadata> file_metadata;
+shared_ptr<const IcebergTableMetadata> IcebergLoadTableResponse::GetMetadata(ClientContext &context,
+                                                                             const IcebergTable &table) const {
+	// Resolve the callback on every initialization, even when the file's parsed contents are already cached.
+	// Registration and authorization remain connection/transaction-specific.
+	optional<OpenFileInfo> metadata_file;
+	const bool use_metadata_file = table.catalog.attach_options.use_metadata_location && result.metadata_location;
+	auto log_fallback = [&](const std::exception &ex) {
+		DUCKDB_LOG(context, IcebergLogType,
+		           "Could not load table metadata from metadata-location '%s': %s - falling back to the "
+		           "metadata embedded in the catalog response",
+		           *result.metadata_location, ex.what());
+	};
+	if (use_metadata_file) {
+		try {
+			metadata_file = IcebergFileCredentialsCallback::GetFileInfo(context, table, *result.metadata_location);
+		} catch (std::exception &ex) {
+			log_fallback(ex);
+		}
+	}
+	lock_guard<mutex> guard(lock);
+	if (metadata && (!use_metadata_file || metadata_file)) {
+		DUCKDB_LOG(context, IcebergLogType,
+		           "Iceberg metadata phase=table_metadata_cache scope=catalog_initialization parsed_metadata_hits=1 "
+		           "table_metadata_conversions=0 snapshots_converted=0");
+		return metadata;
+	}
+	unique_ptr<rest_api_objects::TableMetadata> file_metadata;
+	if (metadata_file) {
 		try {
 			auto &fs = FileSystem::GetFileSystem(context);
 			auto caching_fs = make_shared_ptr<CachingFileSystemWrapper>(fs, *context.db);
-			auto metadata_file = IcebergFileCredentialsCallback::GetFileInfo(context, *this, metadata_location);
-			file_metadata = make_uniq<const rest_api_objects::TableMetadata>(
-			    IcebergTableMetadata::Parse(metadata_file, *caching_fs, "none"));
+			file_metadata = make_uniq<rest_api_objects::TableMetadata>(
+			    IcebergTableMetadata::Parse(*metadata_file, *caching_fs, "none"));
 		} catch (std::exception &ex) {
-			DUCKDB_LOG(context, IcebergLogType,
-			           "Could not load table metadata from metadata-location '%s': %s - falling back to the "
-			           "metadata embedded in the catalog response",
-			           metadata_location, ex.what());
-		}
-		if (file_metadata) {
-			InitializeFromLoadTableResult(context, load_table_result, file_metadata.get());
-			return;
+			log_fallback(ex);
 		}
 	}
-	InitializeFromLoadTableResult(context, load_table_result);
+	auto parsed = make_shared_ptr<const IcebergTableMetadata>(
+	    IcebergTableMetadata::FromTableMetadata(file_metadata ? *file_metadata : result.metadata));
+	DUCKDB_LOG(context, IcebergLogType,
+	           "Iceberg metadata phase=table_metadata_conversion scope=catalog_initialization "
+	           "table_metadata_conversions=1 snapshots_converted=%llu",
+	           parsed->snapshots.size());
+	// A transient file failure does not establish the effective authoritative version. Retry on the next
+	// read, and never substitute this fallback for a successfully parsed metadata-location payload.
+	if (!use_metadata_file || file_metadata) {
+		metadata = parsed;
+	}
+	return parsed;
 }
 
-void IcebergTable::SetLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result) {
-	initialization_source = load_table_result;
+void IcebergTable::InitializeFromCatalogResponse(ClientContext &context,
+                                                 shared_ptr<const IcebergLoadTableResponse> load_table_result) {
+	table_metadata = load_table_result->GetMetadata(context, *this);
+	mutable_metadata.reset();
+	SetLoadTableResult(std::move(load_table_result));
+	D_ASSERT(!GetMetadata().GetSchemas().IsEmpty());
+	InitSchemaVersions();
+}
+
+void IcebergTable::SetLoadTableResult(shared_ptr<const IcebergLoadTableResponse> response) {
+	initialization_source = std::move(response);
+	auto &load_table_result = initialization_source->result;
+	config.clear();
 	if (auto &val = load_table_result.config) {
 		config = *val;
 	}
 	storage_credentials.clear();
-
 	if (auto &credentials = load_table_result.storage_credentials) {
 		for (auto &credential : *credentials) {
 			storage_credentials.push_back(credential.Copy());

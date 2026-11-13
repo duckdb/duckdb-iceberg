@@ -10,6 +10,7 @@
 #include "catalog/rest/transaction/iceberg_transaction_data.hpp"
 #include "rest_catalog/objects/storage_credential.hpp"
 #include "iceberg_attach.hpp"
+#include "catalog/rest/iceberg_table_metadata_cache.hpp"
 
 namespace duckdb {
 class LoadTableCachePublication;
@@ -29,7 +30,9 @@ public:
 	IcebergTable(IcebergCatalog &catalog, IcebergSchemaEntry &schema, const string &name,
 	             IcebergTableMetadata metadata);
 	IcebergTable(IcebergCatalog &catalog, IcebergSchemaEntry &schema, const string &name,
-	             const rest_api_objects::LoadTableResult &load_table_result);
+	             shared_ptr<const IcebergLoadTableResponse> load_table_result);
+	IcebergTable(IcebergCatalog &catalog, IcebergSchemaEntry &schema, const string &name,
+	             shared_ptr<const IcebergTableMetadata> metadata);
 	//! A listing placeholder has no schemas until FillEntry resolves it.
 	static shared_ptr<IcebergTable> CreatePlaceholder(IcebergCatalog &catalog, IcebergSchemaEntry &schema,
 	                                                  const string &name);
@@ -88,34 +91,38 @@ public:
 	void InitSchemaVersions();
 
 	bool HasTransactionUpdates() const;
-	void InitializeFromLoadTableResult(ClientContext &context,
-	                                   const rest_api_objects::LoadTableResult &load_table_result,
-	                                   optional_ptr<const rest_api_objects::TableMetadata> metadata_override = nullptr);
 	//! Initialize from a LoadTableResult, preferring the authoritative metadata file referenced by
 	//! 'metadata-location' over the metadata embedded in the catalog response.
 	void InitializeFromCatalogResponse(ClientContext &context,
-	                                   const rest_api_objects::LoadTableResult &load_table_result);
+	                                   shared_ptr<const IcebergLoadTableResponse> load_table_result);
 	void RefreshFromCatalog(ClientContext &context);
+
+	const IcebergTableMetadata &GetMetadata() const;
+	shared_ptr<const IcebergTableMetadata> GetMetadataOwner() const;
+	//! Only transaction-local writers may request mutable metadata. Detaches from cached metadata and
+	//! any outstanding scan/copy before changing it. References obtained from an owner stay valid.
+	IcebergTableMetadata &GetMetadataMutable();
 
 public:
 	IcebergCatalog &catalog;
 	IcebergSchemaEntry &schema;
 	string name;
-	IcebergTableMetadata table_metadata;
 	case_insensitive_map_t<string> config;
 	vector<rest_api_objects::StorageCredential> storage_credentials;
 	unordered_map<int32_t, unique_ptr<IcebergTableSchemaVersion>> schema_versions;
 	// dummy entry to hold existence of a table, but no schema versions
 	unique_ptr<IcebergTableSchemaVersion> dummy_entry;
 	unique_ptr<IcebergTransactionData> transaction_data;
-	//! The cached response this table was initialized from, used as an identity and never dereferenced.
-	optional_ptr<const rest_api_objects::LoadTableResult> initialization_source;
+	//! Owns the validated generation used for identity-based eviction (not a historical metadata identity).
+	shared_ptr<const IcebergLoadTableResponse> initialization_source;
 
 private:
 	void ApplyRefreshResult(ClientContext &context, IcebergLoadTableResult result,
 	                        LoadTableCachePublication &publication);
-	void SetLoadTableResult(const rest_api_objects::LoadTableResult &load_table_result);
+	void SetLoadTableResult(shared_ptr<const IcebergLoadTableResponse> load_table_result);
 	vector<string> GetS3EncryptionTypes() const;
+	shared_ptr<const IcebergTableMetadata> table_metadata;
+	shared_ptr<IcebergTableMetadata> mutable_metadata;
 
 	//! Unchanged by rename, used to check for a rename
 	const string original_name;

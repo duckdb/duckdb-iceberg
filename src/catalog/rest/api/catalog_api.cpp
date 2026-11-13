@@ -196,7 +196,7 @@ IcebergLoadTableResult IcebergLoadTableRequest::Execute(ClientContext &context, 
 		if (can_revalidate) {
 			// ETags validate metadata, not credential lifetime. Storage without an Iceberg refresh
 			// provider (e.g. Azure SAS) needs newly vended credentials from a full LoadTable response.
-			auto &location = cached_result->metadata.location;
+			auto &location = cached_result->result.metadata.location;
 			can_revalidate = location && IcebergTableSecretProvider::SupportsStorageType(DetectStorageType(*location));
 		}
 	}
@@ -229,8 +229,7 @@ IcebergLoadTableResult IcebergLoadTableRequest::Execute(ClientContext &context, 
 	}
 	auto doc = ICUtils::APIResultToDoc(result->body);
 	auto metadata_root = doc->GetRoot();
-	ret.result_ =
-	    make_shared_ptr<const rest_api_objects::LoadTableResult>(ICUtils::ParseLoadTableResult(metadata_root));
+	ret.result_ = make_shared_ptr<const IcebergLoadTableResponse>(ICUtils::ParseLoadTableResult(metadata_root));
 	if (result->headers.HasHeader("ETag")) {
 		ret.etag = result->headers.GetHeaderValue("ETag");
 	}
@@ -275,14 +274,14 @@ APIResult<IRCAPICredentials> IRCAPI::GetTableCredentials(ClientContext &context,
 			return ret;
 		}
 		auto &credentials = ret.result_;
-		if (table_result.result_->storage_credentials) {
-			for (auto &credential : *table_result.result_->storage_credentials) {
+		if (table_result.result_->result.storage_credentials) {
+			for (auto &credential : *table_result.result_->result.storage_credentials) {
 				credentials.storage_credentials.push_back(credential.Copy());
 			}
 		}
 		credentials.config.emplace();
-		if (table_result.result_->config) {
-			*credentials.config = *table_result.result_->config;
+		if (table_result.result_->result.config) {
+			*credentials.config = *table_result.result_->result.config;
 		}
 		return ret;
 	}

@@ -336,7 +336,7 @@ int32_t IcebergTableMetadata::GetCurrentSchemaId() const {
 	return current_schema_id;
 }
 
-IcebergTableSchema &IcebergTableMetadataSchemas::AddSchemaOrGetExisting(shared_ptr<IcebergTableSchema> schema) {
+const IcebergTableSchema &IcebergTableMetadataSchemas::AddSchemaOrGetExisting(shared_ptr<IcebergTableSchema> schema) {
 	if (!schema) {
 		throw InternalException("Can't add NULL schema");
 	}
@@ -347,7 +347,7 @@ IcebergTableSchema &IcebergTableMetadataSchemas::AddSchemaOrGetExisting(shared_p
 		}
 	}
 	auto new_schema_id = schema->schema_id;
-	auto res = schemas.emplace(new_schema_id, std::move(schema));
+	auto res = schemas.emplace(new_schema_id, schema->Copy());
 	if (!res.second) {
 		throw InvalidConfigurationException("Attempted to add schema with id %d, but this already exists in the table!",
 		                                    new_schema_id);
@@ -412,7 +412,7 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 	if (table_metadata.encryption_keys && !table_metadata.encryption_keys->empty()) {
 		throw NotImplementedException("Iceberg table encryption is not supported (encryption-keys is not empty)");
 	}
-	unordered_map<int32_t, shared_ptr<IcebergTableSchema>> schemas;
+	unordered_map<int32_t, shared_ptr<const IcebergTableSchema>> schemas;
 	if (table_metadata.schemas) {
 		for (auto &schema : *table_metadata.schemas) {
 			if (!schema.object_1.schema_id) {
@@ -584,24 +584,7 @@ IcebergTableMetadata IcebergTableMetadata::Copy() const {
 	res.table_properties = table_properties;
 	res.metadata_log = metadata_log;
 	res.current_schema_id = current_schema_id;
-	res.file_secret = file_secret;
-	res.file_secret_value = file_secret_value;
 	return res;
-}
-
-void IcebergTableMetadata::SetFileSecret(string name) {
-	file_secret = std::move(name);
-	file_secret_value = file_secret.empty() ? Value() : Value(file_secret);
-}
-
-void IcebergTableMetadata::ApplyFileSecret(OpenFileInfo &file) const {
-	if (file_secret.empty()) {
-		return;
-	}
-	if (!file.extended_info) {
-		file.extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
-	}
-	file.extended_info->options[ExtendedOpenFileInfo::SECRET_OPTION] = file_secret_value;
 }
 
 const case_insensitive_map_t<string> &IcebergTableMetadata::GetTableProperties() const {

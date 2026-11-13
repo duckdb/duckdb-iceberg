@@ -99,7 +99,7 @@ public:
 
 public:
 	void AddTable(IcebergTable &table_info, ClientContext &context, const IcebergOptions &options) {
-		auto &metadata = table_info.table_metadata;
+		auto &metadata = table_info.GetMetadata();
 		if (table_names_to_skip.count(table_info.name)) {
 			//! FIXME: perhaps log that the table was skipped
 			return;
@@ -109,7 +109,7 @@ public:
 			return;
 		}
 
-		map<timestamp_t, reference<IcebergSnapshot>> snapshots;
+		map<timestamp_t, reference<const IcebergSnapshot>> snapshots;
 		for (auto &it : metadata.snapshots) {
 			auto timestamp = duckdb::Cast::Operation<timestamp_ms_t, timestamp_t>(it.second.timestamp_ms);
 			snapshots.emplace(timestamp, it.second);
@@ -138,7 +138,7 @@ public:
 
 			if (!table.has_snapshot) {
 				//! Mark the table as being created by this snapshot
-				table.catalog_id_offset = ducklake_snapshot.AddTable(table_info.table_metadata.table_uuid);
+				table.catalog_id_offset = ducklake_snapshot.AddTable(table_info.GetMetadata().table_uuid);
 				table.start_snapshot = ducklake_snapshot.snapshot_time;
 				table.has_snapshot = true;
 			}
@@ -762,7 +762,7 @@ private:
 	}
 
 	DuckLakeTable &GetTable(const IcebergTable &table_info) {
-		auto &metadata = table_info.table_metadata;
+		auto &metadata = table_info.GetMetadata();
 		auto table_uuid = metadata.table_uuid;
 		auto it = tables.find(table_uuid);
 		if (it != tables.end()) {

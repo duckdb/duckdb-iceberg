@@ -112,7 +112,7 @@ static unique_ptr<FunctionData> IcebergScanPlanBind(ClientContext &context, Tabl
 			throw InvalidInputException("Table '%s' is not an Iceberg REST catalog table", input_string);
 		}
 		table_entry = &table.Cast<IcebergTableSchemaVersion>();
-		auto &metadata = table_entry->table_info.table_metadata;
+		auto &metadata = table_entry->table_info.GetMetadata();
 		if (!IcebergFileCredentialsCallback::Get(context, table_entry->table_info).empty()) {
 			// a scan task names its files by path, so iceberg_scan_tasks would open them with the secret matched to it
 			throw InvalidInputException("iceberg_scan_plan is not supported for table '%s', whose files are read with "
@@ -122,17 +122,19 @@ static unique_ptr<FunctionData> IcebergScanPlanBind(ClientContext &context, Tabl
 		auto snapshot = metadata.GetSnapshot(*options.snapshot_lookup);
 		auto &schema = metadata.GetSchemaFromId(snapshot.schema_id);
 		auto &fs = FileSystem::GetFileSystem(context);
-		scan_info = make_shared_ptr<IcebergScanInfo>(metadata.GetMetadataPath(fs), metadata, snapshot, schema);
+		scan_info = make_shared_ptr<IcebergScanInfo>(
+		    metadata.GetMetadataPath(fs), table_entry->table_info.GetMetadataOwner(), snapshot, schema,
+		    IcebergFileSecret("", std::to_string(table_entry->catalog.GetOid())));
 		if (options.snapshot_lookup->IsLatest() && table_entry->table_info.transaction_data) {
 			scan_info->transaction_data = table_entry->table_info.transaction_data.get();
 		}
 	} else {
 		auto resolved = IcebergUtils::ResolveTableMetadata(context, input_string, options);
-		auto temp_data = make_uniq<IcebergScanTemporaryData>(std::move(resolved.metadata));
-		auto &metadata = temp_data->metadata;
+		auto &metadata = *resolved.metadata;
 		auto snapshot = metadata.GetSnapshot(*options.snapshot_lookup);
 		auto &schema = metadata.GetSchemaFromId(snapshot.schema_id);
-		scan_info = make_shared_ptr<IcebergScanInfo>(resolved.table_location, std::move(temp_data), snapshot, schema);
+		scan_info = make_shared_ptr<IcebergScanInfo>(resolved.table_location, std::move(resolved.metadata), snapshot,
+		                                             schema, std::move(resolved.file_secret));
 	}
 	auto &metadata = scan_info->metadata;
 	auto &schema = scan_info->schema;
