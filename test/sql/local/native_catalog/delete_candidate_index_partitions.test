@@ -6,6 +6,10 @@ require-env CATALOG_TEST_CONFIG_SETUP mock
 
 include test/sql/init_requires
 
+# These assertions measure cold manifest reads/builds.
+statement ok
+SET iceberg_enable_manifest_cache=false;
+
 require json
 
 statement ok

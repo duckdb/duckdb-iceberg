@@ -105,7 +105,7 @@ FROM
 	) AS t(spec)
 WHERE spec."spec-id"::INTEGER = metadata."default-spec-id"::INTEGER;
 ----
-identity_a_1
+a
 
 # Multiple alterations in one transaction must allocate distinct new IDs.
 statement ok

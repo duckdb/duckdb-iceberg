@@ -1,4 +1,5 @@
 #include "common/iceberg_utils.hpp"
+#include "catalog/rest/iceberg_catalog.hpp"
 
 #include "duckdb.hpp"
 #include "duckdb/common/exception.hpp"
@@ -284,7 +285,8 @@ IcebergResolvedMetadata IcebergUtils::ResolveTableMetadata(ClientContext &contex
 			auto &metadata = iceberg_table.table_info.GetMetadata();
 			return IcebergResolvedMetadata(
 			    metadata.GetLocation(), iceberg_table.table_info.GetMetadataOwner(),
-			    IcebergFileSecret(IcebergFileCredentialsCallback::Get(context, iceberg_table.table_info)));
+			    IcebergFileSecret(IcebergFileCredentialsCallback::Get(context, iceberg_table.table_info),
+			                      std::to_string(iceberg_table.table_info.catalog.GetOid())));
 		}
 	}
 

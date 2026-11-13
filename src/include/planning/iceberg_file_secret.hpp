@@ -8,8 +8,12 @@ namespace duckdb {
 //! The secret selected for one read, independent of immutable metadata and its cache lifetime.
 struct IcebergFileSecret {
 	IcebergFileSecret() = default;
-	explicit IcebergFileSecret(string name) : value(name.empty() ? Value() : Value(std::move(name))) {
+	explicit IcebergFileSecret(string name, string cache_scope = "")
+	    : cache_scope(std::move(cache_scope)), value(name.empty() ? Value() : Value(std::move(name))) {
 	}
+
+	//! Non-secret attachment identity. Never includes credentials or their transaction-local names.
+	string cache_scope;
 
 	void Apply(OpenFileInfo &file) const {
 		if (value.IsNull()) {

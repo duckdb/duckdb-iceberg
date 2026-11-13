@@ -40,11 +40,41 @@ struct IcebergDeleteCandidateIndex::PartitionIndex {
 
 	// Group rows stay pinned and stable across table growth. This map associates
 	// their addresses with entry lists; all partition hashing/equality is DuckDB's.
+	// After construction only const LookupGroups and destruction are used. Neither
+	// accesses the native table's construction-time ClientContext reference (there
+	// are no aggregate destructors). Buffers use the database allocator, which
+	// outlives ObjectCache; no connection or credential owner is retained here.
 	GroupedAggregateHashTable table;
 	unordered_map<data_ptr_t, vector<idx_t>> entries_by_group;
 };
 
 IcebergDeleteCandidateIndex::~IcebergDeleteCandidateIndex() = default;
+
+idx_t IcebergDeleteCandidateIndex::EstimatedIndexMemory() const {
+	idx_t size = sizeof(*this) + partition_fields.capacity() * sizeof(uint64_t) +
+	             partition_types.capacity() * sizeof(LogicalType) +
+	             (unreferenced.capacity() + fallback.capacity()) * sizeof(idx_t);
+	for (auto &type : partition_types) {
+		size += 64 + type.ToString().size();
+	}
+	size += by_referenced_path.bucket_count() * sizeof(void *);
+	for (auto &bucket : by_referenced_path) {
+		size += sizeof(bucket) + 3 * sizeof(void *) + bucket.first.capacity() + 1 +
+		        bucket.second.capacity() * sizeof(idx_t);
+	}
+	if (by_partition) {
+		// The frozen native table's tuples, hash slots and arena are buffer-managed;
+		// include them conservatively in the cache weight as well as the directory.
+		size += sizeof(PartitionIndex) + by_partition->table.GetSizeInBytes();
+		size += by_partition->entries_by_group.bucket_count() * sizeof(void *);
+		for (auto &bucket : by_partition->entries_by_group) {
+			size += sizeof(bucket) + 3 * sizeof(void *) + bucket.second.capacity() * sizeof(idx_t);
+		}
+		// Native build/probe scratch and row-layout metadata retained by the frozen table.
+		size += STANDARD_VECTOR_SIZE * (128 + 64 * partition_types.size());
+	}
+	return size;
+}
 
 static bool CanGroupPartitionType(const LogicalType &type) {
 	// Preserve the conservative type contract: comparing unlike values can
@@ -72,6 +102,13 @@ static bool CanGroupPartitionType(const LogicalType &type) {
 
 IcebergDeleteCandidateIndex::IcebergDeleteCandidateIndex(ClientContext &context, vector<IcebergManifestEntry> entries_p,
                                                          const IcebergPartitionSpec &spec)
+    : IcebergDeleteCandidateIndex(context, make_shared_ptr<const vector<IcebergManifestEntry>>(std::move(entries_p)),
+                                  spec) {
+}
+
+IcebergDeleteCandidateIndex::IcebergDeleteCandidateIndex(ClientContext &context,
+                                                         shared_ptr<const vector<IcebergManifestEntry>> entries_p,
+                                                         const IcebergPartitionSpec &spec)
     : entries(std::move(entries_p)), spec_id(spec.spec_id) {
 	if (!spec.IsUnpartitioned()) {
 		for (auto &field : spec.fields) {
@@ -79,8 +116,8 @@ IcebergDeleteCandidateIndex::IcebergDeleteCandidateIndex(ClientContext &context,
 			partition_types.emplace_back(LogicalType::SQLNULL);
 		}
 	}
-	for (idx_t entry_idx = 0; entry_idx < entries.size(); entry_idx++) {
-		auto &entry = entries[entry_idx];
+	for (idx_t entry_idx = 0; entry_idx < entries->size(); entry_idx++) {
+		auto &entry = (*entries)[entry_idx];
 		if (entry.status == IcebergManifestEntryStatusType::DELETED) {
 			continue;
 		}
@@ -111,7 +148,7 @@ IcebergDeleteCandidateIndex::IcebergDeleteCandidateIndex(ClientContext &context,
 	DataChunk groups;
 	vector<idx_t> entry_indexes;
 	for (auto entry_idx : unreferenced) {
-		auto values = IcebergFilePruner::PartitionValueMap(entries[entry_idx].data_file);
+		auto values = IcebergFilePruner::PartitionValueMap((*entries)[entry_idx].data_file);
 		vector<Value> key;
 		if (TryPartitionKey(values, key)) {
 			if (!by_partition) {

@@ -454,34 +454,17 @@ static constexpr const char *PER_COLUMN_PROPERTY_PREFIXES[] = {
     "write.parquet.bloom-filter-fpp.column.", "write.parquet.bloom-filter-ndv.column.",
     "write.parquet.stats-enabled.column.",    "write.parquet.dict-encoding-enabled.column."};
 
-static void CollectFullNames(const IcebergColumnDefinition &column, const string &parent_name,
-                             vector<pair<int32_t, string>> &result) {
-	auto full_name = parent_name.empty() ? column.name : parent_name + "." + column.name;
-	result.emplace_back(column.id, full_name);
-	for (auto &child : column.GetChildren()) {
-		CollectFullNames(*child, full_name, result);
-	}
-}
-
-static vector<pair<int32_t, string>> GetFullNames(const IcebergTableSchema &schema) {
-	vector<pair<int32_t, string>> result;
-	for (auto &column : schema.columns) {
-		CollectFullNames(*column, string(), result);
-	}
-	return result;
-}
-
 //! Per-column properties name their column, so they have to follow it: when a field (or the struct, list or map it is
 //! nested in) is renamed, its keys move to the new full name, and when a field is dropped, its keys are removed.
 static void UpdatePerColumnProperties(IcebergTable &updated_table, IcebergTransactionData &transaction_data,
                                       const IcebergTableSchema &old_schema, const IcebergTableSchema &new_schema) {
 	//! Case-insensitive, like the property lookup on write
 	case_insensitive_map_t<int32_t> old_field_ids;
-	for (auto &field : GetFullNames(old_schema)) {
+	for (auto &field : old_schema.GetFullNames()) {
 		old_field_ids.emplace(field.second, field.first);
 	}
 	unordered_map<int32_t, string> new_full_names;
-	for (auto &field : GetFullNames(new_schema)) {
+	for (auto &field : new_schema.GetFullNames()) {
 		new_full_names.emplace(field.first, field.second);
 	}
 

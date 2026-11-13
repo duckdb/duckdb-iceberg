@@ -44,11 +44,4 @@ if (NOT EMSCRIPTEN)
   endif()
 endif()
 
-# The native REST mock is a separate, test-only extension. It is deliberately not
-# linked into Iceberg or the default DuckDB library; SQL tests load it explicitly.
-if (BUILD_UNITTESTS AND NOT EMSCRIPTEN)
-  duckdb_extension_load(iceberg_mock
-      SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}/test/native_catalog
-      INCLUDE_DIR ${CMAKE_CURRENT_LIST_DIR}/test/native_catalog
-  )
-endif()
+include("${CMAKE_CURRENT_LIST_DIR}/test/native_catalog/extension_config.cmake")
