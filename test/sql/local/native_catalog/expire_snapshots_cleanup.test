@@ -1,0 +1,323 @@
+# name: test/sql/local/native_catalog/expire_snapshots_cleanup.test
+# description: Snapshot expiration deletes the files only the expired snapshots reach, after the commit
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+require-env FILE_CLEANUP_SUPPORT
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+CREATE TABLE my_datalake.default.expire_cleanup (id INTEGER) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.expire_cleanup VALUES (1);
+
+statement ok
+INSERT INTO my_datalake.default.expire_cleanup VALUES (2);
+
+statement ok
+INSERT INTO my_datalake.default.expire_cleanup VALUES (3);
+
+# The rewrite replaces the three data files with one; the old files survive only through the old snapshots.
+query II
+SELECT rewritten_data_files_count, added_data_files_count
+FROM iceberg_rewrite_data_files('my_datalake.default.expire_cleanup', rewrite_all = true);
+----
+3	1
+
+statement ok
+SET VARIABLE location = (
+	SELECT json_extract_string(body, '$.metadata.location')
+	FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/expire_cleanup', NULL)
+);
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE live_data_files = (
+	SELECT list(file_path ORDER BY file_path) FROM iceberg_metadata(my_datalake.default.expire_cleanup)
+	WHERE content = 'DATA' AND status <> 'DELETED'
+);
+
+statement ok
+SET VARIABLE current_metadata_files = (
+	SELECT list(path ORDER BY path) FROM (
+		SELECT path FROM iceberg_manifests(my_datalake.default.expire_cleanup)
+		UNION
+		SELECT manifest_list FROM iceberg_snapshots(my_datalake.default.expire_cleanup)
+		WHERE sequence_number = (SELECT max(sequence_number) FROM iceberg_snapshots(my_datalake.default.expire_cleanup))
+	)
+);
+
+statement ok
+COMMIT;
+
+query I
+SELECT count(*) FROM glob(getvariable('location') || '/**/*.parquet');
+----
+4
+
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.expire_cleanup);
+----
+4
+
+statement ok
+CALL enable_logging('Iceberg');
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Inside a transaction nothing is deleted before the commit.
+statement ok
+BEGIN;
+
+query II
+SELECT * FROM iceberg_expire_snapshots('my_datalake.default.expire_cleanup', older_than => TIMESTAMP '2999-01-01', retain_last => 1);
+----
+3	1
+
+query I
+SELECT count(*) FROM glob(getvariable('location') || '/**/*.parquet');
+----
+4
+
+statement ok
+COMMIT;
+
+# The three replaced data files are gone, the rewritten one stays.
+query I
+SELECT list(file ORDER BY file) = getvariable('live_data_files') FROM glob(getvariable('location') || '/**/*.parquet');
+----
+true
+
+# Only the manifests and the manifest list of the retained snapshot remain.
+query I
+SELECT list(file ORDER BY file) = getvariable('current_metadata_files') FROM glob(getvariable('location') || '/metadata/*.avro');
+----
+true
+
+query I
+SELECT message
+FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE 'Iceberg Transaction Cleanup, deleted %'
+ORDER BY message;
+----
+Iceberg Transaction Cleanup, deleted 3 expired data file(s)
+Iceberg Transaction Cleanup, deleted 3 expired manifest list(s)
+Iceberg Transaction Cleanup, deleted 3 expired manifest(s)
+
+query I
+SELECT * FROM my_datalake.default.expire_cleanup ORDER BY id;
+----
+1
+2
+3
+
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.expire_cleanup);
+----
+1
+
+# Appends only: every data file stays live through the retained snapshot, so none is deleted.
+statement ok
+CREATE TABLE my_datalake.default.expire_cleanup_appends (id INTEGER) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.expire_cleanup_appends VALUES (1);
+
+statement ok
+INSERT INTO my_datalake.default.expire_cleanup_appends VALUES (2);
+
+statement ok
+INSERT INTO my_datalake.default.expire_cleanup_appends VALUES (3);
+
+statement ok
+SET VARIABLE appends_location = (
+	SELECT json_extract_string(body, '$.metadata.location')
+	FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/expire_cleanup_appends', NULL)
+);
+
+statement ok
+SET VARIABLE appends_data_files = (
+	SELECT list(file ORDER BY file) FROM glob(getvariable('appends_location') || '/**/*.parquet')
+);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query II
+SELECT * FROM iceberg_expire_snapshots('my_datalake.default.expire_cleanup_appends', older_than => TIMESTAMP '2999-01-01', retain_last => 1);
+----
+2	1
+
+query I
+SELECT list(file ORDER BY file) = getvariable('appends_data_files') FROM glob(getvariable('appends_location') || '/**/*.parquet');
+----
+true
+
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE 'Iceberg Transaction Cleanup, deleted % expired data file(s)';
+----
+0
+
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE 'Iceberg Transaction Cleanup, deleted 2 expired manifest list(s)';
+----
+1
+
+query I
+SELECT * FROM my_datalake.default.expire_cleanup_appends ORDER BY id;
+----
+1
+2
+3
+
+# clean_expired_files => false keeps everything, and a ROLLBACK after planning deletes nothing.
+statement ok
+CREATE TABLE my_datalake.default.expire_cleanup_keep (id INTEGER) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.expire_cleanup_keep VALUES (1);
+
+statement ok
+INSERT INTO my_datalake.default.expire_cleanup_keep VALUES (2);
+
+statement ok
+SET VARIABLE keep_location = (
+	SELECT json_extract_string(body, '$.metadata.location')
+	FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/expire_cleanup_keep', NULL)
+);
+
+# Every commit writes a new metadata.json; compare the data and Avro files only.
+statement ok
+SET VARIABLE keep_files = (
+	SELECT list(file ORDER BY file) FROM glob(getvariable('keep_location') || '/**')
+	WHERE file NOT LIKE '%.metadata.json'
+);
+
+statement ok
+BEGIN;
+
+query II
+SELECT * FROM iceberg_expire_snapshots('my_datalake.default.expire_cleanup_keep', older_than => TIMESTAMP '2999-01-01', retain_last => 1);
+----
+1	1
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT list(file ORDER BY file) = getvariable('keep_files') FROM glob(getvariable('keep_location') || '/**')
+WHERE file NOT LIKE '%.metadata.json';
+----
+true
+
+query II
+SELECT * FROM iceberg_expire_snapshots('my_datalake.default.expire_cleanup_keep', older_than => TIMESTAMP '2999-01-01', retain_last => 1, clean_expired_files => false);
+----
+1	1
+
+query I
+SELECT list(file ORDER BY file) = getvariable('keep_files') FROM glob(getvariable('keep_location') || '/**')
+WHERE file NOT LIKE '%.metadata.json';
+----
+true
+
+statement error
+SELECT * FROM iceberg_expire_snapshots('my_datalake.default.expire_cleanup_keep', clean_expired_files => NULL);
+----
+cannot be NULL
+
+# V3: one Puffin file holds the deletion vectors of two data files. Superseding one of them leaves the
+# file live through the other, so it stays until both are superseded.
+statement ok
+CREATE TABLE my_datalake.default.expire_cleanup_dv (id INTEGER) WITH ('format-version' = '3');
+
+statement ok
+INSERT INTO my_datalake.default.expire_cleanup_dv VALUES (1), (2), (5);
+
+statement ok
+INSERT INTO my_datalake.default.expire_cleanup_dv VALUES (3), (4);
+
+statement ok
+DELETE FROM my_datalake.default.expire_cleanup_dv WHERE id IN (1, 3);
+
+statement ok
+SET VARIABLE dv_location = (
+	SELECT json_extract_string(body, '$.metadata.location')
+	FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/expire_cleanup_dv', NULL)
+);
+
+statement ok
+SET VARIABLE shared_dv_file = (
+	SELECT DISTINCT file_path FROM iceberg_metadata(my_datalake.default.expire_cleanup_dv)
+	WHERE content = 'POSITION_DELETES'
+);
+
+statement ok
+DELETE FROM my_datalake.default.expire_cleanup_dv WHERE id = 2;
+
+# The first data file's vector was superseded; the shared file is still live for the second data file.
+query I
+SELECT list(status ORDER BY status) FROM iceberg_metadata(my_datalake.default.expire_cleanup_dv)
+WHERE file_path = getvariable('shared_dv_file');
+----
+[DELETED, EXISTING]
+
+query II
+SELECT * FROM iceberg_expire_snapshots('my_datalake.default.expire_cleanup_dv', older_than => TIMESTAMP '2999-01-01', retain_last => 1);
+----
+3	1
+
+query I
+SELECT count(*) FROM glob(getvariable('dv_location') || '/**/*.puffin');
+----
+2
+
+query I
+SELECT count(*) FROM glob(getvariable('shared_dv_file'));
+----
+1
+
+statement ok
+DELETE FROM my_datalake.default.expire_cleanup_dv WHERE id = 4;
+
+query II
+SELECT * FROM iceberg_expire_snapshots('my_datalake.default.expire_cleanup_dv', older_than => TIMESTAMP '2999-01-01', retain_last => 1);
+----
+1	1
+
+query I
+SELECT count(*) FROM glob(getvariable('shared_dv_file'));
+----
+0
+
+query I
+SELECT count(*) FROM glob(getvariable('dv_location') || '/**/*.puffin');
+----
+2
+
+query I
+SELECT * FROM my_datalake.default.expire_cleanup_dv ORDER BY id;
+----
+5
+
+statement ok
+DROP TABLE my_datalake.default.expire_cleanup;
+
+statement ok
+DROP TABLE my_datalake.default.expire_cleanup_appends;
+
+statement ok
+DROP TABLE my_datalake.default.expire_cleanup_keep;
+
+statement ok
+DROP TABLE my_datalake.default.expire_cleanup_dv;

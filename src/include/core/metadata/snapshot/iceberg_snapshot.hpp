@@ -24,6 +24,9 @@ public:
 public:
 	//! Throws if the snapshot doesn't record its schema-id
 	int32_t GetSchemaId() const;
+	bool HasSchemaId() const {
+		return schema_id.has_value();
+	}
 
 private:
 	//! The schema-id is optional, so a snapshot may not record the schema it was written with

@@ -100,7 +100,7 @@ ExpireSnapshotsPlan ExecuteSnapshotExpiration(ClientContext &context, const Expi
 
 	ApplyTableUpdate(visible_table, transaction, [&](IcebergTable &table) {
 		auto &transaction_data = table.GetOrCreateTransactionData(transaction);
-		transaction_data.TableRemoveSnapshots(plan.to_expire);
+		transaction_data.TableRemoveSnapshots(plan.to_expire, input.clean_expired_files);
 		//! Mirror the staged update so another call in this transaction replans
 		//! from the remaining snapshots.
 		ApplyExpirationToTransactionMetadata(table.GetMetadataMutable(), plan.to_expire);

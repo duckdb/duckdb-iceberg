@@ -37,6 +37,16 @@ public:
 	timestamp_ms_t timestamp_ms;
 };
 
+struct IcebergStatisticsFile {
+public:
+	IcebergStatisticsFile(int64_t snapshot_id, const string &path) : snapshot_id(snapshot_id), path(path) {
+	}
+
+public:
+	int64_t snapshot_id;
+	string path;
+};
+
 struct IcebergTableMetadataSchemas {
 public:
 	IcebergTableMetadataSchemas() = default;
@@ -179,6 +189,9 @@ public:
 	//! Stored as raw millis (matching the REST API representation and last_updated_ms)
 	//! to keep all timestamp comparisons in a single unit.
 	vector<pair<int64_t /*snapshot_id*/, timestamp_ms_t>> snapshot_log;
+	//! Puffin statistics and partition statistics files, one entry per snapshot that has them
+	vector<IcebergStatisticsFile> statistics;
+	vector<IcebergStatisticsFile> partition_statistics;
 	vector<IcebergFieldMapping> mappings;
 
 	//! Custom write paths from table properties

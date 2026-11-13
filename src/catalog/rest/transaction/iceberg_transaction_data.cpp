@@ -451,7 +451,20 @@ void IcebergTransactionData::TableRemoveProperties(const vector<string> &propert
 	updates.push_back(make_uniq<RemoveProperties>(properties));
 }
 
-void IcebergTransactionData::TableRemoveSnapshots(const vector<int64_t> &snapshot_ids) {
+void IcebergTransactionData::TableRemoveSnapshots(const vector<int64_t> &snapshot_ids, bool clean_expired_files_p) {
+	if (!expired_snapshots.empty() && clean_expired_files != clean_expired_files_p) {
+		throw InvalidInputException("iceberg_expire_snapshots: 'clean_expired_files' must match the earlier call in "
+		                            "this transaction");
+	}
+	clean_expired_files = clean_expired_files_p;
+	//! The transaction's metadata loses these snapshots below; the cleanup needs their manifest lists.
+	auto &snapshots = table_info.GetMetadata().snapshots;
+	for (auto snapshot_id : snapshot_ids) {
+		auto entry = snapshots.find(snapshot_id);
+		if (entry != snapshots.end()) {
+			expired_snapshots.push_back(entry->second);
+		}
+	}
 	for (auto &update : updates) {
 		if (update->type == IcebergTableUpdateType::REMOVE_SNAPSHOTS) {
 			update->Cast<RemoveSnapshots>().AddSnapshotIds(snapshot_ids);
