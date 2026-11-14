@@ -1,5 +1,5 @@
 # name: test/sql/local/native_catalog/dv_supersedes_external_position_deletes.test
-# description: Vectors supersede referenced position deletes but retain shared and bounds-only files, including with an existing vector
+# description: Vectors supersede referenced and bounds-scoped position deletes but retain shared files, including with an existing vector
 # group: [native_catalog]
 
 require-env CATALOG_TEST_CONFIG_SETUP mock
@@ -129,14 +129,14 @@ DELETE FROM my_datalake.default.dv_external_sources WHERE id = 5;
 ----
 1
 
-# The vector absorbs all positions for A, but only the explicitly referenced file is invalidated.
-# In particular, equal filename bounds do not make a source eligible for invalidation.
+# The vector absorbs all positions for A, so the files scoped to A are invalidated:
+# the referenced one, and the one whose equal file_path bounds name A. The shared file stays.
 query TII rowsort
 SELECT CASE WHEN file_format = 'puffin' THEN 'vector' ELSE regexp_extract(file_path, 'dv_(\w+).parquet', 1) END,
 	status = 'DELETED', record_count
 FROM iceberg_metadata(my_datalake.default.dv_external_sources) WHERE content = 'POSITION_DELETES';
 ----
-bounds	false	1
+bounds	true	1
 scoped	true	1
 shared	false	2
 vector	false	4
@@ -210,13 +210,13 @@ DELETE FROM my_datalake.default.dv_external_sources WHERE id = 6;
 ----
 1
 
-# Both the old vector and the old referenced Parquet file must now be superseded.
+# The old vector and the old scoped Parquet files must now be superseded.
 query TII rowsort
 SELECT CASE WHEN file_format = 'puffin' THEN 'vector' ELSE regexp_extract(file_path, 'dv_(\w+).parquet', 1) END,
 	status = 'DELETED', record_count
 FROM iceberg_metadata(my_datalake.default.dv_external_sources) WHERE content = 'POSITION_DELETES';
 ----
-bounds	false	1
+bounds	true	1
 scoped	true	1
 shared	false	2
 vector	false	5
@@ -232,7 +232,7 @@ SELECT (snap->'summary'->>'removed-delete-files')::BIGINT,
 	(snap->'summary'->>'total-position-deletes')::BIGINT
 FROM snapshots WHERE (snap->>'sequence-number')::BIGINT = 6;
 ----
-2	5	8
+3	6	7
 
 query II
 SELECT count(*), count(*) FILTER (WHERE id IN (1, 2, 3, 5, 6, 13)) FROM my_datalake.default.dv_external_sources;

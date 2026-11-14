@@ -114,8 +114,8 @@ static optional_ptr<IcebergPositionalDeleteData> TryGetOrCreatePositionDeletes(p
 		return nullptr;
 	}
 	// A deletion vector written for this data file supersedes a file-scoped delete file. A partition-scoped one
-	// (no referenced_data_file) may still apply to other data files and stays live.
-	if (delete_file.referenced_data_file) {
+	// may still apply to other data files and stays live.
+	if (delete_file.ReferencedDataFile() == file_path) {
 		it->second->source_files.push_back(delete_file.file_path);
 	}
 	return reinterpret_cast<IcebergPositionalDeleteData &>(*it->second);
