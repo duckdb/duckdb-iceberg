@@ -695,6 +695,78 @@ private:
 	idx_t opens = 0;
 };
 
+//! Holds every open of one of the given files until a second one overlaps it, and records the overlap.
+//! Once an open has waited in vain the gate stays open, so a serial reader still finishes.
+class OverlappingOpensFileSystem : public LocalFileSystem {
+public:
+	explicit OverlappingOpensFileSystem(unordered_set<string> paths_p) : paths(std::move(paths_p)) {
+	}
+	string GetName() const override {
+		return "OverlappingOpensFileSystem";
+	}
+	bool CanHandleFile(const string &file) override {
+		return paths.count(file) > 0;
+	}
+	unique_ptr<FileHandle> OpenFile(const string &file, FileOpenFlags flags,
+	                                optional_ptr<FileOpener> opener = nullptr) override {
+		{
+			unique_lock<mutex> guard(lock);
+			active++;
+			max_active = MaxValue(max_active, active);
+			cv.notify_all();
+			if (!gave_up && !cv.wait_for(guard, std::chrono::seconds(10), [&] { return max_active > 1 || gave_up; })) {
+				gave_up = true;
+				cv.notify_all();
+			}
+			active--;
+		}
+		return LocalFileSystem::OpenFile(file, flags, opener);
+	}
+	idx_t MaxOverlappingOpens() {
+		lock_guard<mutex> guard(lock);
+		return max_active;
+	}
+
+private:
+	unordered_set<string> paths;
+	mutex lock;
+	std::condition_variable cv;
+	idx_t active = 0;
+	idx_t max_active = 0;
+	bool gave_up = false;
+};
+
+//! Fails every open of one file, and lets a test wait until that happened.
+class FailingManifestFileSystem : public LocalFileSystem {
+public:
+	explicit FailingManifestFileSystem(string path_p) : path(std::move(path_p)) {
+	}
+	string GetName() const override {
+		return "FailingManifestFileSystem";
+	}
+	bool CanHandleFile(const string &file) override {
+		return file == path;
+	}
+	unique_ptr<FileHandle> OpenFile(const string &file, FileOpenFlags flags,
+	                                optional_ptr<FileOpener> opener = nullptr) override {
+		{
+			lock_guard<mutex> guard(lock);
+			opened = true;
+		}
+		cv.notify_all();
+		throw IOException("Injected delete manifest read failure");
+	}
+	bool WaitForOpen() {
+		unique_lock<mutex> guard(lock);
+		return cv.wait_for(guard, std::chrono::seconds(10), [&] { return opened; });
+	}
+
+private:
+	string path;
+	mutex lock;
+	std::condition_variable cv;
+	bool opened = false;
+};
 } // namespace
 
 TEST_CASE("Iceberg overlapping lazy delete loads publish atomically and propagate failures", "[iceberg_planning]") {
@@ -822,6 +894,134 @@ TEST_CASE("Iceberg overlapping lazy delete loads publish atomically and propagat
 			REQUIRE(indexes[0].index.get() == retained.get());
 		}
 	}
+}
+
+TEST_CASE("Iceberg delete manifest read failure on a waiting thread reaches the owner and waiter",
+          "[iceberg_planning]") {
+	PlanningTest test;
+	// Two read tasks, and no thread besides the two callers below that could run them.
+	Query(test.connection, "SET threads=2");
+	Query(test.connection, "SET external_threads=2");
+	Query(test.connection, "SET async_threads=0");
+	Query(test.connection, "SET enable_external_file_cache=false");
+	Query(test.connection, "SET iceberg_enable_manifest_cache=false");
+	Query(test.connection, "CREATE TABLE lake.default.t (id INTEGER) WITH "
+	                       "('format-version'=3, 'commit.manifest-merge.enabled'='false')");
+	Query(test.connection, "INSERT INTO lake.default.t SELECT range FROM range(10)");
+	Query(test.connection, "INSERT INTO lake.default.t SELECT range FROM range(10,20)");
+	Query(test.connection, "DELETE FROM lake.default.t WHERE id=1");
+	Query(test.connection, "DELETE FROM lake.default.t WHERE id=12");
+	auto bound = test.Bind();
+	Query(test.connection, "SET iceberg_enable_manifest_cache=true");
+	auto &base = bound->Cast<MultiFileBindData>().file_list->Cast<IcebergMultiFileList>().GetScanPlanner();
+	auto &fs = FileSystem::GetFileSystem(*test.connection.context);
+	IcebergScanPlanContext context {
+	    *test.connection.context, fs,     base.GetPath(), base.GetOptions(), base.GetSnapshot(), base.GetMetadata(),
+	    base.GetSchema(),         nullptr};
+	annotated_mutex planning_lock;
+	IcebergManifestStore store(planning_lock, context);
+	string held_path;
+	string failing_path;
+	{
+		annotated_lock_guard<annotated_mutex> guard(store.lock);
+		store.LoadManifestList();
+		REQUIRE(store.DeleteManifests().size() == 2);
+		held_path = store.DeleteManifests()[0].GetFile().manifest_path;
+		failing_path = store.DeleteManifests()[1].GetFile().manifest_path;
+	}
+	auto held = make_uniq<GatedManifestFileSystem>(held_path, 0);
+	auto failing = make_uniq<FailingManifestFileSystem>(failing_path);
+	auto &held_gate = *held;
+	auto &failing_gate = *failing;
+	auto &database_fs = FileSystem::GetFileSystem(*test.database.instance);
+	database_fs.RegisterSubSystem(std::move(held));
+	database_fs.RegisterSubSystem(std::move(failing));
+	auto read = [&](vector<idx_t> indexes) {
+		try {
+			store.ReadDeleteManifests(indexes, 0);
+			return string();
+		} catch (std::exception &ex) {
+			return string(ex.what());
+		}
+	};
+	// The owner's read task stays inside the open of the first manifest until the gate is released,
+	auto owner = std::async(std::launch::async, [&] { return read({0, 1}); });
+	auto owner_held = held_gate.WaitForReader();
+	// so the task that opens the second manifest, and fails, can only run on the waiter.
+	auto waiter = std::async(std::launch::async, [&] { return read({0}); });
+	auto waiter_failed = failing_gate.WaitForOpen();
+	// Always unblock before assertions or future destruction, including on failure.
+	held_gate.Release();
+	auto owner_error = owner.get();
+	auto waiter_error = waiter.get();
+	database_fs.UnregisterSubSystem("GatedManifestFileSystem");
+	database_fs.UnregisterSubSystem("FailingManifestFileSystem");
+	INFO(owner_error);
+	REQUIRE(owner_held);
+	REQUIRE(waiter_failed);
+	REQUIRE(StringUtil::Contains(owner_error, "Injected delete manifest read failure"));
+	REQUIRE(owner_error == waiter_error);
+	// Neither index is published, and the manifest that was read is not cached either.
+	annotated_lock_guard<annotated_mutex> guard(store.lock);
+	REQUIRE_THROWS_AS(store.GetDeleteIndexes({0}), InternalException);
+	REQUIRE_THROWS_AS(store.GetDeleteIndexes({1}), InternalException);
+	auto descriptors = store.DeleteManifests();
+	IcebergManifestFileScanInfo info(context.metadata, context.snapshot, descriptors, context.options, fs, context.path,
+	                                 nullptr, {0, 1});
+	auto &cache = ObjectCache::GetObjectCache(context.context);
+	for (idx_t i = 0; i < 2; i++) {
+		REQUIRE_FALSE(cache.GetWithTypePrefix<IcebergParsedManifest>(ManifestCacheKey(info, i)));
+	}
+}
+
+TEST_CASE("Iceberg delete manifests are read by waiting threads and by async threads", "[iceberg_planning]") {
+	bool single_data_file = false;
+	SECTION("Threads waiting for the load run its read tasks") {
+	}
+	SECTION("Async threads run the read tasks when no other thread waits") {
+		single_data_file = true;
+	}
+	PlanningTest test;
+	auto &connection = test.connection;
+	// Two threads, so a load of the delete manifests schedules two read tasks.
+	Query(connection, "SET threads=2");
+	if (!single_data_file) {
+		// Without async threads only a thread that waits for the load can run the second task.
+		Query(connection, "SET async_threads=0");
+	}
+	Query(connection, "SET enable_external_file_cache=false");
+	Query(connection, "SET iceberg_enable_manifest_cache=false");
+	Query(connection, "CREATE TABLE lake.default.t (id INTEGER) WITH "
+	                  "('format-version'=2, 'commit.manifest-merge.enabled'='false')");
+	Query(connection, "INSERT INTO lake.default.t SELECT range FROM range(10)");
+	if (!single_data_file) {
+		Query(connection, "INSERT INTO lake.default.t SELECT range FROM range(10,20)");
+	}
+	// Every DELETE adds a delete manifest with deletes for every data file, so the scan of each needs all four.
+	for (idx_t i = 0; i < 4; i++) {
+		Query(connection, StringUtil::Format("DELETE FROM lake.default.t WHERE id %% 10 = %llu", i));
+	}
+	auto manifests = connection.Query("SELECT DISTINCT manifest_path FROM iceberg_metadata(lake.default.t) "
+	                                  "WHERE manifest_content = 'DELETE'");
+	REQUIRE_FALSE(manifests->HasError());
+	unordered_set<string> delete_manifests;
+	for (idx_t i = 0; i < manifests->RowCount(); i++) {
+		delete_manifests.insert(manifests->Collection().GetValue(0, i).ToString());
+	}
+	REQUIRE(delete_manifests.size() == 4);
+
+	auto gated = make_uniq<OverlappingOpensFileSystem>(std::move(delete_manifests));
+	auto &gate = *gated;
+	auto &fs = FileSystem::GetFileSystem(*test.database.instance);
+	fs.RegisterSubSystem(std::move(gated));
+	auto result = connection.Query("SELECT count(*) FROM lake.default.t");
+	auto overlapping_opens = gate.MaxOverlappingOpens();
+	fs.UnregisterSubSystem("OverlappingOpensFileSystem");
+
+	REQUIRE_FALSE(result->HasError());
+	REQUIRE(result->Collection().GetValue(0, 0) == Value::BIGINT(single_data_file ? 6 : 12));
+	// Both read tasks ran at once: the second on the thread that waits for the load, or on an async thread.
+	REQUIRE(overlapping_opens == 2);
 }
 
 TEST_CASE("Iceberg parsed manifest ownership inheritance identity and eviction", "[iceberg_planning]") {
