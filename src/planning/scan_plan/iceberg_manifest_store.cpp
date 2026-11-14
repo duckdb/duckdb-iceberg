@@ -16,8 +16,9 @@ namespace duckdb {
 
 struct IcebergManifestScanningState {
 	IcebergManifestScanningState(ClientContext &context, unique_ptr<AvroScan> scan,
-	                             vector<IcebergManifestListEntry> &list_entries)
-	    : context(context), executor(context), scan(std::move(scan)), list_entries(list_entries) {
+	                             vector<IcebergManifestListEntry> &list_entries,
+	                             TaskSchedulerType type = TaskSchedulerType::REGULAR)
+	    : context(context), executor(context, type), scan(std::move(scan)), list_entries(list_entries) {
 	}
 
 	ClientContext &context;
@@ -35,6 +36,8 @@ struct IcebergDeleteManifestLoadState {
 	vector<reference<const IcebergManifestListEntry>> sources;
 	vector<IcebergManifestListEntry> manifests;
 	shared_ptr<IcebergManifestScanningState> scan_state;
+	//! Set under 'lock' once the read tasks are scheduled; threads waiting for the load then run them as well
+	bool tasks_scheduled = false;
 };
 
 namespace {
@@ -339,14 +342,21 @@ void IcebergManifestStore::ReadDeleteManifests(const vector<idx_t> &manifest_ind
 				auto scan = AvroScan::ScanManifest(context.snapshot, new_load->manifests, context.options, context.fs,
 				                                   context.path, context.metadata, context.context, nullptr, to_read,
 				                                   context.file_secret);
-				new_load->scan_state = make_shared_ptr<IcebergManifestScanningState>(context.context, std::move(scan),
-				                                                                     new_load->manifests);
+				// The regular threads are inside the scan and cannot take these reads, so queue them where the
+				// async threads take them as well.
+				new_load->scan_state = make_shared_ptr<IcebergManifestScanningState>(
+				    context.context, std::move(scan), new_load->manifests, TaskSchedulerType::ASYNC);
 				auto &executor = new_load->scan_state->executor;
 				auto &scheduler = TaskScheduler::GetScheduler(context.context);
 				auto num_threads = MinValue<idx_t>(scheduler.NumberOfThreads(), to_read.size());
 				for (idx_t i = 0; i < num_threads; i++) {
 					executor.ScheduleTask(make_uniq<ManifestReadTask>(*new_load->scan_state));
 				}
+				{
+					lock_guard<mutex> guard(new_load->lock);
+					new_load->tasks_scheduled = true;
+				}
+				new_load->cv.notify_all();
 				DUCKDB_LOG(context.context, IcebergLogType,
 				           "Iceberg metadata phase=delete_manifest_scan_started selected_delete_manifests=%llu "
 				           "total_delete_manifests=%llu filters=%llu",
@@ -401,7 +411,21 @@ void IcebergManifestStore::ReadDeleteManifests(const vector<idx_t> &manifest_ind
 
 	for (auto &load : required_loads) {
 		unique_lock<mutex> guard(load->lock);
-		load->cv.wait(guard, [&load] { return load->complete; });
+		// The async threads can all be opening data files that wait for this load, which would leave every read
+		// task to the thread that started it. Run the tasks while waiting. Only that thread drains the
+		// executor, because a finished task wakes a single drainer.
+		load->cv.wait(guard, [&load] { return load->complete || load->tasks_scheduled; });
+		if (!load->complete) {
+			auto scan_state = load->scan_state;
+			guard.unlock();
+			shared_ptr<Task> task;
+			while (scan_state->executor.GetTask(task)) {
+				task->Execute(TaskExecutionMode::PROCESS_ALL);
+				task.reset();
+			}
+			guard.lock();
+			load->cv.wait(guard, [&load] { return load->complete; });
+		}
 		if (load->error.HasError()) {
 			load->error.Throw();
 		}
