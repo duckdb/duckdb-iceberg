@@ -1,0 +1,21 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_manifests_v1.test
+# description: iceberg_rewrite_manifests rejects Iceberg V1 tables.
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.rewrite_manifests_v1;
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_manifests_v1 (id INTEGER) WITH ('format-version' = 1);
+
+statement error
+CALL iceberg_rewrite_manifests('my_datalake.default.rewrite_manifests_v1');
+----
+iceberg_rewrite_manifests on Iceberg V1 tables
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_manifests_v1;
