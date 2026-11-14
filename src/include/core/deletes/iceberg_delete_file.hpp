@@ -12,7 +12,8 @@ struct IcebergDeleteFile {
 	    : file_path(file.file_path), file_format(file.file_format), content(file.content),
 	      file_size_in_bytes(file.file_size_in_bytes), record_count(file.record_count), equality_ids(file.equality_ids),
 	      referenced_data_file(file.referenced_data_file), content_offset(file.content_offset),
-	      content_size_in_bytes(file.content_size_in_bytes) {
+	      content_size_in_bytes(file.content_size_in_bytes), lower_bounds(file.lower_bounds),
+	      upper_bounds(file.upper_bounds) {
 	}
 
 	bool operator==(const IcebergDeleteFile &other) const {
@@ -21,6 +22,8 @@ struct IcebergDeleteFile {
 		       equality_ids == other.equality_ids && referenced_data_file == other.referenced_data_file &&
 		       content_offset == other.content_offset && content_size_in_bytes == other.content_size_in_bytes;
 	}
+
+	optional<string> ReferencedDataFile() const;
 
 	string file_path;
 	string file_format;
@@ -31,6 +34,8 @@ struct IcebergDeleteFile {
 	optional<string> referenced_data_file;
 	optional<int64_t> content_offset;
 	optional<int64_t> content_size_in_bytes;
+	unordered_map<int32_t, Value> lower_bounds;
+	unordered_map<int32_t, Value> upper_bounds;
 };
 
 } // namespace duckdb
