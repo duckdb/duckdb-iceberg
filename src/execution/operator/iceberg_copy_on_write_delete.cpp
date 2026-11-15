@@ -367,7 +367,7 @@ SinkCombineResultType IcebergCopyOnWriteDeleteFilter::Combine(ExecutionContext &
 			if (deleted.insert(row_number).second) {
 				global_state.deletes.deleted_count++;
 			} else if (!update_expressions.empty()) {
-				//! DELETE ... USING can match the same target row more than once; an UPDATE would give it two new values
+				//! DELETE ... USING can match the same target row more than once; an UPDATE would give it two values
 				throw NotImplementedException(
 				    "The same row was updated multiple times - this is not (yet) supported in Iceberg. Eliminate "
 				    "duplicate matches prior to running the UPDATE");
