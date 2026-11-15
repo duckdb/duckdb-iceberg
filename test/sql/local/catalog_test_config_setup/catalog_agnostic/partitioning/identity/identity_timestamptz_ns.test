@@ -83,9 +83,9 @@ SET VARIABLE tsns_manifests = (
 
 # Inspect the serialized partition values, including nulls and adjacent nanoseconds.
 query TI
-SELECT typeof(data_file.partition.identity_ts_2), epoch_ns(data_file.partition.identity_ts_2)
+SELECT typeof(data_file.partition.ts), epoch_ns(data_file.partition.ts)
 FROM read_avro(getvariable('tsns_manifests'))
-ORDER BY data_file.partition.identity_ts_2 NULLS LAST;
+ORDER BY data_file.partition.ts NULLS LAST;
 ----
 TIMESTAMPTZ_NS	-1
 TIMESTAMPTZ_NS	0

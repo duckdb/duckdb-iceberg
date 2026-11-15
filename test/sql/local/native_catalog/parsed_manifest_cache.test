@@ -1,0 +1,229 @@
+# name: test/sql/local/native_catalog/parsed_manifest_cache.test
+# description: Parsed manifests and delete indexes survive queries without retaining predicates or snapshot inheritance
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+SET iceberg_use_server_side_scan_planning=false;
+
+statement ok
+SET iceberg_enable_manifest_cache=false;
+
+statement ok
+CREATE TABLE my_datalake.default.parsed_manifest_cache (part INTEGER, id INTEGER)
+PARTITIONED BY (part) WITH ('format-version'=3, 'commit.manifest-merge.enabled'='false');
+
+statement ok
+INSERT INTO my_datalake.default.parsed_manifest_cache SELECT 1, range FROM range(10,14);
+
+statement ok
+INSERT INTO my_datalake.default.parsed_manifest_cache SELECT 2, range FROM range(20,24);
+
+statement ok
+INSERT INTO my_datalake.default.parsed_manifest_cache SELECT 3, range FROM range(30,34);
+
+statement ok
+DELETE FROM my_datalake.default.parsed_manifest_cache WHERE part=1 AND id=10;
+
+statement ok
+SET iceberg_enable_manifest_cache=true;
+
+statement ok
+CALL enable_logging('Iceberg', storage='memory');
+
+statement ok
+CREATE MACRO manifest_work() AS TABLE
+SELECT
+	coalesce(sum(try_cast(regexp_extract(message, 'parsed_manifest_hits=(\d+)', 1) AS BIGINT)),0) AS hits,
+	coalesce(sum(try_cast(regexp_extract(message, 'manifest_parses=(\d+)', 1) AS BIGINT)),0) AS parses,
+	coalesce(sum(try_cast(regexp_extract(message, 'delete_index_builds=(\d+)', 1) AS BIGINT)),0) AS builds
+FROM duckdb_logs() WHERE type='Iceberg' AND message LIKE 'Iceberg metadata phase=%';
+
+# Only the selected partition is read. A subsequent broad scan must still read the other manifests.
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT sum(id) FROM my_datalake.default.parsed_manifest_cache WHERE part=2;
+----
+86
+
+query III
+FROM manifest_work();
+----
+0	1	0
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT sum(id) FROM my_datalake.default.parsed_manifest_cache WHERE part=2;
+----
+86
+
+query III
+FROM manifest_work();
+----
+1	0	0
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT sum(id) FROM my_datalake.default.parsed_manifest_cache;
+----
+248
+
+query III
+FROM manifest_work();
+----
+1	3	1
+
+foreach threads 1 8
+
+statement ok
+SET threads={threads};
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT sum(id) FROM my_datalake.default.parsed_manifest_cache WHERE id>=0;
+----
+248
+
+query III
+FROM manifest_work();
+----
+4	0	0
+
+statement ok
+SET disabled_optimizers='join_order,build_side_probe_side';
+
+query I
+SELECT sum(data.id) FROM my_datalake.default.parsed_manifest_cache data
+JOIN (VALUES (1),(2)) selected(part) USING (part) WHERE data.part>=1;
+----
+122
+
+statement ok
+SET disabled_optimizers='';
+
+endloop
+
+# A new table metadata version keeps compatible old manifests and reads just the new one.
+statement ok
+INSERT INTO my_datalake.default.parsed_manifest_cache SELECT 4, range FROM range(40,44);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT sum(id) FROM my_datalake.default.parsed_manifest_cache;
+----
+414
+
+query III
+FROM manifest_work();
+----
+4	1	0
+
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM my_datalake.default.parsed_manifest_cache WHERE part=2 AND id=20;
+
+query I
+SELECT sum(id) FROM my_datalake.default.parsed_manifest_cache;
+----
+394
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT sum(id) FROM my_datalake.default.parsed_manifest_cache;
+----
+414
+
+# Revalidation still occurs, but a 304 does not reconstruct entries or indexes.
+statement ok
+SET VARIABLE manifest_cache_response = (
+	SELECT body::JSON FROM iceberg_test_catalog_request('GET',
+		'/v1/namespaces/default/tables/parsed_manifest_cache', NULL)
+);
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	json_object('method','GET','path','/v1/namespaces/default/tables/parsed_manifest_cache',
+		'status',200,'body',getvariable('manifest_cache_response'),'headers',json_object('ETag','"cache-v1"'))::VARCHAR);
+----
+204
+
+query I
+SELECT sum(id) FROM my_datalake.default.parsed_manifest_cache;
+----
+414
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	'{"method":"GET","path":"/v1/namespaces/default/tables/parsed_manifest_cache","status":304,"body":null}');
+----
+204
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT sum(id) FROM my_datalake.default.parsed_manifest_cache;
+----
+414
+
+query III
+FROM manifest_work();
+----
+5	0	0
+
+query I
+SELECT count(*) FROM duckdb_logs() WHERE type='Iceberg' AND message LIKE '%is unchanged (HTTP 304)%';
+----
+1
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+statement ok
+DROP TABLE my_datalake.default.parsed_manifest_cache;
+
+# Early consumer termination still drains and caches complete selected manifests.
+statement ok
+CREATE TABLE my_datalake.default.manifest_cache_limit AS SELECT range AS id FROM range(10);
+
+query I
+SELECT 42 FROM my_datalake.default.manifest_cache_limit LIMIT 1;
+----
+42
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT sum(id) FROM my_datalake.default.manifest_cache_limit;
+----
+45
+
+query III
+FROM manifest_work();
+----
+1	0	0
+
+statement ok
+DROP TABLE my_datalake.default.manifest_cache_limit;

@@ -1,0 +1,177 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_written_files_merge.test
+# description: Multiple MERGE actions report every replacement and inserted data file under one query ID
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+SET threads = 4;
+
+foreach version 2 3
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.written_files_merge;
+
+statement ok
+CREATE TABLE my_datalake.default.written_files_merge (id INTEGER, v INTEGER)
+WITH ('format-version' = '{version}');
+
+statement ok
+SET iceberg_store_written_files = false;
+
+statement ok
+INSERT INTO my_datalake.default.written_files_merge VALUES (1, 10), (2, 20), (3, 30), (4, 40);
+
+statement ok
+DROP TABLE IF EXISTS temp.main.iceberg_written_files;
+
+statement ok
+SET iceberg_store_written_files = true;
+
+statement ok
+CALL enable_logging('IcebergDataFileWritten', storage := 'memory');
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+MERGE INTO my_datalake.default.written_files_merge t
+USING (VALUES (1, 11), (2, 22), (3, 33), (5, 55)) s(id, v) ON t.id = s.id
+WHEN MATCHED AND s.id = 1 THEN UPDATE SET v = s.v
+WHEN MATCHED AND s.id = 2 THEN UPDATE SET v = s.v
+WHEN MATCHED THEN DELETE
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v)
+WHEN NOT MATCHED BY SOURCE AND t.id = 99 THEN UPDATE SET v = 0;
+----
+4
+
+query III
+SELECT count(DISTINCT query_id), sum(record_count), count(*) = count(DISTINCT file_path)
+FROM temp.main.iceberg_written_files;
+----
+1	3	true
+
+query TI
+SELECT operation, sum(record_count) FROM temp.main.iceberg_written_files GROUP BY operation ORDER BY operation;
+----
+MERGE_INSERT	1
+MERGE_UPDATE	2
+
+query I
+SELECT count(*) FROM (
+    (SELECT * FROM temp.main.iceberg_written_files
+     EXCEPT ALL
+     SELECT query_id, "table", file_path, record_count, file_size_in_bytes, operation, written_at
+     FROM duckdb_logs_parsed('IcebergDataFileWritten'))
+    UNION ALL
+    (SELECT query_id, "table", file_path, record_count, file_size_in_bytes, operation, written_at
+     FROM duckdb_logs_parsed('IcebergDataFileWritten')
+     EXCEPT ALL SELECT * FROM temp.main.iceberg_written_files)
+);
+----
+0
+
+# Resolve catalog credentials before reading the reported files on the same transaction.
+statement ok
+BEGIN;
+
+query I
+SELECT count(*) FROM temp.main.iceberg_written_files w
+JOIN iceberg_metadata(my_datalake.default.written_files_merge) m USING (file_path)
+WHERE m.content = 'DATA' AND m.record_count = w.record_count;
+----
+3
+
+statement ok
+SET VARIABLE merge_written_paths = (SELECT list(file_path) FROM temp.main.iceberg_written_files);
+
+# The original surviving row and the deleted row must not appear in the reported files.
+query II
+SELECT id, v FROM read_parquet(getvariable('merge_written_paths')) ORDER BY id;
+----
+1	11
+2	22
+5	55
+
+query I
+SELECT count(*) FROM temp.main.iceberg_written_files w
+JOIN parquet_file_metadata(getvariable('merge_written_paths')) p ON w.file_path = p.file_name
+WHERE w.record_count = p.num_rows AND w.file_size_in_bytes = p.file_size_bytes;
+----
+3
+
+statement ok
+COMMIT;
+
+query II
+SELECT id, v FROM my_datalake.default.written_files_merge ORDER BY id;
+----
+1	11
+2	22
+4	40
+5	55
+
+statement ok
+DELETE FROM temp.main.iceberg_written_files;
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Rollback removes all the actions' tracking rows, while their log records remain.
+statement ok
+BEGIN;
+
+statement ok
+MERGE INTO my_datalake.default.written_files_merge t
+USING (VALUES (1, 100), (6, 60)) s(id, v) ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET v = s.v
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
+
+query II
+SELECT count(DISTINCT query_id), sum(record_count) FROM temp.main.iceberg_written_files;
+----
+1	2
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT count(*) FROM temp.main.iceberg_written_files;
+----
+0
+
+query I
+SELECT sum(record_count) FROM duckdb_logs_parsed('IcebergDataFileWritten');
+----
+2
+
+query II
+SELECT count(*), sum(v) FROM my_datalake.default.written_files_merge;
+----
+4	128
+
+# Merge-on-read DELETE writes no data files to either reporting channel.
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+DELETE FROM my_datalake.default.written_files_merge WHERE id = 4;
+
+query I
+SELECT count(*) FROM temp.main.iceberg_written_files;
+----
+0
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('IcebergDataFileWritten');
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.written_files_merge;
+
+endloop

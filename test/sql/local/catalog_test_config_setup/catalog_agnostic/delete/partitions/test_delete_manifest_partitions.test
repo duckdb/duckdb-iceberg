@@ -75,7 +75,7 @@ select count(*) from read_avro(getvariable('manifest_path'));
 3
 
 query I
-select partition.identity_category_2 from (select unnest(data_file) from read_avro(getvariable('manifest_path'))) order by all;
+select partition.category from (select unnest(data_file) from read_avro(getvariable('manifest_path'))) order by all;
 ----
 A
 D
@@ -99,12 +99,12 @@ SELECT content, partition, record_count
 FROM iceberg_files(my_datalake.default.test_delete_manifest_partitions)
 ORDER BY ALL;
 ----
-0	{'identity_category_2': A}	1
-0	{'identity_category_2': B}	1
-0	{'identity_category_2': C}	1
-0	{'identity_category_2': D}	1
-0	{'identity_category_2': E}	1
-0	{'identity_category_2': NULL}	1
-1	{'identity_category_2': A}	1
-1	{'identity_category_2': D}	1
-1	{'identity_category_2': NULL}	1
+0	{'category': A}	1
+0	{'category': B}	1
+0	{'category': C}	1
+0	{'category': D}	1
+0	{'category': E}	1
+0	{'category': NULL}	1
+1	{'category': A}	1
+1	{'category': D}	1
+1	{'category': NULL}	1

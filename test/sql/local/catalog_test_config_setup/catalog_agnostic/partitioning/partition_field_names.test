@@ -1,0 +1,115 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/partitioning/partition_field_names.test
+# description: New partition fields prefer conventional names while reused fields preserve their stored labels
+# group: [partitioning]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.partition_field_names;
+
+# --- The column's name, followed by the transform unless it is identity ---
+
+statement ok
+CREATE TABLE my_datalake.default.partition_field_names (
+	dep VARCHAR, id INTEGER, s VARCHAR, ts TIMESTAMP, d DATE, t2 TIMESTAMP, t3 TIMESTAMP, n STRUCT(k INTEGER, v INTEGER)
+) PARTITIONED BY (dep, bucket(4, id), truncate(10, s), year(ts), month(d), day(t2), hour(t3), n.k, bucket(8, n.k));
+
+query II
+SELECT name, transform FROM iceberg_partition_specs(my_datalake.default.partition_field_names) ORDER BY field_id;
+----
+dep	identity
+id_bucket_4	bucket[4]
+s_trunc_10	truncate[10]
+ts_year	year
+d_month	month
+t2_day	day
+t3_hour	hour
+n.k	identity
+n.k_bucket_8	bucket[8]
+
+# The data file's path and the partition of its manifest entry carry the same names
+statement ok
+INSERT INTO my_datalake.default.partition_field_names VALUES
+	('eng', 1, 'abcdefghijkl', TIMESTAMP '2024-03-05 10:00:00', DATE '2024-03-05', TIMESTAMP '2024-03-05 10:00:00', TIMESTAMP '2024-03-05 10:00:00', {'k': 7, 'v': 8});
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.partition_field_names)
+WHERE replace(file_path, chr(92), '/') LIKE '%/dep=eng/id_bucket_4=%/s_trunc_10=%/ts_year=%/d_month=%/t2_day=%/t3_hour=%/n.k=7/n.k_bucket_8=%';
+----
+1
+
+query II
+SELECT partition.dep, partition."n.k" FROM iceberg_partitions(my_datalake.default.partition_field_names);
+----
+eng	7
+
+query III
+SELECT dep, s, n.k FROM my_datalake.default.partition_field_names;
+----
+eng	abcdefghijkl	7
+
+# --- A field kept from an earlier spec keeps its name and id; a new one gets its default name ---
+
+statement ok
+ALTER TABLE my_datalake.default.partition_field_names SET PARTITIONED BY (bucket(4, id), truncate(5, s), year(d));
+
+query III
+SELECT field_id, name, transform FROM iceberg_partition_specs(my_datalake.default.partition_field_names)
+WHERE is_default ORDER BY field_id;
+----
+1001	id_bucket_4	bucket[4]
+1009	s_trunc_5	truncate[5]
+1010	d_year	year
+
+statement ok
+DROP TABLE my_datalake.default.partition_field_names;
+
+# --- Duplicate expressions are rejected; generated name collisions are resolved ---
+
+statement error
+CREATE TABLE my_datalake.default.partition_field_names (a INTEGER, b INTEGER) PARTITIONED BY (a, b, a);
+----
+Cannot use partition name more than once: a
+
+statement error
+CREATE TABLE my_datalake.default.partition_field_names (a INTEGER, b INTEGER) PARTITIONED BY (bucket(4, a), bucket(4, a));
+----
+Cannot use partition name more than once: a_bucket_4
+
+statement ok
+CREATE TABLE my_datalake.default.partition_field_names (ts TIMESTAMP, ts_day INTEGER) PARTITIONED BY (day(ts));
+
+query TI
+SELECT transform, name <> 'ts_day'
+FROM iceberg_partition_specs(my_datalake.default.partition_field_names) WHERE is_default;
+----
+day	true
+
+statement ok
+DROP TABLE my_datalake.default.partition_field_names;
+
+statement ok
+CREATE TABLE my_datalake.default.partition_field_names (ts TIMESTAMP, ts_day INTEGER);
+
+statement ok
+ALTER TABLE my_datalake.default.partition_field_names SET PARTITIONED BY (day(ts));
+
+query TI
+SELECT transform, name <> 'ts_day'
+FROM iceberg_partition_specs(my_datalake.default.partition_field_names) WHERE is_default;
+----
+day	true
+
+statement ok
+ALTER TABLE my_datalake.default.partition_field_names SET PARTITIONED BY (ts_day, hour(ts));
+
+query II
+SELECT name, transform FROM iceberg_partition_specs(my_datalake.default.partition_field_names) WHERE is_default ORDER BY field_id;
+----
+ts_day	identity
+ts_hour	hour
+
+statement ok
+DROP TABLE my_datalake.default.partition_field_names;

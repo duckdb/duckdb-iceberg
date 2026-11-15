@@ -35,10 +35,10 @@ SELECT partition, spec_id, record_count, file_count, position_delete_record_coun
 FROM iceberg_partitions(my_datalake.default.partitions_evolved)
 ORDER BY spec_id, partition;
 ----
-{'identity_a_1': 1, 'identity_b_2': NULL}	1	2	1	0	0
-{'identity_a_1': 2, 'identity_b_2': NULL}	1	1	1	1	1
-{'identity_a_1': 1, 'identity_b_2': 10}	2	1	1	0	0
-{'identity_a_1': 1, 'identity_b_2': NULL}	2	1	1	0	0
+{'a': 1, 'b': NULL}	1	2	1	0	0
+{'a': 2, 'b': NULL}	1	1	1	1	1
+{'a': 1, 'b': 10}	2	1	1	0	0
+{'a': 1, 'b': NULL}	2	1	1	0	0
 
 # The last snapshot that added a file to the partition
 query IIII
@@ -47,10 +47,10 @@ FROM iceberg_partitions(my_datalake.default.partitions_evolved) p
 JOIN iceberg_snapshots(my_datalake.default.partitions_evolved) s ON p.last_updated_snapshot_id = s.snapshot_id
 ORDER BY p.spec_id, p.partition;
 ----
-1	{'identity_a_1': 1, 'identity_b_2': NULL}	append	true
-1	{'identity_a_1': 2, 'identity_b_2': NULL}	delete	true
-2	{'identity_a_1': 1, 'identity_b_2': 10}	append	true
-2	{'identity_a_1': 1, 'identity_b_2': NULL}	append	true
+1	{'a': 1, 'b': NULL}	append	true
+1	{'a': 2, 'b': NULL}	delete	true
+2	{'a': 1, 'b': 10}	append	true
+2	{'a': 1, 'b': NULL}	append	true
 
 statement ok
 drop table if exists my_datalake.default.partitions_unpartitioned;

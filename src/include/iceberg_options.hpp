@@ -8,6 +8,7 @@
 namespace duckdb {
 
 static constexpr const char *VERSION_GUESSING_CONFIG_VARIABLE = "unsafe_enable_version_guessing";
+static constexpr const char *ENABLE_MANIFEST_CACHE_CONFIG_VARIABLE = "iceberg_enable_manifest_cache";
 
 // The Iceberg format version used when creating a new table without an explicit
 // 'format-version' property. Valid values are 2 and 3. Version 1 is not supported

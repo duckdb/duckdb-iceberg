@@ -1,0 +1,138 @@
+# name: test/sql/local/native_catalog/expire_snapshots_protocol.test
+# description: Native remove-snapshots replay preserves files, trims history gaps, and publishes atomically
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables',
+	'{"name":"expire_protocol","schema":{"type":"struct","schema-id":0,"fields":[]}}');
+----
+200
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/expire_protocol',
+	'{"requirements":[],"updates":[
+		{"action":"add-snapshot","snapshot":{"snapshot-id":10,"sequence-number":1,"schema-id":0,"timestamp-ms":10,"manifest-list":"10.avro","summary":{"operation":"append"}}},
+		{"action":"set-snapshot-ref","ref-name":"main","type":"branch","snapshot-id":10},
+		{"action":"add-snapshot","snapshot":{"snapshot-id":20,"sequence-number":2,"schema-id":0,"timestamp-ms":20,"manifest-list":"20.avro","summary":{"operation":"append"}}},
+		{"action":"set-snapshot-ref","ref-name":"main","type":"branch","snapshot-id":20},
+		{"action":"add-snapshot","snapshot":{"snapshot-id":30,"sequence-number":3,"schema-id":0,"timestamp-ms":30,"manifest-list":"30.avro","summary":{"operation":"append"}}},
+		{"action":"set-snapshot-ref","ref-name":"main","type":"branch","snapshot-id":30}
+	]}');
+----
+200
+
+# Revisit S10 so removing it must trim through its last history entry.
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/expire_protocol',
+	'{"requirements":[],"updates":[
+		{"action":"set-snapshot-ref","ref-name":"main","type":"branch","snapshot-id":10},
+		{"action":"set-snapshot-ref","ref-name":"main","type":"branch","snapshot-id":30}
+	]}');
+----
+200
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE before_expiration = (
+	SELECT body FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/expire_protocol', NULL)
+);
+
+# Ordered replay cannot publish a partial expiration if a subsequent update fails.
+query II
+SELECT status, json_extract_string(body, '$.error.message')
+FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/expire_protocol',
+	'{"requirements":[],"updates":[
+		{"action":"remove-snapshots","snapshot-ids":[10]},
+		{"action":"set-snapshot-ref","ref-name":"main","type":"branch","snapshot-id":999}
+	]}');
+----
+400	Unknown snapshot-id: 999
+
+query I
+SELECT body = getvariable('before_expiration')
+FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/expire_protocol', NULL);
+----
+true
+
+foreach ids null 10 [true] ["10"] [10.5] [null] [9223372036854775808]
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/expire_protocol',
+	'{"requirements":[],"updates":[{"action":"remove-snapshots","snapshot-ids":{ids}}]}');
+----
+400
+
+endloop
+
+# Duplicate and already absent IDs are harmless. Keep S20 addressable by ID,
+# but never leave its older log entry across the removed S10 history gap.
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/expire_protocol',
+	'{"requirements":[{"type":"assert-ref-snapshot-id","ref":"main","snapshot-id":30}],
+	  "updates":[{"action":"remove-snapshots","snapshot-ids":[10,10,999]}]}');
+----
+200
+
+query IIII
+SELECT json_extract(body, '$.metadata.snapshots[*]."snapshot-id"'),
+	json_extract(body, '$.metadata."snapshot-log"[*]."snapshot-id"'),
+	json_extract(body, '$.metadata."current-snapshot-id"'),
+	json_extract(body, '$.metadata."last-sequence-number"')
+FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/expire_protocol', NULL);
+----
+[20, 30]	[30]	30	3
+
+# The old metadata file is immutable and remains readable.
+query I
+SELECT json_array_length(snapshots) FROM read_json(
+	json_extract_string(getvariable('before_expiration'), '$."metadata-location"'),
+	columns = {snapshots: 'JSON'}
+);
+----
+3
+
+statement ok
+COMMIT;
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/expire_protocol',
+	'{"requirements":[],"updates":[{"action":"remove-snapshots","snapshot-ids":[10,999]}]}');
+----
+200
+
+query II
+SELECT json_extract(body, '$.metadata.snapshots[*]."snapshot-id"'),
+	json_extract(body, '$.metadata."snapshot-log"[*]."snapshot-id"')
+FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/expire_protocol', NULL);
+----
+[20, 30]	[30]
+
+# The protocol mirrors Iceberg's metadata update: removing a referenced snapshot
+# removes the dangling ref too. The expiration function itself protects main.
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/expire_protocol',
+	'{"requirements":[],"updates":[{"action":"remove-snapshots","snapshot-ids":[30]}]}');
+----
+200
+
+query IIII
+SELECT json_extract(body, '$.metadata.snapshots[*]."snapshot-id"'),
+	json_extract(body, '$.metadata.refs'),
+	json_extract(body, '$.metadata."current-snapshot-id"') IS NULL,
+	json_extract(body, '$.metadata."snapshot-log"[*]."snapshot-id"')
+FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/expire_protocol', NULL);
+----
+[20]	{}	true	[]
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/v1/namespaces/default/tables/expire_protocol', NULL);
+----
+204

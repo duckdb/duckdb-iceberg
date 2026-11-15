@@ -1,0 +1,165 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_written_files_operations.test
+# description: Written files expose their operation and a staging timestamp for filtering and ordering
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require icu
+
+statement ok
+SET threads = 4;
+
+# The timestamp must represent the same instant in the table and parsed logs, regardless of session time zone.
+statement ok
+SET TimeZone = 'America/Los_Angeles';
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.written_files_operations;
+
+statement ok
+SET iceberg_store_written_files = true;
+
+statement ok
+CALL enable_logging('IcebergDataFileWritten', storage := 'memory');
+
+statement ok
+SET VARIABLE writes_started = (SELECT current_timestamp);
+
+statement ok
+CREATE TABLE my_datalake.default.written_files_operations
+WITH ('format-version' = '2', 'write.delete.mode' = 'copy-on-write')
+AS SELECT 0::INTEGER AS id, 0::INTEGER AS v;
+
+statement ok
+INSERT INTO my_datalake.default.written_files_operations SELECT i, i * 10 FROM range(1, 4) t(i);
+
+statement ok
+UPDATE my_datalake.default.written_files_operations SET v = 11 WHERE id = 1;
+
+statement ok
+MERGE INTO my_datalake.default.written_files_operations t
+USING (VALUES (2, 22), (5, 55)) s(id, v) ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET v = s.v
+WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
+
+statement ok
+CALL iceberg_rewrite_data_files('my_datalake.default.written_files_operations');
+
+statement ok
+DELETE FROM my_datalake.default.written_files_operations WHERE id = 3;
+
+query TII
+SELECT operation, sum(record_count), count(DISTINCT query_id)
+FROM temp.main.iceberg_written_files GROUP BY operation ORDER BY operation;
+----
+COPY_ON_WRITE_DELETE	4	1
+CTAS	1	1
+INSERT	3	1
+MERGE_INSERT	1	1
+MERGE_UPDATE	1	1
+REWRITE_DATA_FILES	5	1
+UPDATE	1	1
+
+query TT
+SELECT DISTINCT typeof(operation), typeof(written_at) FROM temp.main.iceberg_written_files;
+----
+VARCHAR	TIMESTAMP WITH TIME ZONE
+
+query I
+SELECT bool_and(written_at IS NOT NULL AND written_at BETWEEN getvariable('writes_started') AND current_timestamp)
+FROM temp.main.iceberg_written_files;
+----
+true
+
+# Clients interested only in INSERT and CTAS can select them and order the results deterministically.
+query TI
+SELECT operation, record_count FROM temp.main.iceberg_written_files
+WHERE operation IN ('INSERT', 'CTAS')
+ORDER BY written_at, query_id, file_path;
+----
+CTAS	1
+INSERT	3
+
+# A MERGE's actions remain distinguishable while sharing the statement's query ID.
+query II
+SELECT count(DISTINCT query_id), count(DISTINCT operation)
+FROM temp.main.iceberg_written_files WHERE operation IN ('MERGE_INSERT', 'MERGE_UPDATE');
+----
+1	2
+
+query I
+SELECT count(*) FROM (
+    (SELECT * FROM temp.main.iceberg_written_files
+     EXCEPT ALL
+     SELECT query_id, "table", file_path, record_count, file_size_in_bytes, operation, written_at
+     FROM duckdb_logs_parsed('IcebergDataFileWritten'))
+    UNION ALL
+    (SELECT query_id, "table", file_path, record_count, file_size_in_bytes, operation, written_at
+     FROM duckdb_logs_parsed('IcebergDataFileWritten')
+     EXCEPT ALL SELECT * FROM temp.main.iceberg_written_files)
+);
+----
+0
+
+query II
+SELECT id, v FROM my_datalake.default.written_files_operations ORDER BY id;
+----
+0	0
+1	11
+2	22
+5	55
+
+statement ok
+DELETE FROM temp.main.iceberg_written_files;
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Separate statements in one transaction use their staging times, not the shared transaction start time.
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.written_files_operations VALUES (6, 66), (7, 77);
+
+statement ok
+SET VARIABLE previous_write_logged = (SELECT max(timestamp) FROM duckdb_logs_parsed('IcebergDataFileWritten'));
+
+statement ok
+INSERT INTO my_datalake.default.written_files_operations VALUES (8, 88), (9, 99), (10, 110);
+
+query I
+SELECT bool_and(written_at >= getvariable('previous_write_logged'))
+FROM temp.main.iceberg_written_files
+WHERE query_id = (SELECT max(query_id) FROM temp.main.iceberg_written_files);
+----
+true
+
+query TI
+SELECT operation, record_count FROM temp.main.iceberg_written_files ORDER BY written_at, query_id, file_path;
+----
+INSERT	2
+INSERT	3
+
+query I
+SELECT count(DISTINCT query_id) FROM temp.main.iceberg_written_files;
+----
+2
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT count(*) FROM temp.main.iceberg_written_files;
+----
+0
+
+query TI
+SELECT operation, sum(record_count) FROM duckdb_logs_parsed('IcebergDataFileWritten') GROUP BY operation;
+----
+INSERT	5
+
+statement ok
+DROP TABLE my_datalake.default.written_files_operations;

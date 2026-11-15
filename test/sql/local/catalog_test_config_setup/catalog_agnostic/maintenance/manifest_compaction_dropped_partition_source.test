@@ -78,8 +78,8 @@ SELECT
 1	long
 
 query TII
-SELECT typeof(data_file.partition.identity_p_1), data_file.partition.identity_p_1, data_file.record_count
-FROM read_avro(getvariable('partition_manifest_path')) ORDER BY data_file.partition.identity_p_1;
+SELECT typeof(data_file.partition.p), data_file.partition.p, data_file.record_count
+FROM read_avro(getvariable('partition_manifest_path')) ORDER BY data_file.partition.p;
 ----
 BIGINT	2147483648	1
 BIGINT	2147483649	1

@@ -12,6 +12,7 @@
 #include "planning/metadata_io/avro/iceberg_avro_multi_file_list.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "iceberg_logging.hpp"
+#include "planning/metadata_io/avro/iceberg_manifest_cache.hpp"
 
 namespace duckdb {
 
@@ -27,6 +28,13 @@ struct ManifestFileVirtualColumn {
 
 AvroScan::AvroScan(const string &path, ClientContext &context, shared_ptr<IcebergAvroScanInfo> avro_scan_info)
     : context(context), scan_info(avro_scan_info) {
+	if (scan_info->type == AvroScanInfoType::MANIFEST_FILE) {
+		FindCachedManifests();
+		if (scan_info->Cast<IcebergManifestFileScanInfo>().manifest_indexes.empty()) {
+			finished = true;
+			return;
+		}
+	}
 	auto &instance = DatabaseInstance::GetDatabase(context);
 	auto &system_catalog = Catalog::GetSystemCatalog(instance);
 	auto data = CatalogTransaction::GetSystemTransaction(instance);
@@ -80,7 +88,77 @@ AvroScan::~AvroScan() {
 		           "Iceberg metadata phase=manifest_parse scope=avro_scan manifest_parses=%llu "
 		           "manifest_entries_converted=%llu",
 		           info.manifest_parses.load(), info.manifest_entries_converted.load());
+		DUCKDB_LOG(context, IcebergLogType,
+		           "Iceberg metadata phase=manifest_cache scope=avro_scan parsed_manifest_hits=%llu "
+		           "parsed_manifest_misses=%llu",
+		           cache_hits, cache_misses.size());
 	}
+}
+
+void AvroScan::FindCachedManifests() {
+	auto &info = scan_info->Cast<IcebergManifestFileScanInfo>();
+	Value setting;
+	const bool enabled =
+	    context.TryGetCurrentSetting(ENABLE_MANIFEST_CACHE_CONFIG_VARIABLE, setting) && setting.GetValue<bool>();
+	vector<idx_t> to_read;
+	for (auto index : info.manifest_indexes) {
+		auto &manifest = info.manifest_files[index];
+		if (enabled) {
+			auto key = ManifestCacheKey(info, index);
+			auto cached = ObjectCache::GetObjectCache(context).GetWithTypePrefix<IcebergParsedManifest>(key);
+			if (cached) {
+				auto metadata = cached->Validate(info, manifest);
+				manifest.ResetManifestEntries();
+				manifest.manifest_metadata.emplace(metadata);
+				manifest.parsed_manifest = std::move(cached);
+				if (info.read_state) {
+					info.read_state->PushBatch({index, 0, manifest.GetManifestEntries().size()});
+				}
+				cache_hits++;
+				continue;
+			}
+			cache_misses.emplace_back(index, std::move(key));
+		}
+		if (info.read_state) {
+			auto &counts = *manifest.GetFile().counts;
+			manifest.GetOrCreateManifestEntries().reserve(*counts.added_files_count + *counts.existing_files_count +
+			                                              *counts.deleted_files_count);
+		}
+		to_read.push_back(index);
+	}
+	// Retain the original merged decoding types even when only some manifests missed.
+	info.manifest_indexes = std::move(to_read);
+}
+
+void AvroScan::Complete() {
+	if (completed || scan_info->type != AvroScanInfoType::MANIFEST_FILE) {
+		return;
+	}
+	context.InterruptCheck();
+	if (!cache_misses.empty() && (!readers_started.load() || readers_started.load() != readers_finished.load())) {
+		throw InternalException("Cannot cache an incomplete manifest scan");
+	}
+	auto &info = scan_info->Cast<IcebergManifestFileScanInfo>();
+	// Build and validate the entire load before touching the shared cache.
+	vector<shared_ptr<IcebergParsedManifest>> payloads;
+	for (auto &miss : cache_misses) {
+		auto &manifest = info.manifest_files[miss.first];
+		auto payload = make_shared_ptr<IcebergParsedManifest>(context, manifest, info.metadata, miss.second.size());
+		payload->Validate(info, manifest);
+		payloads.push_back(std::move(payload));
+	}
+	context.InterruptCheck();
+	for (idx_t i = 0; i < payloads.size(); i++) {
+		auto &miss = cache_misses[i];
+		auto &manifest = info.manifest_files[miss.first];
+		manifest.parsed_manifest = payloads[i];
+		ObjectCache::GetObjectCache(context).PutWithTypePrefix<IcebergParsedManifest>(miss.second, payloads[i]);
+		if (payloads[i]->DeleteIndex()) {
+			DUCKDB_LOG(context, IcebergLogType,
+			           "Iceberg metadata phase=delete_candidate_index scope=manifest_cache delete_index_builds=1");
+		}
+	}
+	completed = true;
 }
 
 unique_ptr<AvroScan> AvroScan::ScanManifest(const IcebergSnapshotScanInfo &snapshot_info,

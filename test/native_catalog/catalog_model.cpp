@@ -534,6 +534,39 @@ void Catalog::Apply(Json &metadata, const Json &update, map<string, int64_t> &la
 		for (auto &entry : update.At("removals").Items()) {
 			metadata.At("properties").Erase(entry.String());
 		}
+	} else if (action == "remove-snapshots") {
+		set<int64_t> removed;
+		for (auto &entry : update.At("snapshot-ids").Items()) {
+			removed.insert(entry.Integer());
+		}
+		auto &snapshots = metadata.At("snapshots").Items();
+		snapshots.erase(
+		    std::remove_if(snapshots.begin(), snapshots.end(),
+		                   [&](const Json &snapshot) { return removed.count(snapshot.At("snapshot-id").Integer()); }),
+		    snapshots.end());
+		set<int64_t> retained;
+		for (auto &snapshot : snapshots) {
+			retained.insert(snapshot.At("snapshot-id").Integer());
+		}
+		auto refs = Json::Object();
+		for (auto &ref : metadata.At("refs").Members()) {
+			if (retained.count(ref.second.At("snapshot-id").Integer())) {
+				refs[ref.first] = ref.second;
+			} else if (ref.first == "main") {
+				metadata.Erase("current-snapshot-id");
+			}
+		}
+		metadata["refs"] = std::move(refs);
+		// A gap ends all earlier timestamp history, including repeated IDs.
+		auto history = Json::Array();
+		for (auto &entry : metadata.At("snapshot-log").Items()) {
+			if (retained.count(entry.At("snapshot-id").Integer())) {
+				history.Push(entry);
+			} else {
+				history = Json::Array();
+			}
+		}
+		metadata["snapshot-log"] = std::move(history);
 	} else if (action == "add-snapshot") {
 		auto snapshot = update.At("snapshot");
 		auto identifier = snapshot.At("snapshot-id").Integer();

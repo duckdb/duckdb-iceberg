@@ -63,10 +63,10 @@ SELECT
 	partition_field->>'$.field-id'
 FROM partition_fields;
 ----
-record	r102	102	identity_u_2	"null"	1000
+record	r102	102	u	"null"	1000
 
 query II
-SELECT data_file.record_count, data_file.partition.identity_u_2
+SELECT data_file.record_count, data_file.partition.u
 FROM read_avro(getvariable('unknown_partition_manifest'));
 ----
 2	NULL

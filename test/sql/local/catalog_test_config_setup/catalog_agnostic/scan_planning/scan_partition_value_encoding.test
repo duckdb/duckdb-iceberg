@@ -169,9 +169,11 @@ select * from iceberg_scan_tasks(getvariable('scan_task_list_4')) order by id;
 statement ok
 commit;
 
-# Reusing the name does not change the identity of the historical field.
+# A later column does not take over the historical field's identity. It cannot reuse the name: the historical spec
+# keeps the identity field 'p', and a Java catalog rebuilds every spec against the new schema and refuses an identity
+# field named after a column it is not sourced from (PartitionSpec.Builder.checkAndAddPartitionName).
 statement ok
-alter table my_datalake.default.scan_partition_value_encoding add column p varchar;
+alter table my_datalake.default.scan_partition_value_encoding add column q varchar;
 
 # Keep planning credentials alive until the task list has been consumed.
 statement ok

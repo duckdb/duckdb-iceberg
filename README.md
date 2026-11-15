@@ -4,6 +4,38 @@ This repository contains DuckDB's Apache Iceberg extension. It adds support for 
 
 User-facing documentation is available on the [Iceberg extension page](https://duckdb.org/docs/extensions/iceberg).
 
+## Tracking written data files
+
+Set `iceberg_store_written_files = true` before a write to collect the data files it
+stages in the connection's temporary table `temp.main.iceberg_written_files`.
+Each row contains `query_id`, `table`, `file_path`, `record_count`,
+`file_size_in_bytes`, `operation`, and `written_at`.
+
+The operation is `INSERT`, `CTAS`, `UPDATE`, `MERGE_INSERT`, `MERGE_UPDATE`,
+`COPY_ON_WRITE_DELETE`, or `REWRITE_DATA_FILES`. MERGE's insert and update actions
+share a query ID but have separate operation labels. Operations that write no new
+data files produce no rows.
+
+`written_at` is a `TIMESTAMPTZ` captured when a batch of files is reported after
+staging. Files in the same batch share the timestamp; separate statements within
+a transaction capture their own times. Use `query_id` and `file_path` to break
+timestamp ties. For example, after enabling tracking and performing writes:
+
+```sql
+SELECT query_id, operation, written_at, "table", file_path,
+       record_count, file_size_in_bytes
+FROM temp.main.iceberg_written_files
+WHERE operation IN ('INSERT', 'CTAS')
+ORDER BY written_at, query_id, file_path;
+```
+
+The `IcebergDataFileWritten` log type exposes the same operation and `written_at`
+fields independently of the storage setting. These describe staged files:
+rollback removes the temporary table's rows, while logs remain. The temporary
+catalog commits before the Iceberg catalog, so a failed Iceberg commit can leave
+tracking rows behind; a client requiring committed files must also check that
+the write committed successfully.
+
 ## Row lineage inside transactions
 
 For format version 3 tables, rows inserted within a transaction have NULL `_row_id`

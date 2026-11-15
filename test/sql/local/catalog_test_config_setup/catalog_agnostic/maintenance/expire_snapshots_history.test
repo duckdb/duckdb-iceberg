@@ -1,0 +1,158 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/expire_snapshots_history.test
+# description: Expiration ends timestamp history at its last gap, preserves version reads, and permits later writes
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env TIMETRAVEL_SUPPORT
+
+require-env SNAPSHOT_HISTORY_SUPPORT
+
+include test/sql/init_requires
+
+set ignore_error_messages
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.expire_snapshots_history;
+
+statement ok
+CREATE TABLE my_datalake.default.expire_snapshots_history (id INTEGER);
+
+statement ok
+INSERT INTO my_datalake.default.expire_snapshots_history VALUES (1);
+
+statement ok
+SET VARIABLE first_id = (SELECT snapshot_id FROM iceberg_snapshots(my_datalake.default.expire_snapshots_history));
+
+statement ok
+INSERT INTO my_datalake.default.expire_snapshots_history VALUES (2);
+
+statement ok
+SET VARIABLE retained_id = (
+	SELECT snapshot_id FROM iceberg_snapshots(my_datalake.default.expire_snapshots_history) WHERE sequence_number = 2
+);
+
+statement ok
+SET VARIABLE retained_timestamp = (
+	SELECT made_current_at FROM iceberg_history(my_datalake.default.expire_snapshots_history)
+	WHERE snapshot_id = getvariable('retained_id')
+);
+
+# History revisits S1 after S2, then advances to S3. Expiring S1 must trim both occurrences.
+statement ok
+CALL iceberg_rollback_to_snapshot('my_datalake.default.expire_snapshots_history', getvariable('first_id'));
+
+statement ok
+INSERT INTO my_datalake.default.expire_snapshots_history VALUES (3);
+
+query I
+SELECT count(*) FROM iceberg_history(my_datalake.default.expire_snapshots_history);
+----
+4
+
+statement ok
+BEGIN;
+
+query II
+SELECT * FROM iceberg_expire_snapshots('my_datalake.default.expire_snapshots_history',
+	snapshot_ids => [getvariable('first_id')], retain_last => 10);
+----
+1	2
+
+query I
+SELECT s.sequence_number FROM iceberg_history(my_datalake.default.expire_snapshots_history) h
+JOIN iceberg_snapshots(my_datalake.default.expire_snapshots_history) s USING (snapshot_id);
+----
+3
+
+# S2 is still addressable by ID even though its timestamp history is gone.
+query II
+SELECT count(*), sum(id) FROM my_datalake.default.expire_snapshots_history AT (VERSION => getvariable('retained_id'));
+----
+2	3
+
+statement error
+SELECT count(*) FROM my_datalake.default.expire_snapshots_history AT (TIMESTAMP => getvariable('retained_timestamp'));
+----
+Could not find snapshot at or before timestamp
+
+# The failed lookup aborts the transaction and must restore the staged snapshot and history.
+statement ok
+ROLLBACK;
+
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.expire_snapshots_history);
+----
+3
+
+query I
+SELECT count(*) FROM iceberg_history(my_datalake.default.expire_snapshots_history);
+----
+4
+
+query II
+SELECT count(*), sum(id) FROM my_datalake.default.expire_snapshots_history AT (TIMESTAMP => getvariable('retained_timestamp'));
+----
+2	3
+
+statement ok
+BEGIN;
+
+query II
+SELECT * FROM iceberg_expire_snapshots('my_datalake.default.expire_snapshots_history',
+	snapshot_ids => [getvariable('first_id')], retain_last => 10);
+----
+1	2
+
+# A subsequent no-op does not discard the pending removal.
+query II
+SELECT * FROM iceberg_expire_snapshots('my_datalake.default.expire_snapshots_history', retain_last => 10);
+----
+0	2
+
+statement ok
+COMMIT;
+
+query I
+SELECT s.sequence_number FROM iceberg_history(my_datalake.default.expire_snapshots_history) h
+JOIN iceberg_snapshots(my_datalake.default.expire_snapshots_history) s USING (snapshot_id);
+----
+3
+
+statement error
+SELECT count(*) FROM my_datalake.default.expire_snapshots_history AT (TIMESTAMP => getvariable('retained_timestamp'));
+----
+Could not find snapshot at or before timestamp
+
+query II
+SELECT count(*), sum(id) FROM my_datalake.default.expire_snapshots_history AT (VERSION => getvariable('retained_id'));
+----
+2	3
+
+# Expiring the current snapshot's parent must not break the next append or reuse an old sequence number.
+statement ok
+INSERT INTO my_datalake.default.expire_snapshots_history VALUES (4);
+
+query I
+SELECT list(sequence_number ORDER BY sequence_number) FROM iceberg_snapshots(my_datalake.default.expire_snapshots_history);
+----
+[2, 3, 4]
+
+query II
+SELECT count(*), sum(id) FROM my_datalake.default.expire_snapshots_history;
+----
+3	8
+
+query II
+SELECT * FROM iceberg_expire_snapshots('my_datalake.default.expire_snapshots_history',
+	older_than => TIMESTAMP '2999-01-01', retain_last => 1);
+----
+2	1
+
+query II
+SELECT count(*), sum(id) FROM my_datalake.default.expire_snapshots_history;
+----
+3	8
+
+statement ok
+DROP TABLE my_datalake.default.expire_snapshots_history;

@@ -137,6 +137,32 @@ const IcebergColumnDefinition &IcebergTableSchema::GetColumnByFieldId(idx_t fiel
 	return *column;
 }
 
+static void CollectFullNames(const IcebergColumnDefinition &column, const string &parent_name,
+                             vector<pair<int32_t, string>> &result) {
+	auto full_name = parent_name.empty() ? column.name : parent_name + "." + column.name;
+	result.emplace_back(column.id, full_name);
+	for (auto &child : column.GetChildren()) {
+		CollectFullNames(*child, full_name, result);
+	}
+}
+
+vector<pair<int32_t, string>> IcebergTableSchema::GetFullNames() const {
+	vector<pair<int32_t, string>> result;
+	for (auto &column : columns) {
+		CollectFullNames(*column, string(), result);
+	}
+	return result;
+}
+
+string IcebergTableSchema::GetFullColumnName(idx_t field_id) const {
+	for (auto &field : GetFullNames()) {
+		if (static_cast<idx_t>(field.first) == field_id) {
+			return field.second;
+		}
+	}
+	throw InvalidInputException("Field id %d does not exist in schema with id %d", field_id, schema_id);
+}
+
 optional_ptr<const IcebergColumnDefinition>
 IcebergTableSchema::GetFromPath(const vector<Identifier> &path, optional_ptr<optional_idx> name_offset) const {
 	D_ASSERT(!path.empty());

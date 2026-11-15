@@ -1,0 +1,114 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/expire_snapshots_atomic.test
+# description: Snapshot expiration commits atomically across tables, including a conflicting main update
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env MULTI_TABLE_COMMIT_SUPPORT
+
+require-env ATOMIC_COMMIT_CONFLICT_SUPPORT
+
+include test/sql/init_requires
+
+set ignore_error_messages
+
+foreach table expire_atomic_a expire_atomic_b
+
+statement ok
+drop table if exists my_datalake.default.{table};
+
+statement ok
+create table my_datalake.default.{table} (id INTEGER);
+
+foreach value 1 2 3
+
+statement ok
+insert into my_datalake.default.{table} values ({value});
+
+endloop
+
+endloop
+
+statement ok con1
+begin;
+
+foreach table expire_atomic_a expire_atomic_b
+
+query II con1
+select * from iceberg_expire_snapshots('my_datalake.default.{table}', retain_last => 1, older_than => timestamp '2999-01-01');
+----
+2	1
+
+endloop
+
+statement ok con2
+insert into my_datalake.default.expire_atomic_b values (4);
+
+statement error con1
+commit;
+----
+<REGEX>:.*TransactionContext Error.*Conflict_409.*
+
+# The conflict in B must not publish the valid removal from A.
+query I
+select count(*) from iceberg_snapshots(my_datalake.default.expire_atomic_a);
+----
+3
+
+query I
+select count(*) from iceberg_snapshots(my_datalake.default.expire_atomic_b);
+----
+4
+
+query II
+select count(*), sum(id) from my_datalake.default.expire_atomic_a;
+----
+3	6
+
+query II
+select count(*), sum(id) from my_datalake.default.expire_atomic_b;
+----
+4	10
+
+# A fresh transaction can commit both removals with the updated main requirement.
+statement ok
+begin;
+
+query II
+select * from iceberg_expire_snapshots('my_datalake.default.expire_atomic_a', retain_last => 1, older_than => timestamp '2999-01-01');
+----
+2	1
+
+query II
+select * from iceberg_expire_snapshots('my_datalake.default.expire_atomic_b', retain_last => 1, older_than => timestamp '2999-01-01');
+----
+3	1
+
+statement ok
+commit;
+
+foreach table expire_atomic_a expire_atomic_b
+
+query I
+select count(*) from iceberg_snapshots(my_datalake.default.{table});
+----
+1
+
+endloop
+
+query II
+select count(*), sum(id) from my_datalake.default.expire_atomic_a;
+----
+3	6
+
+query II
+select count(*), sum(id) from my_datalake.default.expire_atomic_b;
+----
+4	10
+
+foreach table expire_atomic_a expire_atomic_b
+
+statement ok
+drop table my_datalake.default.{table};
+
+endloop

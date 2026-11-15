@@ -136,7 +136,10 @@ SELECT list_transform(fields, lambda f: f."field-id"::INTEGER), last_id FROM sch
 ----
 [1002, 1000, 1003]	1003
 
-# A same-named replacement column has a different source ID and must not inherit the old field IDs.
+# A replacement column has a different source ID and must not inherit the old field IDs. It cannot take the dropped
+# column's name: the historical spec keeps the identity field 'a', and a Java catalog rebuilds every spec against the
+# new schema and refuses an identity field named after a column it is not sourced from
+# (PartitionSpec.Builder.checkAndAddPartitionName).
 statement ok
 ALTER TABLE my_datalake.default.partition_field_id_reuse_schema SET PARTITIONED BY (s.k);
 
@@ -147,10 +150,10 @@ statement ok
 ALTER TABLE my_datalake.default.partition_field_id_reuse_schema DROP COLUMN a;
 
 statement ok
-ALTER TABLE my_datalake.default.partition_field_id_reuse_schema ADD COLUMN a BIGINT;
+ALTER TABLE my_datalake.default.partition_field_id_reuse_schema ADD COLUMN a2 BIGINT;
 
 statement ok
-ALTER TABLE my_datalake.default.partition_field_id_reuse_schema SET PARTITIONED BY (a, bucket(4, a), s.k);
+ALTER TABLE my_datalake.default.partition_field_id_reuse_schema SET PARTITIONED BY (a2, bucket(4, a2), s.k);
 
 statement ok
 COMMIT;

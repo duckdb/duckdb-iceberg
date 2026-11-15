@@ -1,0 +1,100 @@
+# name: test/sql/local/native_catalog/partition_field_name_labels.test
+# description: Stored partition labels are independent of source column names and remain authoritative on reuse
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+statement ok
+CREATE TABLE my_datalake.default.partition_labels (dep VARCHAR, label VARCHAR, id INTEGER)
+WITH ('format-version' = '2');
+
+# Seed names supplied by another writer. The identity field's label is also the
+# name of a different table column; only source-id determines the partition value.
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/partition_labels',
+	'{"requirements":[],"updates":[
+		{"action":"add-spec","spec":{"spec-id":1,"fields":[
+			{"source-id":1,"field-id":1000,"name":"label","transform":"identity"},
+			{"source-id":3,"field-id":1001,"name":"legacy_bucket","transform":"bucket[4]"}
+		]}},
+		{"action":"set-default-spec","spec-id":1}
+	]}');
+----
+200
+
+statement ok
+ATTACH OR REPLACE '' AS my_datalake (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none', STAGE_CREATE_TABLES true);
+
+statement ok
+INSERT INTO my_datalake.default.partition_labels VALUES ('engineering', 'unrelated', 1), ('sales', 'different', 2);
+
+query TTI
+SELECT dep, label, id FROM my_datalake.default.partition_labels ORDER BY id;
+----
+engineering	unrelated	1
+sales	different	2
+
+query TI
+SELECT partition.label, record_count FROM iceberg_partitions(my_datalake.default.partition_labels)
+ORDER BY partition.label;
+----
+engineering	1
+sales	1
+
+statement ok
+ALTER TABLE my_datalake.default.partition_labels RENAME COLUMN dep TO department;
+
+# Reordering an existing spec must not regenerate or reinterpret its labels.
+statement ok
+ALTER TABLE my_datalake.default.partition_labels SET PARTITIONED BY (bucket(4, id), department);
+
+query ITT
+SELECT field_id, name, source_column FROM iceberg_partition_specs(my_datalake.default.partition_labels)
+WHERE is_default ORDER BY field_id;
+----
+1000	label	department
+1001	legacy_bucket	id
+
+# A newly partitioned column needs a fresh label instead of stealing the old one.
+statement ok
+ALTER TABLE my_datalake.default.partition_labels SET PARTITIONED BY (department, label, bucket(4, id));
+
+query ITI
+SELECT field_id, source_column,
+	CASE WHEN field_id = 1000 THEN name = 'label'
+	     WHEN field_id = 1001 THEN name = 'legacy_bucket'
+	     ELSE name NOT IN ('label', 'legacy_bucket') END
+FROM iceberg_partition_specs(my_datalake.default.partition_labels) WHERE is_default ORDER BY field_id;
+----
+1000	department	true
+1001	id	true
+1002	label	true
+
+statement ok
+INSERT INTO my_datalake.default.partition_labels VALUES ('finance', 'third', 3);
+
+query I
+SELECT id FROM my_datalake.default.partition_labels WHERE department = 'sales' AND label = 'different';
+----
+2
+
+statement ok
+DELETE FROM my_datalake.default.partition_labels WHERE label = 'unrelated';
+
+query TTI
+SELECT department, label, id FROM my_datalake.default.partition_labels ORDER BY id;
+----
+sales	different	2
+finance	third	3
+
+query T
+SELECT partition.label FROM iceberg_partitions(my_datalake.default.partition_labels)
+WHERE partition.label = 'finance';
+----
+finance
+
+statement ok
+DROP TABLE my_datalake.default.partition_labels;

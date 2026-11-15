@@ -76,6 +76,8 @@ public:
 	vector<Identifier> names;
 	vector<LogicalType> expected_types;
 	bool partitioned_paths = true;
+	//! Directories of a partition's files relative to file_path; the default hive layout when null
+	unique_ptr<Expression> partition_path_expression;
 
 	//! Set of projection columns to execute prior to inserting (if any)
 	vector<unique_ptr<Expression>> projection_list;

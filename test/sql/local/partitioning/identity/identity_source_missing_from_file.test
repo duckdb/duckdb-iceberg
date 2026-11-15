@@ -27,3 +27,22 @@ query I
 select count(*) from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/partition_values_missing_from_files/warehouse/default/nested_source/metadata/00001-e7aaa19e-f292-4245-89eb-9c92709dad47.metadata.json') where address.country = 'fr';
 ----
 2
+
+# A pushed-down cast must also convert a missing field's partition value.
+query IT
+select id, address.country::BLOB from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/partition_values_missing_from_files/warehouse/default/nested_source/metadata/00001-e7aaa19e-f292-4245-89eb-9c92709dad47.metadata.json') order by id;
+----
+1	fr
+2	fr
+
+query ITTT
+select id, address.country, address.country::BLOB, address.city from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/partition_values_missing_from_files/warehouse/default/nested_source/metadata/00001-e7aaa19e-f292-4245-89eb-9c92709dad47.metadata.json') order by id;
+----
+1	fr	fr	paris
+2	fr	fr	lyon
+
+query I
+select id from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/partition_values_missing_from_files/warehouse/default/nested_source/metadata/00001-e7aaa19e-f292-4245-89eb-9c92709dad47.metadata.json') where address.country::BLOB = 'fr'::BLOB order by id;
+----
+1
+2

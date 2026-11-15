@@ -1,0 +1,148 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/partitioning/partition_field_names_collisions.test
+# description: Generated partition names avoid collisions without rejecting valid partition expressions
+# group: [partitioning]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.partition_name_fallback;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.partition_name_retention;
+
+# The preferred name and multiple fallback candidates are already column names.
+statement ok
+CREATE TABLE my_datalake.default.partition_name_fallback (
+	ts TIMESTAMP, TS_DAY INTEGER, ts_day_1000 INTEGER, ts_day_1000_1 INTEGER
+) PARTITIONED BY (day(ts)) WITH ('format-version' = '2');
+
+query ITI
+SELECT field_id, transform, name NOT IN ('ts_day', 'TS_DAY', 'ts_day_1000', 'ts_day_1000_1')
+FROM iceberg_partition_specs(my_datalake.default.partition_name_fallback) WHERE is_default;
+----
+1000	day	true
+
+statement ok
+SET VARIABLE fallback_name = (
+	SELECT name FROM iceberg_partition_specs(my_datalake.default.partition_name_fallback) WHERE is_default
+);
+
+statement ok
+INSERT INTO my_datalake.default.partition_name_fallback VALUES (TIMESTAMP '2024-01-02 03:00:00', 7, 8, 9);
+
+query TIII
+SELECT * FROM my_datalake.default.partition_name_fallback;
+----
+2024-01-02 03:00:00	7	8	9
+
+query TI
+SELECT struct_extract(partition, getvariable('fallback_name')), record_count
+FROM iceberg_partitions(my_datalake.default.partition_name_fallback);
+----
+2024-01-02	1
+
+# Reinstating the partition keeps the chosen label and reuses its spec and field ID.
+statement ok
+ALTER TABLE my_datalake.default.partition_name_fallback RESET PARTITIONED BY;
+
+statement ok
+ALTER TABLE my_datalake.default.partition_name_fallback SET PARTITIONED BY (day(ts));
+
+query III
+SELECT spec_id, field_id, name = getvariable('fallback_name')
+FROM iceberg_partition_specs(my_datalake.default.partition_name_fallback) WHERE is_default;
+----
+0	1000	true
+
+statement ok
+DROP TABLE my_datalake.default.partition_name_fallback;
+
+# CTAS must choose the same name for its planned write and the actual table.
+statement ok
+CREATE TABLE my_datalake.default.partition_name_fallback PARTITIONED BY (day(ts)) AS
+SELECT TIMESTAMP '2024-02-03 04:00:00' AS ts, 10 AS ts_day;
+
+query TI
+SELECT ts, ts_day FROM my_datalake.default.partition_name_fallback WHERE ts_day = 10;
+----
+2024-02-03 04:00:00	10
+
+query ITI
+SELECT field_id, transform, name <> 'ts_day'
+FROM iceberg_partition_specs(my_datalake.default.partition_name_fallback) WHERE is_default;
+----
+1000	day	true
+
+# An existing partition label has priority over a newly generated label.
+statement ok
+CREATE TABLE my_datalake.default.partition_name_retention (a INTEGER, b INTEGER)
+PARTITIONED BY (bucket(4, a)) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.partition_name_retention VALUES (1, 10);
+
+statement ok
+ALTER TABLE my_datalake.default.partition_name_retention RENAME COLUMN a TO renamed;
+
+statement ok
+ALTER TABLE my_datalake.default.partition_name_retention RENAME COLUMN b TO a;
+
+statement ok
+ALTER TABLE my_datalake.default.partition_name_retention
+SET PARTITIONED BY (bucket(4, renamed), bucket(4, a));
+
+query ITI
+SELECT field_id, source_column, name = 'a_bucket_4'
+FROM iceberg_partition_specs(my_datalake.default.partition_name_retention)
+WHERE is_default ORDER BY field_id;
+----
+1000	renamed	true
+1001	a	false
+
+statement ok
+SET VARIABLE retained_names = (
+	SELECT list(name ORDER BY field_id) FROM iceberg_partition_specs(my_datalake.default.partition_name_retention)
+	WHERE is_default
+);
+
+statement ok
+INSERT INTO my_datalake.default.partition_name_retention VALUES (2, 20);
+
+query I
+SELECT a FROM my_datalake.default.partition_name_retention WHERE renamed = 1;
+----
+10
+
+query I
+SELECT renamed FROM my_datalake.default.partition_name_retention WHERE a = 20;
+----
+2
+
+statement ok
+ALTER TABLE my_datalake.default.partition_name_retention SET PARTITIONED BY (bucket(4, a), bucket(4, renamed));
+
+query I
+SELECT list(name ORDER BY field_id) = getvariable('retained_names')
+FROM iceberg_partition_specs(my_datalake.default.partition_name_retention) WHERE is_default;
+----
+true
+
+statement ok
+ALTER TABLE my_datalake.default.partition_name_retention RESET PARTITIONED BY;
+
+statement ok
+ALTER TABLE my_datalake.default.partition_name_retention SET PARTITIONED BY (bucket(4, renamed), bucket(4, a));
+
+query III
+SELECT min(spec_id), list(field_id ORDER BY field_id), list(name ORDER BY field_id) = getvariable('retained_names')
+FROM iceberg_partition_specs(my_datalake.default.partition_name_retention) WHERE is_default;
+----
+1	[1000, 1001]	true
+
+statement ok
+DROP TABLE my_datalake.default.partition_name_fallback;
+
+statement ok
+DROP TABLE my_datalake.default.partition_name_retention;

@@ -87,7 +87,8 @@ TableFunction IcebergTableSchemaVersion::GetScanFunction(ClientContext &context,
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto scan_info = make_shared_ptr<IcebergScanInfo>(
 	    metadata.GetMetadataPath(fs), table_info.GetMetadataOwner(), snapshot_info, iceberg_schema,
-	    IcebergFileSecret(IcebergFileCredentialsCallback::Get(context, table_info)));
+	    IcebergFileSecret(IcebergFileCredentialsCallback::Get(context, table_info),
+	                      std::to_string(table_info.catalog.GetOid())));
 	auto &transaction = IcebergTransaction::Get(context, catalog);
 	scan_info->serialization_transaction_id = transaction.scan_serialization_id;
 	scan_info->serialization_query_id = transaction.active_query.load();

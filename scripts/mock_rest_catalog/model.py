@@ -397,6 +397,28 @@ class Catalog:
         elif action == "remove-properties":
             for name in update["removals"]:
                 metadata["properties"].pop(name, None)
+        elif action == "remove-snapshots":
+            identifiers = update["snapshot-ids"]
+            if not isinstance(identifiers, list) or any(
+                type(identifier) is not int or not -(1 << 63) <= identifier < (1 << 63) for identifier in identifiers
+            ):
+                invalid("snapshot-ids must be a list of signed 64-bit integers")
+            removed = set(identifiers)
+            metadata["snapshots"] = [s for s in metadata["snapshots"] if s["snapshot-id"] not in removed]
+            retained = {s["snapshot-id"] for s in metadata["snapshots"]}
+            for name, ref in list(metadata["refs"].items()):
+                if ref["snapshot-id"] not in retained:
+                    del metadata["refs"][name]
+                    if name == "main":
+                        metadata.pop("current-snapshot-id", None)
+            # A gap ends all earlier timestamp history, including repeated IDs.
+            history = []
+            for entry in metadata["snapshot-log"]:
+                if entry["snapshot-id"] in retained:
+                    history.append(entry)
+                else:
+                    history.clear()
+            metadata["snapshot-log"] = history
         elif action == "add-snapshot":
             snapshot = copy.deepcopy(update["snapshot"])
             identifier = snapshot["snapshot-id"]

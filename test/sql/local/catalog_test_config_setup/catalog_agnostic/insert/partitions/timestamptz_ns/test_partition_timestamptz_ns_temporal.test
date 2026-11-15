@@ -58,28 +58,28 @@ SELECT partition_field_name, partition_field_transform, lower_bound, upper_bound
 FROM iceberg_partition_stats(my_datalake.default.test_timestamptz_ns_year_transform)
 ORDER BY partition_field_name;
 ----
-year_val_2	year	50	54
+val_year	year	50	54
 
 query IIII
 SELECT partition_field_name, partition_field_transform, lower_bound, upper_bound
 FROM iceberg_partition_stats(my_datalake.default.test_timestamptz_ns_month_transform)
 ORDER BY partition_field_name;
 ----
-month_val_2	month	600	659
+val_month	month	600	659
 
 query IIII
 SELECT partition_field_name, partition_field_transform, lower_bound, upper_bound
 FROM iceberg_partition_stats(my_datalake.default.test_timestamptz_ns_day_transform)
 ORDER BY partition_field_name;
 ----
-day_val_2	day	18276	20088
+val_day	day	18276	20088
 
 query IIII
 SELECT partition_field_name, partition_field_transform, lower_bound, upper_bound
 FROM iceberg_partition_stats(my_datalake.default.test_timestamptz_ns_hour_transform)
 ORDER BY partition_field_name;
 ----
-hour_val_2	hour	438632	482135
+val_hour	hour	438632	482135
 
 foreach transform year month day hour
 

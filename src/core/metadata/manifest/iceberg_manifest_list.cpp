@@ -958,6 +958,7 @@ unique_ptr<IcebergManifestList> IcebergManifestList::Load(const string &iceberg_
 	while (!manifest_file_reader->Finished()) {
 		manifest_file_reader->Read();
 	}
+	manifest_scan->Complete();
 	return ret;
 }
 

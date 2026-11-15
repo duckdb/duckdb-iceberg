@@ -6,6 +6,7 @@
 namespace duckdb {
 
 BaseManifestReader::BaseManifestReader(const AvroScan &scan_p) : scan(scan_p), iceberg_version(scan.IcebergVersion()) {
+	scan.readers_started++;
 }
 
 BaseManifestReader::~BaseManifestReader() {
@@ -26,6 +27,15 @@ const IcebergAvroScanInfo &BaseManifestReader::GetScanInfo() const {
 }
 
 void BaseManifestReader::ScanInternal() {
+	if (finished) {
+		return;
+	}
+	if (scan.Finished()) {
+		initialized = true;
+		finished = true;
+		scan.readers_finished++;
+		return;
+	}
 	if (!initialized) {
 		InitializeInternal();
 	}
@@ -37,6 +47,7 @@ void BaseManifestReader::ScanInternal() {
 	scan.avro_scan->function(scan.context, function_input, chunk);
 	if (chunk.size() == 0) {
 		finished = true;
+		scan.readers_finished++;
 	}
 }
 

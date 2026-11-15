@@ -31,15 +31,13 @@ public:
 	//! Partition field IDs and names are deliberately ignored so historical fields can be reused.
 	bool Equals(const IcebergPartitionSpecField &other) const;
 
-	//! Sets the field name, derived from transform + column_name + source_id with Avro-compliance sanitization.
-	//! Must be called after transform and source_id are set.
-	void SetPartitionSpecFieldName(const string &column_name);
+	//! Generate a preferred name using Java's partition-update convention, with an optional collision suffix.
+	//! The format does not mandate this convention. Must be called after transform is set.
+	void SetPartitionSpecFieldName(const string &column_name, const string &suffix = string());
 	const string &GetPartitionSpecFieldName() const;
 
 private:
-	//! Spec field name. Derived using the column source id, the raw transform type, and the column name.
-	//! By using these three fields, names can never collide unless the same transform is used on the same column.
-	//! Eventually users will be able to choose a partition name themselves.
+	//! Stored label, independent of the source column name. Recycled fields retain it verbatim.
 	string name;
 };
 
@@ -67,6 +65,9 @@ public:
 	//! Spec IDs and partition field IDs are ignored, like Java's PartitionSpec.compatibleWith, unless
 	//! 'compare_field_ids' is set: a manifest's partition values are keyed by the partition field IDs.
 	bool Equals(const IcebergPartitionSpec &other, bool compare_field_ids = false) const;
+	//! Assign non-conflicting names to new fields (IDs >= first_new_field_id), preserving reused labels.
+	//! Generated names also avoid schema collisions for Java catalog compatibility.
+	void FinalizeFieldNames(const IcebergTableSchema &schema, idx_t first_new_field_id);
 
 private:
 	JSONMutableValue FieldsToJSON(JSONWriter &writer) const;

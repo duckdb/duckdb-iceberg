@@ -1,0 +1,74 @@
+# name: test/sql/local/iceberg_scans/parsed_manifest_cache.test
+# description: Warm parsed manifests preserve v1 header fallback and day partition representations
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+statement ok
+SET iceberg_enable_manifest_cache=true;
+
+statement ok
+CALL enable_logging('Iceberg', storage='memory');
+
+statement ok
+CREATE MACRO reused_manifests() AS
+(SELECT
+	coalesce(sum(try_cast(regexp_extract(message, 'parsed_manifest_hits=(\d+)', 1) AS BIGINT)),0)>0
+	AND coalesce(sum(try_cast(regexp_extract(message, 'manifest_parses=(\d+)', 1) AS BIGINT)),0)=0
+	AND coalesce(sum(try_cast(regexp_extract(message, 'manifest_entries_converted=(\d+)', 1) AS BIGINT)),0)=0
+FROM duckdb_logs() WHERE type='Iceberg' AND message LIKE 'Iceberg metadata phase=%');
+
+# The v1 manifest omits format-version, schema-id and partition-spec-id.
+query III
+SELECT *
+FROM iceberg_scan('data/persistent/iceberg_v1_deprecated/default/legacy_v1/metadata/no-optional-manifest-keys.metadata.json')
+ORDER BY id;
+----
+1	alpha	10
+2	beta	20
+3	alpha	NULL
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query II
+SELECT id, amount
+FROM iceberg_scan('data/persistent/iceberg_v1_deprecated/default/legacy_v1/metadata/no-optional-manifest-keys.metadata.json')
+WHERE category='alpha' ORDER BY id;
+----
+1	10
+3	NULL
+
+query I
+SELECT reused_manifests();
+----
+true
+
+# An incompatible v1 spec context cannot borrow the valid payload.
+statement error
+SELECT count(*)
+FROM iceberg_scan('data/persistent/iceberg_v1_deprecated/default/legacy_v1/metadata/no-matching-partition-spec.metadata.json');
+----
+has no 'partition-spec-id', and its 'partition-spec' doesn't match any partition spec of the table
+
+# Day values retain the same semantic representation on cold and warm reads.
+foreach pass cold warm
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT partition
+FROM iceberg_files('{WORKING_DIRECTORY}/data/persistent/map_stats/default.db/map_stats',
+	version='00002-0e059d4b-e5e8-41af-a763-76cbf3a3d0bc', allow_moved_paths=true)
+ORDER BY ALL;
+----
+{'_day': 2026-01-01}
+{'_day': 2026-01-02}
+
+query I
+SELECT reused_manifests() = ('{pass}'='warm');
+----
+true
+
+endloop

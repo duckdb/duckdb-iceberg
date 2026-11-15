@@ -22,6 +22,8 @@ from workloads import (
     literal,
     manifest_case,
     manifest_setup,
+    wide_manifest_case,
+    wide_manifest_setup,
 )
 
 
@@ -32,7 +34,7 @@ CONFIG = ROOT / "test/configs/mock_native.json"
 class Shell:
     """One CLI process = one fresh in-memory DatabaseInstance and one connection."""
 
-    def __init__(self, build, output, staleness=False):
+    def __init__(self, build, output, staleness=False, manifest_cache=True):
         self.output = output
         self.stderr = (output / f"shell-{time.time_ns()}.stderr").open("w+")
         self.process = subprocess.Popen(
@@ -54,6 +56,7 @@ class Shell:
             init = init.replace("STAGE_CREATE_TABLES true", "STAGE_CREATE_TABLES true, MAX_TABLE_STALENESS '1 hour'")
         self.query(init)
         self.query("SET iceberg_use_server_side_scan_planning=false")
+        self.query(f"SET iceberg_enable_manifest_cache={'true' if manifest_cache else 'false'}")
 
     def raw(self, text):
         marker = "__metadata_baseline_end__"
@@ -139,6 +142,27 @@ def check_layout(shell, table, expected):
     return actual
 
 
+def check_wide_manifest(shell, table, entries):
+    # Catalog lookup and direct Avro reads share the transaction's credentials.
+    shell.query("BEGIN")
+    try:
+        paths = shell.query(f"SELECT DISTINCT manifest_path FROM iceberg_metadata({literal(table)})")
+        assert len(paths) == 1, paths
+        stats = shell.query(
+            f"""SELECT count(*) AS entries,
+                count(*) FILTER (WHERE cardinality(data_file.lower_bounds)=101
+                    AND cardinality(data_file.upper_bounds)=101) AS entries_with_full_bounds
+                FROM read_avro({literal(paths[0]['manifest_path'])})"""
+        )[0]
+        assert stats == {
+            "entries": entries,
+            "entries_with_full_bounds": entries,
+        }, stats
+        return stats
+    finally:
+        shell.query("COMMIT")
+
+
 def scan_nodes(node):
     if isinstance(node, dict):
         if node.get("extra_info", {}).get("Function", "").upper() == "ICEBERG_SCAN":
@@ -158,8 +182,14 @@ def main():
     parser.add_argument(
         "--output", type=Path, required=True, help="New directory; contains immutable datasets and raw samples"
     )
+    parser.add_argument("--source", type=Path, help="Reuse a previous run's immutable cases.json and layouts.json")
     parser.add_argument("--size", choices=SHAPES, default="reduced")
-    parser.add_argument("--workload", choices=["all", "delete", "manifest", "snapshots"], default="all")
+    parser.add_argument(
+        "--workload",
+        choices=["all", "delete", "manifest", "snapshots", "small-manifests", "wide-manifest"],
+        default="all",
+    )
+    parser.add_argument("--manifest-cache", choices=["on", "off"], default="on")
     parser.add_argument("--threads", nargs="+", type=int, default=[1, 8])
     parser.add_argument(
         "--modes",
@@ -174,11 +204,13 @@ def main():
         parser.error("samples and threads must be positive")
     args.build = args.build.resolve()
     args.output = args.output.resolve()
+    if args.source:
+        args.source = args.source.resolve()
     cmake_cache = (args.build / "CMakeCache.txt").read_text()
     if re.search(r"^COVERAGE:BOOL=(ON|TRUE|1)$", cmake_cache, re.MULTILINE):
         parser.error("Rebuild with COVERAGE=OFF before collecting baselines")
     args.output.mkdir(parents=True, exist_ok=False)
-    setup = Shell(args.build, args.output)
+    setup = Shell(args.build, args.output, manifest_cache=False)
     try:
         runtime = setup.query("SELECT version() AS core")
         extensions = setup.query("SELECT extension_name,extension_version FROM duckdb_extensions() WHERE loaded")
@@ -214,8 +246,11 @@ def main():
         (args.output / "environment.json").write_text(json.dumps(environment, indent=2) + "\n")
         setup.query("SET threads=1")
         cases, layouts = [], {}
+        if args.source:
+            cases = json.loads((args.source / "cases.json").read_text())
+            layouts = json.loads((args.source / "layouts.json").read_text())
         shape = SHAPES[args.size]
-        if args.workload in ("all", "delete"):
+        if not args.source and args.workload in ("all", "delete"):
             for with_deletes in (True, False):
                 name = "delete_filter" if with_deletes else "delete_control"
                 print(f"Preparing {name}: {shape}", flush=True)
@@ -227,7 +262,7 @@ def main():
                 assert setup.query(f"SELECT count(*) AS n FROM {table}") == [{"n": live_rows}]
                 for case in delete_cases(shape, table, with_deletes):
                     cases.append({**case, "table": name, "payload": payload(setup, name)})
-        if args.workload in ("all", "manifest"):
+        if not args.source and args.workload in ("all", "manifest"):
             sizes = [32] if args.size == "reduced" else [1000, 5000, 25000]
             for entries in sizes:
                 name = f"manifest_{entries}"
@@ -251,7 +286,80 @@ def main():
                 cases.append(
                     dict(name=name, table=name, sql=manifest_case(table), expected=1, payload=payload(setup, name))
                 )
-        if args.workload in ("all", "snapshots"):
+        if not args.source and args.workload == "wide-manifest":
+            entries = {"reduced": 32, "regression": 1000, "full": 5000}[args.size]
+            name = f"wide_manifest_{entries}"
+            print(f"Preparing {name}", flush=True)
+            table = f"my_datalake.default.{name}"
+            for sql in wide_manifest_setup(entries, table):
+                setup.query(sql)
+            layouts[name] = check_layout(
+                setup,
+                table,
+                dict(
+                    data_files=entries,
+                    data_rows=entries * 100,
+                    live_delete_entries=0,
+                    data_manifests=1,
+                    delete_manifests=0,
+                    delete_files=0,
+                ),
+            )
+            layouts[name]["statistics"] = check_wide_manifest(setup, table, entries)
+            cases.append(
+                dict(
+                    name=name,
+                    table=name,
+                    sql=wide_manifest_case(table),
+                    expected=0,
+                    expected_files=0,
+                    expected_rows_scanned=0,
+                    manifest_entries=entries,
+                    payload=payload(setup, name),
+                )
+            )
+        if not args.source and args.workload == "small-manifests":
+            # Native transport version of benchmark/metadata_late_materialization.
+            # Keep its 256 x 4096 shape, predicates, result checks and 5ms I/O delay.
+            name = "metadata_late_materialization"
+            table = f"my_datalake.default.{name}"
+            setup.query(
+                f"CREATE TABLE {table} (partition_id INTEGER, payload BIGINT) PARTITIONED BY (partition_id) "
+                "WITH ('format-version'=2, 'commit.manifest-merge.enabled'='false')"
+            )
+            for partition in range(256):
+                setup.query(f"INSERT INTO {table} SELECT {partition},range+{partition * 4096} FROM range(4096)")
+            layouts[name] = check_layout(
+                setup,
+                table,
+                dict(
+                    data_files=256,
+                    data_rows=256 * 4096,
+                    live_delete_entries=0,
+                    data_manifests=256,
+                    delete_manifests=0,
+                    delete_files=0,
+                ),
+            )
+            for label, predicate, expected in [
+                ("one_partition", "partition_id=255", 4286576640),
+                ("four_partitions", "partition_id BETWEEN 252 AND 255", 17045643264),
+            ]:
+                cases.append(
+                    dict(
+                        name=label,
+                        table=name,
+                        sql=f"SELECT sum(payload) AS result FROM {table} WHERE {predicate}",
+                        # The CLI serializes HUGEINT SUM results as JSON strings.
+                        expected=str(expected),
+                        payload=payload(setup, name),
+                        settings_sql=(
+                            f"LOAD {literal(args.build / 'test/extension/debug_fs.duckdb_extension')}; "
+                            "SET debug_fs_delay_mean_ms=5; SET enable_external_file_cache=false"
+                        ),
+                    )
+                )
+        if not args.source and args.workload in ("all", "snapshots"):
             name = "snapshot_base"
             setup.query(f"CREATE TABLE my_datalake.default.{name} AS SELECT range AS id FROM range(10)")
             original = payload(setup, name)
@@ -317,9 +425,16 @@ def main():
                     try:
                         for sample in range(args.samples):
                             if shell is None:
-                                shell = Shell(args.build, args.output, staleness=mode == "staleness")
+                                shell = Shell(
+                                    args.build,
+                                    args.output,
+                                    staleness=mode == "staleness",
+                                    manifest_cache=args.manifest_cache == "on",
+                                )
                                 shell.query(f"SET threads={threads}")
                                 shell.query(f"SET enable_external_file_cache={'false' if mode == 'cold' else 'true'}")
+                                if "settings_sql" in case:
+                                    shell.query(case["settings_sql"])
                                 response(shell, case["table"], case["payload"])
                                 if "keys_sql" in case:
                                     shell.query(case["keys_sql"])
@@ -341,6 +456,9 @@ def main():
                             files = int(scan["extra_info"]["Total Files Read"])
                             rows = scan.get("operator_rows_scanned", scan.get("rows_scanned"))
                             assert rows is not None, scan
+                            if "expected_files" in case:
+                                assert files == case["expected_files"], (case["name"], files)
+                                assert rows == case["expected_rows_scanned"], (case["name"], rows)
                             results.append(
                                 dict(
                                     case=case["name"],
@@ -361,15 +479,44 @@ def main():
                                 shell = None
                         # A separate diagnostic query keeps logging out of timing samples.
                         if shell is None:
-                            shell = Shell(args.build, args.output)
+                            shell = Shell(args.build, args.output, manifest_cache=args.manifest_cache == "on")
                             response(shell, case["table"], case["payload"])
                             shell.query(f"SET threads={threads}")
                             shell.query("SET enable_external_file_cache=false")
+                            if "settings_sql" in case:
+                                shell.query(case["settings_sql"])
                             if "keys_sql" in case:
                                 shell.query(case["keys_sql"])
                         shell.query("CALL enable_logging(['Iceberg','HTTP'], storage='memory')")
                         shell.query(case["sql"])
                         logs = shell.query("SELECT type,message FROM duckdb_logs() WHERE type IN ('Iceberg','HTTP')")
+                        counters = {
+                            key: sum(int(v) for row in logs for v in re.findall(key + r"=(\d+)", row["message"]))
+                            for key in (
+                                "manifest_parses",
+                                "manifest_entries_converted",
+                                "delete_index_builds",
+                                "parsed_manifest_hits",
+                                "parsed_manifest_misses",
+                                "scan_tasks",
+                            )
+                        }
+                        if args.manifest_cache == "on" and mode != "cold":
+                            assert counters["manifest_parses"] == counters["manifest_entries_converted"] == 0, counters
+                            assert (
+                                counters["delete_index_builds"] == 0 and counters["parsed_manifest_hits"] > 0
+                            ), counters
+                        else:
+                            assert counters["manifest_parses"] > 0, counters
+                        if "manifest_entries" in case:
+                            assert counters["scan_tasks"] == 0, counters
+                            assert counters["delete_index_builds"] == 0, counters
+                            if args.manifest_cache == "on" and mode != "cold":
+                                assert counters["parsed_manifest_hits"] == 1, counters
+                                assert counters["parsed_manifest_misses"] == 0, counters
+                            else:
+                                assert counters["manifest_parses"] == 1, counters
+                                assert counters["manifest_entries_converted"] == case["manifest_entries"], counters
                         requests = [
                             log["message"]
                             for log in logs

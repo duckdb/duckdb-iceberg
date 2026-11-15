@@ -66,25 +66,25 @@ endloop
 
 # the partition values round down, like the Iceberg spec
 query II
-SELECT partition.year_ts_2, record_count FROM iceberg_partitions('my_datalake.default.ts_ns_boundary_year') ORDER BY ALL;
+SELECT partition.ts_year, record_count FROM iceberg_partitions('my_datalake.default.ts_ns_boundary_year') ORDER BY ALL;
 ----
 -1	1
 54	2
 
 query II
-SELECT partition.month_ts_2, record_count FROM iceberg_partitions('my_datalake.default.ts_ns_boundary_month') ORDER BY ALL;
+SELECT partition.ts_month, record_count FROM iceberg_partitions('my_datalake.default.ts_ns_boundary_month') ORDER BY ALL;
 ----
 -1	1
 659	2
 
 query II
-SELECT partition.day_ts_2, record_count FROM iceberg_partitions('my_datalake.default.ts_ns_boundary_day') ORDER BY ALL;
+SELECT partition.ts_day, record_count FROM iceberg_partitions('my_datalake.default.ts_ns_boundary_day') ORDER BY ALL;
 ----
 1969-12-31	1
 2024-12-31	2
 
 query II
-SELECT partition.hour_ts_2, record_count FROM iceberg_partitions('my_datalake.default.ts_ns_boundary_hour') ORDER BY ALL;
+SELECT partition.ts_hour, record_count FROM iceberg_partitions('my_datalake.default.ts_ns_boundary_hour') ORDER BY ALL;
 ----
 -1	1
 482135	2

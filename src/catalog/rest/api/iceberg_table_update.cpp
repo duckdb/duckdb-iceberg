@@ -100,7 +100,7 @@ static optional<IcebergManifestListEntry> RewriteManifestFile(const IcebergManif
 	D_ASSERT(loaded_manifest.manifest_metadata);
 	const auto &file = loaded_manifest.GetFile();
 
-	auto rewritten_entries = file.PrepareEntriesForRewrite(std::move(loaded_manifest.GetManifestEntries()));
+	auto rewritten_entries = file.PrepareEntriesForRewrite(loaded_manifest.TakeManifestEntries());
 	bool removed_any_entries = false;
 	for (auto &manifest_entry : rewritten_entries) {
 		if (!deletes.IsInvalidated({manifest_entry.data_file.file_path, manifest_entry.data_file.content_offset})) {

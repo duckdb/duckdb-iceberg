@@ -519,9 +519,9 @@ static void VerifyTransformSource(const ParsedExpression &key, const IcebergTran
 	}
 }
 
-IcebergPartitionSpec IcebergTable::BuildPartitionSpec(const vector<unique_ptr<ParsedExpression>> &partition_keys,
-                                                      const IcebergTableSchema &schema, int32_t spec_id,
-                                                      idx_t base_partition_field_id) {
+static IcebergPartitionSpec BuildPartitionSpecFields(const vector<unique_ptr<ParsedExpression>> &partition_keys,
+                                                     const IcebergTableSchema &schema, int32_t spec_id,
+                                                     idx_t base_partition_field_id) {
 	IcebergPartitionSpec new_spec(spec_id);
 
 	for (auto &key : partition_keys) {
@@ -532,16 +532,22 @@ IcebergPartitionSpec IcebergTable::BuildPartitionSpec(const vector<unique_ptr<Pa
 		}
 		VerifyTransformSource(*key, transform, source_columns[0].get(), "partition");
 		auto source_id = source_columns[0].get().id;
-		auto column_name = source_columns[0].get().name;
 
 		IcebergPartitionSpecField field;
 		field.transform = transform;
 		field.source_id = source_id;
 		field.partition_field_id = base_partition_field_id + new_spec.fields.size();
-		// transform field names cannot be the column name. Otherwise Lakekeeper complains
-		field.SetPartitionSpecFieldName(column_name);
+		field.SetPartitionSpecFieldName(schema.GetFullColumnName(source_id));
 		new_spec.fields.push_back(std::move(field));
 	}
+	return new_spec;
+}
+
+IcebergPartitionSpec IcebergTable::BuildPartitionSpec(const vector<unique_ptr<ParsedExpression>> &partition_keys,
+                                                      const IcebergTableSchema &schema, int32_t spec_id,
+                                                      idx_t base_partition_field_id) {
+	auto new_spec = BuildPartitionSpecFields(partition_keys, schema, spec_id, base_partition_field_id);
+	new_spec.FinalizeFieldNames(schema, base_partition_field_id);
 
 	return new_spec;
 }
@@ -588,10 +594,11 @@ void IcebergTable::SetPartitionedBy(IcebergTransaction &transaction,
                                     const vector<unique_ptr<ParsedExpression>> &partition_keys,
                                     const IcebergTableSchema &schema) {
 	auto &metadata = GetMetadataMutable();
-	auto base_partition_field_id = GetNextPartitionFieldId();
+	const auto first_new_field_id = GetNextPartitionFieldId();
+	auto next_partition_field_id = first_new_field_id;
 	auto new_spec_id = static_cast<int32_t>(GetNextPartitionSpecId());
 
-	auto new_spec = BuildPartitionSpec(partition_keys, schema, new_spec_id, base_partition_field_id);
+	auto new_spec = BuildPartitionSpecFields(partition_keys, schema, new_spec_id, first_new_field_id);
 	// V2+ tracks partition field IDs across specs, allowing equivalent historical fields to reuse IDs.
 	// V1 did not require explicit field IDs: they were assigned by position starting at 1000 in each spec.
 	// Its evolution rules preserve positions (using void transforms for removed fields), so the reference
@@ -620,10 +627,11 @@ void IcebergTable::SetPartitionedBy(IcebergTransaction &transaction,
 			if (existing_field) {
 				field = *existing_field;
 			} else {
-				field.partition_field_id = base_partition_field_id++;
+				field.partition_field_id = next_partition_field_id++;
 			}
 		}
 	}
+	new_spec.FinalizeFieldNames(schema, first_new_field_id);
 
 	// if spec definition already exists in a previous spec definition, set it to that spec id
 	// (some catalog may allow duplicate definitions, others not)

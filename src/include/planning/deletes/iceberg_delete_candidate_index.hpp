@@ -11,6 +11,8 @@ class IcebergDeleteCandidateIndex {
 public:
 	IcebergDeleteCandidateIndex(ClientContext &context, vector<IcebergManifestEntry> entries,
 	                            const IcebergPartitionSpec &spec);
+	IcebergDeleteCandidateIndex(ClientContext &context, shared_ptr<const vector<IcebergManifestEntry>> entries,
+	                            const IcebergPartitionSpec &spec);
 	~IcebergDeleteCandidateIndex();
 
 	//! At most three borrowed buckets: original referenced path, partition and fallback.
@@ -18,14 +20,16 @@ public:
 	vector<reference<const vector<idx_t>>> Lookup(const string &original_data_path, int32_t data_spec_id,
 	                                              const partition_value_map_t &partition_values) const;
 	const vector<IcebergManifestEntry> &Entries() const {
-		return entries;
+		return *entries;
 	}
+	//! Frozen index allocations only; the payload accounts for the shared entries.
+	idx_t EstimatedIndexMemory() const;
 
 private:
 	struct PartitionIndex;
 	bool TryPartitionKey(const partition_value_map_t &values, vector<Value> &key) const;
 
-	vector<IcebergManifestEntry> entries;
+	shared_ptr<const vector<IcebergManifestEntry>> entries;
 	int32_t spec_id;
 	vector<uint64_t> partition_fields;
 	vector<LogicalType> partition_types;

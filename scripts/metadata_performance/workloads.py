@@ -1,4 +1,4 @@
-"""Shape-checked SQL workloads for #1654 and #1721; no catalog configuration."""
+"""Shape-checked SQL workloads for #1500, #1654 and #1721; no catalog configuration."""
 
 import datetime as dt
 from dataclasses import dataclass
@@ -136,3 +136,18 @@ def manifest_setup(entries, table):
 def manifest_case(table):
     return f"""SELECT count(*) AS result FROM {table} WHERE k='k7'
         AND ts >= TIMESTAMP '2026-01-01' AND ts < TIMESTAMP '2026-01-02'"""
+
+
+def wide_manifest_setup(entries, table):
+    # #1500: one manifest, 101 statistics-bearing columns, 100 rows per file.
+    columns = ",".join(f"c{i} BIGINT" for i in range(1, 101))
+    values = ",".join(f"range+{i}" for i in range(1, 101))
+    yield f"""CREATE TABLE {table} (p INTEGER, {columns}) PARTITIONED BY (p)
+        WITH ('commit.manifest-merge.enabled'='false')"""
+    yield f"INSERT INTO {table} SELECT range % {entries}, {values} FROM range({entries * 100})"
+
+
+def wide_manifest_case(table):
+    # c1 is not a partition column: the manifest survives pruning, while each
+    # data file's lower bound excludes it. No Parquet file needs to be read.
+    return f"SELECT count(*) AS result FROM {table} WHERE c1 < 0"
