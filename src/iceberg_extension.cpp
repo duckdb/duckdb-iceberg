@@ -25,6 +25,7 @@
 #include "catalog/rest/storage/iceberg_table_secret_provider.hpp"
 #include "common/iceberg_utils.hpp"
 #include "iceberg_logging.hpp"
+#include "iceberg_profile_metrics.hpp"
 #include "iceberg_attach.hpp"
 #include "iceberg_options.hpp"
 #include "common/iceberg_default.hpp"
@@ -223,6 +224,7 @@ static void LoadInternal(ExtensionLoader &loader) {
 	auto &log_manager = instance.GetLogManager();
 	log_manager.RegisterLogType(make_uniq<IcebergLogType>());
 	log_manager.RegisterLogType(make_uniq<IcebergDataFileWrittenLogType>());
+	IcebergProfileMetrics::Register(loader);
 	StorageExtension::Register(config, "iceberg", make_shared_ptr<IRCStorageExtension>());
 	PlannerExtension::Register(config, IcebergPlanner::Create());
 }
