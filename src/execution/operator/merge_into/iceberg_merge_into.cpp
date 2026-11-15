@@ -68,7 +68,7 @@ PhysicalOperator &IcebergCatalog::PlanMergeInto(ClientContext &context, Physical
 	if (update_delete_count > 0) {
 		auto &table_entry = op.table.Cast<IcebergTableSchemaVersion>();
 		auto &updated_table = irc_transaction.GetOrCreateAlter().GetOrInitializeTable(table_entry.table_info);
-		auto &table_metadata = updated_table.table_metadata;
+		auto &table_metadata = updated_table.GetMetadata();
 		//! As for DELETE and UPDATE, a V3 table refuses a copy-on-write mode below
 		if (table_metadata.iceberg_version == 2 && table_metadata.UsesCopyOnWrite(WRITE_MERGE_MODE) &&
 		    !op.return_chunk) {

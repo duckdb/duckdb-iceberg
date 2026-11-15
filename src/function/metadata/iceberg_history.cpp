@@ -27,14 +27,14 @@ static unordered_set<int64_t> GetCurrentAncestors(const IcebergTableMetadata &me
 
 struct IcebergHistoryBindData : public TableFunctionData {
 	IcebergHistoryBindData() {};
-	IcebergTableMetadata metadata {IcebergTableMetadataSchemas {}};
+	shared_ptr<const IcebergTableMetadata> metadata;
 };
 
 struct IcebergHistoryGlobalState : public GlobalTableFunctionState {
 	static unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionInitInput &input) {
 		auto &bind_data = input.bind_data->Cast<IcebergHistoryBindData>();
 		auto global_state = make_uniq<IcebergHistoryGlobalState>();
-		global_state->current_ancestors = GetCurrentAncestors(bind_data.metadata);
+		global_state->current_ancestors = GetCurrentAncestors(*bind_data.metadata);
 		return std::move(global_state);
 	}
 
@@ -69,7 +69,7 @@ static void IcebergHistoryFunction(ClientContext &context, TableFunctionInput &d
 	auto &bind_data = data.bind_data->Cast<IcebergHistoryBindData>();
 	auto &global_state = data.global_state->Cast<IcebergHistoryGlobalState>();
 
-	auto &metadata = bind_data.metadata;
+	auto &metadata = *bind_data.metadata;
 	auto &snapshot_log = metadata.snapshot_log;
 
 	idx_t count = 0;

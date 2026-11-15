@@ -119,7 +119,8 @@ unique_ptr<IcebergScanPlanProvider> IcebergScanPlanProvider::Create(IcebergScanP
 						table_info.LoadCredentials(context.context, table_info.GetVendedCredentials(
 						                                                context.context, plan.storage_credentials));
 					}
-					provider = make_uniq<ServerSideScanPlanProvider>(std::move(plan));
+					provider =
+					    make_uniq<ServerSideScanPlanProvider>(std::move(plan), context.metadata, context.context);
 				}
 			} catch (std::exception &ex) {
 				ErrorData error(ex);

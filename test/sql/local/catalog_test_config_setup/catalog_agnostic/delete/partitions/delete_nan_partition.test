@@ -1,0 +1,76 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/partitions/delete_nan_partition.test
+# description: Deletes in a NaN identity partition apply when their delete manifest also covers non-NaN partitions
+# group: [partitions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+# ---- DOUBLE: one DELETE writes one delete manifest for the 2.0 and NaN partitions ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_delete_nan_double;
+
+statement ok
+CREATE TABLE my_datalake.default.test_delete_nan_double (x DOUBLE, id INT) PARTITIONED BY (x);
+
+statement ok
+INSERT INTO my_datalake.default.test_delete_nan_double VALUES
+    (1.0, 1), (2.0, 2), ('nan'::DOUBLE, 3), ('nan'::DOUBLE, 4);
+
+statement ok
+DELETE FROM my_datalake.default.test_delete_nan_double WHERE id IN (2, 3);
+
+# the summary bounds of the delete manifest are [2.0, 2.0] and leave the NaN partition out
+query II
+SELECT content, partition_summaries FROM iceberg_manifests(my_datalake.default.test_delete_nan_double) ORDER BY ALL;
+----
+0	[{'contains_null': false, 'contains_nan': true, 'lower_bound': 1.0, 'upper_bound': 2.0}]
+1	[{'contains_null': false, 'contains_nan': true, 'lower_bound': 2.0, 'upper_bound': 2.0}]
+
+query II
+SELECT x, id FROM my_datalake.default.test_delete_nan_double ORDER BY id;
+----
+1.0	1
+nan	4
+
+query I
+SELECT count(*) FROM my_datalake.default.test_delete_nan_double WHERE isnan(x);
+----
+1
+
+# a later delete outside the NaN partition leaves the NaN row in place
+statement ok
+DELETE FROM my_datalake.default.test_delete_nan_double WHERE id = 1;
+
+query II
+SELECT x, id FROM my_datalake.default.test_delete_nan_double ORDER BY id;
+----
+nan	4
+
+statement ok
+DROP TABLE my_datalake.default.test_delete_nan_double;
+
+# ---- FLOAT ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_delete_nan_float;
+
+statement ok
+CREATE TABLE my_datalake.default.test_delete_nan_float (x FLOAT, id INT) PARTITIONED BY (x);
+
+statement ok
+INSERT INTO my_datalake.default.test_delete_nan_float VALUES
+    (1.0, 1), (2.0, 2), ('nan'::FLOAT, 3), ('nan'::FLOAT, 4);
+
+statement ok
+DELETE FROM my_datalake.default.test_delete_nan_float WHERE id IN (2, 3);
+
+query II
+SELECT x, id FROM my_datalake.default.test_delete_nan_float ORDER BY id;
+----
+1.0	1
+nan	4
+
+statement ok
+DROP TABLE my_datalake.default.test_delete_nan_float;

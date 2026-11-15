@@ -55,3 +55,60 @@ query II
 explain analyze select * from scan where nested.data = '10.9'::decimal(10,2);
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 1\s+.*
+
+# Filters on truncate-partitioned DECIMAL columns of every physical storage type
+# (INT16, INT32, INT64, INT128) must read the unscaled value correctly.
+# truncate(50): 10.65 / 10.75 -> 10.50, 10.49 / 10.10 -> 10.00, -0.01 -> -0.50
+
+foreach dtype decimal(4,2) decimal(9,2) decimal(18,2) decimal(38,2)
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.truncate_partitioned_decimal_widths;
+
+statement ok
+CREATE TABLE my_datalake.default.truncate_partitioned_decimal_widths (
+    id INTEGER,
+    c {dtype}
+)
+PARTITIONED BY (truncate(50, c)) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.truncate_partitioned_decimal_widths
+VALUES
+    (1, '10.65'::{dtype}),
+    (2, '10.49'::{dtype}),
+    (3, '10.75'::{dtype}),
+    (4, '10.10'::{dtype}),
+    (5, '-0.01'::{dtype}),
+    (6, NULL);
+
+query I
+select id from my_datalake.default.truncate_partitioned_decimal_widths where c = '10.65'::{dtype};
+----
+1
+
+query II
+explain analyze select * from my_datalake.default.truncate_partitioned_decimal_widths where c = '10.65'::{dtype};
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1\s+.*
+
+query I
+select id from my_datalake.default.truncate_partitioned_decimal_widths where c >= '10.50'::{dtype} order by id;
+----
+1
+3
+
+query II
+explain analyze select * from my_datalake.default.truncate_partitioned_decimal_widths where c >= '10.50'::{dtype};
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1\s+.*
+
+query I
+select id from my_datalake.default.truncate_partitioned_decimal_widths where c < '0'::{dtype};
+----
+5
+
+statement ok
+DROP TABLE my_datalake.default.truncate_partitioned_decimal_widths;
+
+endloop

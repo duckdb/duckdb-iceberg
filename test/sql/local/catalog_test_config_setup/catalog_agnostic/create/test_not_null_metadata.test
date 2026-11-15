@@ -1,0 +1,202 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_not_null_metadata.test
+# description: required Iceberg columns are reported as NOT NULL by DESCRIBE, information_schema and duckdb_constraints()
+# group: [create]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+use my_datalake.default;
+
+statement ok
+drop table if exists not_null_metadata_t;
+
+statement ok
+create table not_null_metadata_t (a int NOT NULL, b int, c varchar NOT NULL);
+
+query II
+SELECT column_name, "null" FROM (DESCRIBE not_null_metadata_t);
+----
+a	NO
+b	YES
+c	NO
+
+query II
+SELECT column_name, is_nullable FROM information_schema.columns
+WHERE table_catalog = 'my_datalake' AND table_name = 'not_null_metadata_t' ORDER BY ordinal_position;
+----
+a	NO
+b	YES
+c	NO
+
+query II
+SELECT constraint_type, constraint_column_names FROM duckdb_constraints()
+WHERE database_name = 'my_datalake' AND table_name = 'not_null_metadata_t' ORDER BY constraint_column_names;
+----
+NOT NULL	[a]
+NOT NULL	[c]
+
+# LogicalIndex identifies a column; NOT NULL must not create a storage index.
+query I
+SELECT count(*) FROM duckdb_indexes()
+WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'not_null_metadata_t';
+----
+0
+
+query II
+SELECT index_count, has_primary_key FROM duckdb_tables()
+WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'not_null_metadata_t';
+----
+0	false
+
+# Writes still enforce the constraint
+statement error
+insert into not_null_metadata_t values (NULL, 1, 'x');
+----
+<REGEX>:.*NOT NULL constraint failed.*not_null_metadata_t.a.*
+
+# Required columns still accept duplicates.
+statement ok
+insert into not_null_metadata_t values (1, NULL, 'x'), (1, NULL, 'x');
+
+statement error
+UPDATE not_null_metadata_t SET c = NULL;
+----
+<REGEX>:.*NOT NULL constraint failed.*not_null_metadata_t.c.*
+
+query I
+SELECT count(*) FROM not_null_metadata_t WHERE a = 1 AND b IS NULL AND c = 'x';
+----
+2
+
+# Renaming a required column keeps it NOT NULL
+statement ok
+ALTER TABLE not_null_metadata_t RENAME COLUMN c TO c2;
+
+query II
+SELECT column_name, "null" FROM (DESCRIBE not_null_metadata_t);
+----
+a	NO
+b	YES
+c2	NO
+
+# A rolled-back schema change must restore the catalog's NOT NULL metadata.
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE not_null_metadata_t ALTER COLUMN a DROP NOT NULL;
+
+query II
+SELECT column_name, is_nullable FROM information_schema.columns
+WHERE table_catalog = 'my_datalake' AND table_schema = 'default' AND table_name = 'not_null_metadata_t'
+ORDER BY ordinal_position;
+----
+a	YES
+b	YES
+c2	NO
+
+query I
+SELECT constraint_column_names FROM duckdb_constraints()
+WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'not_null_metadata_t';
+----
+[c2]
+
+query II
+SELECT column_name, "null" FROM (DESCRIBE not_null_metadata_t);
+----
+a	YES
+b	YES
+c2	NO
+
+statement ok
+ROLLBACK;
+
+query II
+SELECT column_name, "null" FROM (DESCRIBE not_null_metadata_t);
+----
+a	NO
+b	YES
+c2	NO
+
+# DROP NOT NULL makes the column nullable in the metadata too
+statement ok
+ALTER TABLE not_null_metadata_t ALTER COLUMN a DROP NOT NULL;
+
+query II
+SELECT column_name, "null" FROM (DESCRIBE not_null_metadata_t);
+----
+a	YES
+b	YES
+c2	NO
+
+# Dropping the column before a required column keeps the constraint on the right column
+statement ok
+ALTER TABLE not_null_metadata_t DROP COLUMN a;
+
+query II
+SELECT column_name, "null" FROM (DESCRIBE not_null_metadata_t);
+----
+b	YES
+c2	NO
+
+query I
+SELECT constraint_column_names FROM duckdb_constraints()
+WHERE database_name = 'my_datalake' AND table_name = 'not_null_metadata_t';
+----
+[c2]
+
+# Removing the last constraint leaves no stale NOT NULL metadata.
+statement ok
+ALTER TABLE not_null_metadata_t ALTER COLUMN c2 DROP NOT NULL;
+
+query II
+SELECT column_name, "null" FROM (DESCRIBE not_null_metadata_t);
+----
+b	YES
+c2	YES
+
+query I
+SELECT count(*) FROM duckdb_constraints()
+WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'not_null_metadata_t';
+----
+0
+
+statement ok
+INSERT INTO not_null_metadata_t VALUES (NULL, NULL);
+
+query I
+SELECT count(*) FROM not_null_metadata_t WHERE b IS NULL AND c2 IS NULL;
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_indexes()
+WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'not_null_metadata_t';
+----
+0
+
+statement ok
+BEGIN;
+
+statement ok
+DROP TABLE not_null_metadata_t;
+
+query I
+SELECT count(*) FROM information_schema.columns
+WHERE table_catalog = 'my_datalake' AND table_schema = 'default' AND table_name = 'not_null_metadata_t';
+----
+0
+
+statement ok
+ROLLBACK;
+
+query II
+SELECT column_name, "null" FROM (DESCRIBE not_null_metadata_t);
+----
+b	YES
+c2	YES
+
+statement ok
+drop table not_null_metadata_t;

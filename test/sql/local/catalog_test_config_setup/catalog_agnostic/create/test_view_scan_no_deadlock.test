@@ -37,7 +37,7 @@ statement ok
 insert into deadlock_test_table values (1, 'alice'), (2, 'bob');
 
 statement ok
-create view deadlock_test_view as select id, name from deadlock_test_table where id > 0;
+create view deadlock_test_view as select id, name from my_datalake.default.deadlock_test_table where id > 0;
 
 # Restarting reruns the selected catalog's on_init and clears the view cache.
 # Views remain in the REST catalog, so scanning must load them again.

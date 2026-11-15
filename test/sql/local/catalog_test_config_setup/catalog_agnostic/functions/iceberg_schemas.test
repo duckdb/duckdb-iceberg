@@ -1,0 +1,68 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/functions/iceberg_schemas.test
+# description: iceberg_schemas on a catalog table follows schema evolution and shows column comments as 'doc'
+# group: [functions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.iceberg_schemas_evolution;
+
+statement ok
+CREATE TABLE my_datalake.default.iceberg_schemas_evolution (id INTEGER, name VARCHAR);
+
+# one schema, and it is the current one
+# ('doc IS NULL' rather than a bare 'doc', so a SQL NULL can't be mistaken for the string 'NULL')
+query IIIIIII
+SELECT schema_id, name, field_id, type, required, doc IS NULL, is_current
+FROM iceberg_schemas(my_datalake.default.iceberg_schemas_evolution);
+----
+0	id	1	INTEGER	false	true	true
+0	name	2	VARCHAR	false	true	true
+
+statement ok
+ALTER TABLE my_datalake.default.iceberg_schemas_evolution ADD COLUMN amount DECIMAL(15,2);
+
+# ADD COLUMN creates schema 1, which becomes the current one; schema 0 is kept unchanged
+query IIIIIII
+SELECT schema_id, name, field_id, type, required, doc IS NULL, is_current
+FROM iceberg_schemas(my_datalake.default.iceberg_schemas_evolution);
+----
+0	id	1	INTEGER	false	true	false
+0	name	2	VARCHAR	false	true	false
+1	id	1	INTEGER	false	true	true
+1	name	2	VARCHAR	false	true	true
+1	amount	3	DECIMAL(15,2)	false	true	true
+
+statement ok
+COMMENT ON COLUMN my_datalake.default.iceberg_schemas_evolution.name IS 'comment';
+
+# the comment is stored as the field's 'doc' in the current schema, the other fields have no doc
+query III
+SELECT name, doc, doc IS NULL
+FROM iceberg_schemas(my_datalake.default.iceberg_schemas_evolution)
+WHERE is_current
+ORDER BY field_id;
+----
+id	NULL	true
+name	comment	false
+amount	NULL	true
+
+query I
+SELECT count(*)
+FROM iceberg_schemas(my_datalake.default.iceberg_schemas_evolution)
+WHERE is_current AND name = 'name' AND doc = 'comment';
+----
+1
+
+# the older schemas are unchanged: no field has a doc there
+query I
+SELECT count(*)
+FROM iceberg_schemas(my_datalake.default.iceberg_schemas_evolution)
+WHERE NOT is_current AND doc IS NOT NULL;
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.iceberg_schemas_evolution;

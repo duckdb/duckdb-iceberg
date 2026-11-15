@@ -97,7 +97,7 @@ static void IcebergRollbackToSnapshotFunction(ClientContext &context, TableFunct
 
 	auto iceberg_table = bind_data.iceberg_table;
 	auto &table_info = iceberg_table->table_info;
-	auto previous_snapshot = table_info.table_metadata.GetLatestSnapshot();
+	auto previous_snapshot = table_info.GetMetadata().GetLatestSnapshot();
 	int64_t previous_snapshot_id = 0;
 	if (previous_snapshot) {
 		previous_snapshot_id = previous_snapshot->snapshot_id;

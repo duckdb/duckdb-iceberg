@@ -18,7 +18,7 @@ DuckLakePartitionColumn::DuckLakePartitionColumn(const IcebergPartitionSpecField
 	}
 	case IcebergTransformType::BUCKET:
 	case IcebergTransformType::TRUNCATE:
-	case IcebergTransformType::VOID:
+	case IcebergTransformType::VOID_TRANSFORM:
 	default:
 		throw InvalidInputException("This type of transform (%s) can not be translated to DuckLake",
 		                            field.transform.RawType());

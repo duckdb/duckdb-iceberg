@@ -1,0 +1,136 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/partitioned_reads/truncate/truncate_decimal_boundaries.test
+# description: Decimal truncate pruning preserves signed unscaled values and scale at partition boundaries
+# group: [truncate]
+
+include test/sql/init_requires
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+# Each triple differs by one unscaled unit, with the middle value divisible by 50.
+# Cover INT16/INT32/INT64 near their maximum decimal precision, INT128 just beyond
+# BIGINT, and full 38-digit INT128 values at both small and large scales.
+# Leave room for the negative partition key to round down within that precision.
+foreach precision,scale,below,boundary,above 4,0,9899,9900,9901 9,4,99999.9899,99999.9900,99999.9901 18,6,999999999999.999899,999999999999.999900,999999999999.999901 19,0,9223372036854775849,9223372036854775850,9223372036854775851 38,2,123456789012345678901234567890123456.49,123456789012345678901234567890123456.50,123456789012345678901234567890123456.51 38,18,12345678901234567890.123456789012345649,12345678901234567890.123456789012345650,12345678901234567890.123456789012345651
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.truncate_decimal_boundaries;
+
+# Disable column metrics so the file-count assertions require partition pruning.
+statement ok
+CREATE TABLE my_datalake.default.truncate_decimal_boundaries (
+	id INTEGER,
+	c DECIMAL({precision},{scale})
+)
+PARTITIONED BY (truncate(50, c))
+WITH ('format-version' = '2', 'write.metadata.metrics.default' = 'none');
+
+statement ok
+INSERT INTO my_datalake.default.truncate_decimal_boundaries VALUES
+	(1, '{below}'::DECIMAL({precision},{scale})),
+	(2, '{boundary}'::DECIMAL({precision},{scale})),
+	(3, '{above}'::DECIMAL({precision},{scale})),
+	(4, '-{below}'::DECIMAL({precision},{scale})),
+	(5, '-{boundary}'::DECIMAL({precision},{scale})),
+	(6, '-{above}'::DECIMAL({precision},{scale})),
+	(7, NULL);
+
+query I
+SELECT count(*) FROM my_datalake.default.truncate_decimal_boundaries;
+----
+7
+
+query II
+EXPLAIN ANALYZE SELECT * FROM my_datalake.default.truncate_decimal_boundaries;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 5\s+.*
+
+query I
+SELECT id FROM my_datalake.default.truncate_decimal_boundaries WHERE c = '{below}'::DECIMAL({precision},{scale});
+----
+1
+
+query I
+SELECT id FROM my_datalake.default.truncate_decimal_boundaries WHERE c = '{boundary}'::DECIMAL({precision},{scale});
+----
+2
+
+query I
+SELECT id FROM my_datalake.default.truncate_decimal_boundaries WHERE c = '{above}'::DECIMAL({precision},{scale});
+----
+3
+
+query II
+EXPLAIN ANALYZE SELECT * FROM my_datalake.default.truncate_decimal_boundaries WHERE c = '{above}'::DECIMAL({precision},{scale});
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1\s+.*
+
+# Negative values round down, so -below and -boundary share a partition, while
+# -above belongs to the preceding partition. Equality must retain each row.
+query I
+SELECT id FROM my_datalake.default.truncate_decimal_boundaries WHERE c = '-{below}'::DECIMAL({precision},{scale});
+----
+4
+
+query II
+EXPLAIN ANALYZE SELECT * FROM my_datalake.default.truncate_decimal_boundaries WHERE c = '-{below}'::DECIMAL({precision},{scale});
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1\s+.*
+
+query I
+SELECT id FROM my_datalake.default.truncate_decimal_boundaries WHERE c = '-{boundary}'::DECIMAL({precision},{scale});
+----
+5
+
+query I
+SELECT id FROM my_datalake.default.truncate_decimal_boundaries WHERE c = '-{above}'::DECIMAL({precision},{scale});
+----
+6
+
+query II
+EXPLAIN ANALYZE SELECT * FROM my_datalake.default.truncate_decimal_boundaries WHERE c = '-{above}'::DECIMAL({precision},{scale});
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1\s+.*
+
+query I
+SELECT id FROM my_datalake.default.truncate_decimal_boundaries WHERE c > '{boundary}'::DECIMAL({precision},{scale});
+----
+3
+
+query I
+SELECT id FROM my_datalake.default.truncate_decimal_boundaries WHERE c >= '{boundary}'::DECIMAL({precision},{scale}) ORDER BY id;
+----
+2
+3
+
+query I
+SELECT id FROM my_datalake.default.truncate_decimal_boundaries WHERE c < '-{boundary}'::DECIMAL({precision},{scale});
+----
+6
+
+query I
+SELECT id FROM my_datalake.default.truncate_decimal_boundaries WHERE c <= '-{boundary}'::DECIMAL({precision},{scale}) ORDER BY id;
+----
+5
+6
+
+# Strict comparisons inside a truncated partition must still scan that partition.
+query I
+SELECT id FROM my_datalake.default.truncate_decimal_boundaries WHERE c > '-{boundary}'::DECIMAL({precision},{scale}) AND c < 0;
+----
+4
+
+query I
+SELECT id FROM my_datalake.default.truncate_decimal_boundaries WHERE c BETWEEN '-{boundary}'::DECIMAL({precision},{scale}) AND '-{below}'::DECIMAL({precision},{scale}) ORDER BY id;
+----
+4
+5
+
+query I
+SELECT id FROM my_datalake.default.truncate_decimal_boundaries WHERE c IS NULL;
+----
+7
+
+statement ok
+DROP TABLE my_datalake.default.truncate_decimal_boundaries;
+
+endloop

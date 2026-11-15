@@ -15,16 +15,20 @@
 
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
+#include "planning/iceberg_file_secret.hpp"
 
 namespace duckdb {
 
 struct IcebergResolvedMetadata {
-	IcebergResolvedMetadata(string table_location_p, IcebergTableMetadata metadata_p)
-	    : table_location(std::move(table_location_p)), metadata(std::move(metadata_p)) {
+	IcebergResolvedMetadata(string table_location_p, shared_ptr<const IcebergTableMetadata> metadata_p,
+	                        IcebergFileSecret file_secret_p = {})
+	    : table_location(std::move(table_location_p)), metadata(std::move(metadata_p)),
+	      file_secret(std::move(file_secret_p)) {
 	}
 
 	string table_location;
-	IcebergTableMetadata metadata;
+	shared_ptr<const IcebergTableMetadata> metadata;
+	IcebergFileSecret file_secret;
 };
 
 class IcebergUtils {

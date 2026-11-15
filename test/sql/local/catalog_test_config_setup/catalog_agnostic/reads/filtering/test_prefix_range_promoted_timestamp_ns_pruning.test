@@ -1,0 +1,89 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_prefix_range_promoted_timestamp_ns_pruning.test
+# description: DATE to TIMESTAMP_NS pruning preserves pre-epoch endpoints and nanosecond precision
+# group: [filtering]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SCAN_PLANNING_MODE client
+
+require-env FORMAT_V3_SUPPORT
+
+require-env TIMESTAMP_NS_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+SET threads=1;
+
+statement ok
+SET dynamic_or_filter_threshold=0;
+
+statement ok
+CALL enable_logging('Iceberg');
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.prf_promoted_timestamp_ns;
+
+statement ok
+CREATE TABLE my_datalake.default.prf_promoted_timestamp_ns (d DATE) WITH ('format-version'='3');
+
+statement ok
+INSERT INTO my_datalake.default.prf_promoted_timestamp_ns
+SELECT DATE '1960-01-01' - range::INTEGER FROM range(10)
+UNION ALL SELECT NULL;
+
+statement ok
+INSERT INTO my_datalake.default.prf_promoted_timestamp_ns
+SELECT DATE '2000-01-01' + range::INTEGER FROM range(10);
+
+statement ok
+ALTER TABLE my_datalake.default.prf_promoted_timestamp_ns ALTER d TYPE TIMESTAMP_NS;
+
+statement ok
+INSERT INTO my_datalake.default.prf_promoted_timestamp_ns
+SELECT make_timestamp_ns(epoch_ns(TIMESTAMP '1960-01-01') + range + 1) FROM range(10);
+
+# A ten-nanosecond key span selects a prefix-range filter instead of a Bloom filter.
+statement ok
+CREATE TEMP TABLE prf_timestamp_ns_keys AS
+SELECT unnest([
+	'1960-01-01'::TIMESTAMP_NS,
+	'1960-01-01 00:00:00.000000001'::TIMESTAMP_NS,
+	'1960-01-01 00:00:00.000000010'::TIMESTAMP_NS,
+	NULL
+]) AS d;
+
+statement ok
+SET disabled_optimizers='join_filter_pushdown';
+
+query I
+SELECT t.d FROM my_datalake.default.prf_promoted_timestamp_ns t
+JOIN prf_timestamp_ns_keys s USING (d) ORDER BY t.d;
+----
+1960-01-01 00:00:00
+1960-01-01 00:00:00.000000001
+1960-01-01 00:00:00.00000001
+
+statement ok
+SET disabled_optimizers='';
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT t.d FROM my_datalake.default.prf_promoted_timestamp_ns t
+JOIN prf_timestamp_ns_keys s USING (d) ORDER BY t.d;
+----
+1960-01-01 00:00:00
+1960-01-01 00:00:00.000000001
+1960-01-01 00:00:00.00000001
+
+# The nonmatching DATE file is still pruned after converting its bounds to nanoseconds.
+query I
+SELECT count(DISTINCT message) FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE '%skipped ''data_file''%' AND message LIKE '%IN PRF%';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.prf_promoted_timestamp_ns;

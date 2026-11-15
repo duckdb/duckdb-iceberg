@@ -34,7 +34,7 @@ statement ok
 insert into vm_base values (1, 'x'), (2, 'y');
 
 statement ok
-create view vm_view as select a, b from vm_base where a > 0;
+create view vm_view as select a, b from my_datalake.default.vm_base where a > 0;
 
 # iceberg_view_metadata returns exactly one row
 query I

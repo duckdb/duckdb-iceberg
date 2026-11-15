@@ -1,0 +1,350 @@
+# name: test/sql/local/native_catalog/load_table_etag.test
+# description: Revalidate cached LoadTable responses with opaque HTTP ETags
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+require-env STAGED_CREATE_SUPPORT
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+ATTACH OR REPLACE '' AS my_datalake (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none', TABLE_RESOLUTION 'eager', STAGE_CREATE_TABLES true);
+
+statement ok
+CREATE TABLE my_datalake.default.etag_table AS SELECT 1 AS id;
+
+statement ok
+SET VARIABLE original_response = (
+	SELECT body::JSON FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/etag_table', NULL)
+);
+
+statement ok
+CREATE MACRO etag_response(payload, headers := '{}'::JSON, status_code := 200) AS TABLE
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	json_object('method', 'GET', 'path', '/v1/namespaces/default/tables/etag_table',
+		'status', status_code, 'body', payload::JSON, 'headers', headers::JSON)::VARCHAR);
+
+# LoadTable revalidation precedes scan planning. These log assertions do not
+# depend on client-side pruning or scan-planning requests.
+statement ok
+CALL enable_logging(['HTTP', 'Iceberg'], storage='memory');
+
+statement ok
+SET redact_http_logs = false;
+
+# Header names are case insensitive; opaque tag values retain quotes and case.
+query I
+SELECT * FROM etag_response(getvariable('original_response'), headers := '{"eTaG":"\"Version-A\""}');
+----
+204
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT id FROM my_datalake.default.etag_table;
+----
+1
+
+query I
+SELECT request.headers['If-None-Match'] IS NULL
+FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%/tables/etag_table';
+----
+true
+
+# No MAX_TABLE_STALENESS is set. Each new transaction revalidates, and a 304
+# with an empty body reuses the exact response that supplied the validator.
+query I
+SELECT * FROM etag_response(NULL, status_code := 304);
+----
+204
+
+statement ok
+CALL truncate_duckdb_logs();
+
+loop i 0 2
+
+query I
+SELECT id FROM my_datalake.default.etag_table;
+----
+1
+
+endloop
+
+query II
+SELECT request.headers['If-None-Match'], response.reason
+FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%/tables/etag_table' ORDER BY timestamp;
+----
+"Version-A"	Not Modified
+"Version-A"	Not Modified
+
+query I
+SELECT message FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE '%is unchanged%' ORDER BY timestamp;
+----
+Iceberg table 'my_datalake.default.etag_table' is unchanged (HTTP 304); reusing cached metadata
+Iceberg table 'my_datalake.default.etag_table' is unchanged (HTTP 304); reusing cached metadata
+
+# Prune the listing's resolved entry while retaining the response cache, then
+# report the table again. Eager listing must revalidate its new placeholder.
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	'{"method":"GET","path":"/v1/namespaces/default/tables","status":200,"body":{"identifiers":[]}}');
+----
+204
+
+query I
+SELECT count(*) FROM duckdb_columns() WHERE database_name = 'my_datalake' AND table_name = 'etag_table';
+----
+0
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	'{"method":"GET","path":"/v1/namespaces/default/tables","status":200,"body":{"identifiers":[{"namespace":["default"],"name":"etag_table"}]}}');
+----
+204
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT column_name FROM duckdb_columns() WHERE database_name = 'my_datalake' AND table_name = 'etag_table';
+----
+id
+
+query II
+SELECT request.headers['If-None-Match'], response.reason
+FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%/tables/etag_table';
+----
+"Version-A"	Not Modified
+
+# A validator returned on a 304 replaces the previous one, including weak tags.
+query I
+SELECT * FROM etag_response(NULL, headers := '{"ETag":"W/\"Version-B\""}', status_code := 304);
+----
+204
+
+query I
+SELECT id FROM my_datalake.default.etag_table;
+----
+1
+
+query I
+SELECT * FROM etag_response(NULL, status_code := 304);
+----
+204
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT id FROM my_datalake.default.etag_table;
+----
+1
+
+query I
+SELECT request.headers['If-None-Match']
+FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%/tables/etag_table';
+----
+W/"Version-B"
+
+# A separate attachment has no response to validate and must reject an unsolicited 304.
+statement ok
+ATTACH '' AS etag_fresh (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none');
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement error
+SELECT id FROM etag_fresh.default.etag_table;
+----
+LoadTable returned HTTP 304 without a cached response to revalidate
+
+query I
+SELECT count(*) FROM duckdb_logs() WHERE type = 'Iceberg' AND message LIKE '%is unchanged%';
+----
+0
+
+statement ok
+DETACH etag_fresh;
+
+# A 304 also renews MAX_TABLE_STALENESS, avoiding another request until expiry.
+query I
+SELECT * FROM etag_response(getvariable('original_response'), headers := '{"ETag":"\"Version-A\""}');
+----
+204
+
+statement ok
+ATTACH '' AS etag_cached (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none', MAX_TABLE_STALENESS '1 second');
+
+query I
+SELECT id FROM etag_cached.default.etag_table;
+----
+1
+
+query I
+SELECT * FROM etag_response(NULL, status_code := 304);
+----
+204
+
+sleep 1100 milliseconds
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT id FROM etag_cached.default.etag_table;
+----
+1
+
+query I
+SELECT id FROM etag_cached.default.etag_table;
+----
+1
+
+query II
+SELECT request.headers['If-None-Match'], response.reason
+FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%/tables/etag_table';
+----
+"Version-A"	Not Modified
+
+query I
+SELECT message FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE '%is unchanged%' ORDER BY timestamp;
+----
+Iceberg table 'etag_cached.default.etag_table' is unchanged (HTTP 304); reusing cached metadata
+
+statement ok
+DETACH etag_cached;
+
+# Make a genuinely changed response, then verify that HTTP 200 replaces the old
+# cached metadata even when a validator was sent.
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+statement ok
+INSERT INTO my_datalake.default.etag_table VALUES (2);
+
+statement ok
+SET VARIABLE changed_response = (
+	SELECT body::JSON FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/etag_table', NULL)
+);
+
+query I
+SELECT * FROM etag_response(getvariable('original_response'), headers := '{"ETag":"\"Version-A\""}');
+----
+204
+
+query I
+SELECT id FROM my_datalake.default.etag_table;
+----
+1
+
+query I
+SELECT * FROM etag_response(getvariable('changed_response'), headers := '{"ETag":"\"Version-C\""}');
+----
+204
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT id FROM my_datalake.default.etag_table ORDER BY id;
+----
+1
+2
+
+query II
+SELECT request.headers['If-None-Match'], response.reason
+FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%/tables/etag_table';
+----
+"Version-A"	OK
+
+query I
+SELECT count(*) FROM duckdb_logs() WHERE type = 'Iceberg' AND message LIKE '%is unchanged%';
+----
+0
+
+query I
+SELECT * FROM etag_response(NULL, status_code := 304);
+----
+204
+
+query I
+SELECT id FROM my_datalake.default.etag_table ORDER BY id;
+----
+1
+2
+
+# A full response without an ETag clears the old validator.
+query I
+SELECT * FROM etag_response(getvariable('changed_response'));
+----
+204
+
+query I
+SELECT count(*) FROM my_datalake.default.etag_table;
+----
+2
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT count(*) FROM my_datalake.default.etag_table;
+----
+2
+
+query I
+SELECT request.headers['If-None-Match'] IS NULL
+FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%/tables/etag_table';
+----
+true
+
+query I
+SELECT * FROM etag_response(NULL, status_code := 304);
+----
+204
+
+statement error
+SELECT id FROM my_datalake.default.etag_table;
+----
+LoadTable returned HTTP 304 without a cached response to revalidate
+
+# Permission errors must never be replaced by a previously cached success.
+query I
+SELECT * FROM etag_response(getvariable('changed_response'), headers := '{"ETag":"\"Version-C\""}');
+----
+204
+
+query I
+SELECT count(*) FROM my_datalake.default.etag_table;
+----
+2
+
+query I
+SELECT * FROM etag_response('{"error":{"message":"Access denied for ETag test","type":"ForbiddenException","code":403}}',
+	status_code := 403);
+----
+204
+
+statement error
+SELECT id FROM my_datalake.default.etag_table;
+----
+Access denied for ETag test
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+statement ok
+DROP TABLE my_datalake.default.etag_table;

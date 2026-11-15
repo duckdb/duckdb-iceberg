@@ -195,7 +195,7 @@ PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanUpdate(ClientContext &cont
 	auto match_column_count = match_plan.GetTypes().size();
 	vector<idx_t> match_row_id_indexes {match_column_count - 2, match_column_count - 1};
 
-	auto &columns = table.table_info.table_metadata.GetLatestSchema().columns;
+	auto &columns = table.table_info.GetMetadata().GetLatestSchema().columns;
 	if (op.columns.size() != columns.size()) {
 		throw InternalException(
 		    "Copy-on-write UPDATE: expected a new value for each of the %llu table columns, got %llu", columns.size(),
@@ -233,7 +233,7 @@ PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanRewrite(ClientContext &con
                                                               vector<idx_t> match_row_id_indexes,
                                                               vector<unique_ptr<Expression>> update_expressions,
                                                               shared_ptr<IcebergCopyOnWriteMergeRows> merge_rows) {
-	auto &metadata = table.table_info.table_metadata;
+	auto &metadata = table.table_info.GetMetadata();
 	if (metadata.iceberg_version >= 3) {
 		//! A V3 rewrite has to carry each kept row's _row_id and _last_updated_sequence_number into the new files
 		//! Pending rows may not have their final lineage yet, so carrying scan-time values is not sufficient.

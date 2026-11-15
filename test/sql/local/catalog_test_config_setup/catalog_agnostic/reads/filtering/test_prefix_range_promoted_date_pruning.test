@@ -1,0 +1,62 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_prefix_range_promoted_date_pruning.test
+# description: Prefix-range pruning reads the DATE bounds of files written before a V3 DATE to TIMESTAMP promotion as timestamps
+# group: [filtering]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SCAN_PLANNING_MODE client
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+SET threads=1;
+
+statement ok
+SET dynamic_or_filter_threshold=0;
+
+statement ok
+CALL enable_logging('Iceberg');
+
+# The first file keeps DATE bounds
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.prf_promoted_dates;
+
+statement ok
+CREATE TABLE my_datalake.default.prf_promoted_dates (d DATE) WITH ('format-version'='3');
+
+statement ok
+INSERT INTO my_datalake.default.prf_promoted_dates SELECT DATE '2020-01-01' + range::INTEGER FROM range(10);
+
+statement ok
+INSERT INTO my_datalake.default.prf_promoted_dates SELECT DATE '2030-01-01' + range::INTEGER FROM range(10);
+
+statement ok
+ALTER TABLE my_datalake.default.prf_promoted_dates ALTER COLUMN d TYPE TIMESTAMP;
+
+statement ok
+INSERT INTO my_datalake.default.prf_promoted_dates
+SELECT TIMESTAMP '2020-01-05' + INTERVAL (range + 1) MICROSECOND FROM range(10);
+
+# Keep the key span small enough to select a prefix-range filter rather than a Bloom filter.
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT t.d
+FROM my_datalake.default.prf_promoted_dates t
+JOIN (SELECT unnest([TIMESTAMP '2020-01-05', TIMESTAMP '2020-01-05 00:00:00.000003']) AS d) s USING (d)
+ORDER BY t.d;
+----
+2020-01-05 00:00:00
+2020-01-05 00:00:00.000003
+
+query I
+SELECT count(DISTINCT message) FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE '%skipped ''data_file''%' AND message LIKE '%IN PRF%';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.prf_promoted_dates;

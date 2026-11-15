@@ -15,4 +15,7 @@ void ValidateRewriteSnapshot(const RewritePlan &plan, const IcebergTable &table_
 //! Check both at bind time and again before staging the replacement snapshot.
 void ValidateRewriteTransaction(const IcebergTransactionData &transaction_data);
 
+//! Check the output row count against the selected files and applicable deletes before staging a rewrite.
+void ValidateRewrittenRowCount(const RewritePlan &plan, const vector<IcebergManifestEntry> &new_entries);
+
 } // namespace duckdb

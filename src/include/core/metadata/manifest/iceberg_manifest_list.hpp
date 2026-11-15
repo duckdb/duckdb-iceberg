@@ -1,5 +1,7 @@
 #pragma once
 
+#include "planning/iceberg_file_secret.hpp"
+
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/optional.hpp"
@@ -138,7 +140,8 @@ struct IcebergManifestFile : public IcebergManifest {
 	}
 
 	//! Resolve inherited identities against this file before moving entries into a replacement.
-	//! ADDED entries become EXISTING; explicit identities and previously DELETED entries are preserved.
+	//! ADDED entries become EXISTING and explicit identities are preserved. Previously DELETED entries are
+	//! dropped: a tombstone belongs only to the snapshot that deleted the file (Apache Iceberg semantics).
 	vector<IcebergManifestEntry> PrepareEntriesForRewrite(vector<IcebergManifestEntry> entries) const;
 
 	string manifest_path;
@@ -260,10 +263,11 @@ public:
 	static LogicalType FieldSummaryType();
 	static Value FieldSummaryFieldIds();
 	static void LoadManifestFiles(const IcebergSnapshotScanInfo &snapshot_info, const IcebergTableMetadata &metadata,
-	                              ClientContext &context, vector<IcebergManifestListEntry> &result);
+	                              ClientContext &context, vector<IcebergManifestListEntry> &result,
+	                              IcebergFileSecret file_secret = {});
 	static unique_ptr<IcebergManifestList> Load(const string &iceberg_path, const IcebergTableMetadata &metadata,
 	                                            const IcebergSnapshotScanInfo &snapshot_info, ClientContext &context,
-	                                            const IcebergOptions &options);
+	                                            const IcebergOptions &options, IcebergFileSecret file_secret = {});
 
 private:
 	string path;

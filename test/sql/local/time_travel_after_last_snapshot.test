@@ -35,8 +35,9 @@ SELECT count(*) FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/iceberg/l
 ----
 51793
 
-# Only a timestamp beyond the current time is rejected.
+# Only a timestamp beyond the current time is rejected. The future timestamp is
+# computed from 'now()', so the test does not expire on a fixed date.
 statement error
-SELECT count(*) FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE, snapshot_from_timestamp => TIMESTAMP '2027-01-01 00:00:00');
+SELECT count(*) FROM iceberg_scan('{WORKING_DIRECTORY}/data/persistent/iceberg/lineitem_iceberg', ALLOW_MOVED_PATHS=TRUE, snapshot_from_timestamp => now()::TIMESTAMP + INTERVAL 1 YEAR);
 ----
-<REGEX>:.*Can not time travel to '2027-01-01 00:00:00', it lies in the future.*
+<REGEX>:.*Can not time travel to '.*', it lies in the future.*

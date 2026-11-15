@@ -35,8 +35,12 @@ create table my_datalake.default.equality_delete_null_data_file_pruning (value i
 statement ok
 insert into my_datalake.default.equality_delete_null_data_file_pruning values (NULL), (0), (1);
 
-# The non-null key gives the delete file bounds [50, 50], disjoint from data bounds [0, 1].
-# The NULL key still matches the data file, so those bounds must not prune the equality delete.
+# Reuse the same delete statistics for a second data file, including its NULL row.
+statement ok
+insert into my_datalake.default.equality_delete_null_data_file_pruning values (NULL), (10), (11);
+
+# The non-null key gives the delete file bounds [50, 50], disjoint from both data files.
+# The NULL key still matches both files, so those bounds must not prune the equality delete.
 statement ok
 delete from my_datalake.default.equality_delete_null_data_file_pruning
 where value IS NULL or value = 50;
@@ -60,12 +64,12 @@ true	true	true
 statement ok
 call truncate_duckdb_logs();
 
-# The NULL row is deleted, proving the disjoint non-null bounds did not discard the equality delete.
+# Both NULL rows are deleted, including when the unusable delete bounds are cached.
 query II
 select count(*), sum(case when value is null then 1 else 0 end)
 from my_datalake.default.equality_delete_null_data_file_pruning;
 ----
-2	0
+4	0
 
 query I
 select count(*)

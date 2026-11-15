@@ -1,0 +1,93 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/scan_planning/scan_tasks_upgraded_v3.test
+# description: Scan tasks preserve a legacy snapshot after a table is upgraded from format v2 to v3
+# group: [scan_planning]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+require-env SNAPSHOT_HISTORY_SUPPORT
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+drop table if exists my_datalake.default.scan_tasks_upgraded_v3;
+
+statement ok
+create table my_datalake.default.scan_tasks_upgraded_v3(id integer, name varchar)
+with ('format-version'=2);
+
+statement ok
+insert into my_datalake.default.scan_tasks_upgraded_v3 values (1, 'a'), (2, 'b');
+
+statement ok
+alter table my_datalake.default.scan_tasks_upgraded_v3 set ('format-version'=3);
+
+statement ok
+alter table my_datalake.default.scan_tasks_upgraded_v3 add column score double;
+
+# The current snapshot is still the one written under v2. Plan and execute it
+# before any v3 snapshot assigns row IDs to its carried-forward data file.
+query III
+select count(*), sum(id), count(score)
+from my_datalake.default.scan_tasks_upgraded_v3;
+----
+2	3	0
+
+# Keep catalog-vended storage credentials alive from planning through task execution.
+statement ok
+begin;
+
+statement ok
+set variable upgraded_v2_tasks = (
+  select list(task)
+  from (select * from iceberg_scan_plan('my_datalake.default.scan_tasks_upgraded_v3')) task
+);
+
+query III
+select count(*), sum(id), count(score)
+from iceberg_scan_tasks(getvariable('upgraded_v2_tasks'));
+----
+2	3	0
+
+statement ok
+commit;
+
+# A snapshot written after the upgrade must have first-row-id, while the legacy
+# snapshot must remain unchanged.
+statement ok
+insert into my_datalake.default.scan_tasks_upgraded_v3 values (3, 'c', 3.5);
+
+statement ok
+begin;
+
+# iceberg_scan_plan exposes the current v3 metadata. The legacy v2 snapshot has no
+# first-row-id, while the snapshot written under v3 provides the positive control.
+query III
+select distinct metadata."format-version"::integer, s."sequence-number"::bigint, s."first-row-id" is null
+from iceberg_scan_plan('my_datalake.default.scan_tasks_upgraded_v3'),
+     unnest(metadata.snapshots::variant[]) as t(s)
+order by 2;
+----
+3	1	true
+3	2	false
+
+statement ok
+set variable upgraded_v3_tasks = (
+  select list(task)
+  from (select * from iceberg_scan_plan('my_datalake.default.scan_tasks_upgraded_v3')) task
+);
+
+query III
+select count(*), sum(id), count(score)
+from iceberg_scan_tasks(getvariable('upgraded_v3_tasks'));
+----
+3	6	1
+
+statement ok
+commit;
+
+statement ok
+drop table my_datalake.default.scan_tasks_upgraded_v3;

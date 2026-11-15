@@ -21,6 +21,11 @@ ifeq (${EQUALITY_DELETE_WRITES_ENABLED}, 1)
 	EXT_FLAGS:=${EXT_FLAGS} -DICEBERG_ENABLE_EQUALITY_DELETE_WRITES=1
 endif
 
+# CI runs slow tests in the dedicated catalog workflows.
+ifeq ($(GITHUB_ACTIONS),true)
+T ?= "test/*" "exclude:*.test_slow"
+endif
+
 # Include the Makefile from extension-ci-tools
 include extension-ci-tools/makefiles/duckdb_extension.Makefile
 

@@ -8,7 +8,7 @@
 namespace duckdb {
 
 void ValidateRewriteSnapshot(const RewritePlan &plan, const IcebergTable &table_info, const string &phase) {
-	auto snapshot = table_info.table_metadata.GetLatestSnapshot();
+	auto snapshot = table_info.GetMetadata().GetLatestSnapshot();
 	if (plan.starting_snapshot_id < 0) {
 		if (snapshot) {
 			throw CatalogException(
@@ -33,6 +33,21 @@ void ValidateRewriteTransaction(const IcebergTransactionData &transaction_data) 
 		throw NotImplementedException(
 		    "iceberg_rewrite_data_files: table '%s' has uncommitted changes in this transaction; commit them first",
 		    transaction_data.table_info.name);
+	}
+}
+
+void ValidateRewrittenRowCount(const RewritePlan &plan, const vector<IcebergManifestEntry> &new_entries) {
+	int64_t written = 0;
+	for (auto &entry : new_entries) {
+		written += entry.data_file.record_count;
+	}
+	auto selected = plan.selected_record_count;
+	auto at_least = plan.max_deleted_rows ? selected - *plan.max_deleted_rows : int64_t(0);
+	if (written > selected || written < at_least) {
+		throw CatalogException("iceberg_rewrite_data_files: the rewritten files hold %lld rows, but the %llu files "
+		                       "selected hold %lld rows before deletes and at least %lld after them, so the rewrite "
+		                       "would change the table's data; nothing was committed",
+		                       written, plan.selected_candidates.size(), selected, MaxValue<int64_t>(at_least, 0));
 	}
 }
 

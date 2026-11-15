@@ -1,0 +1,139 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_function_promoted_pruning.test
+# description: Function filters preserve promoted floating-point and decimal bounds, including nested fields, NaNs and NULLs
+# group: [filtering]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SCAN_PLANNING_MODE client
+
+include test/sql/init_requires
+
+statement ok
+SET threads=1;
+
+statement ok
+CALL enable_logging('Iceberg');
+
+# Both the top-level column and the struct leaf retain FLOAT bounds in the old files.
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.function_promoted_float;
+
+statement ok
+CREATE TABLE my_datalake.default.function_promoted_float (id INTEGER, x FLOAT, s STRUCT(x FLOAT));
+
+statement ok
+INSERT INTO my_datalake.default.function_promoted_float
+SELECT id, x, {'x': x} FROM (VALUES (1, 1.0), (2, 2.0), (3, 3.0), (4, NULL)) t(id, x);
+
+statement ok
+INSERT INTO my_datalake.default.function_promoted_float
+SELECT id, x, {'x': x} FROM (VALUES (5, 1.0::FLOAT), (6, 3.0::FLOAT), (7, 'NaN'::FLOAT)) t(id, x);
+
+statement ok
+ALTER TABLE my_datalake.default.function_promoted_float ALTER x TYPE DOUBLE;
+
+statement ok
+ALTER TABLE my_datalake.default.function_promoted_float ALTER s.x TYPE DOUBLE;
+
+statement ok
+INSERT INTO my_datalake.default.function_promoted_float
+SELECT id, x, {'x': x} FROM (VALUES (8, 100.5), (9, 101.5)) t(id, x);
+
+foreach field x s.x
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.function_promoted_float
+WHERE {field} + 1 BETWEEN 2.5 AND 4;
+----
+[2, 3, 6]
+
+query I
+SELECT count(DISTINCT message) FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE '%skipped ''data_file''%';
+----
+1
+
+# NaN must remain above the finite upper bound after promotion to DOUBLE.
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.function_promoted_float
+WHERE {field} + 1 > 7 AND {field} + 1 <= 'NaN'::DOUBLE;
+----
+[7, 8, 9]
+
+query I
+SELECT count(DISTINCT message) FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE '%skipped ''data_file''%';
+----
+1
+
+# A matching NULL cannot be discarded using the promoted finite bounds.
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.function_promoted_float
+WHERE coalesce({field}, 100.5) BETWEEN 100 AND 102;
+----
+[4, 8, 9]
+
+endloop
+
+statement ok
+DROP TABLE my_datalake.default.function_promoted_float;
+
+# Decimal precision changes can cross each physical storage boundary while preserving scale.
+foreach width 9 18 38
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.function_promoted_decimal;
+
+statement ok
+CREATE TABLE my_datalake.default.function_promoted_decimal (x DECIMAL(4,2));
+
+statement ok
+INSERT INTO my_datalake.default.function_promoted_decimal VALUES (-99.99), (-1.25), (0), (1.25), (99.99), (NULL);
+
+statement ok
+ALTER TABLE my_datalake.default.function_promoted_decimal ALTER x TYPE DECIMAL({width},2);
+
+statement ok
+INSERT INTO my_datalake.default.function_promoted_decimal VALUES (1000.25), (1000.50);
+
+# COALESCE uses the promoted statistics while retaining the original scale and NULL information.
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(x ORDER BY x) FROM my_datalake.default.function_promoted_decimal
+WHERE coalesce(x, 0::DECIMAL({width},2)) BETWEEN 1::DECIMAL({width},2) AND 2::DECIMAL({width},2);
+----
+[1.25]
+
+query I
+SELECT count(DISTINCT message) FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE '%skipped ''data_file''%' AND message LIKE '%COALESCE%';
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(x ORDER BY x) FROM my_datalake.default.function_promoted_decimal
+WHERE coalesce(x, 0::DECIMAL({width},2)) BETWEEN 1000::DECIMAL({width},2) AND 1001::DECIMAL({width},2);
+----
+[1000.25, 1000.50]
+
+query I
+SELECT count(DISTINCT message) FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE '%skipped ''data_file''%' AND message LIKE '%COALESCE%';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.function_promoted_decimal;
+
+endloop

@@ -333,11 +333,32 @@ Value IcebergHash::TruncateValue(const Value &v, idx_t width) {
 		return Value::BIGINT(val - (((val % W) + W) % W));
 	}
 	case LogicalTypeId::DECIMAL: {
-		// Truncate the unscaled integer value, preserving type (scale/precision)
-		auto scaled = v.WithType(LogicalType::BIGINT);
-		auto val = scaled.GetValue<int64_t>();
+		// Truncate the unscaled integer value, preserving type (scale/precision).
+		// Read the unscaled value according to the physical storage type (INT16/INT32/INT64/INT128).
+		auto decimal_width = DecimalType::GetWidth(v.type());
+		auto scale = DecimalType::GetScale(v.type());
+		int64_t val;
+		switch (v.type().InternalType()) {
+		case PhysicalType::INT16:
+			val = v.GetValueUnsafe<int16_t>();
+			break;
+		case PhysicalType::INT32:
+			val = v.GetValueUnsafe<int32_t>();
+			break;
+		case PhysicalType::INT64:
+			val = v.GetValueUnsafe<int64_t>();
+			break;
+		case PhysicalType::INT128: {
+			auto hval = v.GetValueUnsafe<hugeint_t>();
+			auto hw = hugeint_t(W);
+			auto result = hval - (((hval % hw) + hw) % hw);
+			return Value::DECIMAL(result, decimal_width, scale);
+		}
+		default:
+			throw InternalException("iceberg_truncate: unexpected physical type for DECIMAL %s", v.type().ToString());
+		}
 		auto result = val - (((val % W) + W) % W);
-		return Value::DECIMAL(result, DecimalType::GetWidth(v.type()), DecimalType::GetScale(v.type()));
+		return Value::DECIMAL(result, decimal_width, scale);
 	}
 	case LogicalTypeId::BLOB: {
 		auto bytes = StringValue::Get(v);
