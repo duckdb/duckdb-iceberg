@@ -1,0 +1,80 @@
+# name: test/sql/local/iceberg_scans/iceberg_scan_incremental_generated.test
+# description: incremental reads over a table with five append snapshots
+# group: [iceberg_scans]
+
+require-env DUCKDB_ICEBERG_HAVE_GENERATED_DATA
+
+require avro
+
+require parquet
+
+require iceberg
+
+# 'filtering_on_bounds' is five append snapshots of 1000 rows each, where snapshot i appends
+# col1 values [1000 * i, 1000 * i + 1000). The snapshot ids are not stable across regeneration,
+# so they are resolved by position.
+
+loop i 0 5
+
+statement ok
+set variable s{i} = (
+	select snapshot_id from iceberg_snapshots('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/filtering_on_bounds')
+	order by sequence_number offset {i} limit 1
+);
+
+endloop
+
+query I
+select count(*) from iceberg_scan('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/filtering_on_bounds');
+----
+5000
+
+# one increment is exactly the 1000 rows that snapshot appended
+query III
+select count(*), min(col1), max(col1) from iceberg_scan('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/filtering_on_bounds', start_snapshot_id=getvariable('s0'), end_snapshot_id=getvariable('s1'));
+----
+1000	1000	1999
+
+query III
+select count(*), min(col1), max(col1) from iceberg_scan('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/filtering_on_bounds', start_snapshot_id=getvariable('s3'), end_snapshot_id=getvariable('s4'));
+----
+1000	4000	4999
+
+# spanning the whole chain returns everything except the first snapshot's rows
+query III
+select count(*), min(col1), max(col1) from iceberg_scan('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/filtering_on_bounds', start_snapshot_id=getvariable('s0'), end_snapshot_id=getvariable('s4'));
+----
+4000	1000	4999
+
+# 'end_snapshot_id' defaults to the current snapshot, which is s4
+query III
+select count(*), min(col1), max(col1) from iceberg_scan('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/filtering_on_bounds', start_snapshot_id=getvariable('s0'));
+----
+4000	1000	4999
+
+query I
+select count(*) from iceberg_scan('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/filtering_on_bounds', start_snapshot_id=getvariable('s4'));
+----
+0
+
+# the base snapshot plus every increment reconstructs the table with no duplicates
+query III
+select count(*), count(distinct col1), sum(col1) from (
+	select * from iceberg_scan('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/filtering_on_bounds', snapshot_from_id=getvariable('s0'))
+	union all
+	select * from iceberg_scan('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/filtering_on_bounds', start_snapshot_id=getvariable('s0'), end_snapshot_id=getvariable('s1'))
+	union all
+	select * from iceberg_scan('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/filtering_on_bounds', start_snapshot_id=getvariable('s1'), end_snapshot_id=getvariable('s2'))
+	union all
+	select * from iceberg_scan('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/filtering_on_bounds', start_snapshot_id=getvariable('s2'), end_snapshot_id=getvariable('s3'))
+	union all
+	select * from iceberg_scan('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/filtering_on_bounds', start_snapshot_id=getvariable('s3'), end_snapshot_id=getvariable('s4'))
+);
+----
+5000	5000	12497500
+
+# a filter on top of the range still prunes
+query III
+select count(*), min(col1), max(col1) from iceberg_scan('{WORKING_DIRECTORY}/data/generated/iceberg/spark-local/default/filtering_on_bounds', start_snapshot_id=getvariable('s0')) where col1 >= 2500 and col1 < 3500;
+----
+1000	2500	3499

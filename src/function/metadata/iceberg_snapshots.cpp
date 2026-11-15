@@ -14,21 +14,6 @@
 
 namespace duckdb {
 
-static string SnapshotOperationToString(IcebergSnapshotOperationType type) {
-	switch (type) {
-	case IcebergSnapshotOperationType::APPEND:
-		return "append";
-	case IcebergSnapshotOperationType::REPLACE:
-		return "replace";
-	case IcebergSnapshotOperationType::OVERWRITE:
-		return "overwrite";
-	case IcebergSnapshotOperationType::DELETE:
-		return "delete";
-	default:
-		return "unknown";
-	}
-}
-
 static Value SummaryValue(const case_insensitive_map_t<string> &summary) {
 	map<string, string> sorted(summary.begin(), summary.end());
 	vector<Value> keys;
@@ -141,7 +126,7 @@ static void IcebergSnapshotsFunction(ClientContext &context, TableFunctionInput 
 			string_t manifest_string_t = StringVector::AddString(output.data[4], string_t(snapshot.manifest_list));
 			FlatVector::GetDataMutable<string_t>(output.data[4])[i] = manifest_string_t;
 		}
-		auto operation_str = SnapshotOperationToString(snapshot.operation);
+		auto operation_str = IcebergSnapshotOperationTypeToString(snapshot.operation);
 		FlatVector::GetDataMutable<string_t>(output.data[5])[i] =
 		    StringVector::AddString(output.data[5], operation_str);
 		output.data[6].SetValue(i, SummaryValue(snapshot.summary));
