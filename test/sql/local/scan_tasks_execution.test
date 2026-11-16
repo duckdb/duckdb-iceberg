@@ -991,6 +991,72 @@ select count(*) from projection_chunk_reads() where reads > 0;
 statement ok
 call disable_logging();
 
+# A scan that needs no column reads neither range, with one task and with two.
+foreach task_copies 1 2
+
+statement ok
+set variable column_less_tasks =
+ list_concat(getvariable('projection_io_tasks'), getvariable('projection_io_tasks'))[1:{task_copies}];
+
+statement ok
+call enable_logging(['FileSystem', 'Iceberg']);
+
+statement ok
+call truncate_duckdb_logs();
+
+query I
+select count(*) = 100000 * {task_copies} from iceberg_scan_tasks(getvariable('column_less_tasks'));
+----
+true
+
+query I
+select count(*) from projection_chunk_reads() where reads > 0;
+----
+0
+
+# One task runs in the single-file executor, two in the multi-file one.
+query II
+select count(*) filter (where message='Iceberg scan tasks executor mode=multi_file task_count=2') =
+         case when {task_copies} = 2 then 1 else 0 end,
+       count(*) filter (where message='Iceberg scan tasks executor mode=single_file task_count=1') =
+         case when {task_copies} = 1 then 1 else 0 end
+from duckdb_logs() where type='Iceberg';
+----
+true	true
+
+# A residual filter reads its predicate column; the missing 'added' field defaults to 99.
+statement ok
+set variable column_less_filtered_tasks = (select list(task) from (
+ select t.*, 'value >= 50000 OR added = 0'::varchar row_filter
+ from (select unnest(getvariable('column_less_tasks')) t)
+) task);
+
+statement ok
+call truncate_duckdb_logs();
+
+query I
+select count(*) = 50000 * {task_copies} from iceberg_scan_tasks(getvariable('column_less_filtered_tasks'));
+----
+true
+
+query TI rowsort
+select column_name, reads > 0 from projection_chunk_reads();
+----
+id	false
+value	true
+
+query I
+select count(*) from duckdb_logs() where type='Iceberg' and message =
+ concat('Iceberg scan tasks executor mode=', case when {task_copies} = 2 then 'multi_file' else 'single_file' end,
+        ' task_count=', {task_copies});
+----
+1
+
+statement ok
+call disable_logging();
+
+endloop
+
 # An unprojected equality key must still be read; unrelated data columns must not.
 statement ok
 copy (select 123::integer value) to '{TEST_DIR}/task_projection_eq.parquet'
@@ -1008,6 +1074,8 @@ foreach fast_filter true false
 statement ok
 set iceberg_equality_delete_fast_filter={fast_filter};
 
+foreach aggregate count(part) count(*)
+
 statement ok
 call enable_logging('FileSystem');
 
@@ -1015,7 +1083,7 @@ statement ok
 call truncate_duckdb_logs();
 
 query I
-select count(part) from iceberg_scan_tasks(getvariable('projection_io_delete_tasks'));
+select {aggregate} from iceberg_scan_tasks(getvariable('projection_io_delete_tasks'));
 ----
 99999
 
@@ -1027,6 +1095,8 @@ value	true
 
 statement ok
 call disable_logging();
+
+endloop
 
 endloop
 
