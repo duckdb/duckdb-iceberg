@@ -30,7 +30,7 @@ namespace {
 constexpr int64_t MIN_TARGET_FILE_SIZE_BYTES = 100;
 
 static QualifiedName ParseRewriteTableName(ClientContext &context, string identifier) {
-	auto name = IcebergUtils::ParseTableName(identifier);
+	auto name = IcebergUtils::ParseTableName(context, identifier);
 	if (name.Path().size() == 3) {
 		return name;
 	}

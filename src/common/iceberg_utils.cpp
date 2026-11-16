@@ -140,12 +140,25 @@ static string ExtractIcebergScanPath(const string &sql) {
 	return sql.substr(start, end - start);
 }
 
-QualifiedName IcebergUtils::ParseTableName(const string &input_string) {
+//! File names have dots too, so a longer name is only a nested schema path when it starts with an attached catalog
+static bool IsNestedCatalogPath(ClientContext &context, const string &input, const vector<Identifier> &components) {
+	if (components.size() <= 3 || input.find_first_of("/\\") != string::npos) {
+		return false;
+	}
+	for (auto &component : components) {
+		if (component.empty()) {
+			return false;
+		}
+	}
+	return Catalog::GetCatalogEntry(context, components[0]) != nullptr;
+}
+
+QualifiedName IcebergUtils::ParseTableName(ClientContext &context, const string &input_string) {
 	auto components = QualifiedName::ParseComponents(input_string);
 	if (components.empty()) {
 		throw InvalidInputException("Table name is empty");
 	}
-	if (components.size() > 3) {
+	if (components.size() > 3 && !IsNestedCatalogPath(context, input_string, components)) {
 		throw InvalidInputException("Too many identifiers in table name %s", input_string);
 	}
 	vector<Identifier> path;
@@ -162,7 +175,7 @@ optional_ptr<CatalogEntry> IcebergUtils::GetCatalogEntry(ClientContext &context,
                                                          const string &input_string, OnEntryNotFound if_not_found) {
 	//! Resolved as a reference in a query is: 'name' and 'schema.name' through the search path, so after
 	//! 'USE catalog.schema' they name entries of that catalog
-	EntryLookupInfo lookup_info(type, ParseTableName(input_string));
+	EntryLookupInfo lookup_info(type, ParseTableName(context, input_string));
 	return Catalog::GetEntry(context, lookup_info, if_not_found);
 }
 
@@ -177,6 +190,9 @@ optional_ptr<CatalogEntry> IcebergUtils::TryGetCatalogTable(ClientContext &conte
 		    CatalogType::TABLE_ENTRY,
 		    QualifiedName(Identifier(components[0]), Identifier(components[1]), Identifier(components[2])));
 		return Catalog::GetEntry(context, table_info, OnEntryNotFound::RETURN_NULL);
+	}
+	if (IsNestedCatalogPath(context, input, components)) {
+		return GetCatalogEntry(context, CatalogType::TABLE_ENTRY, input, OnEntryNotFound::RETURN_NULL);
 	}
 	//! A shorter string could also be a table location: anything that looks like a path, or is an existing file or
 	//! directory, stays a location
@@ -205,7 +221,7 @@ optional_ptr<CatalogEntry> IcebergUtils::TryGetCatalogTable(ClientContext &conte
 
 QualifiedName IcebergUtils::GetQualifiedTableName(CatalogEntry &table_entry) {
 	auto &entry = table_entry.Cast<InCatalogEntry>();
-	return QualifiedName(entry.catalog.GetName(), entry.ParentSchema().name, entry.name);
+	return entry.ParentSchema().GetQualifiedName(entry.name);
 }
 
 optional_ptr<SchemaCatalogEntry> IcebergUtils::GetSchemaEntry(ClientContext &context, string &input_string) {
@@ -237,13 +253,11 @@ string IcebergUtils::GetStorageLocation(ClientContext &context, const string &in
 	string storage_location = input;
 
 	do {
-		if (qualified_name.size() != 3) {
+		if (qualified_name.size() != 3 && !IsNestedCatalogPath(context, input, qualified_name)) {
 			break;
 		}
 		//! Fully qualified table reference, let's do a lookup
-		EntryLookupInfo table_info(CatalogType::TABLE_ENTRY,
-		                           QualifiedName(qualified_name[0], qualified_name[1], qualified_name[2]));
-		auto catalog_entry = Catalog::GetEntry(context, table_info, OnEntryNotFound::RETURN_NULL);
+		auto catalog_entry = TryGetCatalogTable(context, input);
 		if (!catalog_entry) {
 			break;
 		}

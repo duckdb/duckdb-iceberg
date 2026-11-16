@@ -17,7 +17,7 @@ namespace {
 
 constexpr const char *EXPIRE_SNAPSHOTS_NAME = "iceberg_expire_snapshots";
 
-QualifiedName ParseExpireSnapshotsTableName(const Value &identifier_value) {
+QualifiedName ParseExpireSnapshotsTableName(ClientContext &context, const Value &identifier_value) {
 	if (identifier_value.IsNull()) {
 		throw InvalidInputException("%s: table identifier cannot be NULL", EXPIRE_SNAPSHOTS_NAME);
 	}
@@ -27,7 +27,8 @@ QualifiedName ParseExpireSnapshotsTableName(const Value &identifier_value) {
 		                            identifier);
 	}
 	auto parts = QualifiedName::ParseComponents(identifier);
-	if (parts.size() != 3) {
+	//! A longer name is a nested schema path when it starts with an attached catalog
+	if (parts.size() < 3 || (parts.size() > 3 && !Catalog::GetCatalogEntry(context, parts[0]))) {
 		throw InvalidInputException("%s: table identifier must be 'catalog.schema.table', got '%s'",
 		                            EXPIRE_SNAPSHOTS_NAME, identifier);
 	}
@@ -37,12 +38,12 @@ QualifiedName ParseExpireSnapshotsTableName(const Value &identifier_value) {
 			                            identifier);
 		}
 	}
-	return QualifiedName {parts[0], parts[1], parts[2]};
+	return QualifiedName::FromPath(std::move(parts));
 }
 
-ExpireSnapshotsPlanInput BindExpireSnapshotsArguments(TableFunctionBindInput &input) {
+ExpireSnapshotsPlanInput BindExpireSnapshotsArguments(ClientContext &context, TableFunctionBindInput &input) {
 	ExpireSnapshotsPlanInput result;
-	result.table_name = ParseExpireSnapshotsTableName(input.inputs[0]);
+	result.table_name = ParseExpireSnapshotsTableName(context, input.inputs[0]);
 
 	for (const auto &entry : input.named_parameters) {
 		auto option = StringUtil::Lower(entry.first.GetIdentifierName());
@@ -93,7 +94,7 @@ unique_ptr<LogicalOperator> ExpireSnapshotsBindOperator(ClientContext &context, 
 	if (!input.binder) {
 		throw InternalException("%s: bind_operator called without a binder", EXPIRE_SNAPSHOTS_NAME);
 	}
-	auto plan_input = BindExpireSnapshotsArguments(input);
+	auto plan_input = BindExpireSnapshotsArguments(context, input);
 	//! Prepared maintenance statements must resolve the catalog again before execution.
 	input.binder->SetAlwaysRequireRebind();
 	auto &catalog = GetMaintenanceIcebergCatalog(context, plan_input.table_name, EXPIRE_SNAPSHOTS_NAME);
