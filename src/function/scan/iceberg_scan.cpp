@@ -108,8 +108,7 @@ static void IcebergScanSerialize(Serializer &serializer, const optional_ptr<Func
 		    "IcebergScan serialization is only supported within the statement that bound the scan");
 	}
 	auto &table_info = table->table_info;
-	auto qualified_name =
-	    QualifiedName(table_info.catalog.GetName(), table_info.schema.name, Identifier(table_info.name));
+	auto qualified_name = table_info.schema.GetQualifiedName(Identifier(table_info.name));
 	serializer.WriteProperty(100, "qualified_name", qualified_name);
 	serializer.WriteProperty(101, "schema_id", scan_info.snapshot_info.schema_id);
 	const bool has_snapshot = scan_info.snapshot_info.snapshot != nullptr;
