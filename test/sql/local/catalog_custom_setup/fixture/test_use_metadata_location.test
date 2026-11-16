@@ -40,10 +40,11 @@ CALL enable_logging('HTTP');
 statement ok
 FROM default_datalake.default.table_unpartitioned;
 
-query I
-select count(*) from duckdb_logs_parsed('HTTP') where request.type = 'GET' and request.url like '%.metadata.json%';
+query II
+SELECT count(*) FILTER (request.type = 'GET'), count(*) FILTER (request.type = 'HEAD')
+FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%.metadata.json%';
 ----
-0
+0	0
 
 statement ok
 DETACH default_datalake;
@@ -64,11 +65,12 @@ CALL truncate_duckdb_logs();
 statement ok
 FROM my_datalake.default.table_unpartitioned;
 
-# resolving the table read the metadata file
-query I
-select count(*) from duckdb_logs_parsed('HTTP') where request.type = 'GET' and request.url like '%.metadata.json%';
+# Resolving the table reads the metadata with a single GET and no preliminary HEAD.
+query II
+SELECT count(*) FILTER (request.type = 'GET'), count(*) FILTER (request.type = 'HEAD')
+FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%.metadata.json%';
 ----
-1
+1	0
 
 statement ok
 CALL truncate_duckdb_logs();
@@ -76,11 +78,12 @@ CALL truncate_duckdb_logs();
 statement ok
 FROM my_datalake.default.table_unpartitioned;
 
-# The external file cache avoids another metadata GET on re-scan
-query I
-select count(*) from duckdb_logs_parsed('HTTP') where request.type = 'GET' and request.url like '%.metadata.json%';
+# The external file cache avoids metadata requests on re-scan.
+query II
+SELECT count(*) FILTER (request.type = 'GET'), count(*) FILTER (request.type = 'HEAD')
+FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%.metadata.json%';
 ----
-0
+0	0
 
 # Recreate the catalog so no catalog-local state can satisfy the metadata read.
 statement ok
@@ -101,11 +104,12 @@ CALL truncate_duckdb_logs();
 statement ok
 FROM my_datalake.default.table_unpartitioned;
 
-# The external file cache also avoids a metadata GET for the new catalog.
-query I
-select count(*) from duckdb_logs_parsed('HTTP') where request.type = 'GET' and request.url like '%.metadata.json%';
+# The external file cache also avoids metadata requests for the new catalog.
+query II
+SELECT count(*) FILTER (request.type = 'GET'), count(*) FILTER (request.type = 'HEAD')
+FROM duckdb_logs_parsed('HTTP') WHERE request.url LIKE '%.metadata.json%';
 ----
-0
+0	0
 
 statement ok
 DETACH my_datalake;
