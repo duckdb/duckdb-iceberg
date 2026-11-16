@@ -12,6 +12,7 @@
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "core/expression/iceberg_value.hpp"
 #include "function/scan_planning/iceberg_row_filter.hpp"
+#include "planning/deletes/iceberg_delete_file_scanner.hpp"
 #include "planning/iceberg_multi_file_list.hpp"
 #include "planning/metadata_io/avro/iceberg_manifest_cache.hpp"
 #include "planning/metadata_io/avro/avro_scan.hpp"
@@ -355,6 +356,84 @@ IcebergPartitionSpec PartitionSpec() {
 }
 
 } // namespace
+
+TEST_CASE("Iceberg delete loads retain owned file scope in their cache identity", "[iceberg_planning]") {
+	PlanningTest test;
+	auto &context = *test.connection.context;
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto delete_path = fs.JoinPath(test.root, "positions.parquet");
+	const string data_path = "data.parquet";
+	Query(test.connection, "COPY (SELECT 'data.parquet' AS file_path, 1::BIGINT AS pos) TO '" + delete_path +
+	                           "' (FORMAT PARQUET, FIELD_IDS {file_path: 2147483546, pos: 2147483545})");
+	auto handle = fs.OpenFile(delete_path, FileFlags::FILE_FLAGS_READ);
+	vector<IcebergDeleteFile> descriptors;
+	{
+		auto file = DeleteEntry(0, Value(1)).data_file;
+		file.file_path = delete_path;
+		file.file_format = "parquet";
+		file.file_size_in_bytes = fs.GetFileSize(*handle);
+		file.content_offset = nullopt;
+		descriptors.emplace_back(file);
+		SetFilePathBounds(file, data_path, data_path);
+		descriptors.emplace_back(file);
+		file.lower_bounds[MultiFileReader::DELETE_FILE_PATH_FIELD_ID] = Value(LogicalType::BLOB);
+		descriptors.emplace_back(file);
+		SetFilePathBounds(file, data_path, data_path);
+		file.upper_bounds[MultiFileReader::DELETE_FILE_PATH_FIELD_ID] = Value(LogicalType::BLOB);
+		descriptors.emplace_back(file);
+	}
+	// Descriptors must remain usable after the manifest metadata is destroyed.
+	IcebergTableMetadata metadata {IcebergTableMetadataSchemas {}};
+	IcebergOptions options;
+	IcebergDeleteExecutionContext execution {context, fs, test.root, options, metadata};
+	IcebergDeleteExecutionState state;
+	vector<idx_t> order;
+	SECTION("Unscoped before scoped") {
+		order = {0, 1, 0};
+	}
+	SECTION("Scoped before unscoped") {
+		order = {1, 0, 1};
+	}
+	SECTION("NULL lower bound before scoped") {
+		order = {2, 1, 2};
+	}
+	SECTION("NULL upper bound before scoped") {
+		order = {3, 1, 3};
+	}
+	Query(test.connection, "BEGIN");
+	MetaTransaction::Get(context).SetActiveQuery(DatabaseManager::Get(context).GetNewQueryNumber());
+	for (auto index : order) {
+		auto plan = state.ProcessDeletes(execution, data_path, {descriptors[index]});
+		REQUIRE(plan.positional_deletes);
+		auto positions = state.GetExistingPositionalDeleteData(data_path);
+		REQUIRE(positions);
+		set<idx_t> rows;
+		positions->ToSet(rows);
+		REQUIRE(rows == set<idx_t> {1});
+		vector<IcebergFileIdentity> superseded;
+		if (index == 1) {
+			superseded.emplace_back(delete_path);
+		}
+		REQUIRE(positions->source_files == superseded);
+	}
+}
+
+TEST_CASE("Iceberg Puffin validation requires an explicit reference even with equal bounds", "[iceberg_planning]") {
+	DuckDB database(nullptr);
+	Connection connection(database);
+	auto &context = *connection.context;
+	auto &fs = FileSystem::GetFileSystem(context);
+	const string table_path = "unused";
+	IcebergTableMetadata metadata {IcebergTableMetadataSchemas {}};
+	metadata.iceberg_version = 3;
+	IcebergOptions options;
+	IcebergDeleteExecutionContext execution {context, fs, table_path, options, metadata};
+	auto file = DeleteEntry(0, Value(1)).data_file;
+	SetFilePathBounds(file, "data.parquet", "data.parquet");
+	IcebergDeleteScanEntry entry {IcebergDeleteFile(file), make_shared_ptr<IcebergDeleteFileLoadState>()};
+	REQUIRE_THROWS_WITH(IcebergDeleteFileScanner::ScanFiles(execution, {entry}),
+	                    Catch::Matchers::Contains("Puffin delete file is missing 'referenced_data_file'"));
+}
 
 TEST_CASE("Iceberg delete candidate buckets preserve paths partitions and conservative fallbacks",
           "[iceberg_planning]") {
