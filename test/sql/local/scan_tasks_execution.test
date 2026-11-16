@@ -991,6 +991,44 @@ select count(*) from projection_chunk_reads() where reads > 0;
 statement ok
 call disable_logging();
 
+# A scan that needs no column reads neither range, with one task and with two.
+foreach task_copies 1 2
+
+statement ok
+set variable column_less_tasks =
+ list_concat(getvariable('projection_io_tasks'), getvariable('projection_io_tasks'))[1:{task_copies}];
+
+statement ok
+call enable_logging(['FileSystem', 'Iceberg']);
+
+statement ok
+call truncate_duckdb_logs();
+
+query I
+select count(*) = 100000 * {task_copies} from iceberg_scan_tasks(getvariable('column_less_tasks'));
+----
+true
+
+query I
+select count(*) from projection_chunk_reads() where reads > 0;
+----
+0
+
+# One task runs in the single-file executor, two in the multi-file one.
+query II
+select count(*) filter (where message='Iceberg scan tasks executor mode=multi_file task_count=2') =
+         case when {task_copies} = 2 then 1 else 0 end,
+       count(*) filter (where message='Iceberg scan tasks executor mode=single_file task_count=1') =
+         case when {task_copies} = 1 then 1 else 0 end
+from duckdb_logs() where type='Iceberg';
+----
+true	true
+
+statement ok
+call disable_logging();
+
+endloop
+
 # An unprojected equality key must still be read; unrelated data columns must not.
 statement ok
 copy (select 123::integer value) to '{TEST_DIR}/task_projection_eq.parquet'

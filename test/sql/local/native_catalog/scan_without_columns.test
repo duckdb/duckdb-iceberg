@@ -1,0 +1,139 @@
+# name: test/sql/local/native_catalog/scan_without_columns.test
+# description: A scan that needs no column of the table does not read one from the data files
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+foreach version 2 3
+
+# 'id' is the first column and the largest one in the data files
+statement ok
+CREATE TABLE my_datalake.default.scan_without_columns (id BIGINT, seq INTEGER) WITH (
+	'format-version' = '{version}'
+);
+
+statement ok
+INSERT INTO my_datalake.default.scan_without_columns
+SELECT (hash(i) >> 1)::BIGINT, i::INTEGER FROM range(200000) t(i);
+
+# with a delete the row count is no longer answered from the metadata, the data files are scanned
+statement ok
+DELETE FROM my_datalake.default.scan_without_columns WHERE seq < 10;
+
+# the rewritten rows store their _row_id in a version 3 data file
+statement ok
+UPDATE my_datalake.default.scan_without_columns SET seq = seq WHERE seq >= 100000;
+
+statement ok
+SET VARIABLE data_files = (
+	SELECT list(regexp_extract(file_path, '[^/\\]+$'))
+	FROM iceberg_metadata(my_datalake.default.scan_without_columns)
+	WHERE content = 'DATA' AND status <> 'DELETED'
+);
+
+# the planned tasks are executed in the transaction that planned them
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE scan_tasks = (
+	SELECT list(task) FROM (SELECT * FROM iceberg_scan_plan('my_datalake.default.scan_without_columns')) task
+);
+
+statement ok
+CALL enable_logging('FileSystem');
+
+foreach source my_datalake.default.scan_without_columns iceberg_scan('my_datalake.default.scan_without_columns') iceberg_scan_tasks(getvariable('scan_tasks'))
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT count(*) FROM {source};
+----
+199990
+
+statement ok
+SET VARIABLE count_star_bytes = (
+	SELECT coalesce(sum(bytes), 0) FROM duckdb_logs_parsed('FileSystem')
+	WHERE op = 'READ' AND list_contains(getvariable('data_files'), regexp_extract(path, '[^/\\]+$'))
+);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# 'filename' is a constant of the file, a scan of it reads the footers only
+query I
+SELECT count(filename) FROM {source};
+----
+199990
+
+statement ok
+SET VARIABLE footer_bytes = (
+	SELECT coalesce(sum(bytes), 0) FROM duckdb_logs_parsed('FileSystem')
+	WHERE op = 'READ' AND list_contains(getvariable('data_files'), regexp_extract(path, '[^/\\]+$'))
+);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT count(id) FROM {source};
+----
+199990
+
+statement ok
+SET VARIABLE count_id_bytes = (
+	SELECT coalesce(sum(bytes), 0) FROM duckdb_logs_parsed('FileSystem')
+	WHERE op = 'READ' AND list_contains(getvariable('data_files'), regexp_extract(path, '[^/\\]+$'))
+);
+
+# counting the rows reads the footers and nothing else, reading 'id' over a megabyte more
+query III
+SELECT getvariable('count_star_bytes') = getvariable('footer_bytes'), getvariable('footer_bytes') > 0,
+       getvariable('count_id_bytes') - getvariable('footer_bytes') > 1000000;
+----
+true	true	true
+
+endloop
+
+statement ok
+CALL disable_logging();
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+COMMIT;
+
+# other scans that need no column
+query I
+SELECT count(*) FROM my_datalake.default.scan_without_columns, (VALUES (1), (2)) v(x);
+----
+399980
+
+query I
+SELECT 1 FROM my_datalake.default.scan_without_columns LIMIT 2;
+----
+1
+1
+
+query I
+SELECT EXISTS (SELECT * FROM my_datalake.default.scan_without_columns);
+----
+true
+
+# a filter column is still read
+query I
+SELECT count(*) FROM my_datalake.default.scan_without_columns WHERE seq >= 100000;
+----
+100000
+
+statement ok
+DROP TABLE my_datalake.default.scan_without_columns;
+
+endloop

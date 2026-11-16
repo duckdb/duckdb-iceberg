@@ -251,6 +251,8 @@ static virtual_column_map_t IcebergScanTasksVirtualColumns(ClientContext &, opti
 	result.emplace(MultiFileReader::COLUMN_IDENTIFIER_FILENAME, TableColumn("filename", LogicalType::VARCHAR));
 	result.emplace(MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER,
 	               TableColumn("file_row_number", LogicalType::BIGINT));
+	//! Bound by a scan that needs no column, so that it reads none
+	result.emplace(COLUMN_IDENTIFIER_EMPTY, TableColumn("", LogicalType::BOOLEAN));
 	return result;
 }
 
