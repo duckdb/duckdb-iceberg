@@ -80,6 +80,10 @@
 			"env_value": "true"
 		},
 		{
+			"env_name": "NESTED_NAMESPACE_SUPPORT",
+			"env_value": "true"
+		},
+		{
 			"env_name": "CASE_SENSITIVE_TABLE_NAMES_SUPPORT",
 			"env_value": "true"
 		},

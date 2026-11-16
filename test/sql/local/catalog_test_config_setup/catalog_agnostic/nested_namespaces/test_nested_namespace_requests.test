@@ -1,0 +1,182 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/nested_namespaces/test_nested_namespace_requests.test
+# description: a nested schema path costs the requests of a single-level name, only a listing with SUPPORT_NESTED_NAMESPACES costs more
+# group: [nested_namespaces]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+statement ok
+drop table if exists my_datalake.nr_parent.nr_child.t;
+
+statement ok
+drop table if exists my_datalake.nr_child.t;
+
+statement ok
+drop schema if exists my_datalake.nr_parent.nr_child.nr_leaf;
+
+statement ok
+drop schema if exists my_datalake.nr_parent.nr_child;
+
+statement ok
+drop schema if exists my_datalake.nr_parent;
+
+statement ok
+drop schema if exists my_datalake.nr_child;
+
+statement ok
+create schema my_datalake.nr_parent;
+
+statement ok
+create schema my_datalake.nr_parent.nr_child;
+
+statement ok
+create schema my_datalake.nr_child;
+
+statement ok
+create table my_datalake.nr_parent.nr_child.t as select 1 as i;
+
+statement ok
+create table my_datalake.nr_child.t as select 10 as i;
+
+statement ok
+create macro catalog_requests() as table
+	select request.type as method, regexp_extract(request.url, '/v1/(.*)', 1) as path from duckdb_logs_parsed('HTTP');
+
+statement ok
+CALL enable_logging('HTTP');
+
+# reading a table is one request, to its own namespace
+query I
+select i from my_datalake.nr_parent.nr_child.t;
+----
+1
+
+query TT
+from catalog_requests();
+----
+GET	namespaces/nr_parent%1Fnr_child/tables/t
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select i from my_datalake.nr_child.t;
+----
+10
+
+query TT
+from catalog_requests();
+----
+GET	namespaces/nr_child/tables/t
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# a path through a namespace that does not exist never asks for another namespace
+statement error
+select * from my_datalake.nr_missing.nr_child.t;
+----
+does not exist
+
+query TT
+from catalog_requests();
+----
+GET	namespaces/nr_missing%1Fnr_child/tables/t
+GET	namespaces/nr_missing%1Fnr_child
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement error
+select * from my_datalake.nr_missing.t;
+----
+does not exist
+
+query TT
+from catalog_requests();
+----
+GET	namespaces/nr_missing/tables/t
+GET	namespaces/nr_missing
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# without the option a listing is one request
+query I
+select count(*) from duckdb_schemas() where database_name = 'my_datalake' and schema_name = 'nr_parent';
+----
+1
+
+query TT
+from catalog_requests();
+----
+GET	namespaces
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# however many namespaces there are
+statement ok
+create schema my_datalake.nr_parent.nr_child.nr_leaf;
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+select count(*) from duckdb_schemas() where database_name = 'my_datalake' and schema_name = 'nr_parent';
+----
+1
+
+query TT
+from catalog_requests();
+----
+GET	namespaces
+
+statement ok
+CALL disable_logging();
+
+statement ok
+CALL truncate_duckdb_logs();
+
+include test/sql/local/catalog_test_config_setup/catalog_agnostic/setup/nested_namespace_catalog.test_setup
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set variable nested_lake_namespaces = (select count(*) from duckdb_schemas() where database_name = 'nested_lake');
+
+# the listing covers both catalogs: one request for my_datalake, and for nested_lake one more per namespace,
+# which carries that namespace as the parent parameter
+query III
+select count(*) = 2 + getvariable('nested_lake_namespaces'),
+	count(*) filter (path = 'namespaces'),
+	count(*) filter (path like 'namespaces?%') = getvariable('nested_lake_namespaces')
+from catalog_requests();
+----
+true	2	true
+
+statement ok
+CALL disable_logging();
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+drop table my_datalake.nr_parent.nr_child.t;
+
+statement ok
+drop table my_datalake.nr_child.t;
+
+statement ok
+drop schema my_datalake.nr_parent.nr_child.nr_leaf;
+
+statement ok
+drop schema my_datalake.nr_parent.nr_child;
+
+statement ok
+drop schema my_datalake.nr_parent;
+
+statement ok
+drop schema my_datalake.nr_child;

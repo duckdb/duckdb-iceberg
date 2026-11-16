@@ -1,0 +1,63 @@
+# name: test/sql/local/iceberg_scans/nested_schema_table_name.test
+# description: a table name with a nested schema path resolves through the catalog, a dotted file name stays a location
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+statement ok
+ATTACH ':memory:' AS nested_db;
+
+statement ok
+CREATE SCHEMA nested_db.a;
+
+statement ok
+CREATE SCHEMA nested_db.a.b;
+
+statement ok
+CREATE TABLE nested_db.a.b.t (i INTEGER);
+
+statement ok
+CREATE VIEW nested_db.a.b.v AS SELECT * FROM iceberg_scan('data/persistent/iceberg/lineitem_iceberg', allow_moved_paths = true);
+
+# a view that wraps an iceberg_scan resolves as it does with a three-part name
+query I
+SELECT count(*) FROM iceberg_snapshots('nested_db.a.b.v');
+----
+2
+
+statement error
+SELECT * FROM iceberg_snapshots('nested_db.a.b.t');
+----
+is not an Iceberg table
+
+statement error
+SELECT * FROM iceberg_table_properties('nested_db.a.b.t');
+----
+non-iceberg table
+
+statement error
+SELECT * FROM iceberg_table_properties('nested_db.a.b.missing');
+----
+does not exist
+
+# a name that is not in the catalog is a table location, as with a three-part name
+statement error
+SELECT * FROM iceberg_snapshots('nested_db.a.b.missing');
+----
+no version-hint could be found
+
+statement error
+SELECT * FROM iceberg_snapshots('nested_db.a.b/c.t');
+----
+no version-hint could be found
+
+# a longer name only names a table when it starts with an attached catalog
+statement error
+SELECT * FROM iceberg_table_properties('missing_db.a.b.t');
+----
+Too many identifiers in table name
+
+query I
+SELECT count(*) FROM iceberg_snapshots('data/persistent/iceberg/lineitem_iceberg_gz/metadata/v2.gz.metadata.json', metadata_compression_codec = 'gzip');
+----
+1

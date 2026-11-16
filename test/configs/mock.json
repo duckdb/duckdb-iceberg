@@ -20,6 +20,7 @@
 		{"env_name": "CASE_SENSITIVE_TABLE_NAMES_SUPPORT", "env_value": "true"},
 		{"env_name": "SNAPSHOT_HISTORY_SUPPORT", "env_value": "true"},
 		{"env_name": "NAMESPACE_PROPERTIES_SUPPORT", "env_value": "true"},
+		{"env_name": "NESTED_NAMESPACE_SUPPORT", "env_value": "true"},
 		{"env_name": "METADATA_FILE_READ_SUPPORT", "env_value": "true"},
 		{"env_name": "METADATA_LOG_SUPPORT", "env_value": "true"},
 		{"env_name": "TIMETRAVEL_SUPPORT", "env_value": "true"},
