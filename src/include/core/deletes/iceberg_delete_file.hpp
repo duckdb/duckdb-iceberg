@@ -13,12 +13,16 @@ struct IcebergDeleteFile {
 	      file_size_in_bytes(file.file_size_in_bytes), record_count(file.record_count), equality_ids(file.equality_ids),
 	      referenced_data_file(file.referenced_data_file), content_offset(file.content_offset),
 	      content_size_in_bytes(file.content_size_in_bytes) {
+		if (auto path = file.SingleReferencedDataFile()) {
+			single_referenced_data_file = *path;
+		}
 	}
 
 	bool operator==(const IcebergDeleteFile &other) const {
 		return file_path == other.file_path && file_format == other.file_format && content == other.content &&
 		       file_size_in_bytes == other.file_size_in_bytes && record_count == other.record_count &&
 		       equality_ids == other.equality_ids && referenced_data_file == other.referenced_data_file &&
+		       single_referenced_data_file == other.single_referenced_data_file &&
 		       content_offset == other.content_offset && content_size_in_bytes == other.content_size_in_bytes;
 	}
 
@@ -28,7 +32,10 @@ struct IcebergDeleteFile {
 	int64_t file_size_in_bytes = 0;
 	int64_t record_count = 0;
 	vector<int32_t> equality_ids;
+	//! The explicit manifest field, required by Puffin deletion vectors.
 	optional<string> referenced_data_file;
+	//! Owned single-file reference resolved from the manifest field or equal file_path bounds.
+	optional<string> single_referenced_data_file;
 	optional<int64_t> content_offset;
 	optional<int64_t> content_size_in_bytes;
 };
