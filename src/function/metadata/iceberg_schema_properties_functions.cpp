@@ -24,7 +24,7 @@ namespace duckdb {
 
 struct IcebergSchemaPropertiesBindData : public TableFunctionData {
 	optional_ptr<IcebergSchemaEntry> iceberg_schema;
-	case_insensitive_map_t<string> properties;
+	unordered_map<string, string> properties;
 	set<string> remove_properties;
 };
 

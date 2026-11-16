@@ -710,7 +710,7 @@ void IcebergTransaction::DoSchemaCreates(ClientContext &context) {
 
 		rest_api_objects::CreateNamespaceRequest request;
 		request._namespace.value = namespace_identifiers;
-		request.properties = case_insensitive_map_t<string>();
+		request.properties = unordered_map<string, string>();
 		auto create_body = RESTObjectToJSONString(request);
 
 		if (!IRCAPI::CommitNamespaceCreate(context, ic_catalog, schema_name, create_body)) {

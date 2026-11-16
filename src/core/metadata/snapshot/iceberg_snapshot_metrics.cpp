@@ -1,4 +1,5 @@
 #include "core/metadata/snapshot/iceberg_snapshot_metrics.hpp"
+#include "common/iceberg_properties.hpp"
 #include "core/metadata/snapshot/iceberg_snapshot.hpp"
 
 #include "duckdb/common/types/uuid.hpp"
@@ -184,14 +185,14 @@ IcebergSnapshotMetrics::IcebergSnapshotMetrics(const IcebergSnapshot &parent_sna
 	InheritMetric(parent_snapshot.metrics, IcebergSnapshotMetricType::TOTAL_EQUALITY_DELETES);
 }
 
-IcebergSnapshotMetrics::IcebergSnapshotMetrics(const case_insensitive_map_t<string> &snapshot_summary) {
+IcebergSnapshotMetrics::IcebergSnapshotMetrics(const unordered_map<string, string> &snapshot_summary) {
 	bool file_size_metrics_are_valid = true;
 	for (idx_t i = 0; i < SNAPSHOT_METRIC_KEYS_SIZE; i++) {
 		auto &item = SNAPSHOT_METRIC_KEYS[i];
 		const bool is_file_size_metric = item.type == IcebergSnapshotMetricType::ADDED_FILES_SIZE ||
 		                                 item.type == IcebergSnapshotMetricType::REMOVED_FILES_SIZE ||
 		                                 item.type == IcebergSnapshotMetricType::TOTAL_FILES_SIZE;
-		auto it = snapshot_summary.find(item.name);
+		auto it = IcebergProperties::Find(snapshot_summary, item.name);
 		if (it == snapshot_summary.end()) {
 			//! Not present in the summary
 			continue;
@@ -376,8 +377,8 @@ const metrics_map_t &IcebergSnapshotMetrics::GetMetrics() const {
 	return metrics;
 }
 
-case_insensitive_map_t<string> IcebergSnapshotMetrics::ToString() const {
-	case_insensitive_map_t<string> result;
+unordered_map<string, string> IcebergSnapshotMetrics::ToString() const {
+	unordered_map<string, string> result;
 	for (auto &entry : metrics) {
 		result[MetricsTypeToString(entry.first)] = std::to_string(entry.second);
 	}

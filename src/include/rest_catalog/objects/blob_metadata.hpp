@@ -5,7 +5,7 @@
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
-#include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/unordered_map.hpp"
 
 namespace duckdb {
 namespace rest_api_objects {
@@ -35,7 +35,7 @@ public:
 	int64_t snapshot_id;
 	int64_t sequence_number;
 	vector<int32_t> fields;
-	optional<case_insensitive_map_t<string>> properties;
+	optional<unordered_map<string, string>> properties;
 };
 
 } // namespace rest_api_objects

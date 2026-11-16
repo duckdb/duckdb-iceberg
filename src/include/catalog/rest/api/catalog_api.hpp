@@ -32,7 +32,7 @@ struct IRCAPICredentials {
 	vector<rest_api_objects::StorageCredential> storage_credentials;
 	//! Top-level config override used to build the refreshed secret; unset uses the existing table config.
 	//! The LoadTable fallback currently supplies an empty override when config is omitted.
-	optional<case_insensitive_map_t<string>> config;
+	optional<unordered_map<string, string>> config;
 };
 
 enum class IRCEntryLookupStatus : uint8_t { EXISTS = 0, NOT_FOUND = 1, API_ERROR = 2 };

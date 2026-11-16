@@ -62,7 +62,7 @@ HEADER_FORMAT = """
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
-#include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/unordered_map.hpp"
 {ADDITIONAL_HEADERS}
 
 namespace duckdb {{
@@ -81,7 +81,7 @@ SOURCE_FORMAT = """
 
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
-#include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/unordered_set.hpp"
 #include "rest_catalog/objects/json_utils.hpp"
 #include "rest_catalog/objects/list.hpp"
 
@@ -99,6 +99,7 @@ JSON_UTILS_HEADER_FORMAT = """
 
 #include "duckdb/common/json_document.hpp"
 #include "duckdb/common/string.hpp"
+#include "duckdb/common/string_util.hpp"
 
 namespace duckdb {{
 namespace rest_api_objects {{
@@ -1341,7 +1342,7 @@ class CPPClass:
         exclude_list = []
         if properties:
             exclude_list = [
-                'case_insensitive_set_t handled_properties {',
+                'unordered_set<string> handled_properties {',
                 f"""{', '.join(f'"{x}"' for x in properties)} }};""",
             ]
             skip_if_excluded = [
@@ -1375,7 +1376,8 @@ class CPPClass:
         variable_type = self.generate_variable_type(additional_properties)
         member_schema = ObjectProperty()
         member_schema.additional_properties = additional_properties
-        self.add_member('additional_properties', f'case_insensitive_map_t<{variable_type}>', member_schema)
+        # JSON member names are exact; consumers decide how to interpret recognized settings.
+        self.add_member('additional_properties', f'unordered_map<string, {variable_type}>', member_schema)
 
     def generate_variable_type(self, schema: Property) -> str:
         if schema.type == Property.Type.OBJECT:
@@ -1383,7 +1385,7 @@ class CPPClass:
             assert not object_property.properties
             if object_property.additional_properties:
                 variable_type = self.generate_variable_type(object_property.additional_properties)
-                return f'case_insensitive_map_t<{variable_type}>'
+                return f'unordered_map<string, {variable_type}>'
             return 'JSONValue'
         elif schema.type == Property.Type.ARRAY:
             array_property = cast(ArrayProperty, schema)
@@ -1416,7 +1418,7 @@ class CPPClass:
 
     def generate_nested_class_definitions(self):
         generated_schemas_referenced = [x for x in self.referenced_schemas if x not in self.parse_info.schemas]
-        for item in generated_schemas_referenced:
+        for item in sorted(generated_schemas_referenced):
             parsed_schema = self.parse_info.parsed_schemas[item]
             nested_class = CPPClass(item, self.parse_info)
             nested_class.from_property(parsed_schema)

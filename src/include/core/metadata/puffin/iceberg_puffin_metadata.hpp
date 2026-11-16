@@ -5,7 +5,7 @@
 #include "duckdb/common/serializer/buffered_file_writer.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
-#include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/unordered_map.hpp"
 
 #include <variant>
 
@@ -20,13 +20,13 @@ public:
 	int64_t offset = 0;
 	int64_t length = 0;
 	optional<string> compression_codec;
-	optional<case_insensitive_map_t<string>> properties;
+	optional<unordered_map<string, string>> properties;
 };
 
 struct IcebergPuffinFileMetadata {
 public:
 	vector<IcebergPuffinBlobMetadata> blobs;
-	optional<case_insensitive_map_t<string>> properties;
+	optional<unordered_map<string, string>> properties;
 };
 
 struct IcebergPuffinFileFooter {

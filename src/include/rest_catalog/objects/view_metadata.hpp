@@ -5,7 +5,7 @@
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
-#include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/unordered_map.hpp"
 #include "rest_catalog/objects/schema.hpp"
 #include "rest_catalog/objects/view_history_entry.hpp"
 #include "rest_catalog/objects/view_version.hpp"
@@ -41,7 +41,7 @@ public:
 	vector<ViewVersion> versions;
 	vector<ViewHistoryEntry> version_log;
 	vector<Schema> schemas;
-	optional<case_insensitive_map_t<string>> properties;
+	optional<unordered_map<string, string>> properties;
 };
 
 } // namespace rest_api_objects

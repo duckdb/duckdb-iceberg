@@ -5,7 +5,7 @@
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
-#include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/unordered_map.hpp"
 #include "rest_catalog/objects/schema.hpp"
 #include "rest_catalog/objects/view_version.hpp"
 
@@ -36,7 +36,7 @@ public:
 	string name;
 	Schema schema;
 	ViewVersion view_version;
-	case_insensitive_map_t<string> properties;
+	unordered_map<string, string> properties;
 	optional<string> location;
 };
 

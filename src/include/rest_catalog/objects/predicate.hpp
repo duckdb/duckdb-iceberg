@@ -5,7 +5,7 @@
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
-#include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/unordered_map.hpp"
 #include "rest_catalog/objects/and_or_predicate.hpp"
 #include "rest_catalog/objects/comparison_predicate.hpp"
 #include "rest_catalog/objects/false_expression.hpp"

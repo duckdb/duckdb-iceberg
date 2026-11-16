@@ -1,4 +1,5 @@
 #include "maintenance/rewrite_data_files_planner.hpp"
+#include "common/iceberg_properties.hpp"
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/numeric_utils.hpp"
@@ -53,11 +54,11 @@ int64_t ResolveTargetFileSizeBytes(const RewriteDataFilesPlanInput &input, const
 		return input.target_file_size_bytes.value();
 	}
 	auto &properties = metadata.GetTableProperties();
-	auto it = properties.find("write.parquet.target-file-size-bytes");
+	auto it = IcebergProperties::Find(properties, "write.parquet.target-file-size-bytes");
 	if (it != properties.end()) {
 		return ParseTargetFileSizeProperty(it->second, "write.parquet.target-file-size-bytes");
 	}
-	it = properties.find("write.target-file-size-bytes");
+	it = IcebergProperties::Find(properties, "write.target-file-size-bytes");
 	if (it != properties.end()) {
 		return ParseTargetFileSizeProperty(it->second, "write.target-file-size-bytes");
 	}

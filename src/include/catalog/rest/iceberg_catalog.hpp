@@ -199,6 +199,7 @@ public:
 	//! Allow ATTACH OR REPLACE to actually re-attach when iceberg-specific options change
 	bool HasConflictingAttachOptions(const string &path, const AttachOptions &options) override;
 	void SetAttachOptions(const unordered_map<string, Value> &options);
+	optional_ptr<const string> GetCatalogProperty(const string &name) const;
 	//! Throws if the write mode property doesn't allow merge-on-read delete files, which is all DuckDB-Iceberg writes
 	static void VerifyMergeOnRead(const IcebergTableMetadata &metadata, const string &table_name,
 	                              const string &write_mode_property);
@@ -217,7 +218,9 @@ public:
 	IcebergAttachOptions attach_options;
 	//! Optionally (user-)provided default schema to use
 	optional<Identifier> default_schema;
-	case_insensitive_map_t<string> catalog_properties;
+	//! Retain raw JSON layers separately so case-insensitive interpretation respects override precedence.
+	unordered_map<string, string> catalog_defaults;
+	unordered_map<string, string> catalog_overrides;
 
 private:
 	IcebergEndpointType endpoint_type = IcebergEndpointType::INVALID;

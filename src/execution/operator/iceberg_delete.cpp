@@ -1,4 +1,5 @@
 #include "duckdb/execution/operator/persistent/physical_merge_into.hpp"
+#include "common/iceberg_properties.hpp"
 #include "execution/operator/iceberg_delete.hpp"
 #include "execution/operator/iceberg_copy_on_write_delete.hpp"
 #include "execution/operator/merge_into/iceberg_merge_delete_collector.hpp"
@@ -317,7 +318,7 @@ string DeleteFilePath(FileSystem &fs, const string &filename, const string &form
 idx_t DeleteTargetFileSize(const IcebergTableMetadata &metadata) {
 	constexpr const char *PROPERTY = "write.delete.target-file-size-bytes";
 	auto &properties = metadata.GetTableProperties();
-	auto entry = properties.find(PROPERTY);
+	auto entry = IcebergProperties::Find(properties, PROPERTY);
 	if (entry == properties.end()) {
 		return 64ULL * 1024 * 1024;
 	}
@@ -335,8 +336,8 @@ IcebergPuffinBlobMetadata DeletionVectorMetadata(const IcebergDeleteFileInfo &fi
 	metadata.fields.push_back(MultiFileReader::DELETE_POS_FIELD_ID);
 	metadata.snapshot_id = -1;
 	metadata.sequence_number = -1;
-	metadata.properties = case_insensitive_map_t<string> {{"referenced-data-file", file.data_file_path},
-	                                                      {"cardinality", std::to_string(file.delete_count)}};
+	metadata.properties = unordered_map<string, string> {{"referenced-data-file", file.data_file_path},
+	                                                     {"cardinality", std::to_string(file.delete_count)}};
 	return metadata;
 }
 

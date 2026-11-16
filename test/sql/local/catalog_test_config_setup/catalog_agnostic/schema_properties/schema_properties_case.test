@@ -1,0 +1,84 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/schema_properties/schema_properties_case.test
+# description: Namespace property reads and transaction update batches preserve exact JSON names
+# group: [schema_properties]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env NAMESPACE_PROPERTIES_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP SCHEMA IF EXISTS my_datalake.case_properties;
+
+statement ok
+CREATE SCHEMA my_datalake.case_properties;
+
+statement ok
+CALL set_iceberg_schema_properties(my_datalake.case_properties, MAP {'Custom': 'first', 'custom': 'second'});
+
+query TT
+SELECT key, value FROM iceberg_schema_properties(my_datalake.case_properties)
+WHERE key IN ('Custom', 'custom') ORDER BY key;
+----
+Custom	first
+custom	second
+
+# Removing and then updating distinct names in a transaction must retain both operations.
+statement ok
+BEGIN;
+
+statement ok
+CALL remove_iceberg_schema_properties(my_datalake.case_properties, ['Custom']);
+
+statement ok
+CALL set_iceberg_schema_properties(my_datalake.case_properties, MAP {'custom': 'updated'});
+
+query TT
+SELECT key, value FROM iceberg_schema_properties(my_datalake.case_properties)
+WHERE key IN ('Custom', 'custom') ORDER BY key;
+----
+custom	updated
+
+statement ok
+COMMIT;
+
+query TT
+SELECT key, value FROM iceberg_schema_properties(my_datalake.case_properties)
+WHERE key IN ('Custom', 'custom') ORDER BY key;
+----
+custom	updated
+
+statement ok
+BEGIN;
+
+statement ok
+CALL set_iceberg_schema_properties(my_datalake.case_properties, MAP {'Custom': 'restored'});
+
+statement ok
+CALL remove_iceberg_schema_properties(my_datalake.case_properties, ['custom', 'CUSTOM']);
+
+statement ok
+CALL set_iceberg_schema_properties(my_datalake.case_properties, MAP {'custom': 'last'});
+
+statement ok
+COMMIT;
+
+query TT
+SELECT key, value FROM iceberg_schema_properties(my_datalake.case_properties)
+WHERE key IN ('Custom', 'custom') ORDER BY key;
+----
+Custom	restored
+custom	last
+
+statement ok
+CALL remove_iceberg_schema_properties(my_datalake.case_properties, ['custom']);
+
+query TT
+SELECT key, value FROM iceberg_schema_properties(my_datalake.case_properties)
+WHERE key IN ('Custom', 'custom') ORDER BY key;
+----
+Custom	restored
+
+statement ok
+DROP SCHEMA my_datalake.case_properties;

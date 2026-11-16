@@ -1,0 +1,120 @@
+# name: test/sql/local/native_catalog/json_key_case.test
+# description: Loaded metadata and config maps keep case-distinct keys through caching and transaction copies
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+CREATE TABLE my_datalake.default.json_key_case AS SELECT 1 AS id;
+
+statement ok
+SET VARIABLE original_response = (
+	SELECT body::JSON FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/json_key_case', NULL)
+);
+
+statement ok
+SET VARIABLE case_response = json_merge_patch(getvariable('original_response'), json_object(
+	'metadata', json_object(
+		'properties', '{"Custom":"first","custom":"second"}'::JSON,
+		'snapshots', json_array(json_merge_patch(
+			json_extract(getvariable('original_response'), '$.metadata.snapshots[0]'),
+			'{"summary":{"Operation":"custom operation","Custom":"first","custom":"second"}}'::JSON))),
+	'config', '{"Custom":"ConfigUpper","custom":"ConfigLower","SCAN-PLANNING-MODE":"client"}'::JSON,
+	'storage-credentials', json_array(json_object('prefix', 's3://unused/',
+		'config', '{"Custom":"CredentialUpper","custom":"CredentialLower"}'::JSON))
+));
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	json_object('method', 'GET', 'path', '/v1/namespaces/default/tables/json_key_case',
+		'status', 200, 'body', getvariable('case_response'))::VARCHAR);
+----
+204
+
+statement ok
+ATTACH OR REPLACE '' AS my_datalake (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none', STAGE_CREATE_TABLES true,
+	MAX_TABLE_STALENESS '1 hour');
+
+# Repeat to cover reads from the cached parsed metadata.
+foreach iteration 1 2
+
+query TTTT
+SELECT operation, summary['Operation'], summary['Custom'], summary['custom']
+FROM iceberg_snapshots('my_datalake.default.json_key_case');
+----
+append	custom operation	first	second
+
+query TT
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.json_key_case)
+WHERE key IN ('Custom', 'custom') ORDER BY key;
+----
+Custom	first
+custom	second
+
+query I
+SELECT id FROM my_datalake.default.json_key_case;
+----
+1
+
+endloop
+
+query TTTT
+SELECT config['Custom'], config['custom'],
+	storage_credentials[1].config['Custom'], storage_credentials[1].config['custom']
+FROM iceberg_load_table_response('my_datalake.default.json_key_case');
+----
+ConfigUpper	ConfigLower	CredentialUpper	CredentialLower
+
+# A writer gets its own metadata copy and must keep every retained summary field.
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.json_key_case SET ('Custom' = 'private');
+
+query TTT
+SELECT summary['Operation'], summary['Custom'], summary['custom']
+FROM iceberg_snapshots('my_datalake.default.json_key_case');
+----
+custom operation	first	second
+
+query TT
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.json_key_case)
+WHERE key IN ('Custom', 'custom') ORDER BY key;
+----
+Custom	private
+custom	second
+
+statement ok
+ROLLBACK;
+
+query TT
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.json_key_case)
+WHERE key IN ('Custom', 'custom') ORDER BY key;
+----
+Custom	first
+custom	second
+
+# New snapshots inherit totals from their parent, but not the parent's custom fields.
+statement ok
+INSERT INTO my_datalake.default.json_key_case VALUES (2);
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+query IIII
+SELECT summary['Custom'] IS NULL, summary['custom'] IS NULL, summary['Operation'] IS NULL,
+	summary['total-records']::BIGINT
+FROM iceberg_snapshots('my_datalake.default.json_key_case') ORDER BY sequence_number DESC LIMIT 1;
+----
+true	true	true	2
+
+statement ok
+DROP TABLE my_datalake.default.json_key_case;

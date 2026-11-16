@@ -5,7 +5,7 @@
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
-#include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/unordered_map.hpp"
 #include "rest_catalog/objects/binary_type_value.hpp"
 #include "rest_catalog/objects/boolean_type_value.hpp"
 #include "rest_catalog/objects/date_type_value.hpp"

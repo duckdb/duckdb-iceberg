@@ -53,7 +53,9 @@ rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject() const {
 	res.manifest_list = manifest_list;
 
 	res.summary.operation = OperationTypeToString(operation);
-	res.summary.additional_properties = metrics.ToString();
+	// Loaded summaries keep every raw entry, including custom and unrecognized metrics.
+	// New snapshots start with an empty summary and inherit only their parent's metric totals.
+	res.summary.additional_properties = summary.empty() ? metrics.ToString() : summary;
 
 	if (parent_snapshot_id) {
 		res.parent_snapshot_id = *parent_snapshot_id;

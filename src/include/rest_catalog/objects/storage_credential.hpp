@@ -5,7 +5,7 @@
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
-#include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/unordered_map.hpp"
 
 namespace duckdb {
 namespace rest_api_objects {
@@ -32,7 +32,7 @@ public:
 
 public:
 	string prefix;
-	case_insensitive_map_t<string> config;
+	unordered_map<string, string> config;
 };
 
 } // namespace rest_api_objects

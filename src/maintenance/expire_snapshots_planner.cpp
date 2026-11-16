@@ -1,4 +1,5 @@
 #include "maintenance/expire_snapshots_planner.hpp"
+#include "common/iceberg_properties.hpp"
 
 #include "duckdb/common/assert.hpp"
 #include "duckdb/common/exception.hpp"
@@ -28,7 +29,7 @@ struct SnapshotRetentionPolicy {
 int64_t GetBoundedIntegerTableProperty(const IcebergTableMetadata &metadata, const string &name, int64_t default_value,
                                        int64_t minimum_value, int64_t maximum_value) {
 	const auto &properties = metadata.GetTableProperties();
-	const auto entry = properties.find(name);
+	const auto entry = IcebergProperties::Find(properties, name);
 	if (entry == properties.end()) {
 		return default_value;
 	}

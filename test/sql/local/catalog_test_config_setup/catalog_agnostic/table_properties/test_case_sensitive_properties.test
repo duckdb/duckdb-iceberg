@@ -1,0 +1,127 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/table_properties/test_case_sensitive_properties.test
+# description: Raw table properties retain exact keys while recognized settings have explicit case precedence
+# group: [table_properties]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.case_properties;
+
+statement ok
+CREATE TABLE my_datalake.default.case_properties (id INTEGER) WITH ('Format-Version' = '2', 'Custom' = 'initial');
+
+# MAP keys retain their spelling, including when a single update supplies both variants.
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.case_properties, MAP {'Custom': 'first', 'custom': 'second'});
+
+query TT
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.case_properties)
+WHERE key IN ('Custom', 'custom') ORDER BY key;
+----
+Custom	first
+custom	second
+
+statement ok
+BEGIN;
+
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.case_properties, MAP {'Custom': 'private'});
+
+statement ok
+CALL remove_iceberg_table_properties(my_datalake.default.case_properties, ['CUSTOM']);
+
+query TT
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.case_properties)
+WHERE key IN ('Custom', 'custom') ORDER BY key;
+----
+Custom	private
+custom	second
+
+statement ok
+CALL remove_iceberg_table_properties(my_datalake.default.case_properties, ['custom']);
+
+query TT
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.case_properties)
+WHERE key IN ('Custom', 'custom') ORDER BY key;
+----
+Custom	private
+
+statement ok
+ROLLBACK;
+
+query TT
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.case_properties)
+WHERE key IN ('Custom', 'custom') ORDER BY key;
+----
+Custom	first
+custom	second
+
+# ALTER updates and RESET also address an exact raw key.
+statement ok
+ALTER TABLE my_datalake.default.case_properties SET ('Custom' = 'altered');
+
+query TT
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.case_properties)
+WHERE key IN ('Custom', 'custom') ORDER BY key;
+----
+Custom	altered
+custom	second
+
+statement ok
+ALTER TABLE my_datalake.default.case_properties RESET ('Custom');
+
+query TT
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.case_properties)
+WHERE key IN ('Custom', 'custom') ORDER BY key;
+----
+custom	second
+
+# Recognized settings still accept one noncanonical spelling.
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.case_properties, MAP {'WRITE.FORMAT.DEFAULT': 'orc'});
+
+statement error
+INSERT INTO my_datalake.default.case_properties VALUES (1);
+----
+only parquet is supported
+
+# The canonical lowercase key wins without erasing the uppercase raw property.
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.case_properties, MAP {'write.format.default': 'parquet'});
+
+statement ok
+INSERT INTO my_datalake.default.case_properties VALUES (1);
+
+query TT
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.case_properties)
+WHERE lower(key) = 'write.format.default' ORDER BY key;
+----
+WRITE.FORMAT.DEFAULT	orc
+write.format.default	parquet
+
+statement ok
+CALL remove_iceberg_table_properties(my_datalake.default.case_properties, ['write.format.default']);
+
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.case_properties, MAP {'Write.Format.Default': 'avro'});
+
+statement error
+INSERT INTO my_datalake.default.case_properties VALUES (2);
+----
+Ambiguous Iceberg property 'write.format.default'
+
+statement ok
+CALL remove_iceberg_table_properties(my_datalake.default.case_properties, ['WRITE.FORMAT.DEFAULT', 'Write.Format.Default']);
+
+statement ok
+INSERT INTO my_datalake.default.case_properties VALUES (2);
+
+query I
+SELECT count(*) FROM my_datalake.default.case_properties;
+----
+2
+
+statement ok
+DROP TABLE my_datalake.default.case_properties;

@@ -3,7 +3,7 @@
 
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
-#include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/unordered_set.hpp"
 #include "rest_catalog/objects/json_utils.hpp"
 #include "rest_catalog/objects/list.hpp"
 
@@ -73,7 +73,7 @@ string UpdateNamespacePropertiesRequest::TryFromJSON(JSONValue obj) {
 	}
 	auto updates_val = obj.GetMember("updates");
 	if (updates_val.IsValid()) {
-		case_insensitive_map_t<string> updates_tmp;
+		unordered_map<string, string> updates_tmp;
 		if (updates_val.IsObject()) {
 			updates_val.IterateObject([&](const string &key_str, JSONValue val) {
 				if (!error.empty()) {

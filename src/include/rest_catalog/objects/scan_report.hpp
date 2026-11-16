@@ -5,7 +5,7 @@
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
-#include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/unordered_map.hpp"
 #include "rest_catalog/objects/metrics.hpp"
 
 namespace duckdb {
@@ -41,7 +41,7 @@ public:
 	vector<int32_t> projected_field_ids;
 	vector<string> projected_field_names;
 	Metrics metrics;
-	optional<case_insensitive_map_t<string>> metadata;
+	optional<unordered_map<string, string>> metadata;
 };
 
 } // namespace rest_api_objects

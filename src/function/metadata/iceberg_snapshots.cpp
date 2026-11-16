@@ -29,7 +29,7 @@ static string SnapshotOperationToString(IcebergSnapshotOperationType type) {
 	}
 }
 
-static Value SummaryValue(const case_insensitive_map_t<string> &summary) {
+static Value SummaryValue(const unordered_map<string, string> &summary) {
 	map<string, string> sorted(summary.begin(), summary.end());
 	vector<Value> keys;
 	vector<Value> values;

@@ -5,7 +5,7 @@
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
-#include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/unordered_map.hpp"
 #include "rest_catalog/objects/labels.hpp"
 #include "rest_catalog/objects/view_metadata.hpp"
 
@@ -35,7 +35,7 @@ public:
 public:
 	string metadata_location;
 	ViewMetadata metadata;
-	optional<case_insensitive_map_t<string>> config;
+	optional<unordered_map<string, string>> config;
 	optional<Labels> labels;
 };
 

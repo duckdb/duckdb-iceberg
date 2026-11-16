@@ -1,4 +1,5 @@
 #include "catalog/rest/iceberg_table_set.hpp"
+#include "common/iceberg_properties.hpp"
 #include "catalog/rest/iceberg_view_entry.hpp"
 
 #include "duckdb/parser/expression/constant_expression.hpp"
@@ -388,7 +389,6 @@ IcebergTable &IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCat
 	TableFunctionBinder property_binder(*binder, context, "format-version");
 
 	optional_idx iceberg_version;
-	case_insensitive_map_t<Value> table_properties;
 	// format version must be verified
 	auto format_version_it = info.options.find("format-version");
 	if (format_version_it != info.options.end()) {
@@ -418,7 +418,7 @@ IcebergTable &IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCat
 	}
 	if (location.empty() && catalog.attach_options.default_table_location_from_namespace) {
 		schema.LoadProperties(context);
-		auto ns_location_it = schema.schema_info.properties.find("location");
+		auto ns_location_it = IcebergProperties::Find(schema.schema_info.properties, "location");
 		if (ns_location_it != schema.schema_info.properties.end() && !ns_location_it->second.empty()) {
 			location = ns_location_it->second;
 			StringUtil::RTrim(location, "/");
@@ -451,7 +451,10 @@ IcebergTable &IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCat
 		bootstrap_metadata.table_properties.emplace(option.first, option_val);
 	}
 	// Explicitly enable shredding for new DuckDB tables, while preserving an explicit override.
-	bootstrap_metadata.table_properties.emplace("write.parquet.shred-variants", "true");
+	if (IcebergProperties::Find(bootstrap_metadata.table_properties, "write.parquet.shred-variants") ==
+	    bootstrap_metadata.table_properties.end()) {
+		bootstrap_metadata.table_properties.emplace("write.parquet.shred-variants", "true");
+	}
 
 	auto initial_partition_spec = IcebergTable::BuildPartitionSpec(info.partition_keys, *new_schema, 0, 1000);
 	//! Sort order id 0 is reserved for the unsorted order, so a table created with SORTED BY starts at 1

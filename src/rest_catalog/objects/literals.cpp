@@ -3,7 +3,7 @@
 
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
-#include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/unordered_set.hpp"
 #include "rest_catalog/objects/json_utils.hpp"
 #include "rest_catalog/objects/list.hpp"
 
@@ -11,6 +11,59 @@ namespace duckdb {
 namespace rest_api_objects {
 
 Literals::Literals() {
+}
+Literals::LiteralsOneOf1::LiteralsOneOf1() {
+}
+
+Literals::LiteralsOneOf1 Literals::LiteralsOneOf1::FromJSON(JSONValue obj) {
+	LiteralsOneOf1 res;
+	auto error = res.TryFromJSON(obj);
+	if (!error.empty()) {
+		throw InvalidInputException(error);
+	}
+	return res;
+}
+
+Literals::LiteralsOneOf1 Literals::LiteralsOneOf1::Copy() const {
+	LiteralsOneOf1 res;
+	res.value.reserve(value.size());
+	for (auto &item : value) {
+		res.value.emplace_back(item.Copy());
+	}
+	return res;
+}
+
+string Literals::LiteralsOneOf1::TryFromJSON(JSONValue obj) {
+	string error;
+	if (obj.IsArray()) {
+		obj.IterateArray([&](JSONValue value_item_val) {
+			if (!error.empty()) {
+				return;
+			}
+			Literal value_item;
+			error = value_item.TryFromJSON(value_item_val);
+			if (!error.empty()) {
+				return;
+			}
+			value.emplace_back(std::move(value_item));
+		});
+		if (!error.empty()) {
+			return error;
+		}
+	} else {
+		return StringUtil::Format("LiteralsOneOf1 property 'value' is not of type 'array', found %s instead",
+		                          json_utils::GetTypeDescription(obj).c_str());
+	}
+	return "";
+}
+
+JSONMutableValue Literals::LiteralsOneOf1::ToJSON(JSONWriter &writer) const {
+	auto result = writer.CreateArray();
+	for (const auto &result_item : value) {
+		auto result_item_json = result_item.ToJSON(writer);
+		result.Append(result_item_json);
+	}
+	return result;
 }
 Literals::Object5::Object5() {
 }
@@ -109,59 +162,6 @@ JSONMutableValue Literals::Object5::ToJSON(JSONWriter &writer) const {
 	auto obj = writer.CreateObject();
 	PopulateJSON(writer, obj);
 	return obj;
-}
-Literals::LiteralsOneOf1::LiteralsOneOf1() {
-}
-
-Literals::LiteralsOneOf1 Literals::LiteralsOneOf1::FromJSON(JSONValue obj) {
-	LiteralsOneOf1 res;
-	auto error = res.TryFromJSON(obj);
-	if (!error.empty()) {
-		throw InvalidInputException(error);
-	}
-	return res;
-}
-
-Literals::LiteralsOneOf1 Literals::LiteralsOneOf1::Copy() const {
-	LiteralsOneOf1 res;
-	res.value.reserve(value.size());
-	for (auto &item : value) {
-		res.value.emplace_back(item.Copy());
-	}
-	return res;
-}
-
-string Literals::LiteralsOneOf1::TryFromJSON(JSONValue obj) {
-	string error;
-	if (obj.IsArray()) {
-		obj.IterateArray([&](JSONValue value_item_val) {
-			if (!error.empty()) {
-				return;
-			}
-			Literal value_item;
-			error = value_item.TryFromJSON(value_item_val);
-			if (!error.empty()) {
-				return;
-			}
-			value.emplace_back(std::move(value_item));
-		});
-		if (!error.empty()) {
-			return error;
-		}
-	} else {
-		return StringUtil::Format("LiteralsOneOf1 property 'value' is not of type 'array', found %s instead",
-		                          json_utils::GetTypeDescription(obj).c_str());
-	}
-	return "";
-}
-
-JSONMutableValue Literals::LiteralsOneOf1::ToJSON(JSONWriter &writer) const {
-	auto result = writer.CreateArray();
-	for (const auto &result_item : value) {
-		auto result_item_json = result_item.ToJSON(writer);
-		result.Append(result_item_json);
-	}
-	return result;
 }
 
 Literals Literals::FromJSON(JSONValue obj) {

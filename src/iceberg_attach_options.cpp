@@ -1,5 +1,6 @@
 #include "iceberg_attach.hpp"
 
+#include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/string_util.hpp"
 
 namespace duckdb {
@@ -93,7 +94,10 @@ static case_insensitive_map_t<Value> ReadHeaders(const Value &value) {
 	auto headers = value.DefaultCastAs(LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR));
 	for (auto &entry : MapValue::GetChildren(headers)) {
 		auto &pair = StructValue::GetChildren(entry);
-		result[pair[0].GetValue<string>()] = pair[1];
+		auto name = pair[0].GetValue<string>();
+		if (!result.emplace(name, pair[1]).second) {
+			throw InvalidConfigurationException("Duplicate Iceberg header option '%s'", StringUtil::Lower(name));
+		}
 	}
 	return result;
 }
@@ -136,7 +140,7 @@ static unordered_map<string, Value> NormalizeOptions(const unordered_map<string,
 		}
 		InsertOption(result, it->second->name, entry.second);
 	}
-	if (!headers.empty()) {
+	if (!headers.empty() || result.count("extra_http_headers")) {
 		auto it = result.find("extra_http_headers");
 		if (it != result.end()) {
 			for (auto &entry : ReadHeaders(it->second)) {
@@ -156,7 +160,7 @@ unordered_map<string, Value> NormalizeIcebergAttachOptions(const unordered_map<s
 	return NormalizeOptions(options, false);
 }
 
-unordered_map<string, Value> NormalizeIcebergCatalogOptions(const case_insensitive_map_t<string> &properties) {
+unordered_map<string, Value> NormalizeIcebergCatalogOptions(const unordered_map<string, string> &properties) {
 	unordered_map<string, Value> options;
 	for (auto &entry : properties) {
 		options.emplace(entry.first, Value(entry.second));

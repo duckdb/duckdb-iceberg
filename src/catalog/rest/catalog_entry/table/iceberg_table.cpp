@@ -1,6 +1,8 @@
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
+#include "common/iceberg_properties.hpp"
 
 #include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/map.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
@@ -71,17 +73,17 @@ vector<string> IcebergTable::GetS3EncryptionTypes() const {
 	}
 	// table config overrides the catalog config, and each storage credential overrides both.
 	static const string SSE_TYPE = "s3.sse.type";
-	auto it = config.find(SSE_TYPE);
+	auto it = IcebergProperties::FindConfig(config, SSE_TYPE);
 	if (it != config.end()) {
 		sse_types.push_back(it->second);
 	} else {
-		auto catalog_it = catalog.catalog_properties.find(SSE_TYPE);
-		if (catalog_it != catalog.catalog_properties.end()) {
-			sse_types.push_back(catalog_it->second);
+		auto catalog_type = catalog.GetCatalogProperty(SSE_TYPE);
+		if (catalog_type) {
+			sse_types.push_back(*catalog_type);
 		}
 	}
 	for (auto &credential : storage_credentials) {
-		auto credential_it = credential.config.find(SSE_TYPE);
+		auto credential_it = IcebergProperties::FindConfig(credential.config, SSE_TYPE);
 		if (credential_it != credential.config.end()) {
 			sse_types.push_back(credential_it->second);
 		}
@@ -89,20 +91,28 @@ vector<string> IcebergTable::GetS3EncryptionTypes() const {
 	return sse_types;
 }
 
-static void ParseGCSConfigOptions(const case_insensitive_map_t<string> &config,
-                                  case_insensitive_map_t<Value> &options) {
+static void ParseGCSConfigOptions(const unordered_map<string, string> &config, case_insensitive_map_t<Value> &options) {
 	// Parse GCS-specific configuration.
-	auto token_it = config.find("gcs.oauth2.token");
+	auto token_it = IcebergProperties::FindConfig(config, "gcs.oauth2.token");
 	if (token_it != config.end()) {
 		options["bearer_token"] = token_it->second;
 	}
 }
 
-static void ParseAzureConfigOptions(const case_insensitive_map_t<string> &config,
+static void ParseAzureConfigOptions(const unordered_map<string, string> &config,
                                     case_insensitive_map_t<Value> &options) {
 	static const string ADLS_SAS_TOKEN_PREFIX = "adls.sas-token.";
 
+	// Account hosts are case-insensitive. Resolve duplicates before choosing an account.
+	// Keep the existing single-account behavior, with a stable order for multi-account configs.
+	map<string, string> tokens;
 	for (auto &entry : config) {
+		auto key = StringUtil::Lower(entry.first);
+		if (StringUtil::StartsWith(key, ADLS_SAS_TOKEN_PREFIX) && !tokens.emplace(key, entry.second).second) {
+			throw InvalidConfigurationException("Duplicate Iceberg config property '%s'", key);
+		}
+	}
+	for (auto &entry : tokens) {
 		// SAS token config format is e.g. {adls.sas-token.<account-name>.dfs.core.windows.net, <token>}
 		if (StringUtil::StartsWith(entry.first, ADLS_SAS_TOKEN_PREFIX)) {
 			string host = entry.first.substr(ADLS_SAS_TOKEN_PREFIX.length());
@@ -132,7 +142,7 @@ static void ParseAzureConfigOptions(const case_insensitive_map_t<string> &config
 	}
 }
 
-static void ParseS3ConfigOptions(const case_insensitive_map_t<string> &config, case_insensitive_map_t<Value> &options) {
+static void ParseS3ConfigOptions(const unordered_map<string, string> &config, case_insensitive_map_t<Value> &options) {
 	// Set of recognized S3 config parameters and the duckdb secret option that matches it.
 	static const case_insensitive_map_t<string> config_to_option = {{"s3.access-key-id", "key_id"},
 	                                                                {"s3.secret-access-key", "secret"},
@@ -143,9 +153,13 @@ static void ParseS3ConfigOptions(const case_insensitive_map_t<string> &config, c
 	                                                                {"client.region", "region"},
 	                                                                {"s3.endpoint", "endpoint"}};
 
+	case_insensitive_set_t supplied_options;
 	for (auto &entry : config) {
 		auto it = config_to_option.find(entry.first);
 		if (it != config_to_option.end()) {
+			if (!supplied_options.insert(it->second).second) {
+				throw InvalidConfigurationException("Duplicate Iceberg storage option '%s'", it->second);
+			}
 			options[it->second] = entry.second;
 		}
 	}
@@ -167,7 +181,7 @@ string RetrieveRegion(DBConfig &db_config) {
 
 	return "";
 }
-static void ParseConfigOptions(const case_insensitive_map_t<string> &config, case_insensitive_map_t<Value> &options,
+static void ParseConfigOptions(const unordered_map<string, string> &config, case_insensitive_map_t<Value> &options,
                                ClientContext &context, const string &storage_type = "s3") {
 	if (config.empty()) {
 		return;
@@ -194,7 +208,7 @@ static void ParseConfigOptions(const case_insensitive_map_t<string> &config, cas
 		}
 	}
 
-	auto it = config.find("s3.path-style-access");
+	auto it = IcebergProperties::FindConfig(config, "s3.path-style-access");
 	if (it != config.end()) {
 		bool path_style;
 		if (it->second == "true") {
@@ -258,7 +272,7 @@ IRCAPITableCredentials IcebergTable::GetVendedCredentials(ClientContext &context
 IRCAPITableCredentials
 IcebergTable::GetVendedCredentials(ClientContext &context,
                                    const vector<rest_api_objects::StorageCredential> &storage_credentials,
-                                   optional_ptr<const case_insensitive_map_t<string>> config_override) const {
+                                   optional_ptr<const unordered_map<string, string>> config_override) const {
 	IRCAPITableCredentials result;
 	auto schema_component = IRCPathComponent::NamespaceComponent(schema.namespace_items, catalog.namespace_separator);
 	auto secret_base_name = UUID::ToString(UUID::GenerateRandomUUID());
@@ -752,7 +766,7 @@ void IcebergTable::LoadCredentials(ClientContext &context, IRCAPITableCredential
 	    IcebergLogType::Redact(context, StringUtil::Format("%s.%s.%s", catalog.GetName(), schema.name, name));
 	string storage_scope;
 	const char *scope_source;
-	auto data_path = GetMetadata().table_properties.find("write.data.path");
+	auto data_path = IcebergProperties::Find(GetMetadata().table_properties, "write.data.path");
 	if (data_path != GetMetadata().table_properties.end()) {
 		storage_scope = data_path->second;
 		scope_source = "write.data.path";

@@ -3,6 +3,7 @@
 
 #include "rest_catalog/objects/type.hpp"
 #include "duckdb/common/json_document.hpp"
+#include "duckdb/common/types/value.hpp"
 #include <functional>
 #include "rest_catalog/objects/primitive_type_value.hpp"
 

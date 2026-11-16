@@ -2,7 +2,6 @@
 
 #include "duckdb/common/typedefs.hpp"
 #include "duckdb/common/unordered_map.hpp"
-#include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/vector.hpp"
 
 namespace duckdb {
@@ -82,7 +81,7 @@ struct IcebergSnapshotMetrics {
 public:
 	IcebergSnapshotMetrics();
 	IcebergSnapshotMetrics(const IcebergSnapshot &parent_snapshot);
-	IcebergSnapshotMetrics(const case_insensitive_map_t<string> &summary);
+	IcebergSnapshotMetrics(const unordered_map<string, string> &summary);
 
 public:
 	//! Account for newly written content. Existing entries are not changes to the snapshot.
@@ -91,7 +90,7 @@ public:
 	bool HasTotalFilesSize() const;
 	void SetTotalFilesSize(int64_t total_files_size);
 	const metrics_map_t &GetMetrics() const;
-	case_insensitive_map_t<string> ToString() const;
+	unordered_map<string, string> ToString() const;
 
 private:
 	void AddSizeMetric(IcebergSnapshotMetricType type, int64_t value);

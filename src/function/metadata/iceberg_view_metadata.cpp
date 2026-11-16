@@ -101,7 +101,7 @@ static unique_ptr<FunctionData> IcebergViewMetadataBind(ClientContext &context, 
 	return std::move(ret);
 }
 
-static void OutputMap(const case_insensitive_map_t<string> &config, Vector &config_vec) {
+static void OutputMap(const unordered_map<string, string> &config, Vector &config_vec) {
 	auto config_count = config.size();
 	ListVector::Reserve(config_vec, config_count);
 	auto &config_key_vec = MapVector::GetKeys(config_vec);

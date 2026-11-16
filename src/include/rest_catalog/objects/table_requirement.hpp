@@ -5,7 +5,7 @@
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
-#include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/unordered_map.hpp"
 #include "rest_catalog/objects/assert_create.hpp"
 #include "rest_catalog/objects/assert_current_schema_id.hpp"
 #include "rest_catalog/objects/assert_default_sort_order_id.hpp"

@@ -1,4 +1,5 @@
 #include "catalog/rest/transaction/iceberg_transaction_data.hpp"
+#include "common/iceberg_properties.hpp"
 
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 
@@ -109,7 +110,7 @@ IcebergTransactionData::IcebergTransactionData(ClientContext &context, IcebergTr
 
 int64_t IcebergTransactionData::GetCommitRetryCount() const {
 	static constexpr const int64_t DEFAULT_RETRY_COUNT = 4;
-	auto it = table_info.GetMetadata().table_properties.find("commit.retry.num-retries");
+	auto it = IcebergProperties::Find(table_info.GetMetadata().table_properties, "commit.retry.num-retries");
 	if (it == table_info.GetMetadata().table_properties.end()) {
 		return DEFAULT_RETRY_COUNT;
 	}
@@ -438,9 +439,9 @@ void IcebergTransactionData::TableSetDefaultSpec() {
 	updates.push_back(make_uniq<SetDefaultSpec>(table_info.GetMetadata().default_spec_id));
 }
 
-void IcebergTransactionData::TableSetProperties(const case_insensitive_map_t<string> &properties) {
+void IcebergTransactionData::TableSetProperties(const unordered_map<string, string> &properties) {
 	VerifyNoSnapshotExpiration(updates, "Table property changes");
-	if (properties.count("encryption.key-id")) {
+	if (IcebergProperties::Find(properties, "encryption.key-id") != properties.end()) {
 		throw NotImplementedException("Iceberg table encryption is not supported (encryption.key-id is set)");
 	}
 	updates.push_back(make_uniq<SetProperties>(properties));

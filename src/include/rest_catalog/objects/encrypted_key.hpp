@@ -5,7 +5,7 @@
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
-#include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/unordered_map.hpp"
 
 namespace duckdb {
 namespace rest_api_objects {
@@ -34,7 +34,7 @@ public:
 	string key_id;
 	string encrypted_key_metadata;
 	optional<string> encrypted_by_id;
-	optional<case_insensitive_map_t<string>> properties;
+	optional<unordered_map<string, string>> properties;
 };
 
 } // namespace rest_api_objects

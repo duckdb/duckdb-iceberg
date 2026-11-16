@@ -24,7 +24,7 @@ namespace duckdb {
 IcebergCreateTableRequest::IcebergCreateTableRequest(string name_p, shared_ptr<IcebergTableSchema> schema_p,
                                                      IcebergPartitionSpec partition_spec_p,
                                                      IcebergSortOrder sort_order_p, idx_t iceberg_version_p,
-                                                     case_insensitive_map_t<string> table_properties_p,
+                                                     unordered_map<string, string> table_properties_p,
                                                      string location_p)
     : name(std::move(name_p)), schema(std::move(schema_p)), partition_spec(std::move(partition_spec_p)),
       sort_order(std::move(sort_order_p)), iceberg_version(iceberg_version_p),

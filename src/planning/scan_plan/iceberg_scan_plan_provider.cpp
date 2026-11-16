@@ -1,4 +1,5 @@
 #include "planning/scan_plan/iceberg_scan_plan_provider.hpp"
+#include "common/iceberg_properties.hpp"
 
 #include "catalog/rest/api/iceberg_expression.hpp"
 #include "catalog/rest/api/iceberg_type.hpp"
@@ -23,7 +24,7 @@ static ScanPlanningMode GetScanPlanningMode(optional_ptr<IcebergTableSchemaVersi
 	}
 
 	auto &config = table->table_info.config;
-	auto it = config.find("scan-planning-mode");
+	auto it = IcebergProperties::FindConfig(config, "scan-planning-mode");
 	if (it == config.end()) {
 		return ScanPlanningMode::UNSPECIFIED;
 	}

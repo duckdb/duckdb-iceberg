@@ -5,7 +5,7 @@
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
-#include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/unordered_map.hpp"
 #include "rest_catalog/objects/binary_type_value.hpp"
 #include "rest_catalog/objects/field_statistics.hpp"
 #include "rest_catalog/objects/file_format.hpp"
@@ -42,7 +42,7 @@ public:
 		JSONMutableValue ToJSON(JSONWriter &writer) const;
 
 	public:
-		case_insensitive_map_t<FieldStatistics> additional_properties;
+		unordered_map<string, FieldStatistics> additional_properties;
 	};
 
 public:
