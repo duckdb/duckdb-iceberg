@@ -140,16 +140,19 @@ static unordered_map<string, Value> NormalizeOptions(const unordered_map<string,
 		}
 		InsertOption(result, it->second->name, entry.second);
 	}
-	if (!headers.empty() || result.count("extra_http_headers")) {
-		auto it = result.find("extra_http_headers");
-		if (it != result.end()) {
-			for (auto &entry : ReadHeaders(it->second)) {
+	auto explicit_headers = result.find("extra_http_headers");
+	if (!headers.empty()) {
+		if (explicit_headers != result.end()) {
+			for (auto &entry : ReadHeaders(explicit_headers->second)) {
 				if (!headers.emplace(entry).second) {
 					throw InvalidConfigurationException("Duplicate Iceberg header option '%s'", entry.first);
 				}
 			}
 		}
 		result["extra_http_headers"] = HeadersToValue(headers);
+	} else if (explicit_headers != result.end()) {
+		// Validate duplicate names without rewriting the spelling of an explicit header map.
+		ReadHeaders(explicit_headers->second);
 	}
 	return result;
 }
