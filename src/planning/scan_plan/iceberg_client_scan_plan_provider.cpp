@@ -5,7 +5,8 @@ namespace duckdb {
 
 ClientSideScanPlanProvider::ClientSideScanPlanProvider(IcebergScanPlanState &shared_state,
                                                        IcebergScanPlanContext context)
-    : store(shared_state.GetManifestStore(std::move(context))) {
+    : incremental(context.snapshot.incremental ? &*context.snapshot.incremental : nullptr),
+      store(shared_state.GetManifestStore(std::move(context))) {
 }
 
 void ClientSideScanPlanProvider::LoadManifestList() {
@@ -52,6 +53,21 @@ vector<reference<const IcebergManifestListEntry>> ClientSideScanPlanProvider::Tr
 bool ClientSideScanPlanProvider::DeleteFileAppliesToDataFile(const string &data_file_path,
                                                              const IcebergFileIdentity &delete_file) const {
 	return !store.DeleteFileIsInvalidated(delete_file);
+}
+
+bool ClientSideScanPlanProvider::ManifestIsVisible(const IcebergManifestListEntry &manifest) const {
+	if (!incremental) {
+		return true;
+	}
+	return incremental->ManifestInRange(manifest);
+}
+
+bool ClientSideScanPlanProvider::EntryIsVisible(const IcebergManifestEntry &entry,
+                                                const IcebergManifestListEntry &manifest) const {
+	if (!incremental) {
+		return true;
+	}
+	return incremental->EntryInRange(entry, manifest);
 }
 
 } // namespace duckdb

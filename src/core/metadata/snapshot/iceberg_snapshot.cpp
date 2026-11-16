@@ -27,7 +27,7 @@ int64_t IcebergSnapshot::NextSequenceNumber(int64_t last_sequence_number) {
 	return next;
 }
 
-static string OperationTypeToString(IcebergSnapshotOperationType type) {
+string IcebergSnapshotOperationTypeToString(IcebergSnapshotOperationType type) {
 	switch (type) {
 	case IcebergSnapshotOperationType::APPEND:
 		return "append";
@@ -52,7 +52,7 @@ rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject() const {
 	}
 	res.manifest_list = manifest_list;
 
-	res.summary.operation = OperationTypeToString(operation);
+	res.summary.operation = IcebergSnapshotOperationTypeToString(operation);
 	res.summary.additional_properties = metrics.ToString();
 
 	if (parent_snapshot_id) {

@@ -34,6 +34,10 @@ public:
 	virtual void FinishScanTasks() = 0;
 	virtual bool DeleteFileAppliesToDataFile(const string &data_file_path,
 	                                         const IcebergFileIdentity &delete_file) const = 0;
+	//! Only an incremental client-side scan narrows this, a server-side plan is already the file set.
+	virtual bool ManifestIsVisible(const IcebergManifestListEntry &manifest) const = 0;
+	//! Whether a manifest entry can contribute a file to this scan.
+	virtual bool EntryIsVisible(const IcebergManifestEntry &entry, const IcebergManifestListEntry &manifest) const = 0;
 	virtual const vector<IcebergManifestListEntry> &DataManifests() = 0;
 	virtual const vector<IcebergManifestListEntry> &DeleteManifests() = 0;
 	virtual vector<reference<const IcebergManifestListEntry>> TransactionDataManifests() {
@@ -58,6 +62,8 @@ public:
 	void FinishScanTasks() override DUCKDB_REQUIRES(store.lock);
 	bool DeleteFileAppliesToDataFile(const string &data_file_path,
 	                                 const IcebergFileIdentity &delete_file) const override;
+	bool ManifestIsVisible(const IcebergManifestListEntry &manifest) const override;
+	bool EntryIsVisible(const IcebergManifestEntry &entry, const IcebergManifestListEntry &manifest) const override;
 	const vector<IcebergManifestListEntry> &DataManifests() override DUCKDB_REQUIRES(store.lock);
 	const vector<IcebergManifestListEntry> &DeleteManifests() override DUCKDB_REQUIRES(store.lock);
 
@@ -65,6 +71,8 @@ public:
 	vector<reference<const IcebergManifestListEntry>> TransactionDeleteManifests() override DUCKDB_REQUIRES(store.lock);
 
 private:
+	//! The resolved range of an incremental scan, unset otherwise. Owned by the frozen scan configuration.
+	optional_ptr<const IcebergIncrementalSnapshots> incremental;
 	IcebergManifestStore &store;
 };
 
@@ -81,6 +89,8 @@ public:
 	void FinishScanTasks() override;
 	bool DeleteFileAppliesToDataFile(const string &data_file_path,
 	                                 const IcebergFileIdentity &delete_file) const override;
+	bool ManifestIsVisible(const IcebergManifestListEntry &manifest) const override;
+	bool EntryIsVisible(const IcebergManifestEntry &entry, const IcebergManifestListEntry &manifest) const override;
 	const vector<IcebergManifestListEntry> &DataManifests() override;
 	const vector<IcebergManifestListEntry> &DeleteManifests() override;
 

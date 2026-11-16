@@ -1,0 +1,110 @@
+#include "planning/snapshot/iceberg_incremental_scan.hpp"
+
+#include "duckdb/common/exception.hpp"
+#include "duckdb/common/optional_ptr.hpp"
+#include "duckdb/common/vector.hpp"
+
+#include "core/metadata/iceberg_table_metadata.hpp"
+#include "core/metadata/manifest/iceberg_manifest.hpp"
+#include "core/metadata/manifest/iceberg_manifest_list.hpp"
+#include "core/metadata/snapshot/iceberg_snapshot.hpp"
+
+namespace duckdb {
+
+IcebergIncrementalSnapshots IcebergIncrementalSnapshots::Resolve(const IcebergTableMetadata &metadata,
+                                                                 const IcebergIncrementalScanRange &range) {
+	D_ASSERT(range.IsIncremental());
+	auto start_snapshot_id = *range.start_snapshot_id;
+
+	int64_t end_snapshot_id;
+	if (range.end_snapshot_id) {
+		end_snapshot_id = *range.end_snapshot_id;
+	} else if (metadata.current_snapshot_id) {
+		end_snapshot_id = *metadata.current_snapshot_id;
+	} else {
+		throw InvalidInputException("'end_snapshot_id' is not set and the table has no current snapshot");
+	}
+
+	//! Both throw when the snapshot does not exist
+	metadata.GetSnapshotById(start_snapshot_id);
+	auto end_snapshot = metadata.GetSnapshotById(end_snapshot_id);
+
+	IcebergIncrementalSnapshots result;
+	result.end_snapshot_id = end_snapshot_id;
+	if (start_snapshot_id == end_snapshot_id) {
+		//! An empty range, the scan produces no files
+		return result;
+	}
+
+	//! 'start_snapshot_id' is exclusive, so it is never collected.
+	vector<reference<const IcebergSnapshot>> collected;
+	optional_ptr<const IcebergSnapshot> cursor = end_snapshot;
+	bool found_start = false;
+	//! The bound stops a cycle in corrupt metadata
+	for (idx_t step = 0; cursor && step <= metadata.snapshots.size(); step++) {
+		collected.push_back(*cursor);
+		if (!cursor->parent_snapshot_id) {
+			//! Reached the root of the chain without passing the start snapshot
+			break;
+		}
+		auto parent_snapshot_id = *cursor->parent_snapshot_id;
+		if (parent_snapshot_id == start_snapshot_id) {
+			found_start = true;
+			break;
+		}
+		cursor = metadata.FindSnapshotByIdInternal(parent_snapshot_id);
+	}
+	if (!found_start) {
+		throw InvalidInputException(
+		    "'start_snapshot_id' %lld is not an ancestor of 'end_snapshot_id' %lld, so the range of "
+		    "appended data between them is not defined",
+		    start_snapshot_id, end_snapshot_id);
+	}
+
+	for (auto &snapshot_ref : collected) {
+		auto &snapshot = snapshot_ref.get();
+		if (snapshot.operation != IcebergSnapshotOperationType::APPEND) {
+			throw InvalidInputException(
+			    "Snapshot %lld in the requested range has operation '%s', incremental reads only support "
+			    "'append' snapshots. Reading between these snapshots would silently skip the data it changed",
+			    snapshot.snapshot_id, IcebergSnapshotOperationTypeToString(snapshot.operation));
+		}
+		result.snapshot_ids.insert(snapshot.snapshot_id);
+	}
+	return result;
+}
+
+//! Manifests built from transaction-local content belong to no committed snapshot. Incremental scans
+//! are only reachable through 'iceberg_scan', which never carries them, so reaching one is a bug.
+static const IcebergManifestFile &GetCommittedManifestFile(const IcebergManifestListEntry &manifest) {
+	if (!manifest.HasFile()) {
+		throw InternalException("An incremental scan can not include transaction-local manifests");
+	}
+	return manifest.GetFile();
+}
+
+bool IcebergIncrementalSnapshots::ManifestInRange(const IcebergManifestListEntry &manifest) const {
+	return snapshot_ids.count(GetCommittedManifestFile(manifest).added_snapshot_id) != 0;
+}
+
+bool IcebergIncrementalSnapshots::EntryInRange(const IcebergManifestEntry &entry,
+                                               const IcebergManifestListEntry &manifest) const {
+	switch (entry.status) {
+	case IcebergManifestEntryStatusType::ADDED:
+		return snapshot_ids.count(entry.GetSnapshotId(GetCommittedManifestFile(manifest))) != 0;
+	case IcebergManifestEntryStatusType::EXISTING:
+		//! Merging manifests on append rewrites files added earlier as EXISTING, keeping the id of the
+		//! snapshot that added them, so a file added in the range can be EXISTING in the end snapshot.
+		//! Only ADDED entries may inherit, inheriting here would attribute an old file to the range.
+		if (!entry.HasSnapshotId()) {
+			throw InvalidConfigurationException(
+			    "EXISTING manifest entry for '%s' has no 'snapshot_id', so the snapshot that added it is unknown",
+			    entry.data_file.file_path);
+		}
+		return snapshot_ids.count(entry.GetSnapshotId()) != 0;
+	default:
+		return false;
+	}
+}
+
+} // namespace duckdb
