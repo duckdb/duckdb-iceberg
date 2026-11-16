@@ -1,0 +1,103 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/nested_namespaces/test_nested_namespace_show_tables.test
+# description: SHOW TABLES reaches a nested namespace that no listing has discovered
+# group: [nested_namespaces]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+include test/sql/local/catalog_test_config_setup/catalog_agnostic/setup/nested_namespace_catalog.test_setup
+
+statement ok
+drop table if exists nested_lake.nw_parent.nw_child.t;
+
+statement ok
+drop table if exists nested_lake.nw_child.t;
+
+statement ok
+drop schema if exists nested_lake.nw_parent.nw_child;
+
+statement ok
+drop schema if exists nested_lake.nw_parent;
+
+statement ok
+drop schema if exists nested_lake.nw_child;
+
+# created through nested_lake, so my_datalake only knows the namespaces it finds itself
+statement ok
+create schema nested_lake.nw_parent;
+
+statement ok
+create schema nested_lake.nw_parent.nw_child;
+
+statement ok
+create schema nested_lake.nw_child;
+
+statement ok
+create table nested_lake.nw_parent.nw_child.t as select 1 as i;
+
+statement ok
+create table nested_lake.nw_child.t as select 10 as i;
+
+# with the option each table is listed once, in its own namespace
+query TT
+select "schema", name from (show all tables) where database = 'nested_lake' and "schema" = 'nw_child' order by all;
+----
+nw_child	t
+nw_child	t
+
+# without it the listing stops at the top level
+query TT
+select "schema", name from (show all tables) where database = 'my_datalake' and "schema" like 'nw\_%' escape '\' order by all;
+----
+nw_child	t
+
+# a statement that names the nested namespace still sees its tables
+query T
+show tables from my_datalake.nw_parent.nw_child;
+----
+t
+
+query T
+show tables from my_datalake."nw_parent.nw_child";
+----
+t
+
+statement ok
+use my_datalake.nw_parent.nw_child;
+
+query T
+show tables;
+----
+t
+
+query I
+select i from t;
+----
+1
+
+statement ok
+use my_datalake.default;
+
+# the namespace is listed from then on, under its parent
+query II
+select schema_name, parent_schema from duckdb_schemas() where database_name = 'my_datalake' and schema_name like 'nw\_%' escape '\' order by all;
+----
+nw_child	nw_parent
+nw_child	NULL
+nw_parent	NULL
+
+statement ok
+drop table nested_lake.nw_parent.nw_child.t;
+
+statement ok
+drop table nested_lake.nw_child.t;
+
+statement ok
+drop schema nested_lake.nw_parent.nw_child;
+
+statement ok
+drop schema nested_lake.nw_parent;
+
+statement ok
+drop schema nested_lake.nw_child;

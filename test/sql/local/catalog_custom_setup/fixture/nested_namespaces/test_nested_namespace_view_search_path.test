@@ -1,0 +1,99 @@
+# name: test/sql/local/catalog_custom_setup/fixture/nested_namespaces/test_nested_namespace_view_search_path.test
+# description: a view created or read through the search path lands in the current nested namespace
+# group: [nested_namespaces]
+
+require-env FIXTURE_SERVER_AVAILABLE
+
+include test/sql/init_requires
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    URI 'http://127.0.0.1:8181'
+);
+
+statement ok
+drop view if exists my_datalake.fxs_parent.fxs_child.v_local;
+
+statement ok
+drop table if exists my_datalake.fxs_parent.fxs_child.t;
+
+statement ok
+drop schema if exists my_datalake.fxs_parent.fxs_child;
+
+statement ok
+drop schema if exists my_datalake.fxs_parent;
+
+statement ok
+create schema my_datalake.fxs_parent;
+
+statement ok
+create schema my_datalake.fxs_parent.fxs_child;
+
+statement ok
+create table my_datalake.fxs_parent.fxs_child.t as select * from (values (1), (2)) v(i);
+
+statement ok
+use my_datalake.fxs_parent.fxs_child;
+
+# a view's query has to name its tables with their namespace, in a nested namespace as anywhere else
+statement error
+create view v_unqualified as select * from t;
+----
+names a table without a namespace
+
+statement ok
+create view v_local as select i from fxs_parent.fxs_child.t;
+
+query I
+select i from v_local order by i;
+----
+1
+2
+
+query T
+show tables;
+----
+t
+v_local
+
+statement ok
+use my_datalake.default;
+
+query I
+select i from my_datalake.fxs_parent.fxs_child.v_local order by i;
+----
+1
+2
+
+query I
+select request_url like '%/namespaces/fxs_parent%1Ffxs_child/views/v_local' from iceberg_view_metadata('my_datalake.fxs_parent.fxs_child.v_local');
+----
+true
+
+statement ok
+drop view my_datalake.fxs_parent.fxs_child.v_local;
+
+statement ok
+drop table my_datalake.fxs_parent.fxs_child.t;
+
+statement ok
+drop schema my_datalake.fxs_parent.fxs_child;
+
+statement ok
+drop schema my_datalake.fxs_parent;

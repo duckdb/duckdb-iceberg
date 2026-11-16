@@ -1,0 +1,151 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/nested_namespaces/test_nested_namespace_search_path.test
+# description: USE, the search path and SHOW TABLES FROM take a nested schema path
+# group: [nested_namespaces]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env NESTED_NAMESPACE_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+drop table if exists my_datalake.ns_parent.ns_child.t;
+
+statement ok
+drop table if exists my_datalake.ns_parent.ns_child.created_here;
+
+statement ok
+drop table if exists my_datalake.ns_child.t;
+
+statement ok
+drop schema if exists my_datalake.ns_parent.ns_child.ns_leaf;
+
+statement ok
+drop schema if exists my_datalake.ns_parent.ns_child;
+
+statement ok
+drop schema if exists my_datalake.ns_parent;
+
+statement ok
+drop schema if exists my_datalake.ns_child;
+
+statement ok
+create schema my_datalake.ns_parent;
+
+statement ok
+create schema my_datalake.ns_parent.ns_child;
+
+statement ok
+create schema my_datalake.ns_parent.ns_child.ns_leaf;
+
+statement ok
+create schema my_datalake.ns_child;
+
+# the same table name in the nested namespace and in its top-level sibling
+statement ok
+create table my_datalake.ns_parent.ns_child.t as select * from (values (1), (2), (3)) v(i);
+
+statement ok
+create table my_datalake.ns_child.t as select 10 as i;
+
+query T
+show tables from my_datalake.ns_parent.ns_child;
+----
+t
+
+query T
+show tables from my_datalake.ns_parent.ns_child.ns_leaf;
+----
+
+query T
+show tables from my_datalake."ns_parent.ns_child";
+----
+t
+
+statement ok
+use my_datalake.ns_parent.ns_child;
+
+query T
+select current_schema();
+----
+ns_parent.ns_child
+
+query I
+select sum(i) from t;
+----
+6
+
+query T
+show tables;
+----
+t
+
+# an unqualified name is created in the current nested namespace
+statement ok
+create table created_here as select 7 as i;
+
+query I
+select i from my_datalake.ns_parent.ns_child.created_here;
+----
+7
+
+statement ok
+drop table created_here;
+
+statement ok
+use my_datalake.ns_child;
+
+query T
+select current_schema();
+----
+ns_child
+
+query I
+select sum(i) from t;
+----
+10
+
+statement ok
+use my_datalake."ns_parent.ns_child";
+
+query T
+show tables;
+----
+t
+
+statement ok
+set search_path = 'my_datalake.ns_child,my_datalake.ns_parent.ns_child';
+
+query I
+select sum(i) from t;
+----
+10
+
+statement ok
+set search_path = 'my_datalake.ns_parent.ns_child,my_datalake.ns_child';
+
+query I
+select sum(i) from t;
+----
+6
+
+statement ok
+use my_datalake.default;
+
+statement ok
+drop table my_datalake.ns_parent.ns_child.t;
+
+statement ok
+drop table my_datalake.ns_child.t;
+
+statement ok
+drop schema my_datalake.ns_parent.ns_child.ns_leaf;
+
+statement ok
+drop schema my_datalake.ns_parent.ns_child;
+
+statement ok
+drop schema my_datalake.ns_parent;
+
+statement ok
+drop schema my_datalake.ns_child;
