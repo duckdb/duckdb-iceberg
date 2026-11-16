@@ -36,9 +36,10 @@
 
 namespace duckdb {
 
-IcebergSchemaEntry::IcebergSchemaEntry(Catalog &catalog, CreateSchemaInfo &info)
-    : SchemaCatalogEntry(catalog, info),
-      namespace_items(IRCAPI::ParseSchemaName(info.SchemaName().GetIdentifierName())), exists(true), tables(*this) {
+IcebergSchemaEntry::IcebergSchemaEntry(Catalog &catalog, CreateSchemaInfo &info, vector<string> namespace_items_p,
+                                       shared_ptr<IcebergSchemaEntry> parent_p)
+    : SchemaCatalogEntry(catalog, info, parent_p.get()), namespace_items(std::move(namespace_items_p)), exists(true),
+      parent(std::move(parent_p)), tables(*this) {
 }
 
 IcebergSchemaEntry::~IcebergSchemaEntry() {
@@ -114,8 +115,8 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateTable(CatalogTransaction &t
 	}
 
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
-	if (!exists && !iceberg_transaction.created_schemas.Contains(name.GetIdentifierName())) {
-		throw InvalidInputException("Schema with name \"%s\" does not exist", name.GetIdentifierName());
+	if (!exists && !iceberg_transaction.created_schemas.Contains(GetNamespaceKey())) {
+		throw InvalidInputException("Schema with name \"%s\" does not exist", GetNamespaceKey());
 	}
 	auto &ir_catalog = catalog.Cast<IcebergCatalog>();
 	// check if we have an existing entry with this name
@@ -1188,6 +1189,16 @@ static bool CatalogTypeIsSupported(CatalogType type) {
 
 void IcebergSchemaEntry::Scan(ClientContext &context, CatalogType type,
                               const std::function<void(CatalogEntry &)> &callback) {
+	if (type == CatalogType::SCHEMA_ENTRY) {
+		for (auto &entry : catalog.Cast<IcebergCatalog>().GetSchemas().GetEntries(context)) {
+			auto &child_items = entry->namespace_items;
+			if (child_items.size() == namespace_items.size() + 1 &&
+			    std::equal(namespace_items.begin(), namespace_items.end(), child_items.begin())) {
+				callback(*entry);
+			}
+		}
+		return;
+	}
 	if (!CatalogTypeIsSupported(type)) {
 		return;
 	}
@@ -1204,12 +1215,16 @@ void IcebergSchemaEntry::Scan(CatalogType type, const std::function<void(Catalog
 optional_ptr<CatalogEntry> IcebergSchemaEntry::LookupEntry(CatalogTransaction transaction,
                                                            const EntryLookupInfo &original_lookup_info) {
 	auto type = original_lookup_info.GetCatalogType();
-	if (!CatalogTypeIsSupported(type)) {
+	if (type != CatalogType::SCHEMA_ENTRY && !CatalogTypeIsSupported(type)) {
 		return nullptr;
 	}
 	auto &context = transaction.GetContext();
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	EntryLookupInfo lookup_info(original_lookup_info, ic_catalog.FoldName(original_lookup_info.GetQualifiedName()));
+	if (type == CatalogType::SCHEMA_ENTRY) {
+		auto child_key = GetNamespaceKey() + "." + lookup_info.GetEntryName();
+		return ic_catalog.GetSchemas().GetEntry(context, child_key, OnEntryNotFound::RETURN_NULL);
+	}
 
 	// For VIEW_ENTRY, try the view path
 	if (type == CatalogType::VIEW_ENTRY) {
@@ -1231,7 +1246,7 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::LookupEntry(CatalogTransaction tr
 			return view_entry;
 		}
 		// verify the schema exists
-		if (!IRCAPI::VerifySchemaExistence(context, ic_catalog, name.GetIdentifierName())) {
+		if (!IRCAPI::VerifySchemaExistence(context, ic_catalog, GetNamespaceKey())) {
 			// set exists to false here
 			// we would like to throw an error, but this code is also called when listing schemas,
 			// and throwing an error will abort the listing process.

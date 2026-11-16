@@ -140,7 +140,9 @@ void IcebergCatalog::ScanSchemas(ClientContext &context, std::function<void(Sche
 optional_ptr<SchemaCatalogEntry> IcebergCatalog::LookupSchema(CatalogTransaction transaction,
                                                               const EntryLookupInfo &schema_lookup,
                                                               OnEntryNotFound if_not_found) {
-	auto schema_name = FoldIdentifier(schema_lookup.GetEntryName());
+	// a nested path names one namespace, as does a single part with dots
+	auto &path = schema_lookup.GetQualifiedName().Path();
+	auto schema_name = FoldIdentifier(GetNamespaceKey(path, path.size() > 1 ? 1 : 0));
 	auto entry = schemas.GetEntry(transaction.GetContext(), schema_name, if_not_found);
 	if (!entry && if_not_found != OnEntryNotFound::RETURN_NULL) {
 		throw CatalogException(schema_lookup.GetErrorContext(), "Schema with name \"%s\" not found", schema_name);
@@ -158,6 +160,20 @@ string IcebergCatalog::FoldIdentifier(const string &name) const {
 		return StringUtil::Lower(name);
 	}
 	return name;
+}
+
+string IcebergCatalog::GetNamespaceKey(const vector<Identifier> &schema_path, idx_t start) {
+	string result;
+	for (idx_t i = start; i < schema_path.size(); i++) {
+		if (schema_path[i].empty()) {
+			continue;
+		}
+		if (!result.empty()) {
+			result += ".";
+		}
+		result += schema_path[i].GetIdentifierName();
+	}
+	return result;
 }
 
 QualifiedName IcebergCatalog::FoldName(const QualifiedName &name) const {
@@ -181,7 +197,9 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 	D_ASSERT(context);
 	info.SetQualifiedName(FoldName(info.GetQualifiedName()));
 	auto &iceberg_transaction = IcebergTransaction::Get(*context, *this);
-	auto &schema_name = info.GetQualifiedName().Schema().GetIdentifierName();
+	auto schema_path = info.ParentSchemas();
+	schema_path.push_back(info.SchemaName());
+	auto schema_name = GetNamespaceKey(schema_path);
 	auto created_schema = iceberg_transaction.created_schemas.CheckPending(schema_name, info.on_conflict);
 	if (created_schema) {
 		return created_schema.get();
@@ -197,16 +215,16 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 			if (entry) {
 				return entry;
 			}
-			auto new_schema = make_shared_ptr<IcebergSchemaEntry>(*this, info);
+			auto new_schema = schemas.MakeEntry(*context, schema_name);
 			schemas.AddEntry(schema_name, new_schema);
 			iceberg_transaction.schemas[schema_name] = new_schema;
 			return new_schema.get();
 		}
-		throw CatalogException("Schema with name %s already exists", info.GetQualifiedName().Schema());
+		throw CatalogException("Schema with name %s already exists", Identifier(schema_name));
 	}
 
 	// Schema does not exist - stage it locally and defer the server creation and catalog publication to commit
-	auto new_schema = make_shared_ptr<IcebergSchemaEntry>(*this, info);
+	auto new_schema = schemas.MakeEntry(*context, schema_name);
 	auto result = new_schema.get();
 	iceberg_transaction.created_schemas.Add(schema_name, std::move(new_schema), info.on_conflict);
 	return result;
@@ -223,23 +241,25 @@ void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 	}
 	info.SetQualifiedName(FoldName(info.GetQualifiedName()));
 
+	auto &path = info.GetQualifiedName().Path();
+	auto schema_name = GetNamespaceKey(path, path.size() > 1 ? 1 : 0);
+
 	// Verify schema existence on the server first
-	bool schema_exists =
-	    IRCAPI::VerifySchemaExistence(context, *this, info.GetQualifiedName().Name().GetIdentifierName());
+	bool schema_exists = IRCAPI::VerifySchemaExistence(context, *this, schema_name);
 
 	if (!schema_exists) {
 		if (info.if_not_found == OnEntryNotFound::RETURN_NULL) {
 			// remove the entry if it exists locally
 			// it could have been created during the bind phase.
-			GetSchemas().RemoveEntry(info.GetQualifiedName().Name().GetIdentifierName());
+			GetSchemas().RemoveEntry(schema_name);
 			return;
 		}
-		throw CatalogException("Schema with name %s does not exist", info.GetQualifiedName().Name());
+		throw CatalogException("Schema with name %s does not exist", Identifier(schema_name));
 	}
 
 	// Schema exists - defer the server deletion to commit
 	auto &iceberg_transaction = IcebergTransaction::Get(context, *this);
-	iceberg_transaction.deleted_schemas.insert(info.GetQualifiedName().Name().GetIdentifierName());
+	iceberg_transaction.deleted_schemas.insert(schema_name);
 }
 
 unique_ptr<LogicalOperator> IcebergCatalog::BindCreateIndex(Binder &binder, CreateStatement &stmt,

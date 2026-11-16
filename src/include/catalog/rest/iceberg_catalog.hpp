@@ -156,6 +156,11 @@ public:
 	string FoldIdentifier(const string &name) const;
 	//! Applies IDENTIFIER_CASE to the schema and name parts, keeping the catalog alias as written
 	QualifiedName FoldName(const QualifiedName &name) const;
+	//! The key of a namespace in the schema set: its schema parts, from 'start' on, joined with '.'
+	static string GetNamespaceKey(const vector<Identifier> &schema_path, idx_t start = 0);
+	bool SupportsNestedSchemas() const override {
+		return true;
+	}
 
 public:
 	void Initialize(bool load_builtin) override;
