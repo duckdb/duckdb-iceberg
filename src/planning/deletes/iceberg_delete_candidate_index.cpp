@@ -122,8 +122,9 @@ IcebergDeleteCandidateIndex::IcebergDeleteCandidateIndex(ClientContext &context,
 			continue;
 		}
 		auto &file = entry.data_file;
-		if (file.referenced_data_file) {
-			by_referenced_path[*file.referenced_data_file].push_back(entry_idx);
+		auto referenced_data_file = file.SingleReferencedDataFile();
+		if (referenced_data_file) {
+			by_referenced_path[*referenced_data_file].push_back(entry_idx);
 			continue;
 		}
 		unreferenced.push_back(entry_idx);
