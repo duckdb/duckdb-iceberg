@@ -46,8 +46,16 @@ select count(*) > 10 from (show all tables);
 ----
 1
 
+# SHOW ALL TABLES reads the columns of every listed table, so each of them is loaded (LoadTable)
 query I
-select split(request.url, 'v1')[2] from duckdb_logs_parsed('HTTP') order by all;
+select count(*) > 10 from duckdb_logs_parsed('HTTP') where regexp_matches(request.url, '/namespaces/[^/]+/tables/[^/]+$');
+----
+1
+
+# besides those, only the catalog and its namespaces are listed
+query I
+select split(request.url, 'v1')[2] from duckdb_logs_parsed('HTTP')
+where not regexp_matches(request.url, '/namespaces/[^/]+/tables/[^/]+$') order by all;
 ----
 /config
 /namespaces
@@ -94,10 +102,17 @@ select count(*) > 30 from (show all tables);
 statement ok
 commit;
 
+# five listing requests, plus one LoadTable per table: both scans of SHOW ALL TABLES share the loads
 query I
-select count(*) from duckdb_logs_parsed('HTTP');
+select count(*) from duckdb_logs_parsed('HTTP') where not regexp_matches(request.url, '/namespaces/[^/]+/tables/[^/]+$');
 ----
 5
+
+query I
+select count(*) = count(DISTINCT request.url) from duckdb_logs_parsed('HTTP')
+where regexp_matches(request.url, '/namespaces/[^/]+/tables/[^/]+$');
+----
+1
 
 statement ok
 call truncate_duckdb_logs();

@@ -34,11 +34,13 @@ SELECT count(*) FROM my_datalake.tpch_sf01.region;
 ----
 5
 
-# I can list the table
-query II
-select schema, name from (show all tables) where name = 'basic_insert_test' and schema = 'test_inserts'; 
+# I can list the table. Its columns can not be loaded (403), so it is listed without columns, which also means
+# SHOW ALL TABLES (a join with its columns) leaves it out
+query III
+select schema_name, table_name, column_count from duckdb_tables()
+where database_name = 'my_datalake' and table_name = 'basic_insert_test' and schema_name = 'test_inserts';
 ----
-test_inserts	basic_insert_test
+test_inserts	basic_insert_test	0
 
 # querying from the table results in 403
 statement error

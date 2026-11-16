@@ -1,0 +1,277 @@
+# name: test/sql/local/native_catalog/table_listing_load_errors.test
+# description: Failed table loads do not break listings or poison later explicit lookups
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+CREATE TABLE my_datalake.default.listing_readable (id INTEGER NOT NULL);
+
+statement ok
+CREATE TABLE my_datalake.default.listing_restricted (payload VARCHAR);
+
+statement ok
+DETACH my_datalake;
+
+statement ok
+CREATE MACRO listing_error(error_type, status_code) AS TABLE
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	json_object('method', 'GET', 'path', '/v1/namespaces/default/tables/listing_restricted',
+		'status', status_code, 'body', json_object('error',
+			json_object('message', 'Cannot load listing_restricted', 'type', error_type, 'code', status_code)))::VARCHAR);
+
+statement ok
+CALL enable_logging(level=debug);
+
+# Glue lists non-Iceberg tables but rejects LoadTable with a distinct 404 error.
+# Both that error and permission failures leave the table visible without columns.
+foreach resolution lazy eager
+
+foreach error_type ForbiddenException NoSuchIcebergTableException
+
+query I
+SELECT * FROM listing_error('{error_type}', CASE WHEN '{error_type}' = 'ForbiddenException' THEN 403 ELSE 404 END);
+----
+204
+
+statement ok
+ATTACH '' AS listing_errors (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none', TABLE_RESOLUTION '{resolution}');
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+BEGIN;
+
+query II
+SELECT table_name, column_count FROM duckdb_tables()
+WHERE database_name = 'listing_errors' AND schema_name = 'default'
+ORDER BY table_name;
+----
+listing_readable	1
+listing_restricted	0
+
+# duckdb_tables reads constraints, columns and SQL. A failure is attempted and
+# warned about once, rather than on every one of those accesses.
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP')
+WHERE request.url LIKE '%/tables/listing_restricted';
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE log_level = 'WARNING'
+	AND message LIKE 'Could not resolve the columns of Iceberg table ''default.listing_restricted''%';
+----
+1
+
+# Restoring access permits an explicit lookup in this same transaction.
+# Its resolved state must take precedence over the listing entry's failed load.
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+query I
+SELECT count(*) FROM listing_errors.default.listing_restricted;
+----
+0
+
+query III
+SELECT table_name, column_name, data_type FROM duckdb_columns()
+WHERE database_name = 'listing_errors' AND schema_name = 'default'
+ORDER BY table_name, column_index;
+----
+listing_readable	id	INTEGER
+listing_restricted	payload	VARCHAR
+
+query II
+SELECT name, column_names FROM (SHOW ALL TABLES)
+WHERE database = 'listing_errors' AND schema = 'default'
+ORDER BY name;
+----
+listing_readable	[id]
+listing_restricted	[payload]
+
+statement ok
+COMMIT;
+
+# A direct lookup must still report the original error if access is lost again.
+query I
+SELECT * FROM listing_error('{error_type}', CASE WHEN '{error_type}' = 'ForbiddenException' THEN 403 ELSE 404 END);
+----
+204
+
+statement error
+SELECT * FROM listing_errors.default.listing_restricted;
+----
+Cannot load listing_restricted
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+statement ok
+DETACH listing_errors;
+
+endloop
+
+endloop
+
+# Repeated lazy listings share the failed load only for their own transaction.
+statement ok
+ATTACH '' AS listing_errors (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none', TABLE_RESOLUTION 'lazy');
+
+query I
+SELECT * FROM listing_error('ForbiddenException', 403);
+----
+204
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# Name suggestions need the listing but must not load any of the listed tables.
+statement error
+SELECT * FROM listing_errors.default.listing_readabl;
+----
+Table with name listing_readabl does not exist
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP')
+WHERE request.url LIKE '%/tables/listing_readable' OR request.url LIKE '%/tables/listing_restricted';
+----
+0
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# A table-name filter avoids loading the other table even though its name was listed.
+query I
+SELECT column_name FROM duckdb_columns()
+WHERE database_name = 'listing_errors' AND schema_name = 'default' AND table_name = 'listing_readable';
+----
+id
+
+query II
+SELECT count(*) FILTER (WHERE request.url LIKE '%/tables/listing_readable'),
+	count(*) FILTER (WHERE request.url LIKE '%/tables/listing_restricted')
+FROM duckdb_logs_parsed('HTTP');
+----
+1	0
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+BEGIN;
+
+loop i 0 2
+
+query II
+SELECT table_name, column_count FROM duckdb_tables()
+WHERE database_name = 'listing_errors' AND schema_name = 'default'
+ORDER BY table_name;
+----
+listing_readable	1
+listing_restricted	0
+
+query II
+SELECT table_name, column_name FROM duckdb_columns()
+WHERE database_name = 'listing_errors' AND schema_name = 'default';
+----
+listing_readable	id
+
+query I
+SELECT name FROM (SHOW ALL TABLES) WHERE database = 'listing_errors' AND schema = 'default';
+----
+listing_readable
+
+endloop
+
+query II
+SELECT count(*) FILTER (WHERE request.url LIKE '%/tables/listing_readable'),
+	count(*) FILTER (WHERE request.url LIKE '%/tables/listing_restricted')
+FROM duckdb_logs_parsed('HTTP');
+----
+1	1
+
+statement ok
+COMMIT;
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+query II
+SELECT table_name, column_count FROM duckdb_tables()
+WHERE database_name = 'listing_errors' AND schema_name = 'default'
+ORDER BY table_name;
+----
+listing_readable	1
+listing_restricted	1
+
+# A genuine 404 pins absence for this transaction even if the server's listing
+# still includes the name. Subsequent listings and lookups do not retry it.
+query I
+SELECT * FROM listing_error('NoSuchTableException', 404);
+----
+204
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+BEGIN;
+
+query II
+SELECT table_name, column_name FROM duckdb_columns()
+WHERE database_name = 'listing_errors' AND schema_name = 'default';
+----
+listing_readable	id
+
+query I
+SELECT table_name FROM duckdb_tables()
+WHERE database_name = 'listing_errors' AND schema_name = 'default';
+----
+listing_readable
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP')
+WHERE request.url LIKE '%/tables/listing_restricted';
+----
+1
+
+statement ok
+COMMIT;
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+query I
+SELECT column_name FROM duckdb_columns()
+WHERE database_name = 'listing_errors' AND table_name = 'listing_restricted';
+----
+payload
+
+statement ok
+DROP TABLE listing_errors.default.listing_readable;
+
+statement ok
+DROP TABLE listing_errors.default.listing_restricted;
+
+statement ok
+DETACH listing_errors;
+
+statement ok
+DROP MACRO listing_error;

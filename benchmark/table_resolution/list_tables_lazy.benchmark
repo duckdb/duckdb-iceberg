@@ -1,0 +1,50 @@
+# name: benchmark/table_resolution/list_tables_lazy.benchmark
+# description: list table names against a catalog attached with TABLE_RESOLUTION 'lazy', which reads no columns
+# group: [table_resolution]
+
+name list table names - lazy table resolution
+group table_resolution
+subgroup lazy
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# REQUIRES toxiproxy on 127.0.0.1:8182, in front of the fixture catalog on 8181.
+#
+# The fixture runs on localhost, and toxiproxy adds a jitter delay so we can consistently test this
+# The commands below run the toxiproxy server
+#
+#   toxiproxy-server > /dev/null 2>&1 &
+#   toxiproxy-cli create --listen 127.0.0.1:8182 --upstream 127.0.0.1:8181 iceberg-catalog
+#   toxiproxy-cli toxic add --type latency --attribute latency=50 --attribute jitter=5 iceberg-catalog
+#
+# Only names are projected, so no table has to be loaded. That holds once duckdb_tables() computes only the
+# projected columns (duckdb/duckdb#25528); until then every row still reads column_count and sql.
+
+init
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+load benchmark/load_helpers/create_many_tables.sql
+
+run
+DETACH IF EXISTS my_datalake;
+ATTACH OR REPLACE '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    URI 'http://127.0.0.1:8182',
+    TABLE_RESOLUTION 'lazy'
+);
+SELECT table_name FROM information_schema.tables WHERE table_catalog = 'my_datalake';
