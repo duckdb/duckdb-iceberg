@@ -8,6 +8,31 @@ include test/sql/init_requires
 
 require json
 
+# FileSystem logs contain raw paths; normalize Windows separators before the struct parser unescapes them.
+statement ok
+CREATE TEMP MACRO scan_file_log(message) AS parse_duckdb_log_message('FileSystem', replace(message, '\', '/'));
+
+# Both native Windows paths and forward-slash paths must match the metadata filenames.
+query TTI
+SELECT regexp_extract(log.path, '[^/\\]+$'), log.op, log.bytes
+FROM (
+	SELECT scan_file_log(message) AS log FROM (VALUES
+		('{"fs":"LocalFileSystem","path":"/tmp/warehouse/table/data/part.parquet","op":"READ","bytes":"16384","pos":"4"}'),
+		('{"fs":"LocalFileSystem","path":"C:\warehouse\table\data\part.parquet","op":"READ","bytes":"16384","pos":"4"}')
+	) logs(message)
+);
+----
+part.parquet	READ	16384
+part.parquet	READ	16384
+
+statement ok
+CREATE TEMP MACRO scan_data_bytes() AS (
+	SELECT coalesce(sum(bytes), 0) FROM (
+		SELECT unnest(scan_file_log(message)) FROM duckdb_logs() WHERE type = 'FileSystem'
+	)
+	WHERE op = 'READ' AND list_contains(getvariable('data_files'), regexp_extract(path, '[^/\\]+$'))
+);
+
 foreach version 2 3
 
 # 'id' is the first column and the largest one in the data files
@@ -28,16 +53,16 @@ DELETE FROM my_datalake.default.scan_without_columns WHERE seq < 10;
 statement ok
 UPDATE my_datalake.default.scan_without_columns SET seq = seq WHERE seq >= 100000;
 
+# Metadata lookup and the planned tasks share the transaction that reads their files.
+statement ok
+BEGIN;
+
 statement ok
 SET VARIABLE data_files = (
 	SELECT list(regexp_extract(file_path, '[^/\\]+$'))
 	FROM iceberg_metadata(my_datalake.default.scan_without_columns)
 	WHERE content = 'DATA' AND status <> 'DELETED'
 );
-
-# the planned tasks are executed in the transaction that planned them
-statement ok
-BEGIN;
 
 statement ok
 SET VARIABLE scan_tasks = (
@@ -58,10 +83,7 @@ SELECT count(*) FROM {source};
 199990
 
 statement ok
-SET VARIABLE count_star_bytes = (
-	SELECT coalesce(sum(bytes), 0) FROM duckdb_logs_parsed('FileSystem')
-	WHERE op = 'READ' AND list_contains(getvariable('data_files'), regexp_extract(path, '[^/\\]+$'))
-);
+SET VARIABLE count_star_bytes = scan_data_bytes();
 
 statement ok
 CALL truncate_duckdb_logs();
@@ -73,10 +95,7 @@ SELECT count(filename) FROM {source};
 199990
 
 statement ok
-SET VARIABLE footer_bytes = (
-	SELECT coalesce(sum(bytes), 0) FROM duckdb_logs_parsed('FileSystem')
-	WHERE op = 'READ' AND list_contains(getvariable('data_files'), regexp_extract(path, '[^/\\]+$'))
-);
+SET VARIABLE footer_bytes = scan_data_bytes();
 
 statement ok
 CALL truncate_duckdb_logs();
@@ -87,10 +106,7 @@ SELECT count(id) FROM {source};
 199990
 
 statement ok
-SET VARIABLE count_id_bytes = (
-	SELECT coalesce(sum(bytes), 0) FROM duckdb_logs_parsed('FileSystem')
-	WHERE op = 'READ' AND list_contains(getvariable('data_files'), regexp_extract(path, '[^/\\]+$'))
-);
+SET VARIABLE count_id_bytes = scan_data_bytes();
 
 # counting the rows reads the footers and nothing else, reading 'id' over a megabyte more
 query III
