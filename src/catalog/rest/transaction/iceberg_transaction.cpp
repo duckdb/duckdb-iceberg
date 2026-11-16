@@ -141,6 +141,8 @@ struct SingleTableStagedCommit {
 	rest_api_objects::CommitTableRequest request;
 	vector<string> created_metadata_files;
 	bool retryable = false;
+	//! Retried by planning the snapshot expiration again on the refreshed table
+	bool expiration_retryable = false;
 	IcebergRetryConfig retry_config;
 };
 
@@ -302,6 +304,7 @@ static SingleTableStagedCommit StageSingleTableCommit(DatabaseInstance &db, Iceb
 	auto &transaction_data = *commit_state.table_info.transaction_data;
 	transaction_data.VerifyMergeDeletesComplete();
 	info.retryable = transaction_data.SupportsAppendRetry();
+	info.expiration_retryable = transaction_data.SupportsExpirationRetry();
 	info.retry_config = IcebergRetryConfig::FromTableMetadata(metadata);
 	if (!transaction_data.alters.empty()) {
 		table_info.LoadCredentials(context);
@@ -331,6 +334,7 @@ static MultiTableStagedCommit StageMultiTableCommit(DatabaseInstance &db, Iceber
 	MultiTableStagedCommit info;
 	auto &transaction = info.request;
 	bool all_retryable = true;
+	bool expiration_retryable = false;
 	bool saw_table = false;
 	for (auto &updated_table : alter_update.updated_tables) {
 		auto &table_info = updated_table.second.get();
@@ -351,8 +355,12 @@ static MultiTableStagedCommit StageMultiTableCommit(DatabaseInstance &db, Iceber
 		                              : table_transaction_info.retry_config;
 		saw_table = true;
 		all_retryable = all_retryable && table_transaction_info.retryable;
+		expiration_retryable = table_transaction_info.expiration_retryable;
 	}
-	info.retryable = saw_table && all_retryable;
+	//! A snapshot expiration is planned again on its refreshed table before a retry (RefreshRetryTables); a
+	//! commit is retried that way only when the expiration is its single table change.
+	const bool single_expiration = transaction.table_changes.size() == 1 && expiration_retryable;
+	info.retryable = saw_table && (all_retryable || single_expiration);
 	return info;
 }
 
@@ -472,6 +480,7 @@ void IcebergTransaction::RefreshRetryTables(IcebergTransactionAlterUpdate &alter
 		if (!table_info.transaction_data->RetryStateMatches(table_info)) {
 			throw TransactionException("Table %s changed incompatibly while retrying commit", table_key);
 		}
+		table_info.transaction_data->ReplanExpiration(context, table_info);
 	}
 }
 
@@ -674,8 +683,8 @@ void IcebergTransaction::DoSingleTableCommitUpdates(IcebergTransactionAlterUpdat
 			return;
 		}
 
-		if (!CommitIsRetryable(table_transaction_info.retryable, table_transaction_info.retry_config.num_retries,
-		                       result, attempt)) {
+		const bool retryable = table_transaction_info.retryable || table_transaction_info.expiration_retryable;
+		if (!CommitIsRetryable(retryable, table_transaction_info.retry_config.num_retries, result, attempt)) {
 			result.Throw(catalog.GetBaseUrl().GetURLEncoded());
 		}
 		CleanupMetadataFiles(context, table_transaction_info.created_metadata_files);

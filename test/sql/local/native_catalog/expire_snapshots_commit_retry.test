@@ -1,0 +1,73 @@
+# name: test/sql/local/native_catalog/expire_snapshots_commit_retry.test
+# description: A conflicting expiration commit is retried commit.retry.num-retries times before it fails
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+statement ok
+CALL enable_logging('HTTP', storage='memory');
+
+statement ok
+CREATE TABLE my_datalake.default.expire_retry (id INTEGER) WITH (
+	'commit.retry.num-retries' = '2',
+	'commit.retry.min-wait-ms' = '1',
+	'commit.retry.max-wait-ms' = '1'
+);
+
+foreach value 1 2 3
+
+statement ok
+INSERT INTO my_datalake.default.expire_retry VALUES ({value});
+
+endloop
+
+statement ok
+BEGIN;
+
+query II
+SELECT * FROM iceberg_expire_snapshots('my_datalake.default.expire_retry', retain_last => 1, older_than => timestamp '2999-01-01');
+----
+2	1
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	'{"method":"POST","path":"/v1/transactions/commit","status":409,"body":{"error":{"message":"scripted conflict","type":"CommitFailedException","code":409}}}');
+----
+204
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement error
+COMMIT;
+----
+scripted conflict
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+# The first attempt and commit.retry.num-retries retries
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP')
+WHERE request.type = 'POST' AND request.url LIKE '%/transactions/commit';
+----
+3
+
+# Every retry reloads the table before it plans the expiration again
+query I
+SELECT count(*) FROM duckdb_logs_parsed('HTTP')
+WHERE request.type = 'GET' AND request.url LIKE '%/tables/expire_retry';
+----
+2
+
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.expire_retry);
+----
+3
+
+statement ok
+DROP TABLE my_datalake.default.expire_retry;
