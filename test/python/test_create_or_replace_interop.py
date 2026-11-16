@@ -8,6 +8,7 @@ from duckdb_unittest import DuckDBUnittestRunner
 
 
 @pytest.mark.requires_spark(">=3.5")
+@pytest.mark.requires_capabilities("snapshot_refs")
 @pytest.mark.parametrize("replacement", ["bare", "zero_rows", "populated"])
 def test_replacement_branch_and_history(
     spark_con, rest_catalog, unittest_binary, unittest_test_config, print_unittest_stdin, replacement
