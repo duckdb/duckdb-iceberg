@@ -112,8 +112,9 @@ string IcebergUtils::FileToString(const OpenFileInfo &file, FileSystem &fs) {
 	// fetches the object with a single GET, serving the reads below from that download. File systems that do not
 	// know the hint ignore it. A caller that already knows the size (or asked otherwise) is left alone.
 	OpenFileInfo to_open = file;
-	if (!to_open.extended_info) {
-		to_open.extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
+	to_open.extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
+	if (file.extended_info) {
+		*to_open.extended_info = *file.extended_info;
 	}
 	auto &open_options = to_open.extended_info->options;
 	if (open_options.find("file_size") == open_options.end() &&
