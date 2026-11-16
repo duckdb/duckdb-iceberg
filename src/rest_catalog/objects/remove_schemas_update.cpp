@@ -3,7 +3,7 @@
 
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
-#include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/unordered_set.hpp"
 #include "rest_catalog/objects/json_utils.hpp"
 #include "rest_catalog/objects/list.hpp"
 

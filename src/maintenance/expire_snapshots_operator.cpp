@@ -1,4 +1,5 @@
 #include "maintenance/expire_snapshots_operator.hpp"
+#include "common/iceberg_properties.hpp"
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -55,7 +56,7 @@ IcebergTable &LoadTransactionVisibleTable(ClientContext &context, const Qualifie
 
 void ValidateGCEnabled(const IcebergTableMetadata &metadata) {
 	auto &properties = metadata.GetTableProperties();
-	auto entry = properties.find("gc.enabled");
+	auto entry = IcebergProperties::Find(properties, "gc.enabled");
 	if (entry == properties.end() || StringUtil::CIEquals(entry->second, "true")) {
 		return;
 	}

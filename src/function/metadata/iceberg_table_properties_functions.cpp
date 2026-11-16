@@ -23,7 +23,7 @@ namespace duckdb {
 
 struct SetIcebergTablePropertiesBindData : public TableFunctionData {
 	optional_ptr<IcebergTableSchemaVersion> iceberg_table;
-	case_insensitive_map_t<string> properties;
+	unordered_map<string, string> properties;
 	vector<string> remove_properties;
 };
 

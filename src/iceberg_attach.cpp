@@ -554,7 +554,7 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 		}
 		rest_api_objects::CreateNamespaceRequest request;
 		request._namespace.value = IRCAPI::ParseSchemaName(schema_name);
-		request.properties = case_insensitive_map_t<string>();
+		request.properties = unordered_map<string, string>();
 		JSONWriter writer;
 		writer.SetRoot(request.ToJSON(writer));
 		IRCAPI::CommitNamespaceCreate(context, *catalog, schema_name,

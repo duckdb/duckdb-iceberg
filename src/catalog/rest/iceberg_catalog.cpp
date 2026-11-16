@@ -1,4 +1,5 @@
 #include "catalog/rest/iceberg_catalog.hpp"
+#include "common/iceberg_properties.hpp"
 
 #include "duckdb/storage/database_size.hpp"
 #include "duckdb/logging/logger.hpp"
@@ -489,10 +490,8 @@ void IcebergCatalog::Configure(ClientContext &context, const rest_api_objects::C
 	ParsePrefix();
 	namespace_separator = attach_options.namespace_separator;
 
-	catalog_properties = catalog_config.defaults;
-	for (auto &entry : catalog_config.overrides) {
-		catalog_properties[entry.first] = entry.second;
-	}
+	catalog_defaults = catalog_config.defaults;
+	catalog_overrides = catalog_config.overrides;
 
 	supported_urls.clear();
 	if (auto &endpoints = catalog_config.endpoints) {
@@ -514,6 +513,18 @@ void IcebergCatalog::Configure(ClientContext &context, const rest_api_objects::C
 	if (prefix.empty()) {
 		DUCKDB_LOG(context, IcebergLogType, "No prefix found for catalog with warehouse value %s", warehouse);
 	}
+}
+
+optional_ptr<const string> IcebergCatalog::GetCatalogProperty(const string &name) const {
+	auto override = IcebergProperties::FindConfig(catalog_overrides, name);
+	if (override != catalog_overrides.end()) {
+		return override->second;
+	}
+	auto value = IcebergProperties::FindConfig(catalog_defaults, name);
+	if (value != catalog_defaults.end()) {
+		return value->second;
+	}
+	return nullptr;
 }
 
 //===--------------------------------------------------------------------===//

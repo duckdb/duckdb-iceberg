@@ -68,7 +68,7 @@ public:
 	IRCAPITableCredentials GetVendedCredentials(ClientContext &context) const;
 	IRCAPITableCredentials
 	GetVendedCredentials(ClientContext &context, const vector<rest_api_objects::StorageCredential> &storage_credentials,
-	                     optional_ptr<const case_insensitive_map_t<string>> config_override = nullptr) const;
+	                     optional_ptr<const unordered_map<string, string>> config_override = nullptr) const;
 	const string &BaseFilePath() const;
 	//! Verify if the catalog asks for unsupported read side encryption
 	void VerifyReadEncryptionSupported() const;
@@ -107,7 +107,7 @@ public:
 	IcebergCatalog &catalog;
 	IcebergSchemaEntry &schema;
 	string name;
-	case_insensitive_map_t<string> config;
+	unordered_map<string, string> config;
 	vector<rest_api_objects::StorageCredential> storage_credentials;
 	unordered_map<int32_t, unique_ptr<IcebergTableSchemaVersion>> schema_versions;
 	// dummy entry to hold existence of a table, but no schema versions

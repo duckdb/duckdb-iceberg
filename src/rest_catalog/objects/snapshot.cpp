@@ -3,7 +3,7 @@
 
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
-#include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/unordered_set.hpp"
 #include "rest_catalog/objects/json_utils.hpp"
 #include "rest_catalog/objects/list.hpp"
 
@@ -46,7 +46,7 @@ string Snapshot::Object6::TryFromJSON(JSONValue obj) {
 			                          json_utils::GetTypeDescription(operation_val).c_str());
 		}
 	}
-	case_insensitive_set_t handled_properties {"operation"};
+	unordered_set<string> handled_properties {"operation"};
 	obj.IterateObject([&](const string &key_str, JSONValue val) {
 		if (!error.empty()) {
 			return;

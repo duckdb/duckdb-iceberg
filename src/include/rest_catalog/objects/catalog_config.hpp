@@ -5,7 +5,7 @@
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
-#include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/unordered_map.hpp"
 
 namespace duckdb {
 namespace rest_api_objects {
@@ -31,8 +31,8 @@ public:
 	JSONMutableValue ToJSON(JSONWriter &writer) const;
 
 public:
-	case_insensitive_map_t<string> defaults;
-	case_insensitive_map_t<string> overrides;
+	unordered_map<string, string> defaults;
+	unordered_map<string, string> overrides;
 	optional<vector<string>> endpoints;
 	optional<string> idempotency_key_lifetime;
 };

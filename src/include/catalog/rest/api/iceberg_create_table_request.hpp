@@ -20,7 +20,7 @@ namespace duckdb {
 struct IcebergCreateTableRequest {
 	IcebergCreateTableRequest(string name, shared_ptr<IcebergTableSchema> schema, IcebergPartitionSpec partition_spec,
 	                          IcebergSortOrder sort_order, idx_t iceberg_version,
-	                          case_insensitive_map_t<string> table_properties, string location);
+	                          unordered_map<string, string> table_properties, string location);
 
 public:
 	static unique_ptr<IcebergColumnDefinition>
@@ -39,7 +39,7 @@ private:
 	IcebergPartitionSpec partition_spec;
 	IcebergSortOrder sort_order;
 	idx_t iceberg_version;
-	case_insensitive_map_t<string> table_properties;
+	unordered_map<string, string> table_properties;
 	string location;
 };
 

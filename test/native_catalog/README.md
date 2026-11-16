@@ -87,7 +87,9 @@ without contacting cloud storage. Parsed metadata cases check response-generatio
 identity, concurrent initialization, owner release after replacement, and
 copy-on-write isolation from readers. Authoritative-file fallback is retried, and
 historical metadata-log reconstruction keeps a separate owner from the cached
-head:
+head. JSON map cases exercise generated parsing, copying and serialization,
+retained metadata, exact property names, and case-insensitive interpretation of
+recognized settings and credentials:
 
 ```sh
 ./build/reldebug/test/unittest_iceberg_cache

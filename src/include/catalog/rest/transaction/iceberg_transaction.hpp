@@ -68,7 +68,7 @@ private:
 };
 
 struct SchemaPropertyUpdates {
-	case_insensitive_map_t<string> updates;
+	unordered_map<string, string> updates;
 	set<string> removals;
 };
 

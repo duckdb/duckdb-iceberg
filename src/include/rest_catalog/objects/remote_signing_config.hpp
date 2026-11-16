@@ -5,7 +5,7 @@
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
-#include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/unordered_map.hpp"
 #include "rest_catalog/objects/multi_valued_map.hpp"
 
 namespace duckdb {
@@ -32,7 +32,7 @@ public:
 	JSONMutableValue ToJSON(JSONWriter &writer) const;
 
 public:
-	optional<case_insensitive_map_t<string>> properties;
+	optional<unordered_map<string, string>> properties;
 	optional<MultiValuedMap> headers;
 };
 

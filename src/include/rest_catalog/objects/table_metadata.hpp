@@ -5,7 +5,7 @@
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
-#include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/unordered_map.hpp"
 #include "rest_catalog/objects/encrypted_key.hpp"
 #include "rest_catalog/objects/metadata_log.hpp"
 #include "rest_catalog/objects/partition_field.hpp"
@@ -47,7 +47,7 @@ public:
 	optional<string> location;
 	optional<int64_t> last_updated_ms;
 	optional<int64_t> next_row_id;
-	optional<case_insensitive_map_t<string>> properties;
+	optional<unordered_map<string, string>> properties;
 	optional<vector<Schema>> schemas;
 	optional<Schema> schema;
 	optional<int32_t> current_schema_id;

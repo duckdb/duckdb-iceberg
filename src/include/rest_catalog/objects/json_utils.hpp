@@ -3,6 +3,7 @@
 
 #include "duckdb/common/json_document.hpp"
 #include "duckdb/common/string.hpp"
+#include "duckdb/common/string_util.hpp"
 
 namespace duckdb {
 namespace rest_api_objects {

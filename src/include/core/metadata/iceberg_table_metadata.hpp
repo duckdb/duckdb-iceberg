@@ -118,7 +118,8 @@ public:
 	bool HasLastPartitionId() const;
 	int32_t GetLastPartitionFieldId() const;
 
-	const case_insensitive_map_t<string> &GetTableProperties() const;
+	const unordered_map<string, string> &GetTableProperties() const;
+	//! Interpret a recognized setting; raw property names in GetTableProperties() remain exact.
 	string GetTableProperty(string property_string) const;
 	//! Whether the given write mode property is explicitly set to copy-on-write
 	bool UsesCopyOnWrite(const string &write_mode_property) const;
@@ -186,7 +187,7 @@ public:
 	string write_metadata_path;
 
 	//! table properties
-	case_insensitive_map_t<string> table_properties;
+	unordered_map<string, string> table_properties;
 
 	vector<IcebergMetadataLogItem> metadata_log;
 

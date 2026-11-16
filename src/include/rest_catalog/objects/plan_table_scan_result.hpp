@@ -5,7 +5,7 @@
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
-#include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/unordered_map.hpp"
 #include "rest_catalog/objects/async_planning_result.hpp"
 #include "rest_catalog/objects/completed_planning_with_idresult.hpp"
 #include "rest_catalog/objects/empty_planning_result.hpp"

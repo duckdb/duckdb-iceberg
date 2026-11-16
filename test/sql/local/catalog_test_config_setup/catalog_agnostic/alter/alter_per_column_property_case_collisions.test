@@ -1,0 +1,106 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/alter_per_column_property_case_collisions.test
+# description: Case-distinct column settings are retained and renames reject collisions
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.column_property_case;
+
+statement ok
+CREATE TABLE my_datalake.default.column_property_case (id INTEGER, secret VARCHAR);
+
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.column_property_case,
+	MAP {'write.metadata.metrics.column.secret': 'none', 'write.metadata.metrics.column.SECRET': 'full'});
+
+# Lowercase wins during SQL column resolution, while both raw properties remain visible.
+statement ok
+INSERT INTO my_datalake.default.column_property_case VALUES (1, 'hidden');
+
+query I
+SELECT count(*) FROM iceberg_column_stats(my_datalake.default.column_property_case)
+WHERE column_name = 'secret' AND (lower_bound IS NOT NULL OR upper_bound IS NOT NULL OR value_count IS NOT NULL);
+----
+0
+
+query TT
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.column_property_case)
+WHERE lower(key) LIKE 'write.metadata.metrics.column.%' ORDER BY key;
+----
+write.metadata.metrics.column.SECRET	full
+write.metadata.metrics.column.secret	none
+
+# Both variants would become the same new key. Refuse to discard either setting.
+statement error
+ALTER TABLE my_datalake.default.column_property_case RENAME COLUMN secret TO secret2;
+----
+Renaming column would create duplicate Iceberg property 'write.metadata.metrics.column.secret2'
+
+query T
+SELECT secret FROM my_datalake.default.column_property_case;
+----
+hidden
+
+query TT
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.column_property_case)
+WHERE lower(key) LIKE 'write.metadata.metrics.column.%' ORDER BY key;
+----
+write.metadata.metrics.column.SECRET	full
+write.metadata.metrics.column.secret	none
+
+statement ok
+CALL remove_iceberg_table_properties(my_datalake.default.column_property_case, ['write.metadata.metrics.column.SECRET']);
+
+statement ok
+ALTER TABLE my_datalake.default.column_property_case RENAME COLUMN secret TO secret2;
+
+statement ok
+INSERT INTO my_datalake.default.column_property_case VALUES (2, 'still_hidden');
+
+query I
+SELECT count(*) FROM iceberg_column_stats(my_datalake.default.column_property_case)
+WHERE column_name = 'secret2' AND (lower_bound IS NOT NULL OR upper_bound IS NOT NULL OR value_count IS NOT NULL);
+----
+0
+
+# An existing property for the target name must not be overwritten either.
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.column_property_case,
+	MAP {'WRITE.METADATA.METRICS.COLUMN.SECRET3': 'full'});
+
+statement error
+ALTER TABLE my_datalake.default.column_property_case RENAME COLUMN secret2 TO secret3;
+----
+Renaming column would create duplicate Iceberg property 'write.metadata.metrics.column.secret3'
+
+statement ok
+CALL remove_iceberg_table_properties(my_datalake.default.column_property_case, ['WRITE.METADATA.METRICS.COLUMN.SECRET3']);
+
+statement ok
+ALTER TABLE my_datalake.default.column_property_case RENAME COLUMN secret2 TO secret3;
+
+query TT
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.column_property_case)
+WHERE lower(key) LIKE 'write.metadata.metrics.column.%';
+----
+write.metadata.metrics.column.secret3	none
+
+# DROP removes every case variant for the column.
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.column_property_case,
+	MAP {'WRITE.METADATA.METRICS.COLUMN.SECRET3': 'full'});
+
+statement ok
+ALTER TABLE my_datalake.default.column_property_case DROP COLUMN secret3;
+
+query I
+SELECT count(*) FROM iceberg_table_properties(my_datalake.default.column_property_case)
+WHERE lower(key) LIKE 'write.metadata.metrics.column.%';
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.column_property_case;

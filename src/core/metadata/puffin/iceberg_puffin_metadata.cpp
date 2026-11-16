@@ -40,11 +40,11 @@ JSONMutableValue WriteBlobMetadata(JSONWriter &json, const IcebergPuffinBlobMeta
 	return obj;
 }
 
-string ParseProperties(optional<case_insensitive_map_t<string>> &target, JSONValue properties_val) {
+string ParseProperties(optional<unordered_map<string, string>> &target, JSONValue properties_val) {
 	if (!properties_val.IsObject()) {
 		return "properties is not an object";
 	}
-	case_insensitive_map_t<string> properties;
+	unordered_map<string, string> properties;
 	string error;
 	properties_val.IterateObject([&](const string &key, JSONValue val) {
 		if (!val.IsString()) {

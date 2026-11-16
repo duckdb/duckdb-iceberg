@@ -3,7 +3,7 @@
 
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
-#include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/unordered_set.hpp"
 #include "rest_catalog/objects/json_utils.hpp"
 #include "rest_catalog/objects/list.hpp"
 
@@ -100,7 +100,7 @@ string CommitReport::TryFromJSON(JSONValue obj) {
 	}
 	auto metadata_val = obj.GetMember("metadata");
 	if (metadata_val.IsValid()) {
-		case_insensitive_map_t<string> metadata_tmp;
+		unordered_map<string, string> metadata_tmp;
 		if (metadata_val.IsObject()) {
 			metadata_val.IterateObject([&](const string &key_str, JSONValue val) {
 				if (!error.empty()) {

@@ -9,6 +9,7 @@
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/storage/iceberg_table_secret_provider.hpp"
+#include "core/metadata/puffin/iceberg_puffin_metadata.hpp"
 
 #include <condition_variable>
 #include <thread>
@@ -495,6 +496,151 @@ TEST_CASE("LoadTable does not revalidate expired Azure vended credentials", "[ic
 			}
 		}
 	}
+}
+
+TEST_CASE("Vended credentials preserve raw config keys and interpret settings per layer", "[iceberg_json]") {
+	LoadTableCacheTest test;
+	test.Respond("\"case\"", 200, R"({
+	    "metadata":{"location":"s3://bucket/table"},
+	    "config":{"S3.REGION":"us-east-1","S3.ACCESS-KEY-ID":"BaseKey","s3.secret-access-key":"BaseSecret",
+	              "Custom":"UpperConfig","custom":"LowerConfig"},
+	    "storage-credentials":[{"prefix":"s3://bucket/","config":{
+	        "s3.access-key-id":"ScopedKey","S3.SECRET-ACCESS-KEY":"ScopedSecret","S3.SESSION-TOKEN":"MixedCaseToken",
+	        "Custom":"UpperCredential","custom":"LowerCredential"}}]
+	})");
+	auto response = IcebergLoadTableRequest({"default"}, "t").Execute(*test.connection.context, test.Catalog());
+	REQUIRE_FALSE(response.error_);
+	auto &schema = test.Table().schema;
+	IcebergTable table(test.Catalog(), schema, "t", response.result_);
+	auto copy = table.Copy();
+	for (auto &retained : {&table, &copy}) {
+		REQUIRE(retained->config.at("Custom") == "UpperConfig");
+		REQUIRE(retained->config.at("custom") == "LowerConfig");
+		REQUIRE(retained->storage_credentials[0].config.at("Custom") == "UpperCredential");
+		REQUIRE(retained->storage_credentials[0].config.at("custom") == "LowerCredential");
+		auto credentials = retained->GetVendedCredentials(*test.connection.context);
+		REQUIRE(credentials.storage_credentials.size() == 1);
+		auto &options = credentials.storage_credentials[0].options;
+		REQUIRE(options.at("region").ToString() == "us-east-1");
+		REQUIRE(options.at("key_id").ToString() == "ScopedKey");
+		REQUIRE(options.at("secret").ToString() == "ScopedSecret");
+		REQUIRE(options.at("session_token").ToString() == "MixedCaseToken");
+	}
+}
+
+TEST_CASE("Vended credentials reject equivalent settings within each config layer", "[iceberg_json]") {
+	LoadTableCacheTest test;
+	auto &table = test.Table();
+	table.GetMetadataMutable().location = "s3://bucket/table";
+	table.config = {{"s3.region", "us-east-1"}};
+	string expected;
+	unordered_map<string, string> conflicting;
+	SECTION("Case variants of a credential key") {
+		conflicting = {{"s3.access-key-id", "First"}, {"S3.ACCESS-KEY-ID", "Second"}};
+		expected = "Duplicate Iceberg storage option 'key_id'";
+	}
+	SECTION("Region aliases") {
+		conflicting = {{"s3.region", "us-east-1"}, {"client.region", "us-west-2"}};
+		expected = "Duplicate Iceberg storage option 'region'";
+	}
+	SECTION("Path style case variants") {
+		conflicting = {{"s3.path-style-access", "true"}, {"S3.PATH-STYLE-ACCESS", "false"}};
+		expected = "Duplicate Iceberg config property 's3.path-style-access'";
+	}
+	for (bool scoped : {false, true}) {
+		table.storage_credentials.clear();
+		table.config = {{"s3.region", "us-east-1"}};
+		if (scoped) {
+			rest_api_objects::StorageCredential credential;
+			credential.prefix = "s3://bucket/";
+			credential.config = conflicting;
+			table.storage_credentials.push_back(std::move(credential));
+		} else {
+			for (auto &entry : conflicting) {
+				table.config[entry.first] = entry.second;
+			}
+		}
+		REQUIRE_THROWS_WITH(table.GetVendedCredentials(*test.connection.context), Catch::Contains(expected));
+	}
+}
+
+TEST_CASE("GCS and Azure config interpretation preserves token case and rejects duplicate names", "[iceberg_json]") {
+	LoadTableCacheTest test;
+	auto &table = test.Table();
+	SECTION("GCS") {
+		table.GetMetadataMutable().location = "gs://bucket/table";
+		table.config = {{"GCS.OAUTH2.TOKEN", "MixedCaseToken"}};
+		auto credentials = table.GetVendedCredentials(*test.connection.context);
+		REQUIRE(credentials.config);
+		REQUIRE(credentials.config->options.at("bearer_token").ToString() == "MixedCaseToken");
+		table.config["gcs.oauth2.token"] = "AnotherToken";
+		REQUIRE_THROWS_WITH(table.GetVendedCredentials(*test.connection.context),
+		                    Catch::Contains("Duplicate Iceberg config property 'gcs.oauth2.token'"));
+	}
+	SECTION("Azure") {
+		table.GetMetadataMutable().location = "abfss://warehouse@account.dfs.core.windows.net/table";
+		table.config = {{"ADLS.SAS-TOKEN.ACCOUNT.DFS.CORE.WINDOWS.NET", "MixedCaseToken"}};
+		auto credentials = table.GetVendedCredentials(*test.connection.context);
+		REQUIRE(credentials.config);
+		REQUIRE(credentials.config->options.at("connection_string").ToString() ==
+		        "AccountName=account;SharedAccessSignature=MixedCaseToken;EndpointSuffix=core.windows.net");
+		table.config["adls.sas-token.account.dfs.core.windows.net"] = "AnotherToken";
+		REQUIRE_THROWS_WITH(
+		    table.GetVendedCredentials(*test.connection.context),
+		    Catch::Contains("Duplicate Iceberg config property 'adls.sas-token.account.dfs.core.windows.net'"));
+	}
+	SECTION("Azure account selection is independent of raw map iteration order") {
+		table.GetMetadataMutable().location = "abfss://warehouse@account.dfs.core.windows.net/table";
+		for (bool reverse : {false, true}) {
+			table.config.clear();
+			const pair<string, string> first {"adls.sas-token.account.dfs.core.windows.net", "FirstToken"};
+			const pair<string, string> last {"ADLS.SAS-TOKEN.ZACCOUNT.DFS.CORE.WINDOWS.NET", "LastToken"};
+			table.config.insert(reverse ? last : first);
+			table.config.insert(reverse ? first : last);
+			auto credentials = table.GetVendedCredentials(*test.connection.context);
+			REQUIRE(credentials.config);
+			REQUIRE(credentials.config->options.at("account_name").ToString() == "account");
+			REQUIRE(credentials.config->options.at("connection_string").ToString() ==
+			        "AccountName=account;SharedAccessSignature=FirstToken;EndpointSuffix=core.windows.net");
+		}
+	}
+}
+
+TEST_CASE("Catalog encryption settings respect layer precedence across case variants", "[iceberg_json]") {
+	LoadTableCacheTest test;
+	auto &catalog = test.Catalog();
+	auto &table = test.Table();
+	table.GetMetadataMutable().location = "s3://bucket/table";
+	catalog.catalog_defaults = {{"s3.sse.type", "none"}};
+	catalog.catalog_overrides = {{"S3.SSE.TYPE", "kms"}};
+	REQUIRE_THROWS_WITH(table.VerifyWriteEncryptionSupported(), Catch::Contains("'s3.sse.type'='kms'"));
+	table.config["S3.SSE.TYPE"] = "none";
+	REQUIRE_NOTHROW(table.VerifyWriteEncryptionSupported());
+	table.config["s3.sse.type"] = "custom";
+	REQUIRE_THROWS_WITH(table.VerifyReadEncryptionSupported(),
+	                    Catch::Contains("Duplicate Iceberg config property 's3.sse.type'"));
+	table.config.clear();
+	catalog.catalog_overrides["s3.sse.type"] = "none";
+	REQUIRE_THROWS_WITH(table.VerifyWriteEncryptionSupported(),
+	                    Catch::Contains("Duplicate Iceberg config property 's3.sse.type'"));
+}
+
+TEST_CASE("Puffin blob JSON properties preserve case on write and read", "[iceberg_json]") {
+	LoadTableCacheTest test;
+	auto fs = FileSystem::CreateLocal();
+	auto path = fs->JoinPath(test.root, "case.puffin");
+	IcebergPuffinBlobMetadata blob;
+	blob.type = "test";
+	blob.properties = unordered_map<string, string> {{"Custom", "first"}, {"custom", "second"}};
+	IcebergPuffinWriter writer(*fs, path);
+	writer.WriteBlob({1, 2, 3}, blob);
+	writer.Finish();
+	auto result = IcebergPuffinReader::ReadFooter(*fs, path);
+	REQUIRE(std::holds_alternative<IcebergPuffinFileFooter>(result));
+	auto &metadata = std::get<IcebergPuffinFileFooter>(result).file_metadata;
+	REQUIRE(metadata.blobs.size() == 1);
+	REQUIRE(metadata.blobs[0].properties);
+	REQUIRE(*metadata.blobs[0].properties == *blob.properties);
 }
 
 int main(int argc, char **argv) {

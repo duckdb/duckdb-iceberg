@@ -162,10 +162,10 @@ struct SetDefaultSpec : public IcebergTableUpdate {
 struct SetProperties : public IcebergTableUpdate {
 	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::SET_PROPERTIES;
 
-	explicit SetProperties(const case_insensitive_map_t<string> &properties);
+	explicit SetProperties(const unordered_map<string, string> &properties);
 	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
 
-	case_insensitive_map_t<string> properties;
+	unordered_map<string, string> properties;
 };
 
 struct RemoveProperties : public IcebergTableUpdate {

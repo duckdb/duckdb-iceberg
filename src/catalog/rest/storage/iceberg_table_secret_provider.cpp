@@ -187,7 +187,7 @@ static CreateSecretInput ReVendVendedCredentials(ClientContext &context, CreateS
 		                                       refreshed_credentials.error_->_error.message));
 	}
 	auto &response = refreshed_credentials.result_;
-	optional_ptr<const case_insensitive_map_t<string>> config_override;
+	optional_ptr<const unordered_map<string, string>> config_override;
 	if (response.config) {
 		config_override = *response.config;
 	}

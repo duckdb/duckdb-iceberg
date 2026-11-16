@@ -5,7 +5,7 @@
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
-#include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/unordered_map.hpp"
 #include "rest_catalog/objects/partition_spec.hpp"
 #include "rest_catalog/objects/schema.hpp"
 #include "rest_catalog/objects/sort_order.hpp"
@@ -40,7 +40,7 @@ public:
 	optional<PartitionSpec> partition_spec;
 	optional<SortOrder> write_order;
 	optional<bool> stage_create;
-	optional<case_insensitive_map_t<string>> properties;
+	optional<unordered_map<string, string>> properties;
 };
 
 } // namespace rest_api_objects

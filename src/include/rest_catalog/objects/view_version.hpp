@@ -5,7 +5,7 @@
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
-#include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/unordered_map.hpp"
 #include "rest_catalog/objects/namespace.hpp"
 #include "rest_catalog/objects/view_representation.hpp"
 
@@ -36,7 +36,7 @@ public:
 	int32_t version_id;
 	int64_t timestamp_ms;
 	int32_t schema_id;
-	case_insensitive_map_t<string> summary;
+	unordered_map<string, string> summary;
 	vector<ViewRepresentation> representations;
 	Namespace default_namespace;
 	optional<string> default_catalog;

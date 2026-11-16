@@ -5,7 +5,7 @@
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
-#include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/unordered_map.hpp"
 #include "rest_catalog/objects/function_definition.hpp"
 #include "rest_catalog/objects/function_definition_log_entry.hpp"
 
@@ -38,7 +38,7 @@ public:
 	vector<FunctionDefinition> definitions;
 	vector<FunctionDefinitionLogEntry> definition_log;
 	optional<string> location;
-	optional<case_insensitive_map_t<string>> properties;
+	optional<unordered_map<string, string>> properties;
 	optional<bool> secure;
 	optional<string> _doc;
 };

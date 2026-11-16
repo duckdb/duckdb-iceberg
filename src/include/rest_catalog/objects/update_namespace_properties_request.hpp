@@ -5,7 +5,7 @@
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
-#include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/unordered_map.hpp"
 
 namespace duckdb {
 namespace rest_api_objects {
@@ -32,7 +32,7 @@ public:
 
 public:
 	optional<vector<string>> removals;
-	optional<case_insensitive_map_t<string>> updates;
+	optional<unordered_map<string, string>> updates;
 };
 
 } // namespace rest_api_objects

@@ -232,7 +232,7 @@ void SetDefaultSpec::CreateUpdate(DatabaseInstance &db, ClientContext &context,
 	req.set_default_spec_update->spec_id = spec_id;
 }
 
-SetProperties::SetProperties(const case_insensitive_map_t<string> &properties)
+SetProperties::SetProperties(const unordered_map<string, string> &properties)
     : IcebergTableUpdate(IcebergTableUpdateType::SET_PROPERTIES), properties(properties) {
 }
 

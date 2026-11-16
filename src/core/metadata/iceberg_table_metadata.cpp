@@ -1,4 +1,6 @@
 #include "core/metadata/iceberg_table_metadata.hpp"
+#include "common/iceberg_properties.hpp"
+#include "duckdb/common/case_insensitive_map.hpp"
 
 #include "duckdb/common/exception.hpp"
 
@@ -406,7 +408,8 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 		                              table_metadata.format_version, MAX_ICEBERG_FORMAT_VERSION);
 	}
 	// Check before loading snapshots: empty encrypted tables must not accept plaintext writes either.
-	if (table_metadata.properties && table_metadata.properties->count("encryption.key-id")) {
+	if (table_metadata.properties &&
+	    IcebergProperties::Find(*table_metadata.properties, "encryption.key-id") != table_metadata.properties->end()) {
 		throw NotImplementedException("Iceberg table encryption is not supported (encryption.key-id is set)");
 	}
 	if (table_metadata.encryption_keys && !table_metadata.encryption_keys->empty()) {
@@ -519,7 +522,7 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 
 	if (table_metadata.properties) {
 		auto &properties = *table_metadata.properties;
-		auto name_mapping = properties.find(IcebergFieldMapping::PROPERTY);
+		auto name_mapping = IcebergProperties::Find(properties, IcebergFieldMapping::PROPERTY);
 		if (name_mapping != properties.end()) {
 			res.mappings = IcebergFieldMapping::Parse(name_mapping->second);
 		}
@@ -587,7 +590,7 @@ IcebergTableMetadata IcebergTableMetadata::Copy() const {
 	return res;
 }
 
-const case_insensitive_map_t<string> &IcebergTableMetadata::GetTableProperties() const {
+const unordered_map<string, string> &IcebergTableMetadata::GetTableProperties() const {
 	return table_properties;
 }
 
@@ -617,7 +620,7 @@ const string &IcebergTableMetadata::GetLocation() const {
 }
 
 const string IcebergTableMetadata::GetDataPath(FileSystem &fs) const {
-	auto write_path = table_properties.find("write.data.path");
+	auto write_path = IcebergProperties::Find(table_properties, "write.data.path");
 	// If write.data.path property is set, use it; otherwise use default location + "/data"
 	if (write_path != table_properties.end()) {
 		return write_path->second;
@@ -627,7 +630,7 @@ const string IcebergTableMetadata::GetDataPath(FileSystem &fs) const {
 
 const string IcebergTableMetadata::GetMetadataPath(FileSystem &fs) const {
 	// If write.metadata.path property is set, use it; otherwise use default location + "/metadata"
-	auto metadata_path = table_properties.find("write.metadata.path");
+	auto metadata_path = IcebergProperties::Find(table_properties, "write.metadata.path");
 	// If write.data.path property is set, use it; otherwise use default location + "/metadata"
 	if (metadata_path != table_properties.end()) {
 		return metadata_path->second;
@@ -636,7 +639,7 @@ const string IcebergTableMetadata::GetMetadataPath(FileSystem &fs) const {
 }
 
 string IcebergTableMetadata::GetTableProperty(string property_string) const {
-	auto prop = table_properties.find(property_string);
+	auto prop = IcebergProperties::Find(table_properties, property_string);
 	if (prop != table_properties.end()) {
 		return prop->second;
 	}
@@ -662,9 +665,9 @@ bool IcebergTableMetadata::AllowsMergeOnRead(const string &write_mode_property) 
 	return mode == "merge-on-read" || mode.empty();
 }
 
-static void VerifyParquetFileFormat(const case_insensitive_map_t<string> &table_properties, const string &property,
+static void VerifyParquetFileFormat(const unordered_map<string, string> &table_properties, const string &property,
                                     const char *file_kind) {
-	auto it = table_properties.find(property);
+	auto it = IcebergProperties::Find(table_properties, property);
 	if (it != table_properties.end() && !StringUtil::CIEquals(it->second, "parquet")) {
 		throw NotImplementedException("Cannot write %s file with '%s'='%s': only parquet is supported", file_kind,
 		                              property, it->second);
@@ -681,8 +684,9 @@ void IcebergTableMetadata::VerifyDeleteFileFormat() const {
 		return;
 	}
 	// The delete file format defaults to the data file format
-	auto &property =
-	    table_properties.count(WRITE_DELETE_FORMAT_DEFAULT) ? WRITE_DELETE_FORMAT_DEFAULT : WRITE_FORMAT_DEFAULT;
+	auto &property = IcebergProperties::Find(table_properties, WRITE_DELETE_FORMAT_DEFAULT) != table_properties.end()
+	                     ? WRITE_DELETE_FORMAT_DEFAULT
+	                     : WRITE_FORMAT_DEFAULT;
 	VerifyParquetFileFormat(table_properties, property, "delete");
 }
 

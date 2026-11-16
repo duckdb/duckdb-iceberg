@@ -1,4 +1,5 @@
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
+#include "common/iceberg_properties.hpp"
 
 #include "duckdb/parser/column_list.hpp"
 #include "duckdb/common/type_visitor.hpp"
@@ -470,7 +471,8 @@ static void UpdatePerColumnProperties(IcebergTable &updated_table, IcebergTransa
 
 	auto &properties = updated_table.GetMetadataMutable().table_properties;
 	vector<string> removed_keys;
-	case_insensitive_map_t<string> moved_properties;
+	unordered_map<string, string> moved_properties;
+	case_insensitive_set_t moved_keys;
 	for (auto &property : properties) {
 		auto &key = property.first;
 		for (auto prefix_p : PER_COLUMN_PROPERTY_PREFIXES) {
@@ -487,13 +489,26 @@ static void UpdatePerColumnProperties(IcebergTable &updated_table, IcebergTransa
 				removed_keys.push_back(key);
 			} else if (new_full_name->second != old_field->first) {
 				removed_keys.push_back(key);
-				moved_properties[key.substr(0, prefix.size()) + new_full_name->second] = property.second;
+				auto new_key = key.substr(0, prefix.size()) + new_full_name->second;
+				if (!moved_keys.insert(new_key).second) {
+					throw InvalidInputException("Renaming column would create duplicate Iceberg property '%s'",
+					                            StringUtil::Lower(new_key));
+				}
+				moved_properties.emplace(std::move(new_key), property.second);
 			}
 			break;
 		}
 	}
 	if (removed_keys.empty()) {
 		return;
+	}
+	// Do not overwrite an existing setting for the new name, or collapse case variants on rename.
+	unordered_set<string> removed(removed_keys.begin(), removed_keys.end());
+	for (auto &property : properties) {
+		if (!removed.count(property.first) && moved_keys.count(property.first)) {
+			throw InvalidInputException("Renaming column would create duplicate Iceberg property '%s'",
+			                            StringUtil::Lower(property.first));
+		}
 	}
 	transaction_data.TableRemoveProperties(removed_keys);
 	for (auto &key : removed_keys) {
@@ -531,7 +546,7 @@ static void UpdateNameMapping(ClientContext &context, IcebergTable &updated_tabl
                               IcebergTransactionData &transaction_data, const IcebergTableSchema &old_schema,
                               const IcebergTableSchema &new_schema) {
 	auto &properties = updated_table.GetMetadataMutable().table_properties;
-	auto mapping = properties.find(IcebergFieldMapping::PROPERTY);
+	auto mapping = IcebergProperties::Find(properties, IcebergFieldMapping::PROPERTY);
 	if (mapping == properties.end()) {
 		return;
 	}
@@ -554,8 +569,8 @@ static void UpdateNameMapping(ClientContext &context, IcebergTable &updated_tabl
 	}
 	auto updated_mappings = IcebergFieldMapping::Parse(*updated);
 	if (*updated != mapping->second) {
-		transaction_data.TableSetProperties({{IcebergFieldMapping::PROPERTY, *updated}});
-		mapping->second = *updated;
+		transaction_data.TableSetProperties({{mapping->first, *updated}});
+		properties[mapping->first] = *updated;
 	}
 	//! Scans in this transaction use the parsed mappings without reloading the table from the catalog.
 	updated_table.GetMetadataMutable().mappings = std::move(updated_mappings);
@@ -935,7 +950,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		TableFunctionBinder property_binder(*binder_ptr, context, "SET TABLE OPTIONS");
 
 		optional_idx new_format_version;
-		case_insensitive_map_t<string> new_properties;
+		unordered_map<string, string> new_properties;
 
 		for (auto &option : set_options_info.table_options) {
 			auto &key = option.first;

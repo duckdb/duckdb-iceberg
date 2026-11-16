@@ -1,4 +1,5 @@
 #include "execution/operator/iceberg_insert.hpp"
+#include "common/iceberg_properties.hpp"
 
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
 #include "duckdb/logging/logger.hpp"
@@ -996,7 +997,7 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, const I
 	// write.parquet.bloom-filter-enabled.column.<col> -> write_bloom_filter
 	for (idx_t i = 0; i < ICEBERG_TABLE_PROPERTY_MAPPING_SIZE; i++) {
 		auto &mapping = ICEBERG_TABLE_PROPERTY_MAPPING[i];
-		auto it = table_properties.find(mapping.iceberg_option);
+		auto it = IcebergProperties::Find(table_properties, mapping.iceberg_option);
 		if (it == table_properties.end()) {
 			continue;
 		}
@@ -1013,7 +1014,7 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, const I
 		info->options[mapping.parquet_option].emplace_back(it->second);
 	}
 
-	auto shred_variants = table_properties.find("write.parquet.shred-variants");
+	auto shred_variants = IcebergProperties::Find(table_properties, "write.parquet.shred-variants");
 	// Iceberg defaults to no shredding when the property is absent.
 	if (shred_variants == table_properties.end() ||
 	    !Value(shred_variants->second).DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>()) {
@@ -1067,7 +1068,7 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, const I
 	GenerateSortOrderExpressions(context, copy_input, result);
 
 	result.filename_pattern.SetFilenamePattern("{uuidv7}");
-	auto write_target_file_size = table_properties.find("write.target-file-size-bytes");
+	auto write_target_file_size = IcebergProperties::Find(table_properties, "write.target-file-size-bytes");
 	if (write_target_file_size != table_properties.end()) {
 		result.file_size_bytes = IcebergUtils::ParseByteSizeOptionallyFormatted(write_target_file_size->second);
 	}
@@ -1091,7 +1092,7 @@ IcebergCopyOptions IcebergInsert::GetCopyOptions(ClientContext &context, const I
 	result.partition_columns = layout.partition_columns;
 	result.return_type = CopyFunctionReturnType::WRITTEN_FILE_STATISTICS;
 
-	auto partitioned_paths = table_properties.find("write.object-storage.partitioned-paths");
+	auto partitioned_paths = IcebergProperties::Find(table_properties, "write.object-storage.partitioned-paths");
 	if (partitioned_paths != table_properties.end()) {
 		result.partitioned_paths =
 		    Value(partitioned_paths->second).DefaultCastAs(LogicalType::BOOLEAN).GetValue<bool>();
@@ -1337,7 +1338,10 @@ static unique_ptr<IcebergTableMetadata> BuildPlaceholderMetadata(ClientContext &
 		metadata->table_properties[option.first] = val.GetValue<string>();
 	}
 	// Match the default persisted by CreateNewEntry when planning the first CTAS write.
-	metadata->table_properties.emplace("write.parquet.shred-variants", "true");
+	if (IcebergProperties::Find(metadata->table_properties, "write.parquet.shred-variants") ==
+	    metadata->table_properties.end()) {
+		metadata->table_properties.emplace("write.parquet.shred-variants", "true");
+	}
 
 	// Resolve nested field IDs and storage types exactly as table creation does.
 	int32_t last_column_id;

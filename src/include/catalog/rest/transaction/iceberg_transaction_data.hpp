@@ -60,7 +60,7 @@ public:
 	void TableAddSortOrder();
 	void TableSetDefaultSortOrder();
 	void TableSetDefaultSpec();
-	void TableSetProperties(const case_insensitive_map_t<string> &properties);
+	void TableSetProperties(const unordered_map<string, string> &properties);
 	void TableRemoveProperties(const vector<string> &properties);
 	void TableRemoveSnapshots(const vector<int64_t> &snapshot_ids);
 	void TableSetLocation();
