@@ -330,107 +330,6 @@ static Value GetSchemaDefault(const IcebergTableMetadataSchemas &schemas, const 
 	return value.type() == column.type ? value : value.DefaultCastAs(column.type);
 }
 
-//! Whether a field inside this struct has a non-NULL default
-static bool HasNestedDefault(const IcebergTableMetadataSchemas &schemas, const MultiFileColumnDefinition &column) {
-	if (column.type.id() != LogicalTypeId::STRUCT) {
-		return false;
-	}
-	for (auto &child : column.children) {
-		if (!GetSchemaDefault(schemas, child).IsNull() || HasNestedDefault(schemas, child)) {
-			return true;
-		}
-	}
-	return false;
-}
-
-//! FIXME: remove this and AddPresenceFields once DuckDB keeps a NULL struct's missing fields NULL.
-//! Field pushdown is off for structs with nested defaults, so their NULL structs stay NULL.
-bool IcebergMultiFileReader::IcebergSupportsPushdownExtract(const FunctionData &bind_data_p,
-                                                            const LogicalIndex &col_idx) {
-	auto &bind_data = bind_data_p.Cast<MultiFileBindData>();
-	auto &column = bind_data.reader_bind.schema[col_idx.index];
-	if (column.type.id() == LogicalTypeId::VARIANT) {
-		return true;
-	}
-	if (!StructType::IsStruct(column.type)) {
-		return false;
-	}
-	auto &file_list = bind_data.file_list->Cast<IcebergMultiFileList>();
-	return !HasNestedDefault(file_list.GetScanPlanner().GetMetadata().GetSchemas(), column);
-}
-
-static bool InFile(const MultiFileColumnDefinition &column, const unordered_set<int32_t> &local_ids) {
-	return !column.identifier.IsNull() && local_ids.count(column.GetIdentifierFieldId());
-}
-
-//! Add one field of this struct that is in the file
-static bool AddPresenceField(const MultiFileColumnDefinition &column, const unordered_set<int32_t> &local_ids,
-                             ColumnIndex &index) {
-	for (idx_t i = 0; i < column.children.size(); i++) {
-		auto &child = column.children[i];
-		if (InFile(child, local_ids) && !child.type.IsNested()) {
-			index.AddChildIndex(ColumnIndex(i));
-			return true;
-		}
-	}
-	for (idx_t i = 0; i < column.children.size(); i++) {
-		auto &child = column.children[i];
-		if (InFile(child, local_ids) && child.type.id() == LogicalTypeId::STRUCT) {
-			ColumnIndex child_index(i);
-			if (AddPresenceField(child, local_ids, child_index)) {
-				index.AddChildIndex(std::move(child_index));
-				return true;
-			}
-		}
-	}
-	for (idx_t i = 0; i < column.children.size(); i++) {
-		auto &child = column.children[i];
-		if (InFile(child, local_ids) && child.type.id() != LogicalTypeId::STRUCT) {
-			index.AddChildIndex(ColumnIndex(i));
-			return true;
-		}
-	}
-	return false;
-}
-
-//! Read at least one field that is in the file for each selected struct, so NULL structs stay NULL
-static bool AddPresenceFields(const MultiFileColumnDefinition &column, const unordered_set<int32_t> &local_ids,
-                              ColumnIndex &index) {
-	if (!index.HasChildren()) {
-		return true;
-	}
-	bool reads_file_field = false;
-	for (auto &child_index : index.GetChildIndexesMutable()) {
-		auto &child = column.children[child_index.GetPrimaryIndex()];
-		if (!InFile(child, local_ids)) {
-			continue;
-		}
-		if (child.type.id() == LogicalTypeId::STRUCT) {
-			reads_file_field |= AddPresenceFields(child, local_ids, child_index);
-		} else {
-			reads_file_field = true;
-		}
-	}
-	return reads_file_field || AddPresenceField(column, local_ids, index);
-}
-
-//! Only structs with nested defaults need this
-static void AddPresenceFields(const vector<MultiFileColumnDefinition> &local_columns,
-                              const vector<MultiFileColumnDefinition> &scan_columns,
-                              vector<ColumnIndex> &scan_column_ids, const IcebergTableMetadataSchemas &schemas) {
-	unordered_set<int32_t> local_ids;
-	CollectFieldIds(local_columns, local_ids);
-	for (auto &id : scan_column_ids) {
-		if (id.IsVirtualColumn() || id.IsPushdownExtract() || !id.HasChildren()) {
-			continue;
-		}
-		auto &column = scan_columns[id.GetPrimaryIndex()];
-		if (InFile(column, local_ids) && HasNestedDefault(schemas, column)) {
-			AddPresenceFields(column, local_ids, id);
-		}
-	}
-}
-
 //! The value of a field that is missing from the file, when partition values determine it: the field's own
 //! partition value, or a struct built from its children's partition values and schema defaults. A struct is only
 //! built if a non-NULL partition value proves it is non-NULL; otherwise the field keeps its schema default.
@@ -479,89 +378,29 @@ static void ApplyNestedPartitionDefaults(const unordered_map<int32_t, Value> &co
 	}
 }
 
-//! Narrow a value to the field selected by a pushed-down struct extraction.
-static optional<Value> ProjectValue(Value value, const ColumnIndex &index) {
-	optional_ptr<const ColumnIndex> current = index;
-	while (current->IsPushdownExtract()) {
-		current = current->GetChildIndex(0);
-		if (value.type().id() != LogicalTypeId::STRUCT || !current->HasPrimaryIndex()) {
-			// Semi-structured extraction (e.g. VARIANT) belongs to the normal column mapper.
-			return nullopt;
-		}
-		auto child_index = current->GetPrimaryIndex();
-		auto child_type = StructType::GetChildType(value.type(), child_index);
-		value = value.IsNull() ? Value(child_type) : Value(StructValue::GetChildren(value)[child_index]);
+void IcebergMultiFileReader::ApplyPartitionDefaults(const unordered_map<int32_t, Value> &constants,
+                                                    const MultiFileReaderData &reader_data,
+                                                    vector<MultiFileColumnDefinition> &scan_columns,
+                                                    const vector<ColumnIndex> &scan_column_ids,
+                                                    const IcebergTableMetadataSchemas &schemas) {
+	if (constants.empty()) {
+		return;
 	}
-	return value;
-}
-
-void IcebergMultiFileReader::ApplyColumnDefaults(const unordered_map<int32_t, Value> &constants,
-                                                 MultiFileReaderData &reader_data,
-                                                 vector<MultiFileColumnDefinition> &scan_columns,
-                                                 const vector<ColumnIndex> &scan_column_ids,
-                                                 const IcebergTableMetadataSchemas &schemas, ClientContext &context) {
 	unordered_set<int32_t> local_ids;
 	CollectFieldIds(reader_data.reader->columns, local_ids);
 	unordered_set<idx_t> visited;
-	for (idx_t i = 0; i < scan_column_ids.size(); i++) {
-		auto &id = scan_column_ids[i];
-		if (id.IsVirtualColumn()) {
+	for (auto &id : scan_column_ids) {
+		if (id.IsVirtualColumn() || !visited.insert(id.GetPrimaryIndex()).second) {
 			continue;
 		}
 		auto &column = scan_columns[id.GetPrimaryIndex()];
-		// Follow a pushed-down extraction to the first field missing from the file, whose default the mapper reads.
-		optional_ptr<MultiFileColumnDefinition> missing = column;
-		optional_ptr<const ColumnIndex> index = id;
-		while (missing && local_ids.count(missing->GetIdentifierFieldId())) {
-			if (!index->IsPushdownExtract() || missing->type.id() != LogicalTypeId::STRUCT) {
-				missing = nullptr;
-				break;
-			}
-			index = index->GetChildIndex(0);
-			missing = missing->children[index->GetPrimaryIndex()];
-		}
-		if (!missing) {
-			if (!constants.empty() && visited.insert(id.GetPrimaryIndex()).second) {
-				ApplyNestedPartitionDefaults(constants, schemas, local_ids, column);
-			}
+		if (local_ids.count(column.GetIdentifierFieldId())) {
+			ApplyNestedPartitionDefaults(constants, schemas, local_ids, column);
 			continue;
 		}
-		optional<Value> value;
-		if (!constants.empty()) {
-			value = GetPartitionDefault(constants, schemas, *missing);
-		}
-		if (!index->IsPushdownExtract()) {
-			if (!value) {
-				if (missing.get() != &column) {
-					//! FIXME: remove once DuckDB fills a missing field with the scan type (duckdb#27704)
-					// Fields of a pushed-down struct default to NULL, so this field is NULL in every row
-					reader_data.constant_map.Add(MultiFileGlobalIndex(i), Value(id.GetScanType()));
-				}
-				continue;
-			}
-			if (missing.get() == &column) {
-				reader_data.constant_map.Add(MultiFileGlobalIndex(i), std::move(*value));
-			} else {
-				// A non-NULL identity value proves its ancestors are non-NULL.
-				// Keep each projected cast in its own scan slot.
-				reader_data.constant_map.Add(MultiFileGlobalIndex(i), value->CastAs(context, id.GetScanType()));
-			}
-			continue;
-		}
-		if (!value) {
-			// The mapper doesn't narrow a missing struct's default to a pushed-down field, so project it here.
-			value = GetSchemaDefault(schemas, *missing);
-		}
-		auto projected = ProjectValue(*value, *index);
-		if (projected) {
-			// A cast pushed into the extraction changes the type the scan expects
-			auto &scan_type = id.GetScanType();
-			if (projected->type() != scan_type) {
-				projected = projected->CastAs(context, scan_type);
-			}
-			reader_data.constant_map.Add(MultiFileGlobalIndex(i), std::move(*projected));
-		} else {
-			missing->default_expression = ConstantExpression::FromValue(*value);
+		auto value = GetPartitionDefault(constants, schemas, column);
+		if (value) {
+			column.default_expression = ConstantExpression::FromValue(*value);
 		}
 	}
 }
@@ -618,8 +457,7 @@ ReaderInitializeType IcebergMultiFileReader::InitializeTaskReader(
 		}
 	}
 	//! After the field mapping, so files without field ids are matched too
-	AddPresenceFields(local_columns, scan_columns, scan_column_ids, schemas);
-	ApplyColumnDefaults(partition_constants, reader_data, scan_columns, scan_column_ids, schemas, context);
+	ApplyPartitionDefaults(partition_constants, reader_data, scan_columns, scan_column_ids, schemas);
 
 	vector<bool> accelerated_files;
 	Value fast_filter_setting;
