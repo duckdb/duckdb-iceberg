@@ -1,6 +1,7 @@
 #define CATCH_CONFIG_RUNNER
 #include "catch.hpp"
 #include "duckdb.hpp"
+// Catch includes Windows headers, whose DELETE macro conflicts with Iceberg's enums.
 #include "duckdb/common/windows_undefs.hpp"
 #include "catalog/rest/api/iceberg_create_table_request.hpp"
 
@@ -144,6 +145,73 @@ TEST_CASE("Replacement never reuses IDs from historical schemas", "[iceberg_sche
 	REQUIRE(metadata.GetLastColumnId() == 20);
 }
 
+TEST_CASE("Replacement refreshes existing field ID lookups", "[iceberg_schema]") {
+	SchemaTest test;
+	auto original =
+	    test.Schema({{"id", LogicalType::INTEGER}, {"s", LogicalType::STRUCT({{"x", LogicalType::INTEGER}})}});
+	auto metadata = test.Metadata(original, 10);
+	auto replacement =
+	    test.Schema({{"added", LogicalType::INTEGER},
+	                 {"s", LogicalType::STRUCT({{"x", LogicalType::INTEGER}, {"added", LogicalType::INTEGER}})},
+	                 {"id", LogicalType::BIGINT}});
+	SECTION("Lookups were populated before assignment") {
+		REQUIRE(replacement->GetSourceIdMap().size() == 5);
+		REQUIRE(replacement->GetColumnByFieldId(1).name == "added");
+	}
+	SECTION("Parsing a schema populates its lookups") {
+		replacement = IcebergTableSchema::ParseSchema(replacement->ToRESTObject());
+	}
+	REQUIRE(IcebergCreateTableRequest::AssignReplacementFieldIds(*replacement, metadata) == 12);
+	CheckFields(*replacement, {{11, "added"}, {2, "s"}, {3, "s.x"}, {12, "s.added"}, {1, "id"}});
+	REQUIRE_FALSE(replacement->TryGetColumnByFieldId(4));
+	REQUIRE_FALSE(replacement->TryGetColumnByFieldId(5));
+}
+
+TEST_CASE("Replacement identifier fields follow their reassigned IDs", "[iceberg_schema]") {
+	SchemaTest test;
+	auto original =
+	    test.Schema({{"id", LogicalType::INTEGER}, {"s", LogicalType::STRUCT({{"key", LogicalType::INTEGER}})}});
+	original->columns[0]->required = true;
+	original->identifier_field_ids = {1};
+	auto metadata = test.Metadata(original, 10);
+	auto replacement = test.Schema({{"s", LogicalType::STRUCT({{"key", LogicalType::INTEGER}})},
+	                                {"id", LogicalType::BIGINT},
+	                                {"added", LogicalType::INTEGER}});
+	for (auto &column : replacement->columns) {
+		column->required = true;
+	}
+	replacement->GetMutableFromPath({Identifier("s"), Identifier("key")}, nullptr)->required = true;
+	replacement->identifier_field_ids = {2, 3, 4};
+	REQUIRE(IcebergCreateTableRequest::AssignReplacementFieldIds(*replacement, metadata) == 11);
+	const vector<int32_t> expected_identifiers {3, 1, 11};
+	REQUIRE(replacement->identifier_field_ids == expected_identifiers);
+	CheckFields(*replacement, {{2, "s"}, {3, "s.key"}, {1, "id"}, {11, "added"}});
+	for (auto field_id : expected_identifiers) {
+		REQUIRE(replacement->GetColumnByFieldId(field_id).required);
+	}
+	auto reparsed = IcebergTableSchema::ParseSchema(replacement->ToRESTObject());
+	REQUIRE(reparsed->identifier_field_ids == expected_identifiers);
+	CheckFields(*reparsed, {{2, "s"}, {3, "s.key"}, {1, "id"}, {11, "added"}});
+	REQUIRE(metadata.GetLatestSchema().identifier_field_ids == vector<int32_t> {1});
+}
+
+TEST_CASE("Replacement rejects ambiguous full field names", "[iceberg_schema]") {
+	SchemaTest test;
+	auto original = test.Schema({{"a", LogicalType::STRUCT({{"b", LogicalType::INTEGER}})}});
+	auto replacement = test.Schema({{"a", LogicalType::STRUCT({{"b", LogicalType::INTEGER}})}});
+	auto ambiguous =
+	    test.Schema({{"a.b", LogicalType::INTEGER}, {"a", LogicalType::STRUCT({{"b", LogicalType::INTEGER}})}});
+	SECTION("The current schema has a literal dotted name and a matching nested path") {
+		original = ambiguous;
+	}
+	SECTION("The replacement has a literal dotted name and a matching nested path") {
+		replacement = ambiguous;
+	}
+	auto metadata = test.Metadata(original, 10);
+	REQUIRE_THROWS_WITH(IcebergCreateTableRequest::AssignReplacementFieldIds(*replacement, metadata),
+	                    Catch::Contains("multiple fields for name a.b"));
+}
+
 TEST_CASE("Replacement field IDs require a valid table high-water mark", "[iceberg_schema]") {
 	SchemaTest test;
 	auto original = test.Schema({{"id", LogicalType::INTEGER}});
@@ -153,6 +221,13 @@ TEST_CASE("Replacement field IDs require a valid table high-water mark", "[icebe
 		REQUIRE(IcebergCreateTableRequest::AssignReplacementFieldIds(*replacement, metadata) ==
 		        NumericLimits<int32_t>::Maximum());
 		CheckFields(*replacement, {{1, "id"}});
+	}
+	SECTION("The last available ID can be assigned alongside a matching field") {
+		metadata.last_column_id = NumericLimits<int32_t>::Maximum() - 1;
+		replacement = test.Schema({{"new", LogicalType::INTEGER}, {"id", LogicalType::INTEGER}});
+		REQUIRE(IcebergCreateTableRequest::AssignReplacementFieldIds(*replacement, metadata) ==
+		        NumericLimits<int32_t>::Maximum());
+		CheckFields(*replacement, {{NumericLimits<int32_t>::Maximum(), "new"}, {1, "id"}});
 	}
 	SECTION("New IDs cannot overflow") {
 		replacement = test.Schema({{"new", LogicalType::INTEGER}});
