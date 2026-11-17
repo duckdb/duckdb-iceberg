@@ -54,7 +54,8 @@ private:
 //! Streams blobs to one Puffin file and records their individual byte ranges in its footer.
 class IcebergPuffinWriter {
 public:
-	IcebergPuffinWriter(FileSystem &fs, const string &path);
+	//! The QueryContext attributes the written bytes to the query's I/O metrics ("Data Written").
+	IcebergPuffinWriter(FileSystem &fs, const string &path, QueryContext context = QueryContext());
 	idx_t WriteBlob(const vector<data_t> &blob, IcebergPuffinBlobMetadata metadata);
 	//! Write the footer, close the file, and return the shared file size.
 	idx_t Finish();
