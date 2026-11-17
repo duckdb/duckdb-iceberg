@@ -44,11 +44,13 @@ namespace {
 
 class ManifestReadTask : public BaseExecutorTask {
 public:
-	ManifestReadTask(IcebergManifestScanningState &state) : BaseExecutorTask(state.executor), reader(*state.scan) {
+	ManifestReadTask(IcebergManifestScanningState &state)
+	    : BaseExecutorTask(state.executor), context(state.context), reader(*state.scan) {
 	}
 
-	//! One manifest read per step. The wrapper loops this while draining and yields between steps.
+	//! Read one manifest chunk per step. The wrapper loops this while draining and yields between steps.
 	TaskExecutionResult ExecuteTaskStep() override {
+		context.InterruptCheck();
 		if (!reader.Finished()) {
 			reader.Read();
 			return TaskExecutionResult::TASK_NOT_FINISHED;
@@ -61,6 +63,7 @@ public:
 	}
 
 private:
+	ClientContext &context;
 	manifest_file::ManifestReader reader;
 };
 

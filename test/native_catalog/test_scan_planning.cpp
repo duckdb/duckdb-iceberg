@@ -926,6 +926,10 @@ public:
 		unique_lock<mutex> guard(lock);
 		return cv.wait_for(guard, std::chrono::seconds(10), [&] { return opened; });
 	}
+	bool WasOpened() {
+		lock_guard<mutex> guard(lock);
+		return opened;
+	}
 
 private:
 	string path;
@@ -1064,6 +1068,12 @@ TEST_CASE("Iceberg overlapping lazy delete loads publish atomically and propagat
 
 TEST_CASE("Iceberg delete manifest read failure on a waiting thread reaches the owner and waiter",
           "[iceberg_planning]") {
+	bool interrupted = false;
+	SECTION("I/O failure on the waiting thread") {
+	}
+	SECTION("A query interrupt prevents the waiting thread from reading another manifest") {
+		interrupted = true;
+	}
 	PlanningTest test;
 	// Two read tasks, and no thread besides the two callers below that could run them.
 	Query(test.connection, "SET threads=2");
@@ -1110,23 +1120,42 @@ TEST_CASE("Iceberg delete manifest read failure on a waiting thread reaches the 
 			return string(ex.what());
 		}
 	};
-	// The owner's read task stays inside the open of the first manifest until the gate is released,
+	// The owner's read task stays inside the open of the first manifest until the gate is released.
 	auto owner = std::async(std::launch::async, [&] { return read({0, 1}); });
 	auto owner_held = held_gate.WaitForReader();
-	// so the task that opens the second manifest, and fails, can only run on the waiter.
+	auto owner_count = IcebergManifestStoreTest::LoadOwners(store, 0);
+	if (interrupted) {
+		context.context.Interrupt();
+	}
+	// The waiter can run the second task, which must honor the interrupt before attempting another open.
 	auto waiter = std::async(std::launch::async, [&] { return read({0}); });
-	auto waiter_failed = failing_gate.WaitForOpen();
+	bool waiter_progress;
+	if (interrupted) {
+		auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+		while (IcebergManifestStoreTest::LoadOwners(store, 0) <= owner_count &&
+		       std::chrono::steady_clock::now() < deadline) {
+			std::this_thread::yield();
+		}
+		waiter_progress = IcebergManifestStoreTest::LoadOwners(store, 0) > owner_count;
+	} else {
+		waiter_progress = failing_gate.WaitForOpen();
+	}
 	// Always unblock before assertions or future destruction, including on failure.
 	held_gate.Release();
 	auto owner_error = owner.get();
 	auto waiter_error = waiter.get();
+	auto second_manifest_opened = failing_gate.WasOpened();
+	context.context.ClearInterrupt();
 	database_fs.UnregisterSubSystem("GatedManifestFileSystem");
 	database_fs.UnregisterSubSystem("FailingManifestFileSystem");
 	INFO(owner_error);
 	REQUIRE(owner_held);
-	REQUIRE(waiter_failed);
-	REQUIRE(StringUtil::Contains(owner_error, "Injected delete manifest read failure"));
+	REQUIRE(waiter_progress);
+	REQUIRE(StringUtil::Contains(owner_error, interrupted ? "Interrupted" : "Injected delete manifest read failure"));
 	REQUIRE(owner_error == waiter_error);
+	REQUIRE(second_manifest_opened == !interrupted);
+	// Clearing the interrupt does not publish a failed load or cause a retry on this store.
+	REQUIRE(read({0, 1}) == owner_error);
 	// Neither index is published, and the manifest that was read is not cached either.
 	annotated_lock_guard<annotated_mutex> guard(store.lock);
 	REQUIRE_THROWS_AS(store.GetDeleteIndexes({0}), InternalException);
