@@ -1,6 +1,7 @@
 #define CATCH_CONFIG_RUNNER
 #include "catch.hpp"
 #include "duckdb.hpp"
+#include "duckdb/common/windows_undefs.hpp"
 #include "catalog/rest/api/iceberg_create_table_request.hpp"
 
 using namespace duckdb;
