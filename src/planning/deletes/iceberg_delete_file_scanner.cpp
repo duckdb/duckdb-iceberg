@@ -422,6 +422,7 @@ static void CompleteDeleteFileLoad(IcebergDeleteFileLoadState &load, const Error
 //! Reads delete files and publishes them. Throws, and publishes nothing, when the read fails.
 static void ReadDeleteFiles(const IcebergDeleteExecutionContext &context,
                             const vector<IcebergDeleteScanEntry> &entries) {
+	context.context.InterruptCheck();
 	auto scanned = IcebergDeleteFileScanner::ScanFiles(context, entries);
 	for (auto &entry : scanned.equality_delete_data) {
 		if (entry.delete_file->equality_values.size()) {

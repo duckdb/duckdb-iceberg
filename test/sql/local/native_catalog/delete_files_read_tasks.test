@@ -63,14 +63,16 @@ endloop
 
 endloop
 
-# 5 shared equality delete files: file e deletes the ids at the positions with pos % 600 = 100 + e
-loop e 0 5
+# 5 nonempty shared equality delete files and one empty file. Odd files use (p, id) in the reverse
+# of their physical column order; even files use only id and must ignore the NULL p column.
+loop e 0 6
 
 statement ok
 COPY (
-	SELECT (k * 100000 + pos)::INTEGER AS id FROM range(12) t(k), range(3000) r(pos)
-	WHERE pos % 600 = 100 + {e} ORDER BY id
-) TO '{TEST_DIR}/dfrt_eq_{e}.parquet' (FORMAT PARQUET, FIELD_IDS {'id': getvariable('dfrt_field_ids').id});
+	SELECT (k * 100000 + pos)::INTEGER AS id, CASE WHEN {e} % 2 = 1 THEN 'a' END AS p
+	FROM range(12) t(k), range(3000) r(pos)
+	WHERE {e} < 5 AND pos % 600 = 100 + {e} ORDER BY id
+) TO '{TEST_DIR}/dfrt_eq_{e}.parquet' (FORMAT PARQUET, FIELD_IDS getvariable('dfrt_field_ids'));
 
 endloop
 
@@ -83,7 +85,7 @@ JOIN (SELECT filename, size FROM read_blob('{TEST_DIR}/dfrt_*.parquet')) b ON b.
 query II
 SELECT count(*), count(*) FILTER (WHERE size > 0 AND num_rows > 0) FROM dfrt_files;
 ----
-98	98
+99	98
 
 statement ok
 COPY (
@@ -121,7 +123,10 @@ COPY (
 			file_size_in_bytes: size::BIGINT,
 			referenced_data_file: CASE WHEN name LIKE 'dfrt_own_%'
 				THEN '{TEST_DIR}/dfrt_data_' || split_part(name, '_', 3) || '.parquet' END,
-			equality_ids: CASE WHEN name LIKE 'dfrt_eq_%' THEN [getvariable('dfrt_field_ids').id] END
+			equality_ids: CASE WHEN name LIKE 'dfrt_eq_%' THEN
+				CASE WHEN split_part(parse_filename(name, true), '_', 3)::INTEGER % 2 = 1
+					THEN [getvariable('dfrt_field_ids').p, getvariable('dfrt_field_ids').id]
+					ELSE [getvariable('dfrt_field_ids').id] END END
 		} AS data_file
 	FROM dfrt_files WHERE name NOT LIKE 'dfrt_data_%' ORDER BY name
 ) TO '{TEST_DIR}/dfrt_deletes.avro' (
@@ -147,7 +152,7 @@ COPY (
 		0::INTEGER AS deleted_files_count,
 		rows::BIGINT AS added_rows_count, 0::BIGINT AS existing_rows_count,
 		0::BIGINT AS deleted_rows_count
-	FROM (VALUES ('data', 0, 11, 12, 36000), ('deletes', 1, 10, 86, 7500)) t(kind, content, seq, files, rows)
+	FROM (VALUES ('data', 0, 11, 12, 36000), ('deletes', 1, 10, 87, 7500)) t(kind, content, seq, files, rows)
 ) TO '{TEST_DIR}/dfrt_list.avro' (
 	FORMAT AVRO,
 	FIELD_IDS {
@@ -174,19 +179,19 @@ SELECT content, count(*) FROM iceberg_metadata(my_datalake.default.delete_files_
 WHERE status <> 'DELETED' GROUP BY ALL ORDER BY ALL;
 ----
 DATA	12
-EQUALITY_DELETES	5
+EQUALITY_DELETES	6
 POSITION_DELETES	81
 
 statement ok
 SET iceberg_use_server_side_scan_planning=false;
 
-# every data file is planned with the 9 shared position delete files, the 5 equality delete files and its own 6,
-# so the worker that opens a data file first claims 20 delete files and the others wait for 14 of them
+# Every data file is planned with 9 shared position deletes, 6 equality deletes and its own 6 position deletes.
+# The first worker claims 21 delete files; other workers share 15 of them.
 query III
 SELECT count(*), min(len(delete_files)), max(len(delete_files))
 FROM iceberg_scan_plan('my_datalake.default.delete_files_read_tasks');
 ----
-12	20	20
+12	21	21
 
 # source: the definition of the files above; the three values below are also what a build that reads the delete
 # files of a claim in one scan returns
@@ -217,6 +222,13 @@ SET threads={threads};
 statement ok
 SET async_threads={async_threads};
 
+# Stopping a scan early must drain reads before their execution context is destroyed.
+query II
+SELECT count(*), count(*) FILTER (WHERE id NOT IN (SELECT id FROM dfrt_expected))
+FROM (SELECT id FROM my_datalake.default.delete_files_read_tasks LIMIT 17);
+----
+17	0
+
 query III
 SELECT count(*), sum(id), bit_xor(hash(id)) = (SELECT bit_xor(hash(id)) FROM dfrt_expected)
 FROM my_datalake.default.delete_files_read_tasks;
@@ -229,6 +241,24 @@ SELECT (SELECT count(*) FROM (SELECT id FROM my_datalake.default.delete_files_re
 	(SELECT count(*) FROM (SELECT id FROM dfrt_expected EXCEPT SELECT id FROM my_datalake.default.delete_files_read_tasks));
 ----
 0	0
+
+# The explicit task executor has its own short-lived delete execution context.
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE dfrt_tasks = (
+	SELECT list(task) FROM iceberg_scan_plan('my_datalake.default.delete_files_read_tasks') task
+);
+
+query III
+SELECT count(*), sum(id), bit_xor(hash(id)) = (SELECT bit_xor(hash(id)) FROM dfrt_expected)
+FROM iceberg_scan_tasks(getvariable('dfrt_tasks'));
+----
+29065	15889569420	true
+
+statement ok
+COMMIT;
 
 endloop
 

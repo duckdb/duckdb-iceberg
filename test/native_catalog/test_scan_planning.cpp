@@ -1554,6 +1554,91 @@ TEST_CASE("Iceberg delete file read task that fails before it runs reaches the o
 	REQUIRE(test.Read("a-third-data-file.parquet", {last}) == owner_error);
 }
 
+TEST_CASE("Iceberg interrupted delete file reads settle every claimed load", "[iceberg_planning]") {
+	const auto task_size = IcebergDeleteExecutionState::DELETE_FILES_PER_READ_TASK;
+	DeleteFileLoadTest test(2 * task_size + 1, {"SET threads=2", "SET external_threads=2", "SET async_threads=0"});
+	auto &context = *test.test.connection.context;
+	auto &fs = FileSystem::GetFileSystem(*test.test.database.instance);
+	auto gated = make_uniq<GatedManifestFileSystem>(test.descriptors.front().file_path, 0);
+	auto &gate = *gated;
+	fs.RegisterSubSystem(std::move(gated));
+
+	auto owner = std::async(std::launch::async, [&] { return test.Read(test.data_file, test.descriptors); });
+	auto owner_held = gate.WaitForReader();
+	auto first_load = IcebergDeleteExecutionStateTest::Load(test.state, test.descriptors.front());
+	auto owners = first_load.use_count();
+	context.Interrupt();
+	auto waiter =
+	    std::async(std::launch::async, [&] { return test.Read("another-data-file.parquet", test.descriptors); });
+	auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+	while (first_load.use_count() <= owners && std::chrono::steady_clock::now() < deadline) {
+		std::this_thread::yield();
+	}
+	auto waiter_registered = first_load.use_count() > owners;
+	gate.Release();
+	auto owner_error = owner.get();
+	auto waiter_returned = waiter.wait_for(std::chrono::seconds(10)) == std::future_status::ready;
+	if (!waiter_returned) {
+		for (auto &descriptor : test.descriptors) {
+			IcebergDeleteExecutionStateTest::Abandon(test.state, descriptor);
+		}
+	}
+	auto waiter_error = waiter.get();
+	context.ClearInterrupt();
+	fs.UnregisterSubSystem("GatedManifestFileSystem");
+
+	INFO(owner_error);
+	REQUIRE(owner_held);
+	REQUIRE(waiter_registered);
+	REQUIRE(waiter_returned);
+	REQUIRE(StringUtil::Contains(owner_error, "Interrupted"));
+	REQUIRE(owner_error == waiter_error);
+	for (auto &descriptor : test.descriptors) {
+		REQUIRE(IcebergDeleteExecutionStateTest::Complete(test.state, descriptor));
+		REQUIRE_FALSE(IcebergDeleteExecutionStateTest::HasReadTasks(test.state, descriptor));
+	}
+	// Clearing the interrupt does not turn a cancelled cached load into a successful read.
+	REQUIRE(test.Read(test.data_file, {test.descriptors.back()}) == owner_error);
+}
+
+TEST_CASE("Iceberg delete file waiters can finish before an unrelated read fails", "[iceberg_planning]") {
+	const auto task_size = IcebergDeleteExecutionState::DELETE_FILES_PER_READ_TASK;
+	DeleteFileLoadTest test(2 * task_size + 1, {"SET threads=2", "SET external_threads=2", "SET async_threads=0"});
+	auto expected =
+	    test.test.connection.Query("SELECT pos FROM read_parquet('" + test.descriptors.back().file_path + "')");
+	REQUIRE_FALSE(expected->HasError());
+	REQUIRE(expected->RowCount() == 1);
+	auto expected_position = expected->Collection().GetValue(0, 0).GetValue<idx_t>();
+	auto gated = make_uniq<GatedManifestFileSystem>(test.descriptors.front().file_path, 1);
+	auto &gate = *gated;
+	auto &fs = FileSystem::GetFileSystem(*test.test.database.instance);
+	fs.RegisterSubSystem(std::move(gated));
+	auto owner = std::async(std::launch::async, [&] { return test.Read(test.data_file, test.descriptors); });
+	auto owner_held = gate.WaitForReader();
+	// A duplicate descriptor must neither be read twice nor make this waiter depend on other files.
+	auto waiter = std::async(std::launch::async, [&] {
+		return test.Read(test.data_file, {test.descriptors.back(), test.descriptors.back()});
+	});
+	auto waiter_finished = waiter.wait_for(std::chrono::seconds(10)) == std::future_status::ready;
+	gate.Release();
+	auto owner_error = owner.get();
+	auto waiter_error = waiter.get();
+	fs.UnregisterSubSystem("GatedManifestFileSystem");
+
+	INFO(owner_error);
+	REQUIRE(owner_held);
+	REQUIRE(waiter_finished);
+	REQUIRE(waiter_error.empty());
+	REQUIRE(StringUtil::Contains(owner_error, "Injected delete manifest read failure"));
+	// A later failure cannot overwrite the completed load or the waiter's assembled positions.
+	REQUIRE(test.Read(test.data_file, {test.descriptors.back()}).empty());
+	auto positions = test.state.GetExistingPositionalDeleteData(test.data_file);
+	REQUIRE(positions);
+	set<idx_t> deleted;
+	positions->ToSet(deleted);
+	REQUIRE(deleted == set<idx_t> {expected_position});
+}
+
 namespace {
 
 IcebergPredicateStats MetricsBounds(const Value &lower, const Value &upper) {
