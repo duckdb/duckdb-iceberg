@@ -127,8 +127,7 @@ static optional<IcebergManifestListEntry> RewriteManifestFile(const IcebergManif
 static void DropManifestsWithoutLiveFiles(vector<IcebergManifestListEntry> &manifests) {
 	auto has_no_live_files = [](const IcebergManifestListEntry &manifest) {
 		auto &counts = manifest.GetFile().counts;
-		return counts && counts->added_files_count && counts->existing_files_count && *counts->added_files_count == 0 &&
-		       *counts->existing_files_count == 0;
+		return counts && counts->HasNoLiveFiles();
 	};
 	manifests.erase(std::remove_if(manifests.begin(), manifests.end(), has_no_live_files), manifests.end());
 }
