@@ -40,8 +40,9 @@ IcebergFileRewrite::IcebergFileRewrite(PhysicalPlan &physical_plan, vector<Logic
 
 void IcebergFileRewrite::PlanCopy(ClientContext &context, PhysicalPlanGenerator &planner,
                                   const IcebergTableMetadata &metadata, PhysicalOperator &rows,
-                                  optional_idx target_file_size) {
+                                  optional_idx target_file_size, IcebergInsertVirtualColumns virtual_columns) {
 	IcebergCopyInput copy_input(context, metadata, metadata.GetLatestSchema());
+	copy_input.virtual_columns = virtual_columns;
 	auto &copy = IcebergInsert::PlanCopyForInsert(context, planner, copy_input, &rows);
 	if (target_file_size.IsValid()) {
 		copy.file_size_bytes = target_file_size;

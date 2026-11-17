@@ -20,6 +20,7 @@
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "execution/operator/iceberg_file_rewrite.hpp"
+#include "planning/iceberg_multi_file_reader.hpp"
 
 namespace duckdb {
 
@@ -96,9 +97,11 @@ optional_ptr<PhysicalTableScan> FindTableScan(PhysicalOperator &plan) {
 	return FindTableScan(plan.children[0].get());
 }
 
-//! Bind `SELECT * FROM <table>`, then add the filename and file_row_number virtual columns to its scan. They are
-//! added by column id, not by name, so a table column that happens to be called `filename` cannot shadow them.
-unique_ptr<LogicalOperator> BindKeepScan(ClientContext &context, IcebergTableSchemaVersion &table) {
+//! Bind `SELECT * FROM <table>`, then add virtual columns to its scan: on V3, the row lineage columns
+//! `_row_id` and `_last_updated_sequence_number`, then always `filename` and `file_row_number`. They are added by
+//! column id, not by name, so a table column that happens to be called `filename` cannot shadow them.
+unique_ptr<LogicalOperator> BindKeepScan(ClientContext &context, IcebergTableSchemaVersion &table,
+                                         bool with_row_lineage) {
 	auto select = make_uniq<SelectNode>();
 	select->select_list.push_back(make_uniq<StarExpression>());
 	auto table_ref = make_uniq<BaseTableRef>();
@@ -114,8 +117,14 @@ unique_ptr<LogicalOperator> BindKeepScan(ClientContext &context, IcebergTableSch
 	}
 	auto &projection = plan->Cast<LogicalProjection>();
 	auto &get = plan->children[0]->Cast<LogicalGet>();
-	for (auto virtual_column :
-	     {MultiFileReader::COLUMN_IDENTIFIER_FILENAME, MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER}) {
+	vector<column_t> virtual_columns;
+	if (with_row_lineage) {
+		virtual_columns.push_back(COLUMN_IDENTIFIER_ROW_ID);
+		virtual_columns.push_back(IcebergMultiFileReader::COLUMN_IDENTIFIER_LAST_SEQUENCE_NUMBER);
+	}
+	virtual_columns.push_back(MultiFileReader::COLUMN_IDENTIFIER_FILENAME);
+	virtual_columns.push_back(MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER);
+	for (auto virtual_column : virtual_columns) {
 		auto entry = get.virtual_columns.find(virtual_column);
 		if (entry == get.virtual_columns.end()) {
 			throw InternalException("Copy-on-write DELETE: the Iceberg scan does not expose virtual column %d",
@@ -146,11 +155,11 @@ IcebergCopyOnWriteDeleteFilter::IcebergCopyOnWriteDeleteFilter(PhysicalPlan &phy
 PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner,
                                                              LogicalDelete &op, IcebergTableSchemaVersion &table) {
 	auto &metadata = table.table_info.GetMetadata();
-	if (metadata.iceberg_version >= 3) {
-		//! A V3 rewrite has to carry each kept row's _row_id and _last_updated_sequence_number into the new files
-		//! Pending rows may not have their final lineage yet, so carrying scan-time values is not sufficient.
-		throw NotImplementedException("Copy-on-write DELETE on Iceberg V%d tables", metadata.iceberg_version);
-	}
+	//! A V3 rewrite carries each kept row's _row_id and _last_updated_sequence_number into the new files, so the
+	//! rows keep their identity. A committed row reads its full lineage. A row written earlier in this transaction
+	//! reads only what its file stores: a row inserted in this transaction reads NULL and, like after an UPDATE, gets
+	//! its identity when the transaction commits.
+	const bool with_row_lineage = metadata.iceberg_version >= 3;
 
 	//! Build side: the DELETE's own scan, which emits the filename and file_row_number of every matching row
 	auto &match_plan = planner.CreatePlan(*op.children[0]);
@@ -161,7 +170,7 @@ PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanDelete(ClientContext &cont
 
 	//! Probe side: the whole table again, so the rows of each matched file that survive can be rewritten. It is
 	//! planned here, after optimization, like PhysicalPlanGenerator::Plan does for a full statement.
-	auto keep_logical_plan = BindKeepScan(context, table);
+	auto keep_logical_plan = BindKeepScan(context, table, with_row_lineage);
 	ColumnBindingResolver resolver;
 	resolver.VisitOperator(*keep_logical_plan);
 	keep_logical_plan->ResolveOperatorTypes();
@@ -195,7 +204,9 @@ PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanDelete(ClientContext &cont
 
 	//! Use the same replacement-file writer and snapshot staging as maintenance rewrites.
 	auto &rewrite = planner.Make<CopyOnWriteDeleteRewrite>(table.table_info, filter).Cast<CopyOnWriteDeleteRewrite>();
-	rewrite.PlanCopy(context, planner, metadata, filter);
+	rewrite.PlanCopy(context, planner, metadata, filter, optional_idx(),
+	                 with_row_lineage ? IcebergInsertVirtualColumns::WRITE_ROW_ID_AND_SEQUENCE_NUMBER
+	                                  : IcebergInsertVirtualColumns::NONE);
 	return rewrite;
 }
 

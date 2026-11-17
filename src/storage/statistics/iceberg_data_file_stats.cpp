@@ -111,7 +111,8 @@ void IcebergDataFileStats::PopulateFromReturnStats(ClientContext &context, Icebe
 		auto &col_name = StringValue::Get(struct_children[0]);
 		auto &col_stats = MapValue::GetChildren(struct_children[1]);
 		auto column_names = ParseQuotedList(col_name, '.');
-		if (column_names[0] == "_row_id") {
+		//! Row lineage columns are not part of the table schema, so no column metrics are recorded for them
+		if (column_names[0] == "_row_id" || column_names[0] == "_last_updated_sequence_number") {
 			continue;
 		}
 
