@@ -26,3 +26,27 @@ JOIN my_datalake.default.row_lineage_multiblock_manifest_expected e USING (id);
 2200	0
 
 endloop
+
+# A completed scan must cache the same ordered entries, including when a later
+# scan prunes the first manifest and only reads files from the second insert.
+statement ok
+SET iceberg_enable_manifest_cache = true;
+
+loop i 0 2
+
+query III
+SELECT count(*), count(DISTINCT t._row_id), count(*) FILTER (WHERE t._row_id IS DISTINCT FROM e.row_id)
+FROM my_datalake.default.row_lineage_multiblock_manifest t
+JOIN my_datalake.default.row_lineage_multiblock_manifest_expected e USING (id);
+----
+2200	2200	0
+
+query II
+SELECT count(*), count(*) FILTER (WHERE t._row_id IS DISTINCT FROM e.row_id)
+FROM my_datalake.default.row_lineage_multiblock_manifest t
+JOIN my_datalake.default.row_lineage_multiblock_manifest_expected e USING (id)
+WHERE t.id >= 2000;
+----
+200	0
+
+endloop
