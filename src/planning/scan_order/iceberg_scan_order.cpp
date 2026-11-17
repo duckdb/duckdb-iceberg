@@ -121,7 +121,8 @@ void IcebergScanOrder::Apply(ClientContext &context, const IcebergTableSchema &s
 			const auto &frontier = primary(order_entries[k]);
 			idx_t guaranteed = 0;
 			for (idx_t j = 0; j < k; j++) {
-				if (!ScanOrderCompare(opposite(order_entries[j]), frontier, stat_type)) {
+				// a file that ties with the frontier is not guaranteed: later ORDER BY keys can rank its rows
+				if (ScanOrderCompare(frontier, opposite(order_entries[j]), stat_type)) {
 					guaranteed += order_entries[j].count;
 				}
 				if (guaranteed >= row_limit) {
