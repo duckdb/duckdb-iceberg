@@ -217,10 +217,11 @@ IcebergScanPlanner::GetDataFile(idx_t file_id, annotated_lock_guard<annotated_mu
 				}
 			}
 			shared_state->data_file_partitions[data_file.file_path] = std::move(partition);
-			auto bound_entry = bound_manifest.BindEntry(manifest_entry);
 			if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
+				//! Deleted files don't use up inherited row ids, like Iceberg Java
 				continue;
 			}
+			auto bound_entry = bound_manifest.BindEntry(manifest_entry);
 			//! Replaced by an earlier statement of this transaction, e.g. a rewrite of the data files
 			if (transaction_data &&
 			    transaction_data->IsFileInvalidated({data_file.file_path, data_file.content_offset})) {
