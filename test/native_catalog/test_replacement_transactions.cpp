@@ -209,6 +209,83 @@ TEST_CASE("Replacement rejects concurrent schema changes without partial publica
 	CheckRows(writer, {1, 2}, "WHERE added IS NULL");
 }
 
+TEST_CASE("Replacement rejects earlier data changes and rollback without changing transaction state",
+          "[iceberg_replacement]") {
+	ReplacementTest test;
+	Query(test.connection, "INSERT INTO lake.default.t VALUES (3)");
+	Query(test.connection, "BEGIN");
+	vector<int32_t> expected {1, 2, 3};
+	SECTION("Insert") {
+		Query(test.connection, "INSERT INTO lake.default.t VALUES (7)");
+		expected = {1, 2, 3, 7};
+	}
+	SECTION("Delete") {
+		Query(test.connection, "DELETE FROM lake.default.t WHERE id = 1");
+		expected = {2, 3};
+	}
+	SECTION("Update") {
+		Query(test.connection, "UPDATE lake.default.t SET id = 7 WHERE id = 1");
+		expected = {2, 3, 7};
+	}
+	SECTION("Rewrite") {
+		Query(test.connection, "CALL iceberg_rewrite_data_files('lake.default.t', rewrite_all = true)");
+	}
+	SECTION("Rollback to a snapshot") {
+		Query(test.connection, "CALL iceberg_rollback_to_snapshot('lake.default.t', getvariable('old_snapshot'))");
+		expected = {1, 2};
+	}
+	auto &table = test.WritableTable();
+	auto &data = *table.transaction_data;
+	auto before = table.GetMetadata().ToJSON();
+	auto update_count = data.updates.size();
+	REQUIRE_THROWS_WITH(test.Replace(), Catch::Contains("it was already changed in this transaction"));
+	REQUIRE(table.GetMetadata().ToJSON() == before);
+	REQUIRE(data.updates.size() == update_count);
+	REQUIRE_FALSE(data.replaces_table);
+	Query(test.connection, "COMMIT");
+	CheckRows(test.connection, expected);
+}
+
+TEST_CASE("Replacement supports updates and deletes of its new rows", "[iceberg_replacement]") {
+	for (auto version : {2, 3}) {
+		CAPTURE(version);
+		ReplacementTest test(version);
+		Connection observer(test.database);
+		Query(test.connection, "BEGIN");
+		test.Replace();
+		Query(test.connection, "INSERT INTO lake.default.t VALUES (7), (8), (9)");
+		Query(test.connection, "UPDATE lake.default.t SET id = 17 WHERE id = 7");
+		Query(test.connection, "DELETE FROM lake.default.t WHERE id = 8");
+		CheckRows(test.connection, {9, 17});
+		CheckRows(observer, {1, 2});
+		Query(test.connection, "COMMIT");
+		CheckRows(observer, {9, 17});
+		CheckRows(test.connection, {1, 2}, "AT (VERSION => getvariable('old_snapshot'))");
+		REQUIRE(Scalar(observer, "SELECT count(*) FROM iceberg_snapshots(lake.default.t)") == Value::BIGINT(4));
+		REQUIRE(Scalar(observer, "SELECT parent_id IS NULL FROM iceberg_snapshots(lake.default.t) "
+		                         "WHERE sequence_number = 2") == Value::BOOLEAN(true));
+		if (version == 3) {
+			REQUIRE(Scalar(observer, "SELECT count(DISTINCT _row_id) = count(*) AND min(_row_id) >= 2 "
+			                         "FROM lake.default.t") == Value::BOOLEAN(true));
+		}
+	}
+}
+
+TEST_CASE("Replacement preserves schema and property changes in its transaction", "[iceberg_replacement]") {
+	ReplacementTest test;
+	Query(test.connection, "BEGIN");
+	Query(test.connection, "ALTER TABLE lake.default.t ADD COLUMN note VARCHAR");
+	test.Replace();
+	Query(test.connection, "CALL set_iceberg_table_properties(lake.default.t, {'replacement-probe': 'yes'})");
+	Query(test.connection, "INSERT INTO lake.default.t VALUES (7, 'replacement')");
+	Query(test.connection, "COMMIT");
+	CheckRows(test.connection, {7});
+	REQUIRE(Scalar(test.connection, "SELECT note FROM lake.default.t") == Value("replacement"));
+	REQUIRE(Scalar(test.connection, "SELECT value FROM iceberg_table_properties(lake.default.t) "
+	                                "WHERE key = 'replacement-probe'") == Value("yes"));
+	CheckRows(test.connection, {1, 2}, "AT (VERSION => getvariable('old_snapshot'))");
+}
+
 TEST_CASE("Replacement and subsequent insertion do not open old manifests", "[iceberg_replacement]") {
 	ReplacementTest test(2, false);
 	REQUIRE(Scalar(test.connection, R"(
@@ -226,8 +303,14 @@ TEST_CASE("Replacement and subsequent insertion do not open old manifests", "[ic
 	REQUIRE_THAT(scan->GetError(), Catch::Contains("unavailable-replacement-manifest.avro"));
 	Query(test.connection, "BEGIN");
 	test.Replace();
-	Query(test.connection, "COMMIT");
-	Query(test.connection, "INSERT INTO lake.default.t VALUES (7)");
+	SECTION("Insert before committing the replacement") {
+		Query(test.connection, "INSERT INTO lake.default.t VALUES (7)");
+		Query(test.connection, "COMMIT");
+	}
+	SECTION("Insert after committing the replacement") {
+		Query(test.connection, "COMMIT");
+		Query(test.connection, "INSERT INTO lake.default.t VALUES (7)");
+	}
 	REQUIRE(Scalar(test.connection, "SELECT id FROM lake.default.t") == Value::INTEGER(7));
 	REQUIRE(Scalar(test.connection, "SELECT count(*) FROM iceberg_snapshots(lake.default.t)") == Value::BIGINT(2));
 }

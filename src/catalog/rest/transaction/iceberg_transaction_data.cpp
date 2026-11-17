@@ -441,7 +441,11 @@ void IcebergTransactionData::TableSetDefaultSpec() {
 
 void IcebergTransactionData::TableReplaceContents(IcebergTableMetadata &metadata) {
 	lock_guard<mutex> guard(lock);
-	D_ASSERT(alters.empty());
+	//! Earlier snapshot updates would be replayed at commit, restoring the contents being replaced.
+	if (!alters.empty() || rolls_back) {
+		throw InvalidInputException("Cannot replace table \"%s\": it was already changed in this transaction",
+		                            table_info.name);
+	}
 	replaces_table = true;
 	assert_schema_id = true;
 	metadata.current_snapshot_id.reset();
