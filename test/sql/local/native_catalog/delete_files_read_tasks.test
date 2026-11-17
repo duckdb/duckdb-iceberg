@@ -1,0 +1,267 @@
+# name: test/sql/local/native_catalog/delete_files_read_tasks.test
+# description: Data files that share delete files return the same rows, or the same error, with any number of threads and async threads
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+# DuckDB writes one position delete file per data file, so delete files that several data files share, as
+# other writers produce them, need explicit manifests (as in rewrite_shared_deletes.test).
+statement ok
+CREATE TABLE my_datalake.default.delete_files_read_tasks (id INTEGER, p VARCHAR)
+PARTITIONED BY (p) WITH ('format-version' = 2);
+
+statement ok
+SET VARIABLE dfrt_field_ids = (
+	SELECT {
+		id: max((field->>'id')::INTEGER) FILTER (WHERE field->>'name' = 'id'),
+		p: max((field->>'id')::INTEGER) FILTER (WHERE field->>'name' = 'p')
+	}
+	FROM (
+		SELECT unnest(metadata::JSON->'schemas'->0->'fields'->'$[*]') AS field
+		FROM iceberg_load_table_response(my_datalake.default.delete_files_read_tasks)
+	)
+);
+
+# 12 data files of 3000 rows, the row at position pos of file k has id k * 100000 + pos
+loop k 0 12
+
+statement ok
+COPY (SELECT ({k} * 100000 + pos)::INTEGER AS id, 'a' AS p FROM range(3000) r(pos) ORDER BY pos)
+TO '{TEST_DIR}/dfrt_data_{k}.parquet' (FORMAT PARQUET, FIELD_IDS getvariable('dfrt_field_ids'));
+
+endloop
+
+# 9 shared position delete files: file j deletes, in every data file k, the positions with (pos + k) % 50 = j
+loop j 0 9
+
+statement ok
+COPY (
+	SELECT '{TEST_DIR}/dfrt_data_' || k || '.parquet' AS file_path, pos::BIGINT AS pos
+	FROM range(12) t(k), range(3000) r(pos)
+	WHERE (pos + k) % 50 = {j}
+	ORDER BY file_path, pos
+) TO '{TEST_DIR}/dfrt_shared_{j}.parquet' (FORMAT PARQUET, FIELD_IDS {file_path: 2147483546, pos: 2147483545});
+
+endloop
+
+# 6 position delete files per data file that reference it: file m deletes the positions with pos % 300 = 200 + m
+loop k 0 12
+
+loop m 0 6
+
+statement ok
+COPY (
+	SELECT '{TEST_DIR}/dfrt_data_{k}.parquet' AS file_path, pos::BIGINT AS pos
+	FROM range(3000) r(pos) WHERE pos % 300 = 200 + {m} ORDER BY pos
+) TO '{TEST_DIR}/dfrt_own_{k}_{m}.parquet' (FORMAT PARQUET, FIELD_IDS {file_path: 2147483546, pos: 2147483545});
+
+endloop
+
+endloop
+
+# 5 shared equality delete files: file e deletes the ids at the positions with pos % 600 = 100 + e
+loop e 0 5
+
+statement ok
+COPY (
+	SELECT (k * 100000 + pos)::INTEGER AS id FROM range(12) t(k), range(3000) r(pos)
+	WHERE pos % 600 = 100 + {e} ORDER BY id
+) TO '{TEST_DIR}/dfrt_eq_{e}.parquet' (FORMAT PARQUET, FIELD_IDS {'id': getvariable('dfrt_field_ids').id});
+
+endloop
+
+statement ok
+CREATE TABLE dfrt_files AS
+SELECT parse_filename(m.file_name) AS name, m.num_rows AS num_rows, b.size AS size
+FROM parquet_file_metadata('{TEST_DIR}/dfrt_*.parquet') m
+JOIN (SELECT filename, size FROM read_blob('{TEST_DIR}/dfrt_*.parquet')) b ON b.filename = m.file_name;
+
+query II
+SELECT count(*), count(*) FILTER (WHERE size > 0 AND num_rows > 0) FROM dfrt_files;
+----
+98	98
+
+statement ok
+COPY (
+	SELECT 1::INTEGER AS status, 11::BIGINT AS snapshot_id, 9::BIGINT AS sequence_number,
+		11::BIGINT AS file_sequence_number,
+		{
+			content: 0::INTEGER,
+			file_path: '{TEST_DIR}/' || name,
+			file_format: 'PARQUET',
+			partition: {p: 'a'},
+			record_count: num_rows::BIGINT,
+			file_size_in_bytes: size::BIGINT
+		} AS data_file
+	FROM dfrt_files WHERE name LIKE 'dfrt_data_%' ORDER BY name
+) TO '{TEST_DIR}/dfrt_data.avro' (
+	FORMAT AVRO,
+	METADATA {'schema-id': '0', 'partition-spec-id': '0', 'format-version': '2', 'content': 'data'},
+	FIELD_IDS {
+		status: 0, snapshot_id: 1, sequence_number: 3, file_sequence_number: 4,
+		data_file: {__duckdb_field_id: 2, content: 134, file_path: 100, file_format: 101,
+			partition: {__duckdb_field_id: 102, p: 1000}, record_count: 103, file_size_in_bytes: 104}
+	}
+);
+
+statement ok
+COPY (
+	SELECT 1::INTEGER AS status, 10::BIGINT AS snapshot_id, 10::BIGINT AS sequence_number,
+		10::BIGINT AS file_sequence_number,
+		{
+			content: (CASE WHEN name LIKE 'dfrt_eq_%' THEN 2 ELSE 1 END)::INTEGER,
+			file_path: '{TEST_DIR}/' || name,
+			file_format: 'PARQUET',
+			partition: {p: 'a'},
+			record_count: num_rows::BIGINT,
+			file_size_in_bytes: size::BIGINT,
+			referenced_data_file: CASE WHEN name LIKE 'dfrt_own_%'
+				THEN '{TEST_DIR}/dfrt_data_' || split_part(name, '_', 3) || '.parquet' END,
+			equality_ids: CASE WHEN name LIKE 'dfrt_eq_%' THEN [getvariable('dfrt_field_ids').id] END
+		} AS data_file
+	FROM dfrt_files WHERE name NOT LIKE 'dfrt_data_%' ORDER BY name
+) TO '{TEST_DIR}/dfrt_deletes.avro' (
+	FORMAT AVRO,
+	METADATA {'schema-id': '0', 'partition-spec-id': '0', 'format-version': '2', 'content': 'deletes'},
+	FIELD_IDS {
+		status: 0, snapshot_id: 1, sequence_number: 3, file_sequence_number: 4,
+		data_file: {__duckdb_field_id: 2, content: 134, file_path: 100, file_format: 101,
+			partition: {__duckdb_field_id: 102, p: 1000}, record_count: 103, file_size_in_bytes: 104,
+			referenced_data_file: 143, equality_ids: {__duckdb_field_id: 135, list: 136}}
+	}
+);
+
+statement ok
+COPY (
+	SELECT '{TEST_DIR}/dfrt_' || kind || '.avro' AS manifest_path,
+		(SELECT size FROM read_blob('{TEST_DIR}/dfrt_*.avro') WHERE parse_filename(filename) = 'dfrt_' || kind || '.avro')::BIGINT
+			AS manifest_length,
+		0::INTEGER AS partition_spec_id,
+		content::INTEGER AS content, seq::BIGINT AS sequence_number,
+		0::BIGINT AS min_sequence_number, seq::BIGINT AS added_snapshot_id,
+		files::INTEGER AS added_files_count, 0::INTEGER AS existing_files_count,
+		0::INTEGER AS deleted_files_count,
+		rows::BIGINT AS added_rows_count, 0::BIGINT AS existing_rows_count,
+		0::BIGINT AS deleted_rows_count
+	FROM (VALUES ('data', 0, 11, 12, 36000), ('deletes', 1, 10, 86, 7500)) t(kind, content, seq, files, rows)
+) TO '{TEST_DIR}/dfrt_list.avro' (
+	FORMAT AVRO,
+	FIELD_IDS {
+		manifest_path: 500, manifest_length: 501, partition_spec_id: 502,
+		content: 517, sequence_number: 515, min_sequence_number: 516, added_snapshot_id: 503,
+		added_files_count: 504, existing_files_count: 505, deleted_files_count: 506,
+		added_rows_count: 512, existing_rows_count: 513, deleted_rows_count: 514
+	}
+);
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/delete_files_read_tasks',
+	json_object('requirements', json_array(), 'updates', json_array(
+		json_object('action', 'add-snapshot', 'snapshot', json_object(
+			'snapshot-id', 11, 'sequence-number', 11, 'schema-id', 0,
+			'timestamp-ms', epoch_ms(current_timestamp), 'manifest-list', '{TEST_DIR}/dfrt_list.avro',
+			'summary', json_object('operation', 'overwrite'))),
+		json_object('action', 'set-snapshot-ref', 'ref-name', 'main', 'type', 'branch', 'snapshot-id', 11))));
+----
+200
+
+query TI
+SELECT content, count(*) FROM iceberg_metadata(my_datalake.default.delete_files_read_tasks)
+WHERE status <> 'DELETED' GROUP BY ALL ORDER BY ALL;
+----
+DATA	12
+EQUALITY_DELETES	5
+POSITION_DELETES	81
+
+statement ok
+SET iceberg_use_server_side_scan_planning=false;
+
+# every data file is planned with the 9 shared position delete files, the 5 equality delete files and its own 6,
+# so the worker that opens a data file first claims 20 delete files and the others wait for 14 of them
+query III
+SELECT count(*), min(len(delete_files)), max(len(delete_files))
+FROM iceberg_scan_plan('my_datalake.default.delete_files_read_tasks');
+----
+12	20	20
+
+# source: the definition of the files above; the three values below are also what a build that reads the delete
+# files of a claim in one scan returns
+statement ok
+CREATE TABLE dfrt_expected AS
+SELECT (k * 100000 + pos)::INTEGER AS id FROM range(12) t(k), range(3000) r(pos)
+WHERE (pos + k) % 50 >= 9 AND pos % 300 NOT BETWEEN 200 AND 205 AND pos % 600 NOT BETWEEN 100 AND 104;
+
+query III
+SELECT count(*), sum(id), bit_xor(hash(id)) = (SELECT bit_xor(hash(id)) FROM dfrt_expected)
+FROM my_datalake.default.delete_files_read_tasks;
+----
+29065	15889569420	true
+
+query II
+SELECT count(*), sum(id) FROM dfrt_expected;
+----
+29065	15889569420
+
+# without async threads the workers that open the data files run every read task themselves
+foreach threads 1 4
+
+foreach async_threads 0 4
+
+statement ok
+SET threads={threads};
+
+statement ok
+SET async_threads={async_threads};
+
+query III
+SELECT count(*), sum(id), bit_xor(hash(id)) = (SELECT bit_xor(hash(id)) FROM dfrt_expected)
+FROM my_datalake.default.delete_files_read_tasks;
+----
+29065	15889569420	true
+
+# rows in neither direction differ
+query II
+SELECT (SELECT count(*) FROM (SELECT id FROM my_datalake.default.delete_files_read_tasks EXCEPT SELECT id FROM dfrt_expected)),
+	(SELECT count(*) FROM (SELECT id FROM dfrt_expected EXCEPT SELECT id FROM my_datalake.default.delete_files_read_tasks));
+----
+0	0
+
+endloop
+
+endloop
+
+# a delete file that cannot be read fails the scan with an error that names it, whichever thread reads it
+statement ok
+COPY (SELECT 'not a parquet file' AS x) TO '{TEST_DIR}/dfrt_shared_3.parquet' (FORMAT CSV);
+
+foreach threads 1 4
+
+foreach async_threads 0 4
+
+statement ok
+SET threads={threads};
+
+statement ok
+SET async_threads={async_threads};
+
+statement error
+SELECT count(*), sum(id) FROM my_datalake.default.delete_files_read_tasks;
+----
+dfrt_shared_3.parquet
+
+endloop
+
+endloop
+
+statement ok
+RESET threads;
+
+statement ok
+RESET async_threads;
+
+statement ok
+DROP TABLE my_datalake.default.delete_files_read_tasks;
