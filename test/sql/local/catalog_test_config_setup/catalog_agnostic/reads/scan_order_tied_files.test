@@ -1,0 +1,118 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/scan_order_tied_files.test
+# description: ORDER BY ... LIMIT over data files with equal bounds on the first sort key (duckdb/duckdb-iceberg#1652)
+# group: [reads]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SCAN_PLANNING_MODE client
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.scan_order_tied_files;
+
+statement ok
+CREATE TABLE my_datalake.default.scan_order_tied_files (a BIGINT, b BIGINT);
+
+# One data file per insert. The bounds on 'a' are [1, 1] for the first two files and [2, 2] for the last two.
+statement ok
+INSERT INTO my_datalake.default.scan_order_tied_files VALUES (1, 1), (1, 3);
+
+statement ok
+INSERT INTO my_datalake.default.scan_order_tied_files VALUES (1, 2), (1, 4);
+
+statement ok
+INSERT INTO my_datalake.default.scan_order_tied_files VALUES (2, 1), (2, 3);
+
+statement ok
+INSERT INTO my_datalake.default.scan_order_tied_files VALUES (2, 2), (2, 4);
+
+query I
+SELECT count(DISTINCT file_path) FROM iceberg_metadata(my_datalake.default.scan_order_tied_files);
+----
+4
+
+# The second sort key ranks rows from both tied files.
+query II
+SELECT a, b FROM my_datalake.default.scan_order_tied_files ORDER BY a ASC, b ASC LIMIT 1;
+----
+1	1
+
+query II
+SELECT a, b FROM my_datalake.default.scan_order_tied_files ORDER BY a ASC, b DESC LIMIT 1;
+----
+1	4
+
+query II
+SELECT a, b FROM my_datalake.default.scan_order_tied_files ORDER BY a DESC, b ASC LIMIT 1;
+----
+2	1
+
+query II
+SELECT a, b FROM my_datalake.default.scan_order_tied_files ORDER BY a DESC, b DESC LIMIT 1;
+----
+2	4
+
+query II
+SELECT a, b FROM my_datalake.default.scan_order_tied_files ORDER BY a ASC, b ASC LIMIT 2;
+----
+1	1
+1	2
+
+query II
+SELECT a, b FROM my_datalake.default.scan_order_tied_files ORDER BY a ASC, b DESC LIMIT 2;
+----
+1	4
+1	3
+
+query II
+SELECT a, b FROM my_datalake.default.scan_order_tied_files ORDER BY a DESC, b ASC LIMIT 2;
+----
+2	1
+2	2
+
+query II
+SELECT a, b FROM my_datalake.default.scan_order_tied_files ORDER BY a DESC, b DESC LIMIT 2;
+----
+2	4
+2	3
+
+# A LIMIT that needs rows from files past the tie.
+query II
+SELECT a, b FROM my_datalake.default.scan_order_tied_files ORDER BY a ASC, b DESC LIMIT 5;
+----
+1	4
+1	3
+1	2
+1	1
+2	4
+
+# A single sort key.
+query I
+SELECT a FROM my_datalake.default.scan_order_tied_files ORDER BY a ASC LIMIT 1;
+----
+1
+
+query I
+SELECT a FROM my_datalake.default.scan_order_tied_files ORDER BY a DESC LIMIT 1;
+----
+2
+
+# Files that rank strictly after the tied files are still skipped.
+statement ok
+CALL enable_logging('Iceberg');
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+SELECT a, b FROM my_datalake.default.scan_order_tied_files ORDER BY a ASC, b ASC LIMIT 1;
+
+query I
+SELECT count(*) > 0 FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE '%Scan Order Pushdown, kept 2 of 4%';
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.scan_order_tied_files;
