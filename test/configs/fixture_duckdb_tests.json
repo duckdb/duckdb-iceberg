@@ -114,6 +114,71 @@
   ],
   "skip_tests": [
     {
+      "reason": "Iceberg table names are case-sensitive: replacing TBL does not replace tbl, and sampletable does not resolve SampleTable",
+      "paths": [
+        "test/sql/binder/separate_schema_tables.test",
+        "test/sql/transactions/delete_and_drop_in_same_transaction.test"
+      ]
+    },
+    {
+      "reason": "Explicit main schema references do not resolve tables created in the fixture harness's per-test namespace",
+      "paths": [
+        "test/sql/cte/test_issue_5673.test"
+      ]
+    },
+    {
+      "reason": "Iceberg widens TINYINT/SMALLINT to INTEGER, so Parquet physical types and narrow-integer negation overflow differ from native DuckDB",
+      "paths": [
+        "test/sql/copy/parquet/writer/parquet_write_signed.test",
+        "test/sql/optimizer/expression/test_negation_limits.test"
+      ]
+    },
+    {
+      "reason": "Iceberg represents HUGEINT as DECIMAL(38,0), which cannot represent the full signed 128-bit range and has different arithmetic overflow behavior",
+      "paths": [
+        "test/sql/optimizer/expression/test_move_constants.test",
+        "test/sql/optimizer/expression/test_move_constants_overflow.test"
+      ]
+    },
+    {
+      "reason": "Iceberg widens UINTEGER to BIGINT; BIGINT-to-DOUBLE is not lossless over its full domain, so the optimizer cannot apply the native UINTEGER comparison rewrite",
+      "paths": [
+        "test/sql/optimizer/expression/test_float_identity.test"
+      ]
+    },
+    {
+      "reason": "DuckDB ListGenericFold checks the entire Parquet list child vector for NULLs before excluding NULL parent lists; reproduced with plain read_parquet without Iceberg. Remove when the upstream list-fold implementation handles unreferenced child values",
+      "paths": [
+        "test/sql/function/list/list_cosine_similarity.test",
+        "test/sql/function/list/list_distance.test",
+        "test/sql/function/list/list_inner_product.test"
+      ]
+    },
+    {
+      "reason": "Iceberg/Parquet scan profiling counts seven rows after filtering the NULL join key; this test asserts eight rows from native DuckDB scans",
+      "paths": [
+        "test/sql/pragma/profiling/test_custom_profiling_rows_scanned.test"
+      ]
+    },
+    {
+      "reason": "Iceberg scans do not expose native DuckDB min/max statistics through stats(x); this test requires NaN bounds from native storage",
+      "paths": [
+        "test/sql/storage/nan_min_statistics.test"
+      ]
+    },
+    {
+      "reason": "Native catalog MVCC keeps a concurrently dropped table visible to a transaction that has not loaded it yet; the REST catalog lookup returns table-not-found before the expected native commit conflict",
+      "paths": [
+        "test/sql/transactions/conflict_drop_then_delete.test"
+      ]
+    },
+    {
+      "reason": "The fixture rejects the test's transaction updating multiple tables because it does not advertise atomic multi-table commit support",
+      "paths": [
+        "test/sql/transactions/conflict_rename_append.test"
+      ]
+    },
+    {
       "reason": "Iceberg views do not enforce DuckDB table/view dependency tracking",
       "paths": [
         "test/sql/catalog/view/test_view_schema_change_with_dependencies.test",

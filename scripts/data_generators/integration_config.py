@@ -74,6 +74,7 @@ class CatalogProfile:
     supports_v3_tables: bool = True
     supports_row_lineage: bool = True
     allows_cleanup: bool = True
+    supports_snapshot_refs: bool = True
 
     @property
     def duckdb_catalog_init_sql(self) -> str:
@@ -107,6 +108,8 @@ class CatalogProfile:
             capabilities.add("row_lineage")
         if self.allows_cleanup:
             capabilities.add("allows_cleanup")
+        if self.supports_snapshot_refs:
+            capabilities.add("snapshot_refs")
         return frozenset(capabilities)
 
 
@@ -254,6 +257,8 @@ REST_CATALOG_PROFILES = {
         },
         supports_v3_tables=False,
         supports_row_lineage=False,
+        # Nessie branches and tags version the catalog, not an individual Iceberg table.
+        supports_snapshot_refs=False,
     ),
 }
 
@@ -284,16 +289,12 @@ def resolve_active_catalog(*, allowed_catalogs: tuple[str, ...], purpose: str) -
 
     active_catalog = ACTIVE_CATALOG_FILE.read_text(encoding="utf-8").strip()
     if not active_catalog:
-        raise RuntimeError(
-            f"Cannot determine the active catalog for {purpose}: "
-            f"'{ACTIVE_CATALOG_FILE}' is empty."
-        )
+        raise RuntimeError(f"Cannot determine the active catalog for {purpose}: " f"'{ACTIVE_CATALOG_FILE}' is empty.")
 
     if active_catalog not in allowed_catalogs:
         allowed = ", ".join(allowed_catalogs)
         raise RuntimeError(
-            f"Active catalog '{active_catalog}' is not supported for {purpose}. "
-            f"Expected one of: {allowed}."
+            f"Active catalog '{active_catalog}' is not supported for {purpose}. " f"Expected one of: {allowed}."
         )
 
     return active_catalog
@@ -301,9 +302,7 @@ def resolve_active_catalog(*, allowed_catalogs: tuple[str, ...], purpose: str) -
 
 def resolve_pyspark_runtime(*, purpose: str) -> tuple[SparkRuntime, Version]:
     if importlib.util.find_spec("pyspark") is None:
-        raise RuntimeError(
-            f"PySpark is required for {purpose}, but it is not installed in the current environment."
-        )
+        raise RuntimeError(f"PySpark is required for {purpose}, but it is not installed in the current environment.")
 
     pyspark = importlib.import_module("pyspark")
     pyspark_version = Version(pyspark.__version__)

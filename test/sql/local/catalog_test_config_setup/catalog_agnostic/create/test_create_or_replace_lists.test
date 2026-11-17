@@ -1,0 +1,51 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_or_replace_lists.test
+# description: Replacing list columns preserves NULL lists, empty lists, and element values
+# group: [create]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cor_lists;
+
+foreach type FLOAT DOUBLE
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_lists (id INTEGER, l {type}[]);
+
+query I
+SELECT count(*) FROM my_datalake.default.cor_lists;
+----
+0
+
+statement ok
+INSERT INTO my_datalake.default.cor_lists VALUES
+    (1, [1, 2, 3]), (2, [1, 2, 4]), (3, NULL), (4, []), (5, [1, NULL, 3]);
+
+query IIIII
+SELECT id, l IS NULL, len(l), l[1], l[2]
+FROM my_datalake.default.cor_lists ORDER BY id;
+----
+1	false	3	1.0	2.0
+2	false	3	1.0	2.0
+3	true	NULL	NULL	NULL
+4	false	0	NULL	NULL
+5	false	3	1.0	NULL
+
+# A self-referencing replacement must read the previous lists before publishing.
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_lists AS
+SELECT id, l FROM my_datalake.default.cor_lists;
+
+query I
+SELECT list(l ORDER BY id) IS NOT DISTINCT FROM
+    [[1, 2, 3], [1, 2, 4], NULL, [], [1, NULL, 3]]::{type}[][]
+FROM my_datalake.default.cor_lists;
+----
+true
+
+endloop
+
+statement ok
+DROP TABLE my_datalake.default.cor_lists;

@@ -93,9 +93,13 @@ def _requirement_failure_message(requirement: str, catalog_profile, spark_runtim
         if "allows_cleanup" not in catalog_profile.capabilities:
             return [f"Catalog '{catalog_profile.name}' does not allow data cleanup"]
         return []
+    if requirement == "snapshot_refs":
+        if "snapshot_refs" not in catalog_profile.capabilities:
+            return [f"Catalog '{catalog_profile.name}' does not support Iceberg table-level branches and tags"]
+        return []
     raise pytest.UsageError(
         f"Unknown test/python capability requirement '{requirement}'. "
-        "Supported requirements: format_v3, row_lineage, allows_cleanup."
+        "Supported requirements: format_v3, row_lineage, allows_cleanup, snapshot_refs."
     )
 
 
@@ -136,7 +140,7 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "requires_capabilities(*requirements): require named catalog/runtime capabilities before test setup "
-        "(currently: 'format_v3', 'row_lineage', 'allows_cleanup')",
+        "(currently: 'format_v3', 'row_lineage', 'allows_cleanup', 'snapshot_refs')",
     )
 
 

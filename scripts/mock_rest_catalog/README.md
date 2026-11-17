@@ -78,6 +78,10 @@ missing removals. Committed snapshots are retained and exposed through the
 snapshot-history capability. Metadata files are immutable and completed before
 publication. Unregistering leaves storage files intact.
 
+Table replacement publishes an overwrite snapshot while preserving historical
+snapshots and the parent relationship. A replacement without rows publishes an
+empty snapshot. Both mock backends also support removing the `main` reference.
+
 Every published metadata version links its predecessor in `metadata-log`, including
 metadata-only changes. Old files retain their original update timestamps and
 contents, allowing transaction-start reconstruction of schema, layout, properties
