@@ -71,6 +71,29 @@ class SnapshotRemovalTests(unittest.TestCase):
         self.assertIsNone(result.get("current-snapshot-id"))
         self.assertEqual(result["snapshot-log"], [])
 
+    def test_removing_main_retains_snapshots_and_allows_a_new_lineage(self):
+        before = copy.deepcopy(self.catalog.tables[self.key]["metadata"])
+        remove_main = {"action": "remove-snapshot-ref", "ref-name": "main"}
+        result = self.commit([remove_main])["metadata"]
+        self.assertFalse(result["refs"])
+        self.assertIsNone(result.get("current-snapshot-id"))
+        self.assertEqual(result["snapshots"], before["snapshots"])
+        self.assertEqual(result["snapshot-log"], before["snapshot-log"])
+        self.assertEqual(result["last-sequence-number"], before["last-sequence-number"])
+        self.assertIsNone(self.commit([remove_main])["metadata"].get("current-snapshot-id"))
+        snapshot = copy.deepcopy(before["snapshots"][-1])
+        snapshot.update({"snapshot-id": 40, "sequence-number": 4, "timestamp-ms": 40})
+        result = self.commit([{"action": "add-snapshot", "snapshot": snapshot}, self.ref(40)])["metadata"]
+        self.assertEqual(result["current-snapshot-id"], 40)
+        self.assertNotIn("parent-snapshot-id", result["snapshots"][-1])
+        self.assertEqual(result["snapshots"][:-1], before["snapshots"])
+
+    def test_invalid_update_does_not_publish_main_removal(self):
+        before = copy.deepcopy(self.catalog.tables[self.key])
+        with self.assertRaises(CatalogError):
+            self.commit([{"action": "remove-snapshot-ref", "ref-name": "main"}, self.ref(999)])
+        self.assertEqual(self.catalog.tables[self.key], before)
+
     def test_later_invalid_update_does_not_publish_removal(self):
         before = copy.deepcopy(self.catalog.tables[self.key])
         with self.assertRaises(CatalogError) as error:
