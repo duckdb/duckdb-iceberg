@@ -1,0 +1,17 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_interop/test_row_lineage_read_upgraded_deleted_files.test
+# description: inherited _row_id from a V2 manifest with DELETED entries, after the upgrade to V3
+# group: [catalog_interop]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+# Only the 5 live files of the V2 manifest inherit row ids, not its 5 DELETED files
+query III
+SELECT count(*), count(*) FILTER (WHERE t._row_id IS DISTINCT FROM e.row_id), count(DISTINCT t._row_id)
+FROM my_datalake.default.row_lineage_upgraded_deleted_files t
+JOIN my_datalake.default.row_lineage_upgraded_deleted_files_expected e USING (id);
+----
+600	0	600
