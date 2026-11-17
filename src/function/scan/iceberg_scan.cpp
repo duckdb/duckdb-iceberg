@@ -287,6 +287,17 @@ static vector<column_t> IcebergGetRowIdColumns(ClientContext &, optional_ptr<Fun
 	return result;
 }
 
+//! Column statistics for the optimizer, from the table statistics file of the scanned snapshot
+static unique_ptr<BaseStatistics> IcebergScanColumnStatistics(ClientContext &, TableFunctionGetStatisticsInput &input) {
+	auto &column_index = input.column_index;
+	if (column_index.IsVirtualColumn() || column_index.HasChildren()) {
+		return nullptr;
+	}
+	auto &multi_file_data = input.bind_data->Cast<MultiFileBindData>();
+	auto &file_list = multi_file_data.file_list->Cast<IcebergMultiFileList>();
+	return file_list.GetScanPlanner().GetColumnStatistics(column_index.GetPrimaryIndex());
+}
+
 //! FIXME: needs v1.5.1, causes a crash on v1.5.0
 // static bool IcebergScanSupportsPushdownType(const FunctionData &bind_data_p, idx_t column_id) {
 //	// Don't push down filters on the _row_id virtual column
@@ -319,6 +330,8 @@ TableFunctionSet IcebergFunctions::GetIcebergScanFunction(ExtensionLoader &loade
 		// TODO: implement/fix these
 		function.statistics = nullptr;
 		function.table_scan_progress = nullptr;
+		// Column statistics come from the table statistics files listed in the metadata, not from the Parquet files
+		function.statistics_extended = IcebergScanColumnStatistics;
 
 		function.get_bind_info = IcebergBindInfo;
 		function.get_table_entry = IcebergGetTableEntry;

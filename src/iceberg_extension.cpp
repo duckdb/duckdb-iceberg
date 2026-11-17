@@ -153,6 +153,9 @@ static void LoadInternal(ExtensionLoader &loader) {
 	config.AddExtensionOption(ENABLE_MANIFEST_CACHE_CONFIG_VARIABLE,
 	                          "Cache immutable parsed Iceberg manifests and delete candidate indexes",
 	                          LogicalType::BOOLEAN, Value::BOOLEAN(true));
+	config.AddExtensionOption(ENABLE_TABLE_STATISTICS_CONFIG_VARIABLE,
+	                          "Give the optimizer the distinct counts recorded in a table's statistics files",
+	                          LogicalType::BOOLEAN, Value::BOOLEAN(DEFAULT_ENABLE_TABLE_STATISTICS));
 	config.AddExtensionOption("iceberg_use_server_side_scan_planning",
 	                          "Whether or not to use server-side scanning planning (if available)",
 	                          LogicalType::BOOLEAN, Value::BOOLEAN(false), nullptr, SetScope::GLOBAL);
