@@ -1501,6 +1501,7 @@
       "reason": "Contains attach and use call, when config already uses iceberg attached db",
       "paths": [
         "test/sql/attach/attach_use_string_literal.test",
+        "test/sql/catalog/nested_schema/nested_search_path.test",
         "test/sql/catalog/nested_schema_ctas.test",
         "test/sql/function/list/lambdas/lambda_dot_calls_nested_schema.test",
         "test/sql/storage/metadata/partial_column_metadata_reuse_small_block.test",
@@ -1661,7 +1662,10 @@
     {
       "reason": "EXPLAIN ANALYZE row-groups-scanned / plan output differs on Iceberg parquet storage",
       "paths": [
+        "test/sql/cte/materialized/cte_runtime_filter_modes.test",
+        "test/sql/cte/materialized/cte_runtime_filter_sibling_dependencies.test",
         "test/sql/join/inner/test_join_filter_precedence.test",
+        "test/sql/join/runtime_filter_scheduling.test",
         "test/sql/optimizer/instr_zonemap_pruning.test",
         "test/sql/optimizer/late_materialization_table_filters.test",
         "test/sql/optimizer/monotone_function_zonemap_pruning.test",
@@ -2061,6 +2065,7 @@
     {
       "reason": "Assertions require native column compression segments in pragma_storage_info, which Iceberg's Parquet-backed tables do not expose",
       "paths": [
+        "test/sql/filter/disjunctive_compressed_filter.test",
         "test/sql/storage/compression/constant/constant_negative_zero.test",
         "test/sql/storage/compression/rle/rle_select_force_fetch_row.test",
         "test/sql/storage/reclaim_space/test_reclaim_space_update_large_string.test"
@@ -2131,6 +2136,19 @@
         "test/sql/storage/temp_directory/offload_small_transient_segments.test",
         "test/sql/storage/temp_directory/offload_small_transient_segments_no_optimistic_write.test",
         "test/sql/optimizer/consistent_within_query_optimizations.test"
+      ]
+    },
+    {
+      "reason": "Iceberg uses quoted dotted namespace names; native nested-schema paths are rejected by the catalog capability check",
+      "paths": [
+        "test/sql/catalog/nested_schema/nested_drop_index.test",
+        "test/sql/catalog/nested_schema/nested_drop_sequence.test",
+        "test/sql/catalog/nested_schema/nested_foreign_key_paths.test",
+        "test/sql/catalog/nested_schema/nested_main_schema.test",
+        "test/sql/catalog/nested_schema/nested_missing_entries.test",
+        "test/sql/catalog/nested_schema/nested_show_all_tables.test",
+        "test/sql/catalog/nested_schema/nested_show_tables.test",
+        "test/sql/tpch/dbgen_nested_schema.test"
       ]
     }
   ]
