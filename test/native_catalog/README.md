@@ -104,7 +104,10 @@ has registered, checking atomic publication, retained index ownership, and share
 I/O/cancellation errors. Further cases hold delete manifest opens until two
 overlap, to check that waiting threads and async threads run a load's read tasks,
 and fail a read on a waiting thread, to check that the error reaches both callers.
-The equality-delete view cases require equality-delete writes:
+The delete file cases hold the claiming worker in the open
+of one delete file and check that a waiting worker or an async thread reads the
+others, and that a failed read reaches both. The equality-delete view cases require
+equality-delete writes:
 
 ```sh
 ./build/reldebug/test/unittest_iceberg_planning

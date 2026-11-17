@@ -6,6 +6,8 @@
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/mutex.hpp"
 #include "duckdb/common/atomic.hpp"
+#include "duckdb/common/map.hpp"
+#include "duckdb/common/set.hpp"
 
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
@@ -79,6 +81,15 @@ public:
 	idx_t GetManifestIndex(idx_t scan_index) const;
 	mutex &GetManifestLock(idx_t manifest_index);
 
+	//! Adds entries in Avro block order, as files without a first_row_id inherit row ids in that order
+	void AddEntries(idx_t batch_index, idx_t manifest_index, vector<IcebergManifestEntry> entries);
+	void FinishBatch(idx_t batch_index);
+	//! Call once every reader is done
+	void FlushBatches();
+
+private:
+	void PublishEntries(idx_t manifest_index, vector<IcebergManifestEntry> &entries);
+
 public:
 	vector<IcebergManifestListEntry> &manifest_files;
 	//! Maps the compact multi-file scan index to the owning manifest-list entry.
@@ -96,6 +107,16 @@ public:
 	//! One increment per initialized manifest / converted chunk, never per entry.
 	atomic<idx_t> manifest_parses {0};
 	atomic<idx_t> manifest_entries_converted {0};
+
+private:
+	struct PendingBatch {
+		idx_t manifest_index = 0;
+		vector<IcebergManifestEntry> entries;
+	};
+	mutex batch_lock;
+	idx_t next_batch_index = 0;
+	map<idx_t, PendingBatch> pending_batches;
+	set<idx_t> finished_batches;
 };
 
 class IcebergAvroMultiFileList : public SimpleMultiFileList {

@@ -35,6 +35,57 @@ struct IcebergManifestStoreTest {
 	}
 };
 
+//! A probe of the load of a delete file lets a test wait until the file was read, without a production
+//! callback or a timed race.
+struct IcebergDeleteExecutionStateTest {
+	static shared_ptr<IcebergDeleteFileLoadState> Load(IcebergDeleteExecutionState &state,
+	                                                   const IcebergDeleteFile &file) {
+		lock_guard<mutex> guard(state.lock);
+		auto bucket = state.descriptor_loads.find(IcebergFileIdentity(file.file_path, file.content_offset));
+		if (bucket == state.descriptor_loads.end()) {
+			return nullptr;
+		}
+		for (auto &entry : bucket->second) {
+			if (entry.first == file) {
+				return entry.second;
+			}
+		}
+		return nullptr;
+	}
+	static bool Complete(IcebergDeleteExecutionState &state, const IcebergDeleteFile &file) {
+		auto load = Load(state, file);
+		if (!load) {
+			return false;
+		}
+		lock_guard<mutex> guard(load->lock);
+		return load->complete;
+	}
+	static bool HasReadTasks(IcebergDeleteExecutionState &state, const IcebergDeleteFile &file) {
+		auto load = Load(state, file);
+		if (!load) {
+			return false;
+		}
+		lock_guard<mutex> guard(load->lock);
+		return bool(load->read_tasks);
+	}
+	//! Completes a load that nothing completes, so that a failing test can join the worker that waits for it
+	static void Abandon(IcebergDeleteExecutionState &state, const IcebergDeleteFile &file) {
+		auto load = Load(state, file);
+		if (!load) {
+			return;
+		}
+		{
+			lock_guard<mutex> guard(load->lock);
+			if (load->complete) {
+				return;
+			}
+			load->error = ErrorData("Abandoned by the test");
+			load->complete = true;
+		}
+		load->cv.notify_all();
+	}
+};
+
 } // namespace duckdb
 
 using namespace duckdb;
@@ -1349,6 +1400,443 @@ TEST_CASE("Iceberg frozen partition index survives its creating connection and c
 	cache.DeleteWithTypePrefix<IcebergParsedManifest>("lifetime");
 	REQUIRE(Candidates(*payload->DeleteIndex(), data, 17) == vector<idx_t> {0, 2});
 	REQUIRE(&payload->Entries()[0] == &payload->DeleteIndex()->Entries()[0]);
+}
+
+namespace {
+
+//! Fails every open of one delete file, and lets a test wait until that happened.
+class FailingDeleteFileSystem : public LocalFileSystem {
+public:
+	explicit FailingDeleteFileSystem(string path_p) : path(std::move(path_p)) {
+	}
+	string GetName() const override {
+		return "FailingDeleteFileSystem";
+	}
+	bool CanHandleFile(const string &file) override {
+		return file == path;
+	}
+	unique_ptr<FileHandle> OpenFile(const string &file, FileOpenFlags flags,
+	                                optional_ptr<FileOpener> opener = nullptr) override {
+		{
+			lock_guard<mutex> guard(lock);
+			opened = true;
+		}
+		cv.notify_all();
+		throw IOException("Injected delete file read failure");
+	}
+	bool WaitForOpen() {
+		unique_lock<mutex> guard(lock);
+		return cv.wait_for(guard, std::chrono::seconds(10), [&] { return opened; });
+	}
+
+private:
+	string path;
+	mutex lock;
+	std::condition_variable cv;
+	bool opened = false;
+};
+
+//! Throws from the next task start hook once armed, and lets a test wait until that happened.
+class ThrowingTaskStartState : public ClientContextState {
+public:
+	void OnTaskStart(ClientContext &context) override {
+		{
+			lock_guard<mutex> guard(lock);
+			if (!armed) {
+				return;
+			}
+			armed = false;
+			thrown = true;
+		}
+		cv.notify_all();
+		throw IOException("Injected task start failure");
+	}
+	void Arm() {
+		lock_guard<mutex> guard(lock);
+		armed = true;
+	}
+	bool WaitForThrow() {
+		unique_lock<mutex> guard(lock);
+		return cv.wait_for(guard, std::chrono::seconds(10), [&] { return thrown; });
+	}
+
+private:
+	mutex lock;
+	std::condition_variable cv;
+	bool armed = false;
+	bool thrown = false;
+};
+
+//! Waits until the delete file was read, for at most ten seconds.
+bool WaitForLoad(IcebergDeleteExecutionState &state, const IcebergDeleteFile &file) {
+	auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+	while (!IcebergDeleteExecutionStateTest::Complete(state, file)) {
+		if (std::chrono::steady_clock::now() >= deadline) {
+			return false;
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	return true;
+}
+
+//! A table of one data file with a position delete file per DELETE, whose delete files a test reads through
+//! the delete execution state of a scan, from the threads it chooses.
+struct DeleteFileLoadTest {
+	DeleteFileLoadTest(idx_t delete_files, const vector<string> &settings) {
+		auto &connection = test.connection;
+		for (auto &setting : settings) {
+			Query(connection, setting);
+		}
+		Query(connection, "CREATE TABLE lake.default.t (id INTEGER) WITH ('format-version'=2)");
+		Query(connection, "INSERT INTO lake.default.t SELECT range FROM range(1000)");
+		for (idx_t i = 0; i < delete_files; i++) {
+			Query(connection, StringUtil::Format("DELETE FROM lake.default.t WHERE id = %llu", i * 7));
+		}
+		bound = test.Bind();
+		auto task = Planner().GetScanTask(0);
+		REQUIRE(task);
+		data_file = task->original_file_path;
+		descriptors = task->delete_files;
+		REQUIRE(descriptors.size() == delete_files);
+	}
+
+	IcebergScanPlanner &Planner() {
+		return bound->Cast<MultiFileBindData>().file_list->Cast<IcebergMultiFileList>().GetScanPlanner();
+	}
+
+	//! Reads the delete files for a data file, as the scan of that data file does. Returns the error, if any.
+	string Read(const string &data_file_path, const vector<IcebergDeleteFile> &files) {
+		auto &planner = Planner();
+		auto &context = planner.GetContext();
+		IcebergDeleteExecutionContext execution {context,
+		                                         FileSystem::GetFileSystem(context),
+		                                         planner.GetPath(),
+		                                         planner.GetOptions(),
+		                                         planner.GetMetadata(),
+		                                         planner.GetFileSecret()};
+		try {
+			state.ProcessDeletes(execution, data_file_path, files);
+			return string();
+		} catch (std::exception &ex) {
+			return string(ex.what());
+		}
+	}
+
+	//! The positions the delete files hold, read by read_parquet
+	set<idx_t> DeletedPositions() {
+		set<idx_t> positions;
+		for (auto &descriptor : descriptors) {
+			auto result = test.connection.Query("SELECT pos FROM read_parquet('" + descriptor.file_path + "')");
+			if (result->HasError()) {
+				FAIL(result->GetError());
+			}
+			for (idx_t i = 0; i < result->RowCount(); i++) {
+				positions.insert(result->Collection().GetValue(0, i).GetValue<idx_t>());
+			}
+		}
+		return positions;
+	}
+
+	PlanningTest test;
+	unique_ptr<FunctionData> bound;
+	string data_file;
+	vector<IcebergDeleteFile> descriptors;
+	IcebergDeleteExecutionState state;
+};
+
+} // namespace
+
+TEST_CASE("Iceberg delete files a worker claims are read by waiting workers and by async threads",
+          "[iceberg_planning]") {
+	vector<string> settings;
+	bool waiting_worker = false;
+	SECTION("A waiting worker runs read tasks") {
+		// No scheduler thread exists, so only the two callers below can read a delete file: the claiming worker
+		// is the one held, and the worker that waits for it reads the last delete file.
+		settings = {"SET threads=2", "SET external_threads=2", "SET async_threads=0"};
+		waiting_worker = true;
+	}
+	SECTION("Async threads run read tasks when no worker waits") {
+		// No regular scheduler thread exists and no second caller, so while one read is held the last delete
+		// file is read by an async thread.
+		settings = {"SET threads=1", "SET async_threads=4"};
+	}
+	bool one_read_task = false;
+	SECTION("A claim of one read task is read by the claiming worker") {
+		one_read_task = true;
+	}
+	// One delete file more than two read tasks hold, so the last one is read by the third read task, which a
+	// waiting worker only gets to after the second. Or as many as a read task holds.
+	const auto task_size = IcebergDeleteExecutionState::DELETE_FILES_PER_READ_TASK;
+	DeleteFileLoadTest test(one_read_task ? task_size : 2 * task_size + 1, settings);
+	const string other_data_file = "another-data-file.parquet";
+	auto &last = test.descriptors.back();
+	auto gated = make_uniq<GatedManifestFileSystem>(test.descriptors.front().file_path, 0);
+	auto &gate = *gated;
+	auto &fs = FileSystem::GetFileSystem(*test.test.database.instance);
+	fs.RegisterSubSystem(std::move(gated));
+	// The read of the first delete file stays inside its open until the gate is released, so the claiming
+	// worker cannot be done before that.
+	auto owner = std::async(std::launch::async, [&] { return test.Read(test.data_file, test.descriptors); });
+	auto first_read_held = gate.WaitForReader();
+	std::future<string> waiter;
+	if (waiting_worker) {
+		waiter = std::async(std::launch::async, [&] { return test.Read(other_data_file, test.descriptors); });
+	}
+	bool read_while_held = false;
+	bool has_read_tasks = false;
+	if (one_read_task) {
+		has_read_tasks = IcebergDeleteExecutionStateTest::HasReadTasks(test.state, test.descriptors.front());
+	} else {
+		read_while_held = WaitForLoad(test.state, last);
+	}
+	// Always unblock before assertions or future destruction, including on failure.
+	gate.Release();
+	auto owner_error = owner.get();
+	auto waiter_error = waiter.valid() ? waiter.get() : string();
+	fs.UnregisterSubSystem("GatedManifestFileSystem");
+	INFO(owner_error);
+	REQUIRE(first_read_held);
+	if (one_read_task) {
+		// Nothing was queued for a worker or an async thread to take.
+		REQUIRE_FALSE(has_read_tasks);
+	} else {
+		REQUIRE(read_while_held);
+	}
+	REQUIRE(owner_error.empty());
+	REQUIRE(waiter_error.empty());
+	// The claim is read: no delete file keeps its read tasks.
+	for (auto &descriptor : test.descriptors) {
+		REQUIRE_FALSE(IcebergDeleteExecutionStateTest::HasReadTasks(test.state, descriptor));
+	}
+	// Each worker has the deleted positions of its own data file: all of them, and none.
+	auto positions = test.state.GetExistingPositionalDeleteData(test.data_file);
+	REQUIRE(positions);
+	set<idx_t> deleted;
+	positions->ToSet(deleted);
+	REQUIRE(deleted.size() == test.descriptors.size());
+	REQUIRE(deleted == test.DeletedPositions());
+	REQUIRE_FALSE(test.state.GetExistingPositionalDeleteData(other_data_file));
+}
+
+TEST_CASE("Iceberg delete file read failure on a waiting worker reaches the owner and waiter", "[iceberg_planning]") {
+	// What the read of the first delete file does once the gate is released: 0 succeeds, 1 fails
+	int owner_failure = 0;
+	SECTION("One read fails") {
+	}
+	SECTION("The read of the claiming worker fails as well, later") {
+		owner_failure = 1;
+	}
+	// Three read tasks, and no thread besides the two callers below that could run them.
+	const auto task_size = IcebergDeleteExecutionState::DELETE_FILES_PER_READ_TASK;
+	DeleteFileLoadTest test(2 * task_size + 1, {"SET threads=2", "SET external_threads=2", "SET async_threads=0"});
+	auto held = make_uniq<GatedManifestFileSystem>(test.descriptors.front().file_path, owner_failure);
+	auto failing = make_uniq<FailingDeleteFileSystem>(test.descriptors[task_size].file_path);
+	auto &held_gate = *held;
+	auto &failing_gate = *failing;
+	auto &fs = FileSystem::GetFileSystem(*test.test.database.instance);
+	fs.RegisterSubSystem(std::move(held));
+	fs.RegisterSubSystem(std::move(failing));
+	// The claiming worker stays inside the open of the first delete file until the gate is released,
+	auto owner = std::async(std::launch::async, [&] { return test.Read(test.data_file, test.descriptors); });
+	auto owner_held = held_gate.WaitForReader();
+	// so the second read task, whose first delete file fails to open, runs on the waiting worker. That fails
+	// the claim.
+	auto waiter =
+	    std::async(std::launch::async, [&] { return test.Read("another-data-file.parquet", test.descriptors); });
+	auto waiter_failed = failing_gate.WaitForOpen();
+	// Always unblock before assertions or future destruction, including on failure.
+	held_gate.Release();
+	auto owner_error = owner.get();
+	auto waiter_returned = waiter.wait_for(std::chrono::seconds(10)) == std::future_status::ready;
+	if (!waiter_returned) {
+		for (auto &descriptor : test.descriptors) {
+			IcebergDeleteExecutionStateTest::Abandon(test.state, descriptor);
+		}
+	}
+	auto waiter_error = waiter.get();
+	fs.UnregisterSubSystem("GatedManifestFileSystem");
+	fs.UnregisterSubSystem("FailingDeleteFileSystem");
+	INFO(owner_error);
+	REQUIRE(owner_held);
+	REQUIRE(waiter_failed);
+	// No worker waits for a delete file that nothing reads.
+	REQUIRE(waiter_returned);
+	if (owner_failure) {
+		// Two reads failed. Which of the two errors the claim recorded first is not fixed, but it has one error.
+		REQUIRE((StringUtil::Contains(owner_error, "Injected delete file read failure") ||
+		         StringUtil::Contains(owner_error, "Injected delete manifest read failure")));
+	} else {
+		REQUIRE(StringUtil::Contains(owner_error, "Injected delete file read failure"));
+	}
+	REQUIRE(owner_error == waiter_error);
+	// A delete file that was read stays published, and one of a failed read task has the error of the claim.
+	// Whether the third read task still ran depends on when the failure was recorded, so its file is left out.
+	for (idx_t i = 0; i < 2 * task_size; i++) {
+		const auto read = !owner_failure && i < task_size;
+		REQUIRE(test.Read("a-third-data-file.parquet", {test.descriptors[i]}) == (read ? string() : owner_error));
+	}
+	for (auto &descriptor : test.descriptors) {
+		REQUIRE_FALSE(IcebergDeleteExecutionStateTest::HasReadTasks(test.state, descriptor));
+	}
+}
+
+TEST_CASE("Iceberg delete file read failure is published on every delete file of the claim that was not read",
+          "[iceberg_planning]") {
+	const auto task_size = IcebergDeleteExecutionState::DELETE_FILES_PER_READ_TASK;
+	idx_t delete_files = 0;
+	idx_t failing_file = 0;
+	idx_t read_files = 0;
+	SECTION("A claim of three read tasks: the first is read, the second fails, the third is not run") {
+		delete_files = 2 * task_size + 1;
+		failing_file = task_size;
+		read_files = task_size;
+	}
+	SECTION("A claim without read tasks") {
+		delete_files = task_size;
+	}
+	// The caller is the only thread, so it runs the read tasks one after the other, in the order of the claim.
+	DeleteFileLoadTest test(delete_files, {"SET threads=1", "SET async_threads=0"});
+	auto &fs = FileSystem::GetFileSystem(*test.test.database.instance);
+	fs.RegisterSubSystem(make_uniq<FailingDeleteFileSystem>(test.descriptors[failing_file].file_path));
+	auto owner_error = test.Read(test.data_file, test.descriptors);
+	fs.UnregisterSubSystem("FailingDeleteFileSystem");
+	REQUIRE(StringUtil::Contains(owner_error, "Injected delete file read failure"));
+	for (idx_t i = 0; i < test.descriptors.size(); i++) {
+		auto &descriptor = test.descriptors[i];
+		// Published, so that the read below cannot wait for it.
+		REQUIRE(IcebergDeleteExecutionStateTest::Complete(test.state, descriptor));
+		REQUIRE_FALSE(IcebergDeleteExecutionStateTest::HasReadTasks(test.state, descriptor));
+		// What was read before the failure stays read. Everything else has the one error of the claim.
+		REQUIRE(test.Read("another-data-file.parquet", {descriptor}) == (i < read_files ? string() : owner_error));
+	}
+}
+
+TEST_CASE("Iceberg delete file read task that fails before it runs reaches the owner and waiter",
+          "[iceberg_planning]") {
+	// Two read tasks, and no thread besides the two callers below that could run them.
+	DeleteFileLoadTest test(IcebergDeleteExecutionState::DELETE_FILES_PER_READ_TASK + 1,
+	                        {"SET threads=2", "SET external_threads=2", "SET async_threads=0"});
+	auto hook =
+	    test.test.connection.context->registered_state->GetOrCreate<ThrowingTaskStartState>("throwing_task_start");
+	auto &last = test.descriptors.back();
+	auto gated = make_uniq<GatedManifestFileSystem>(test.descriptors.front().file_path, 0);
+	auto &gate = *gated;
+	auto &fs = FileSystem::GetFileSystem(*test.test.database.instance);
+	fs.RegisterSubSystem(std::move(gated));
+	// The claiming worker stays inside the open of the first delete file until the gate is released,
+	auto owner = std::async(std::launch::async, [&] { return test.Read(test.data_file, test.descriptors); });
+	auto owner_held = gate.WaitForReader();
+	// so the next task to start is the second read task, on the waiting worker. Its start hook throws, which
+	// the task executor records without running or cancelling the task.
+	hook->Arm();
+	auto waiter =
+	    std::async(std::launch::async, [&] { return test.Read("another-data-file.parquet", test.descriptors); });
+	auto start_failed = hook->WaitForThrow();
+	// Always unblock before assertions or future destruction, including on failure.
+	gate.Release();
+	auto owner_error = owner.get();
+	auto waiter_returned = waiter.wait_for(std::chrono::seconds(10)) == std::future_status::ready;
+	if (!waiter_returned) {
+		for (auto &descriptor : test.descriptors) {
+			IcebergDeleteExecutionStateTest::Abandon(test.state, descriptor);
+		}
+	}
+	auto waiter_error = waiter.get();
+	fs.UnregisterSubSystem("GatedManifestFileSystem");
+	INFO(owner_error);
+	REQUIRE(owner_held);
+	REQUIRE(start_failed);
+	// No worker waits for a delete file that nothing reads.
+	REQUIRE(waiter_returned);
+	REQUIRE(StringUtil::Contains(owner_error, "Injected task start failure"));
+	REQUIRE(owner_error == waiter_error);
+	REQUIRE(test.Read("a-third-data-file.parquet", {last}) == owner_error);
+}
+
+TEST_CASE("Iceberg interrupted delete file reads settle every claimed load", "[iceberg_planning]") {
+	const auto task_size = IcebergDeleteExecutionState::DELETE_FILES_PER_READ_TASK;
+	DeleteFileLoadTest test(2 * task_size + 1, {"SET threads=2", "SET external_threads=2", "SET async_threads=0"});
+	auto &context = *test.test.connection.context;
+	auto &fs = FileSystem::GetFileSystem(*test.test.database.instance);
+	auto gated = make_uniq<GatedManifestFileSystem>(test.descriptors.front().file_path, 0);
+	auto &gate = *gated;
+	fs.RegisterSubSystem(std::move(gated));
+
+	auto owner = std::async(std::launch::async, [&] { return test.Read(test.data_file, test.descriptors); });
+	auto owner_held = gate.WaitForReader();
+	auto first_load = IcebergDeleteExecutionStateTest::Load(test.state, test.descriptors.front());
+	auto owners = first_load.use_count();
+	context.Interrupt();
+	auto waiter =
+	    std::async(std::launch::async, [&] { return test.Read("another-data-file.parquet", test.descriptors); });
+	auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+	while (first_load.use_count() <= owners && std::chrono::steady_clock::now() < deadline) {
+		std::this_thread::yield();
+	}
+	auto waiter_registered = first_load.use_count() > owners;
+	gate.Release();
+	auto owner_error = owner.get();
+	auto waiter_returned = waiter.wait_for(std::chrono::seconds(10)) == std::future_status::ready;
+	if (!waiter_returned) {
+		for (auto &descriptor : test.descriptors) {
+			IcebergDeleteExecutionStateTest::Abandon(test.state, descriptor);
+		}
+	}
+	auto waiter_error = waiter.get();
+	context.ClearInterrupt();
+	fs.UnregisterSubSystem("GatedManifestFileSystem");
+
+	INFO(owner_error);
+	REQUIRE(owner_held);
+	REQUIRE(waiter_registered);
+	REQUIRE(waiter_returned);
+	REQUIRE(StringUtil::Contains(owner_error, "Interrupted"));
+	REQUIRE(owner_error == waiter_error);
+	for (auto &descriptor : test.descriptors) {
+		REQUIRE(IcebergDeleteExecutionStateTest::Complete(test.state, descriptor));
+		REQUIRE_FALSE(IcebergDeleteExecutionStateTest::HasReadTasks(test.state, descriptor));
+	}
+	// Clearing the interrupt does not turn a cancelled cached load into a successful read.
+	REQUIRE(test.Read(test.data_file, {test.descriptors.back()}) == owner_error);
+}
+
+TEST_CASE("Iceberg delete file waiters can finish before an unrelated read fails", "[iceberg_planning]") {
+	const auto task_size = IcebergDeleteExecutionState::DELETE_FILES_PER_READ_TASK;
+	DeleteFileLoadTest test(2 * task_size + 1, {"SET threads=2", "SET external_threads=2", "SET async_threads=0"});
+	auto expected =
+	    test.test.connection.Query("SELECT pos FROM read_parquet('" + test.descriptors.back().file_path + "')");
+	REQUIRE_FALSE(expected->HasError());
+	REQUIRE(expected->RowCount() == 1);
+	auto expected_position = expected->Collection().GetValue(0, 0).GetValue<idx_t>();
+	auto gated = make_uniq<GatedManifestFileSystem>(test.descriptors.front().file_path, 1);
+	auto &gate = *gated;
+	auto &fs = FileSystem::GetFileSystem(*test.test.database.instance);
+	fs.RegisterSubSystem(std::move(gated));
+	auto owner = std::async(std::launch::async, [&] { return test.Read(test.data_file, test.descriptors); });
+	auto owner_held = gate.WaitForReader();
+	// A duplicate descriptor must neither be read twice nor make this waiter depend on other files.
+	auto waiter = std::async(std::launch::async, [&] {
+		return test.Read(test.data_file, {test.descriptors.back(), test.descriptors.back()});
+	});
+	auto waiter_finished = waiter.wait_for(std::chrono::seconds(10)) == std::future_status::ready;
+	gate.Release();
+	auto owner_error = owner.get();
+	auto waiter_error = waiter.get();
+	fs.UnregisterSubSystem("GatedManifestFileSystem");
+
+	INFO(owner_error);
+	REQUIRE(owner_held);
+	REQUIRE(waiter_finished);
+	REQUIRE(waiter_error.empty());
+	REQUIRE(StringUtil::Contains(owner_error, "Injected delete manifest read failure"));
+	// A later failure cannot overwrite the completed load or the waiter's assembled positions.
+	REQUIRE(test.Read(test.data_file, {test.descriptors.back()}).empty());
+	auto positions = test.state.GetExistingPositionalDeleteData(test.data_file);
+	REQUIRE(positions);
+	set<idx_t> deleted;
+	positions->ToSet(deleted);
+	REQUIRE(deleted == set<idx_t> {expected_position});
 }
 
 namespace {

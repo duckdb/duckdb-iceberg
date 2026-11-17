@@ -1,5 +1,6 @@
 #include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
 
+#include "duckdb/common/multi_file/multi_file_states.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/string.hpp"
 #include "duckdb/common/vector/vector_iterator.hpp"
@@ -7,6 +8,7 @@
 #include "duckdb/common/vector/struct_vector.hpp"
 #include "duckdb/common/vector/list_vector.hpp"
 #include "duckdb/common/optional.hpp"
+#include "planning/metadata_io/avro/avro_scan.hpp"
 
 namespace duckdb {
 
@@ -23,6 +25,47 @@ void ManifestReader::Read() {
 		return;
 	}
 	ScanInternal();
+	auto &scan_info = scan.scan_info->Cast<IcebergManifestFileScanInfo>();
+	if (finished) {
+		if (current_batch.IsValid()) {
+			scan_info.FinishBatch(current_batch.GetIndex());
+		}
+		if (AllReadersFinished()) {
+			scan_info.FlushBatches();
+		}
+		return;
+	}
+
+	auto &job = local_state->Cast<MultiFileLocalState>().job;
+	if (!job || !job->reader) {
+		throw InternalException("Manifest chunk was produced without a scan job");
+	}
+	auto batch_index = job->batch_index;
+	auto manifest_file_idx = scan_info.GetManifestIndex(job->reader->file_list_idx.GetIndex());
+	if (current_batch.IsValid() && current_batch.GetIndex() != batch_index) {
+		scan_info.FinishBatch(current_batch.GetIndex());
+	}
+	current_batch = batch_index;
+
+	auto &manifest_file = scan_info.manifest_files[manifest_file_idx];
+	//! InitializeReader publishes this immutable value under the per-manifest lock
+	//! before this reader can produce chunks.
+	D_ASSERT(manifest_file.manifest_metadata);
+	auto &manifest_metadata = *manifest_file.manifest_metadata;
+	auto &metadata = scan_info.metadata;
+	auto spec_id = manifest_metadata.partition_spec_id;
+	auto partition_spec_p = metadata.FindPartitionSpecById(spec_id);
+	if (!partition_spec_p) {
+		throw InvalidConfigurationException("Manifest file '%s' key-value metadata references partition-spec-id: "
+		                                    "%d, but no spec with that ID exists in the metadata",
+		                                    manifest_file.GetFile().manifest_path, spec_id);
+	}
+	IcebergManifestReaderInput input(manifest_metadata, *partition_spec_p, metadata.iceberg_version);
+
+	vector<IcebergManifestEntry> decoded_entries;
+	ReadChunk(chunk, scan_info.partition_field_id_to_type, input, decoded_entries);
+	scan_info.manifest_entries_converted += decoded_entries.size();
+	scan_info.AddEntries(batch_index, manifest_file_idx, std::move(decoded_entries));
 }
 
 using IntStringMapEntries = VectorIterator<VectorListType<VectorStructType<int32_t, string_t>>>;

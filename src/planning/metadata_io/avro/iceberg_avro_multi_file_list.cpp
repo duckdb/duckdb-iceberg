@@ -69,6 +69,79 @@ mutex &IcebergManifestFileScanInfo::GetManifestLock(idx_t manifest_index) {
 	return *manifest_locks[manifest_index];
 }
 
+void IcebergManifestFileScanInfo::PublishEntries(idx_t manifest_index, vector<IcebergManifestEntry> &entries) {
+	auto &manifest_file = manifest_files[manifest_index];
+	lock_guard<mutex> manifest_guard(GetManifestLock(manifest_index));
+	auto &manifest_entries = manifest_file.GetOrCreateManifestEntries();
+	idx_t start_index = manifest_entries.size();
+	if (read_state) {
+		//! Streaming consumers retain references into this vector after publication. AvroScan
+		//! reserves the exact manifest-list file count for selected misses, so exceeding the
+		//! reserved capacity means the advertised count was wrong; appending would invalidate those
+		//! references.
+		if (entries.size() > manifest_entries.capacity() - manifest_entries.size()) {
+			throw InvalidConfigurationException("Manifest '%s' contains more entries than its manifest-list counts",
+			                                    manifest_file.GetFile().manifest_path);
+		}
+	}
+	for (auto &entry : entries) {
+		manifest_entries.push_back(std::move(entry));
+	}
+	if (read_state) {
+		read_state->PushBatch(ManifestReadBatch(manifest_index, start_index, manifest_entries.size()));
+	}
+}
+
+void IcebergManifestFileScanInfo::AddEntries(idx_t batch_index, idx_t manifest_index,
+                                             vector<IcebergManifestEntry> entries) {
+	lock_guard<mutex> guard(batch_lock);
+	if (batch_index < next_batch_index) {
+		throw InternalException("Manifest block %llu was already added", batch_index);
+	}
+	if (batch_index == next_batch_index) {
+		PublishEntries(manifest_index, entries);
+		return;
+	}
+	auto &pending = pending_batches[batch_index];
+	pending.manifest_index = manifest_index;
+	for (auto &entry : entries) {
+		pending.entries.push_back(std::move(entry));
+	}
+}
+
+void IcebergManifestFileScanInfo::FinishBatch(idx_t batch_index) {
+	lock_guard<mutex> guard(batch_lock);
+	if (batch_index < next_batch_index) {
+		//! Already added by FlushBatches
+		return;
+	}
+	finished_batches.insert(batch_index);
+	while (true) {
+		auto pending = pending_batches.find(next_batch_index);
+		if (pending != pending_batches.end()) {
+			PublishEntries(pending->second.manifest_index, pending->second.entries);
+			pending_batches.erase(pending);
+		}
+		auto finished = finished_batches.find(next_batch_index);
+		if (finished == finished_batches.end()) {
+			break;
+		}
+		finished_batches.erase(finished);
+		next_batch_index++;
+	}
+}
+
+void IcebergManifestFileScanInfo::FlushBatches() {
+	lock_guard<mutex> guard(batch_lock);
+	//! A block without entries never finishes, so the blocks after it are still pending
+	for (auto &pending : pending_batches) {
+		PublishEntries(pending.second.manifest_index, pending.second.entries);
+		next_batch_index = pending.first + 1;
+	}
+	pending_batches.clear();
+	finished_batches.clear();
+}
+
 IcebergAvroMultiFileList::IcebergAvroMultiFileList(shared_ptr<IcebergAvroScanInfo> info, vector<OpenFileInfo> paths)
     : SimpleMultiFileList(std::move(paths)), info(info) {
 }
