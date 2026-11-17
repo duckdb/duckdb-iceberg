@@ -17,6 +17,8 @@
 #include "iceberg_options.hpp"
 #include "planning/metadata_io/deletes/iceberg_deletes_file_reader.hpp"
 
+#include "duckdb/parallel/task_executor.hpp"
+
 #include <variant>
 
 namespace duckdb {
@@ -403,19 +405,75 @@ IcebergDeleteScanResult IcebergDeleteFileScanner::ScanFiles(const IcebergDeleteE
 
 namespace {
 
-static void CompleteDeleteFileLoads(const vector<shared_ptr<IcebergDeleteFileLoadState>> &loads,
-                                    const ErrorData &error) {
-	for (auto &load : loads) {
-		{
-			lock_guard<mutex> guard(load->lock);
-			load->error = error;
-			load->complete = true;
+//! Publishes a load, unless it is published already: the workers that wait for the delete file continue.
+static void CompleteDeleteFileLoad(IcebergDeleteFileLoadState &load, const ErrorData &error) {
+	{
+		lock_guard<mutex> guard(load.lock);
+		if (load.complete) {
+			return;
 		}
-		load->cv.notify_all();
+		load.error = error;
+		load.complete = true;
+		load.read_tasks.reset();
+	}
+	load.cv.notify_all();
+}
+
+//! Reads delete files and publishes them. Throws, and publishes nothing, when the read fails.
+static void ReadDeleteFiles(const IcebergDeleteExecutionContext &context,
+                            const vector<IcebergDeleteScanEntry> &entries) {
+	context.context.InterruptCheck();
+	auto scanned = IcebergDeleteFileScanner::ScanFiles(context, entries);
+	for (auto &entry : scanned.equality_delete_data) {
+		if (entry.delete_file->equality_values.size()) {
+			entry.load->equality_delete = std::move(entry.delete_file);
+		}
+	}
+	for (auto &entry : entries) {
+		CompleteDeleteFileLoad(*entry.load, ErrorData());
+	}
+}
+
+//! Reads some of the delete files a worker claimed. It uses the execution context of that worker, which waits
+//! for its read tasks before it returns. A read that fails fails the claim: the executor keeps the first error
+//! and cancels the read tasks that have not started, and the claiming worker publishes that error.
+class IcebergDeleteFileReadTask : public BaseExecutorTask {
+public:
+	IcebergDeleteFileReadTask(TaskExecutor &executor, const IcebergDeleteExecutionContext &context,
+	                          vector<IcebergDeleteScanEntry> entries_p)
+	    : BaseExecutorTask(executor), context(context), entries(std::move(entries_p)) {
+	}
+
+	void ExecuteTask() override {
+		ReadDeleteFiles(context, entries);
+	}
+
+	string TaskType() const override {
+		return "IcebergDeleteFileReadTask";
+	}
+
+private:
+	const IcebergDeleteExecutionContext &context;
+	const vector<IcebergDeleteScanEntry> entries;
+};
+
+//! Fails the delete files a worker claimed that nothing published. The worker calls this before it leaves with
+//! an error, whatever the error is: a read task can fail without having run, and tasks can fail to be queued.
+static void FailUnreadDeleteFileLoads(optional_ptr<TaskExecutor> read_tasks,
+                                      const vector<shared_ptr<IcebergDeleteFileLoadState>> &claimed_loads,
+                                      const ErrorData &error) {
+	if (read_tasks) {
+		// A read task that is still queued uses the context of the claiming worker.
+		read_tasks->CancelAndDrain();
+	}
+	for (auto &load : claimed_loads) {
+		CompleteDeleteFileLoad(*load, error);
 	}
 }
 
 } // namespace
+
+constexpr idx_t IcebergDeleteExecutionState::DELETE_FILES_PER_READ_TASK;
 
 shared_ptr<IcebergDeleteData>
 IcebergDeleteExecutionState::GetExistingPositionalDeleteData(const string &file_path) const {
@@ -430,51 +488,92 @@ IcebergDeletePlan IcebergDeleteExecutionState::ProcessDeletes(const IcebergDelet
 	IcebergDeletePlan result;
 	vector<IcebergDeleteScanEntry> scan_entries;
 	vector<shared_ptr<IcebergDeleteFileLoadState>> required_loads;
-	vector<shared_ptr<IcebergDeleteFileLoadState>> new_loads;
-	{
-		lock_guard<mutex> guard(lock);
-		unordered_set<IcebergDeleteFileLoadState *> seen;
-		for (auto &descriptor : descriptors) {
-			shared_ptr<IcebergDeleteFileLoadState> load;
-			auto &bucket = descriptor_loads[{descriptor.file_path, descriptor.content_offset}];
-			for (auto &entry : bucket) {
-				if (entry.first == descriptor) {
-					load = entry.second;
-					break;
+	vector<shared_ptr<IcebergDeleteFileLoadState>> claimed_loads;
+	shared_ptr<TaskExecutor> read_tasks;
+	try {
+		{
+			lock_guard<mutex> guard(lock);
+			unordered_set<IcebergDeleteFileLoadState *> seen;
+			for (auto &descriptor : descriptors) {
+				shared_ptr<IcebergDeleteFileLoadState> load;
+				auto &bucket = descriptor_loads[{descriptor.file_path, descriptor.content_offset}];
+				for (auto &entry : bucket) {
+					if (entry.first == descriptor) {
+						load = entry.second;
+						break;
+					}
+				}
+				if (!load) {
+					load = make_shared_ptr<IcebergDeleteFileLoadState>();
+					claimed_loads.push_back(load);
+					bucket.emplace_back(descriptor, load);
+					scan_entries.push_back({descriptor, load});
+				}
+				if (seen.insert(load.get()).second) {
+					required_loads.push_back(load);
 				}
 			}
-			if (!load) {
-				load = make_shared_ptr<IcebergDeleteFileLoadState>();
-				bucket.emplace_back(descriptor, load);
-				new_loads.push_back(load);
-				scan_entries.push_back({descriptor, load});
-			}
-			if (seen.insert(load.get()).second) {
-				required_loads.push_back(load);
+			if (scan_entries.size() > DELETE_FILES_PER_READ_TASK) {
+				// The claimed loads become visible to other workers when the lock is released. Queue their read
+				// tasks before that, so that a worker that finds one of them finds a task to run as well. During
+				// a scan the regular threads are inside the scan and data files are opened on async threads, so
+				// the tasks are queued where the async threads take them.
+				read_tasks = make_shared_ptr<TaskExecutor>(context.context, TaskSchedulerType::ASYNC);
+				vector<unique_ptr<BaseExecutorTask>> tasks;
+				for (idx_t begin = 0; begin < scan_entries.size(); begin += DELETE_FILES_PER_READ_TASK) {
+					const auto end = MinValue<idx_t>(begin + DELETE_FILES_PER_READ_TASK, scan_entries.size());
+					vector<IcebergDeleteScanEntry> task_entries;
+					for (idx_t i = begin; i < end; i++) {
+						scan_entries[i].load->read_tasks = read_tasks;
+						task_entries.push_back(std::move(scan_entries[i]));
+					}
+					tasks.push_back(
+					    make_uniq<IcebergDeleteFileReadTask>(*read_tasks, context, std::move(task_entries)));
+				}
+				read_tasks->ScheduleTasks(std::move(tasks));
 			}
 		}
-	}
-	// Publish every load claimed by this worker before waiting for other builders.
-	// Keep the existing batched Parquet scan for newly selected delete files.
-	if (!scan_entries.empty()) {
-		ErrorData error;
-		try {
-			auto scanned = IcebergDeleteFileScanner::ScanFiles(context, scan_entries);
-			for (auto &entry : scanned.equality_delete_data) {
-				if (entry.delete_file->equality_values.size()) {
-					entry.load->equality_delete = std::move(entry.delete_file);
-				}
-			}
-		} catch (std::exception &ex) {
-			error = ErrorData(ex);
-		} catch (...) { // LCOV_EXCL_START
-			error = ErrorData("Unknown exception while reading Iceberg delete files");
-		} // LCOV_EXCL_STOP
-		CompleteDeleteFileLoads(new_loads, error);
-	}
+		// Read the delete files claimed by this worker before waiting for other builders. Its read tasks use
+		// 'context', so they all have to be finished when this returns.
+		if (read_tasks) {
+			read_tasks->WorkOnTasks();
+		} else if (!scan_entries.empty()) {
+			// Few enough for one read: no task is queued.
+			ReadDeleteFiles(context, scan_entries);
+		}
+	} catch (std::exception &ex) {
+		// This worker leaves, and nothing else publishes what it claimed: no worker may wait for it.
+		FailUnreadDeleteFileLoads(read_tasks.get(), claimed_loads, ErrorData(ex));
+		throw;
+	} catch (...) { // LCOV_EXCL_START
+		FailUnreadDeleteFileLoads(read_tasks.get(), claimed_loads,
+		                          ErrorData("Unknown exception while reading Iceberg delete files"));
+		throw;
+	} // LCOV_EXCL_STOP
 	vector<shared_ptr<IcebergDeleteData>> positions;
 	for (auto &load : required_loads) {
 		unique_lock<mutex> guard(load->lock);
+		// A delete file another worker claimed: run the read tasks of that claim until this file was read,
+		// so that a worker blocked on delete files reads delete files. The task it takes need not hold this
+		// file, so the worker can be held for one read task after the file was read.
+		while (!load->complete) {
+			auto other_tasks = load->read_tasks;
+			if (!other_tasks) {
+				break;
+			}
+			guard.unlock();
+			shared_ptr<Task> task;
+			const auto found = other_tasks->GetTask(task);
+			if (found) {
+				task->Execute(TaskExecutionMode::PROCESS_ALL);
+			}
+			task.reset();
+			other_tasks.reset();
+			guard.lock();
+			if (!found) {
+				break;
+			}
+		}
 		load->cv.wait(guard, [&load] { return load->complete; });
 		if (load->error.HasError()) {
 			load->error.Throw();
