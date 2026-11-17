@@ -116,7 +116,7 @@ public:
 		}
 
 		auto &schema_entry = table_info.schema;
-		auto &schema = GetSchema(schema_entry.name.GetIdentifierName());
+		auto &schema = GetSchema(schema_entry.GetNamespaceKey());
 
 		auto &table = GetTable(table_info);
 		schema.tables.push_back(table.table_uuid);

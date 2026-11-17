@@ -21,11 +21,11 @@ static IcebergSchemaEntry &LoadIcebergSchema(ClientContext &context, const Quali
 
 	auto &schema_set = iceberg_catalog.GetSchemas();
 	schema_set.LoadEntries(context);
-	auto schema_entry_opt =
-	    schema_set.GetEntry(context, table_name.Schema().GetIdentifierName(), OnEntryNotFound::RETURN_NULL);
+	auto schema_name = IcebergCatalog::GetNamespaceKey(table_name.SchemaPath());
+	auto schema_entry_opt = schema_set.GetEntry(context, schema_name, OnEntryNotFound::RETURN_NULL);
 	if (!schema_entry_opt) {
-		throw InvalidInputException("%s: schema '%s' not found in catalog '%s'", function_name,
-		                            table_name.Schema().GetIdentifierName(), table_name.Catalog().GetIdentifierName());
+		throw InvalidInputException("%s: schema '%s' not found in catalog '%s'", function_name, schema_name,
+		                            table_name.Catalog().GetIdentifierName());
 	}
 	return schema_entry_opt->Cast<IcebergSchemaEntry>();
 }
@@ -53,7 +53,8 @@ shared_ptr<IcebergTable> ReloadIcebergTableShared(ClientContext &context, const 
 		table_info->RefreshFromCatalog(context);
 	} else if (!tables.FillEntry(context, *table_info)) {
 		throw InvalidInputException("%s: table '%s' not found in schema '%s.%s'", function_name, table_name_string,
-		                            table_name.Catalog().GetIdentifierName(), table_name.Schema().GetIdentifierName());
+		                            table_name.Catalog().GetIdentifierName(),
+		                            IcebergCatalog::GetNamespaceKey(table_name.SchemaPath()));
 	}
 	return table_info;
 }

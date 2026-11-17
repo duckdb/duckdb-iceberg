@@ -704,10 +704,21 @@ void IcebergTransaction::DoTableDeletes(IcebergTransactionDeleteUpdate &delete_u
 	table.schema.DropEntry(context, drop_info, true);
 }
 
+//! Order namespace keys so that a parent comes before its children
+static vector<string> OrderByDepth(vector<string> schema_names) {
+	std::stable_sort(schema_names.begin(), schema_names.end(), [](const string &lhs, const string &rhs) {
+		return std::count(lhs.begin(), lhs.end(), '.') < std::count(rhs.begin(), rhs.end(), '.');
+	});
+	return schema_names;
+}
+
 void IcebergTransaction::DoSchemaCreates(ClientContext &context) {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
+	vector<string> schema_names;
 	for (auto &created_schema : created_schemas) {
-		auto &schema_name = created_schema.first;
+		schema_names.push_back(created_schema.first);
+	}
+	for (auto &schema_name : OrderByDepth(std::move(schema_names))) {
 		auto namespace_identifiers = IRCAPI::ParseSchemaName(schema_name);
 
 		rest_api_objects::CreateNamespaceRequest request;
@@ -718,13 +729,16 @@ void IcebergTransaction::DoSchemaCreates(ClientContext &context) {
 		if (!IRCAPI::CommitNamespaceCreate(context, ic_catalog, schema_name, create_body)) {
 			created_schemas.OnNamespaceExists(schema_name);
 		}
-		ic_catalog.GetSchemas().AddEntry(schema_name, created_schema.second.entry);
+		ic_catalog.GetSchemas().AddEntry(schema_name, created_schemas.GetSharedEntry(schema_name));
 	}
 }
 
 void IcebergTransaction::DoSchemaDeletes(ClientContext &context) {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
-	for (auto &schema_name : deleted_schemas) {
+	auto schema_names = OrderByDepth(vector<string>(deleted_schemas.begin(), deleted_schemas.end()));
+	// children first: a namespace that still has children cannot be dropped
+	for (auto it = schema_names.rbegin(); it != schema_names.rend(); ++it) {
+		auto &schema_name = *it;
 		vector<string> namespace_items;
 		auto namespace_identifier = IRCAPI::ParseSchemaName(schema_name);
 		IRCAPI::CommitNamespaceDrop(context, ic_catalog, namespace_identifier);
@@ -789,10 +803,11 @@ void IcebergTransaction::DoViewCreates(ClientContext &context) {
 		auto &view_info = view_entry.second;
 		auto &view_name = view_info->GetViewName().GetIdentifierName();
 		// Look up the schema entry from the catalog by name
-		auto &schema_entry = ic_catalog.schemas
-		                         .GetEntry(context, view_info->GetQualifiedName().Schema().GetIdentifierName(),
-		                                   OnEntryNotFound::THROW_EXCEPTION)
-		                         ->Cast<IcebergSchemaEntry>();
+		auto &schema_entry =
+		    ic_catalog.schemas
+		        .GetEntry(context, IcebergCatalog::GetNamespaceKey(view_info->GetQualifiedName().SchemaPath()),
+		                  OnEntryNotFound::THROW_EXCEPTION)
+		        ->Cast<IcebergSchemaEntry>();
 
 		// query may have been moved by ViewCatalogEntry::Initialize(), so use sql field or reconstruct
 		string view_sql;

@@ -1,0 +1,70 @@
+# name: test/sql/local/native_catalog/nested_namespace_missing_parent.test
+# description: a catalog that refuses to create a namespace under a missing parent gives a clear error
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+CREATE SCHEMA my_datalake.np_parent;
+
+# Model a catalog that only creates a namespace inside an existing parent. The mock itself creates it anyway.
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	'{"method":"POST","path":"/v1/namespaces","status":404,"body":{"error":{"message":"Parent namespace does not exist","type":"NoSuchNamespaceException","code":404}}}');
+----
+204
+
+statement error
+CREATE SCHEMA my_datalake.np_missing.np_child;
+----
+Cannot create schema "np_missing.np_child": parent schema "np_missing" does not exist
+
+statement error
+CREATE SCHEMA my_datalake."np_missing.np_child";
+----
+Cannot create schema "np_missing.np_child": parent schema "np_missing" does not exist
+
+statement error
+CREATE SCHEMA IF NOT EXISTS my_datalake.np_parent.np_missing.np_child;
+----
+Cannot create schema "np_parent.np_missing.np_child": parent schema "np_parent.np_missing" does not exist
+
+# Any other failure keeps the catalog's own error.
+statement error
+CREATE SCHEMA my_datalake.np_parent.np_child;
+----
+NotFound_404
+
+statement error
+CREATE SCHEMA my_datalake.np_top;
+----
+NotFound_404
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+query I
+SELECT count(*) FROM duckdb_schemas() WHERE database_name = 'my_datalake' AND schema_name IN ('np_missing', 'np_child', 'np_top');
+----
+0
+
+statement ok
+CREATE SCHEMA my_datalake.np_parent.np_child;
+
+# Whether a namespace with children can be dropped is also up to the catalog: this one refuses.
+statement error
+DROP SCHEMA my_datalake.np_parent;
+----
+<REGEX>:.*Namespace.*not empty.*
+
+statement ok
+DROP SCHEMA my_datalake.np_parent.np_child;
+
+statement ok
+DROP SCHEMA my_datalake.np_parent;

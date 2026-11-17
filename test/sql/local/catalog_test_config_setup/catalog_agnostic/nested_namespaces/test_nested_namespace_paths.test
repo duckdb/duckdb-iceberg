@@ -1,0 +1,295 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/nested_namespaces/test_nested_namespace_paths.test
+# description: a nested schema path names a multi-level namespace, without SUPPORT_NESTED_NAMESPACES
+# group: [nested_namespaces]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env NESTED_NAMESPACE_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+drop table if exists my_datalake.nn_parent.nn_child.t;
+
+statement ok
+drop table if exists my_datalake.nn_parent.nn_child.created_as;
+
+statement ok
+drop table if exists my_datalake.nn_child.t;
+
+statement ok
+drop table if exists my_datalake.nn_parent.nn_quoted.t;
+
+statement ok
+drop schema if exists my_datalake.nn_parent.nn_quoted;
+
+statement ok
+drop schema if exists my_datalake.nn_parent.nn_child.nn_leaf;
+
+statement ok
+drop schema if exists my_datalake.nn_parent.nn_child;
+
+statement ok
+drop schema if exists my_datalake.nn_parent;
+
+statement ok
+drop schema if exists my_datalake.nn_child;
+
+# create schemas at depth 1, 2 and 3
+statement ok
+create schema my_datalake.nn_parent;
+
+statement ok
+create schema my_datalake.nn_parent.nn_child;
+
+statement ok
+create schema my_datalake.nn_parent.nn_child.nn_leaf;
+
+statement ok
+create schema if not exists my_datalake.nn_parent.nn_child.nn_leaf;
+
+statement error
+create schema my_datalake.nn_parent.nn_child;
+----
+already exists
+
+# a top-level namespace with the same last name as the nested one
+statement ok
+create schema my_datalake.nn_child;
+
+# the same table name in the nested namespace and in its top-level sibling
+statement ok
+create table my_datalake.nn_parent.nn_child.t (i INTEGER, s VARCHAR);
+
+statement ok
+create table my_datalake.nn_child.t (i INTEGER, s VARCHAR);
+
+statement ok
+insert into my_datalake.nn_parent.nn_child.t values (1, 'nested'), (2, 'nested'), (3, 'nested');
+
+statement ok
+insert into my_datalake.nn_child.t values (10, 'top');
+
+query IT
+select * from my_datalake.nn_parent.nn_child.t order by i;
+----
+1	nested
+2	nested
+3	nested
+
+query IT
+select * from my_datalake.nn_child.t order by i;
+----
+10	top
+
+statement ok
+update my_datalake.nn_parent.nn_child.t set i = i + 100 where i = 1;
+
+statement ok
+delete from my_datalake.nn_parent.nn_child.t where i = 2;
+
+query IT
+select * from my_datalake.nn_parent.nn_child.t order by i;
+----
+3	nested
+101	nested
+
+# the sibling is untouched
+query IT
+select * from my_datalake.nn_child.t order by i;
+----
+10	top
+
+query TT
+select column_name, column_type from (describe my_datalake.nn_parent.nn_child.t) order by all;
+----
+i	INTEGER
+s	VARCHAR
+
+# columns can be qualified with the full path
+query I
+select my_datalake.nn_parent.nn_child.t.i from my_datalake.nn_parent.nn_child.t order by 1;
+----
+3
+101
+
+statement ok
+create table my_datalake.nn_parent.nn_child.created_as as select 42 as answer;
+
+query I
+select answer from my_datalake.nn_parent.nn_child.created_as;
+----
+42
+
+statement ok
+drop table my_datalake.nn_parent.nn_child.created_as;
+
+# the quoted dotted form names the same namespace
+query IT
+select * from my_datalake."nn_parent.nn_child".t order by i;
+----
+3	nested
+101	nested
+
+statement ok
+insert into my_datalake."nn_parent.nn_child".t values (4, 'quoted');
+
+query IT
+select * from my_datalake.nn_parent.nn_child.t order by i;
+----
+3	nested
+4	quoted
+101	nested
+
+query I
+select count(*) from my_datalake.nn_parent."nn_child".t;
+----
+3
+
+statement ok
+use my_datalake."nn_parent.nn_child";
+
+query T
+select current_schema();
+----
+nn_parent.nn_child
+
+query I
+select count(*) from t;
+----
+3
+
+statement ok
+use my_datalake.default;
+
+# a namespace created, filled and dropped by its quoted name is the one the path names
+statement ok
+create schema my_datalake."nn_parent.nn_quoted";
+
+statement error
+create schema my_datalake.nn_parent.nn_quoted;
+----
+already exists
+
+statement ok
+create table my_datalake."nn_parent.nn_quoted".t as select 5 as i;
+
+query I
+select i from my_datalake.nn_parent.nn_quoted.t;
+----
+5
+
+statement ok
+drop table my_datalake.nn_parent.nn_quoted.t;
+
+statement ok
+drop schema my_datalake."nn_parent.nn_quoted";
+
+statement error
+drop schema my_datalake.nn_parent.nn_quoted;
+----
+does not exist
+
+# a path through a namespace that does not exist is an error, not a hit on the sibling
+statement error
+select * from my_datalake.nn_missing.nn_child.t;
+----
+does not exist
+
+statement error
+select * from my_datalake.nn_parent.nn_missing.t;
+----
+does not exist
+
+statement error
+insert into my_datalake.nn_missing.nn_child.t values (5, 'missing');
+----
+does not exist
+
+statement error
+update my_datalake.nn_missing.nn_child.t set i = 0;
+----
+does not exist
+
+statement error
+delete from my_datalake.nn_missing.nn_child.t;
+----
+does not exist
+
+statement error
+describe my_datalake.nn_missing.nn_child.t;
+----
+does not exist
+
+statement error
+drop table my_datalake.nn_missing.nn_child.t;
+----
+does not exist
+
+statement ok
+drop table if exists my_datalake.nn_missing.nn_child.t;
+
+statement error
+drop schema my_datalake.nn_missing.nn_child;
+----
+Schema with name "nn_missing.nn_child" does not exist
+
+statement ok
+drop schema if exists my_datalake.nn_missing.nn_child;
+
+query II
+select count(*), sum(i) from my_datalake.nn_child.t;
+----
+1	10
+
+# the lookups above did not leave a namespace behind
+query I
+select count(*) from duckdb_schemas() where database_name = 'my_datalake' and schema_name = 'nn_missing';
+----
+0
+
+statement error
+create table my_datalake.nn_missing.nn_child.created (i INTEGER);
+----
+does not exist
+
+# a namespace with tables cannot be dropped
+statement error
+drop schema my_datalake.nn_parent.nn_child;
+----
+<REGEX>:.*Namespace.*not empty.*
+
+statement error
+drop schema my_datalake.nn_parent cascade;
+----
+CASCADE is not supported
+
+statement ok
+drop table my_datalake.nn_parent.nn_child.t;
+
+statement ok
+drop table my_datalake.nn_child.t;
+
+# drop at depth 3 and 2; the sibling keeps existing until it is dropped by its own name
+statement ok
+drop schema my_datalake.nn_parent.nn_child.nn_leaf;
+
+statement ok
+drop schema my_datalake.nn_parent.nn_child;
+
+statement error
+create table my_datalake.nn_parent.nn_child.t (i INTEGER);
+----
+does not exist
+
+statement ok
+create table my_datalake.nn_child.t (i INTEGER);
+
+statement ok
+drop table my_datalake.nn_child.t;
+
+statement ok
+drop schema my_datalake.nn_parent;
+
+statement ok
+drop schema my_datalake.nn_child;

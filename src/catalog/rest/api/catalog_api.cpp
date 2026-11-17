@@ -596,6 +596,14 @@ bool IRCAPI::CommitNamespaceCreate(ClientContext &context, IcebergCatalog &catal
 	if (response->status == HTTPStatusCode::Conflict_409 && VerifySchemaExistence(context, catalog, schema)) {
 		return false;
 	}
+	// some catalogs only create a nested namespace inside an existing parent
+	auto parent_end = schema.rfind('.');
+	if (response->status == HTTPStatusCode::NotFound_404 && parent_end != string::npos) {
+		auto parent = schema.substr(0, parent_end);
+		if (!VerifySchemaExistence(context, catalog, parent)) {
+			throw CatalogException("Cannot create schema \"%s\": parent schema \"%s\" does not exist", schema, parent);
+		}
+	}
 	if (response->status != HTTPStatusCode::OK_200) {
 		throw HTTPException(*response, "Request to '%s' returned a non-200 status code (%s), with reason: %s, body: %s",
 		                    url_builder.GetURLEncoded(), EnumUtil::ToString(response->status), response->reason,

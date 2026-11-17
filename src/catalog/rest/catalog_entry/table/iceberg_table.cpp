@@ -290,8 +290,8 @@ IcebergTable::GetVendedCredentials(ClientContext &context,
 	// Detect storage type from metadata location
 	const auto &table_location = GetMetadata().GetLocation();
 	string storage_type = DetectStorageType(table_location);
-	auto log_table_name =
-	    IcebergLogType::Redact(context, StringUtil::Format("%s.%s.%s", catalog.GetName(), schema.name, name));
+	auto log_table_name = IcebergLogType::Redact(
+	    context, StringUtil::Format("%s.%s.%s", catalog.GetName(), schema.GetNamespaceKey(), name));
 	DUCKDB_LOG_DEBUG(
 	    context, "Iceberg table '%s': preparing %llu storage credentials for storage type '%s' at location '%s'",
 	    log_table_name, storage_credentials.size(), storage_type, IcebergLogType::Redact(context, table_location));
@@ -362,7 +362,7 @@ IcebergTable::GetVendedCredentials(ClientContext &context,
 		if (IcebergTableSecretProvider::SupportsStorageType(storage_type)) {
 			create_secret_input.provider = IcebergTableSecretProvider::Provider();
 			create_secret_input.options["refresh_info"] = IcebergTableSecretProvider::MakeRefreshInfo(
-			    catalog.GetName().GetIdentifierName(), schema.name.GetIdentifierName(), name);
+			    catalog.GetName().GetIdentifierName(), schema.GetNamespaceKey(), name);
 		}
 
 		ParseConfigOptions(credential.config, create_secret_input.options, context, storage_type);
@@ -401,7 +401,7 @@ IcebergTable::GetVendedCredentials(ClientContext &context,
 		if (IcebergTableSecretProvider::SupportsStorageType(storage_type)) {
 			config.provider = IcebergTableSecretProvider::Provider();
 			config.options["refresh_info"] = IcebergTableSecretProvider::MakeRefreshInfo(
-			    catalog.GetName().GetIdentifierName(), schema.name.GetIdentifierName(), name);
+			    catalog.GetName().GetIdentifierName(), schema.GetNamespaceKey(), name);
 		}
 	} else if (result.storage_credentials.empty()) {
 		DUCKDB_LOG_DEBUG(context, "Iceberg table '%s': no usable vended credentials or config options available",
@@ -444,7 +444,7 @@ optional_ptr<CatalogEntry> IcebergTable::CreateSchemaVersion(const IcebergTableS
 idx_t IcebergTable::GetMaxSchemaId() {
 	idx_t max_schema_id = 0;
 	if (schema_versions.empty()) {
-		throw CatalogException("No schema versions found for table '%s.%s'", schema.name.GetIdentifierName(), name);
+		throw CatalogException("No schema versions found for table '%s.%s'", schema.GetNamespaceKey(), name);
 	}
 	for (auto &schema : schema_versions) {
 		if (schema.first > max_schema_id) {
@@ -765,8 +765,8 @@ void IcebergTable::LoadCredentials(ClientContext &context, IRCAPITableCredential
 
 	auto &info = *table_credentials.config;
 	D_ASSERT(info.scope.empty());
-	auto log_table_name =
-	    IcebergLogType::Redact(context, StringUtil::Format("%s.%s.%s", catalog.GetName(), schema.name, name));
+	auto log_table_name = IcebergLogType::Redact(
+	    context, StringUtil::Format("%s.%s.%s", catalog.GetName(), schema.GetNamespaceKey(), name));
 	string storage_scope;
 	const char *scope_source;
 	auto data_path = GetMetadata().table_properties.find("write.data.path");

@@ -1,0 +1,177 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/nested_namespaces/test_nested_namespace_listing.test
+# description: SUPPORT_NESTED_NAMESPACES only decides whether a listing discovers the nested namespaces
+# group: [nested_namespaces]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+include test/sql/local/catalog_test_config_setup/catalog_agnostic/setup/nested_namespace_catalog.test_setup
+
+statement ok
+drop table if exists nested_lake.nl_parent.nl_child.t;
+
+statement ok
+drop table if exists nested_lake.nl_child.t;
+
+statement ok
+drop schema if exists nested_lake.nl_parent.nl_child.nl_leaf;
+
+statement ok
+drop schema if exists nested_lake.nl_parent.nl_child;
+
+statement ok
+drop schema if exists nested_lake.nl_parent.nl_made;
+
+statement ok
+drop schema if exists nested_lake.nl_parent;
+
+statement ok
+drop schema if exists nested_lake.nl_child;
+
+statement ok
+drop schema if exists nested_lake.nl_implicit.nl_made;
+
+# created through nested_lake, so my_datalake only knows the namespaces it finds itself
+statement ok
+create schema nested_lake.nl_parent;
+
+statement ok
+create schema nested_lake.nl_parent.nl_child;
+
+statement ok
+create schema nested_lake.nl_parent.nl_child.nl_leaf;
+
+statement ok
+create schema nested_lake.nl_child;
+
+statement ok
+create table nested_lake.nl_parent.nl_child.t as select 1 as i;
+
+statement ok
+create table nested_lake.nl_child.t as select 10 as i;
+
+# with the option every namespace is listed once, under its parent
+query II
+select schema_name, parent_schema from duckdb_schemas() where database_name = 'nested_lake' and schema_name like 'nl\_%' escape '\' order by all;
+----
+nl_child	nl_parent
+nl_child	NULL
+nl_leaf	nl_child
+nl_parent	NULL
+
+query I
+select schema_name from information_schema.schemata where catalog_name = 'nested_lake' and schema_name like 'nl\_%' escape '\' order by all;
+----
+nl_child
+nl_child
+nl_leaf
+nl_parent
+
+# and so is each table
+query TT
+select table_schema, table_name from information_schema.tables where table_catalog = 'nested_lake' and table_schema = 'nl_child';
+----
+nl_child	t
+nl_child	t
+
+# without the option only the top-level namespaces are listed
+query II
+select schema_name, parent_schema from duckdb_schemas() where database_name = 'my_datalake' and schema_name like 'nl\_%' escape '\' order by all;
+----
+nl_child	NULL
+nl_parent	NULL
+
+query TT
+select table_schema, table_name from information_schema.tables where table_catalog = 'my_datalake' and table_schema like 'nl\_%' escape '\';
+----
+nl_child	t
+
+# the nested namespaces resolve all the same; one named through this catalog is listed from then on, as a single-level one is
+query I
+select i from my_datalake.nl_parent.nl_child.t;
+----
+1
+
+query II
+select schema_name, parent_schema from duckdb_schemas() where database_name = 'my_datalake' and schema_name like 'nl\_%' escape '\' order by all;
+----
+nl_child	nl_parent
+nl_child	NULL
+nl_parent	NULL
+
+# a namespace created through this catalog is listed once, under its parent
+statement ok
+create schema my_datalake.nl_parent.nl_made;
+
+query II
+select schema_name, parent_schema from duckdb_schemas() where database_name = 'my_datalake' and schema_name like 'nl\_%' escape '\' order by all;
+----
+nl_child	nl_parent
+nl_child	NULL
+nl_made	nl_parent
+nl_parent	NULL
+
+query II
+select schema_name, parent_schema from duckdb_schemas() where database_name = 'nested_lake' and schema_name like 'nl\_%' escape '\' order by all;
+----
+nl_child	nl_parent
+nl_child	NULL
+nl_leaf	nl_child
+nl_made	nl_parent
+nl_parent	NULL
+
+statement ok
+drop schema my_datalake.nl_parent.nl_made;
+
+query I
+select count(*) from duckdb_schemas() where database_name = 'my_datalake' and schema_name = 'nl_made';
+----
+0
+
+# whether a parent has to exist is up to the catalog: this one creates a namespace without it
+statement ok
+create schema my_datalake.nl_implicit.nl_made;
+
+statement ok
+create table my_datalake.nl_implicit.nl_made.t as select 7 as i;
+
+query I
+select i from my_datalake.nl_implicit.nl_made.t;
+----
+7
+
+query II
+select schema_name, parent_schema from duckdb_schemas() where database_name = 'my_datalake' and schema_name = 'nl_made';
+----
+nl_made	nl_implicit
+
+statement ok
+drop table my_datalake.nl_implicit.nl_made.t;
+
+statement ok
+drop schema my_datalake.nl_implicit.nl_made;
+
+statement ok
+drop table nested_lake.nl_parent.nl_child.t;
+
+statement ok
+drop table nested_lake.nl_child.t;
+
+statement ok
+drop schema nested_lake.nl_parent.nl_child.nl_leaf;
+
+statement ok
+drop schema nested_lake.nl_parent.nl_child;
+
+query II
+select schema_name, parent_schema from duckdb_schemas() where database_name = 'nested_lake' and schema_name in ('nl_parent', 'nl_child', 'nl_leaf') order by all;
+----
+nl_child	NULL
+nl_parent	NULL
+
+statement ok
+drop schema nested_lake.nl_parent;
+
+statement ok
+drop schema nested_lake.nl_child;

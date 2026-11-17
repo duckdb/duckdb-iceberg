@@ -4,6 +4,7 @@
 #include "iceberg_schema_information.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/common/enums/on_entry_not_found.hpp"
+#include "duckdb/common/string_util.hpp"
 
 #include "catalog/rest/api/catalog_api.hpp"
 #include "catalog/rest/iceberg_table_set.hpp"
@@ -14,10 +15,11 @@ struct IRCAPISchema;
 
 class IcebergSchemaEntry : public SchemaCatalogEntry {
 public:
-	IcebergSchemaEntry(Catalog &catalog, CreateSchemaInfo &info);
+	IcebergSchemaEntry(Catalog &catalog, CreateSchemaInfo &info, vector<string> namespace_items,
+	                   shared_ptr<IcebergSchemaEntry> parent = nullptr);
 	~IcebergSchemaEntry() override;
 
-	//! The various levels of namespaces this flattened representation represents
+	//! The levels of the namespace this schema represents
 	vector<string> namespace_items;
 
 public:
@@ -48,8 +50,12 @@ public:
 	bool DoesExist() const {
 		return exists;
 	}
+	//! The levels joined with '.': the key of this namespace in the schema set and in transaction state
+	string GetNamespaceKey() const {
+		return StringUtil::Join(namespace_items, ".");
+	}
 	string GetSchemaKey() const {
-		return this->catalog.GetName() + "." + this->name;
+		return this->catalog.GetName() + "." + GetNamespaceKey();
 	};
 	void LoadProperties(ClientContext &context);
 
@@ -58,6 +64,8 @@ private:
 	// does the schema actually exist? default is true, but this is set to false
 	// when a verify schema request is made.
 	bool exists;
+	//! Keeps the parent namespace's entry alive
+	shared_ptr<IcebergSchemaEntry> parent;
 
 public:
 	IcebergTableSet tables;

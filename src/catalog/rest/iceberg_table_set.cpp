@@ -304,15 +304,15 @@ void IcebergTableSet::RenameEntry(const string &name, const string &new_name, Ic
 
 void IcebergTableSet::LoadEntriesInternal(ClientContext &context) {
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
-	bool schema_listed = iceberg_transaction.listed_schemas.find(schema.name.GetIdentifierName()) !=
-	                     iceberg_transaction.listed_schemas.end();
+	bool schema_listed =
+	    iceberg_transaction.listed_schemas.find(schema.GetNamespaceKey()) != iceberg_transaction.listed_schemas.end();
 	if (schema_listed) {
 		return;
 	}
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	// The request owns its namespace; workers never access or mutate this table set.
 	IcebergRequestExecutor executor(context, ic_catalog);
-	bool allow_forbidden = !iceberg_transaction.looked_up_entries.count(schema.name.GetIdentifierName());
+	bool allow_forbidden = !iceberg_transaction.looked_up_entries.count(schema.GetNamespaceKey());
 	auto result = executor.Schedule(IcebergListTablesRequest(schema.namespace_items, allow_forbidden));
 	auto tables = executor.WaitAndTakeResult(*result);
 	if (context.IsInterrupted()) {
@@ -323,7 +323,7 @@ void IcebergTableSet::LoadEntriesInternal(ClientContext &context) {
 		return;
 	}
 	ApplyListResult(std::move(tables));
-	iceberg_transaction.listed_schemas.insert(schema.name.GetIdentifierName());
+	iceberg_transaction.listed_schemas.insert(schema.GetNamespaceKey());
 }
 
 void IcebergTableSet::ApplyListResult(IcebergListTablesResult tables) {
@@ -568,8 +568,7 @@ optional_ptr<CatalogEntry> IcebergTableSet::GetEntry(ClientContext &context, con
 
 const unordered_set<string> &IcebergTableSet::LoadViewEntries(ClientContext &context) {
 	auto &transaction = IcebergTransaction::Get(context, catalog);
-	auto &schema_name = schema.name.GetIdentifierName();
-	auto existing = transaction.listed_views.find(schema_name);
+	auto existing = transaction.listed_views.find(schema.GetNamespaceKey());
 	if (existing != transaction.listed_views.end()) {
 		return existing->second;
 	}
@@ -593,7 +592,7 @@ const unordered_set<string> &IcebergTableSet::ApplyViewListResult(ClientContext 
 			names.insert(view.name);
 		}
 	}
-	return transaction.listed_views.emplace(schema.name.GetIdentifierName(), std::move(names)).first->second;
+	return transaction.listed_views.emplace(schema.GetNamespaceKey(), std::move(names)).first->second;
 }
 
 bool IcebergTableSet::TryGetLocalViewEntry(ClientContext &context, const string &view_name,
@@ -741,17 +740,17 @@ void IcebergTableSet::ScanViews(ClientContext &context, const std::function<void
 	// Copy the listing before invoking callbacks: binding a view may resolve other schemas.
 	auto names = LoadViewEntries(context);
 	auto &transaction = IcebergTransaction::Get(context, catalog);
+	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	for (auto &created : transaction.created_views) {
-		auto &info = *created.second;
-		if (info.GetQualifiedName().Schema() == schema.name) {
-			names.insert(info.GetViewName().GetIdentifierName());
+		auto &view_name = created.second->GetViewName().GetIdentifierName();
+		if (created.first == IcebergTable::GetTableKey(ic_catalog, schema.namespace_items, view_name)) {
+			names.insert(view_name);
 		}
 	}
 	struct PendingViewLoad {
 		string name;
 		shared_ptr<IcebergRequestResult<IcebergLoadViewResult>> result;
 	};
-	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto &scheduler = TaskScheduler::GetScheduler(context);
 	const auto window_size = MinValue<idx_t>(8, scheduler.NumberOfThreads() + scheduler.NumberOfAsyncThreads());
 	deque<PendingViewLoad> pending;

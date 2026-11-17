@@ -1,0 +1,311 @@
+# name: test/sql/local/catalog_custom_setup/fixture/nested_namespaces/test_nested_namespace_paths.test
+# description: a nested schema path names a multi-level namespace; SUPPORT_NESTED_NAMESPACES only adds them to listings
+# group: [nested_namespaces]
+
+require-env FIXTURE_SERVER_AVAILABLE
+
+include test/sql/init_requires
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+CREATE SECRET (
+    TYPE S3,
+    KEY_ID 'admin',
+    SECRET 'password',
+    ENDPOINT '127.0.0.1:9000',
+    URL_STYLE 'path',
+    USE_SSL 0
+);
+
+statement ok
+ATTACH '' AS my_datalake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    URI 'http://127.0.0.1:8181'
+);
+
+# the same catalog, with the nested namespaces in its listings
+statement ok
+ATTACH '' AS nested_lake (
+    TYPE ICEBERG,
+    CLIENT_ID 'admin',
+    CLIENT_SECRET 'password',
+    URI 'http://127.0.0.1:8181',
+    SUPPORT_NESTED_NAMESPACES true
+);
+
+# children before parents: a namespace that only exists through its children cannot be dropped
+statement ok
+drop table if exists my_datalake.fx_parent.fx_child.t;
+
+statement ok
+drop table if exists my_datalake.fx_parent.fx_child.created_as;
+
+statement ok
+drop table if exists my_datalake.fx_child.t;
+
+statement ok
+drop table if exists my_datalake.fx_implicit.fx_mid.fx_made.t;
+
+statement ok
+drop schema if exists my_datalake.fx_implicit.fx_mid.fx_made;
+
+statement ok
+drop schema if exists my_datalake.fx_parent.fx_child.fx_leaf;
+
+statement ok
+drop schema if exists my_datalake.fx_parent.fx_other;
+
+statement ok
+drop schema if exists my_datalake.fx_parent.fx_child;
+
+statement ok
+drop schema if exists my_datalake.fx_parent;
+
+statement ok
+drop schema if exists my_datalake.fx_child;
+
+# create schemas at depth 1, 2 and 3
+statement ok
+create schema my_datalake.fx_parent;
+
+statement ok
+create schema my_datalake.fx_parent.fx_child;
+
+statement ok
+create schema my_datalake.fx_parent.fx_child.fx_leaf;
+
+statement ok
+create schema if not exists my_datalake.fx_parent.fx_child.fx_leaf;
+
+statement error
+create schema my_datalake.fx_parent.fx_child;
+----
+already exists
+
+# a top-level namespace with the same last name as the nested one
+statement ok
+create schema my_datalake.fx_child;
+
+# with the option every namespace is listed once, under its parent
+query II
+select schema_name, parent_schema from duckdb_schemas() where database_name = 'nested_lake' and schema_name like 'fx\_%' escape '\' order by all;
+----
+fx_child	fx_parent
+fx_child	NULL
+fx_leaf	fx_child
+fx_parent	NULL
+
+# without it the catalog lists the ones it created
+query II
+select schema_name, parent_schema from duckdb_schemas() where database_name = 'my_datalake' and schema_name like 'fx\_%' escape '\' order by all;
+----
+fx_child	fx_parent
+fx_child	NULL
+fx_leaf	fx_child
+fx_parent	NULL
+
+# one created elsewhere resolves all the same, and is listed once it is named through this catalog
+statement ok
+create schema nested_lake.fx_parent.fx_other;
+
+query I
+select count(*) from duckdb_schemas() where database_name = 'my_datalake' and schema_name = 'fx_other';
+----
+0
+
+statement ok
+create table my_datalake.fx_parent.fx_other.t as select 8 as i;
+
+query I
+select i from my_datalake.fx_parent.fx_other.t;
+----
+8
+
+query II
+select schema_name, parent_schema from duckdb_schemas() where database_name = 'my_datalake' and schema_name = 'fx_other';
+----
+fx_other	fx_parent
+
+query II
+select schema_name, parent_schema from duckdb_schemas() where database_name = 'nested_lake' and schema_name = 'fx_other';
+----
+fx_other	fx_parent
+
+statement ok
+drop table my_datalake.fx_parent.fx_other.t;
+
+statement ok
+drop schema nested_lake.fx_parent.fx_other;
+
+# the same table name in the nested namespace and in its top-level sibling
+statement ok
+create table my_datalake.fx_parent.fx_child.t (i INTEGER, s VARCHAR);
+
+statement ok
+create table my_datalake.fx_child.t (i INTEGER, s VARCHAR);
+
+statement ok
+insert into my_datalake.fx_parent.fx_child.t values (1, 'nested'), (2, 'nested'), (3, 'nested');
+
+statement ok
+insert into my_datalake.fx_child.t values (10, 'top');
+
+query IT
+select * from my_datalake.fx_parent.fx_child.t order by i;
+----
+1	nested
+2	nested
+3	nested
+
+query IT
+select * from my_datalake.fx_child.t order by i;
+----
+10	top
+
+statement ok
+update my_datalake.fx_parent.fx_child.t set i = i + 100 where i = 1;
+
+statement ok
+delete from my_datalake.fx_parent.fx_child.t where i = 2;
+
+query IT
+select * from my_datalake.fx_parent.fx_child.t order by i;
+----
+3	nested
+101	nested
+
+# the sibling is untouched
+query IT
+select * from my_datalake.fx_child.t order by i;
+----
+10	top
+
+statement ok
+create table my_datalake.fx_parent.fx_child.created_as as select 42 as answer;
+
+query I
+select answer from my_datalake.fx_parent.fx_child.created_as;
+----
+42
+
+statement ok
+drop table my_datalake.fx_parent.fx_child.created_as;
+
+# the quoted dotted form names the same namespace
+query IT
+select * from my_datalake."fx_parent.fx_child".t order by i;
+----
+3	nested
+101	nested
+
+statement ok
+insert into my_datalake."fx_parent.fx_child".t values (4, 'quoted');
+
+query I
+select count(*) from my_datalake.fx_parent.fx_child.t;
+----
+3
+
+statement ok
+use my_datalake."fx_parent.fx_child";
+
+query T
+select current_schema();
+----
+fx_parent.fx_child
+
+query I
+select count(*) from t;
+----
+3
+
+statement ok
+use my_datalake.default;
+
+# a path through a namespace that does not exist is an error, not a hit on the sibling
+statement error
+select * from my_datalake.fx_missing.fx_child.t;
+----
+does not exist
+
+statement error
+insert into my_datalake.fx_missing.fx_child.t values (5, 'missing');
+----
+does not exist
+
+query I
+select count(*) from my_datalake.fx_child.t;
+----
+1
+
+query I
+select count(*) from duckdb_schemas() where database_name = 'my_datalake' and schema_name = 'fx_missing';
+----
+0
+
+statement error
+create table my_datalake.fx_missing.fx_child.created (i INTEGER);
+----
+does not exist
+
+# this catalog creates a namespace without its parents, which then exist for as long as it does
+statement ok
+create schema my_datalake.fx_implicit.fx_mid.fx_made;
+
+statement ok
+create table my_datalake.fx_implicit.fx_mid.fx_made.t as select 7 as i;
+
+query I
+select i from my_datalake.fx_implicit.fx_mid.fx_made.t;
+----
+7
+
+query II
+select schema_name, parent_schema from duckdb_schemas() where database_name = 'nested_lake' and schema_name in ('fx_implicit', 'fx_mid', 'fx_made') order by all;
+----
+fx_implicit	NULL
+fx_made	fx_mid
+fx_mid	fx_implicit
+
+# without the option the levels a path went through are listed as well
+query II
+select schema_name, parent_schema from duckdb_schemas() where database_name = 'my_datalake' and schema_name in ('fx_implicit', 'fx_mid', 'fx_made') order by all;
+----
+fx_implicit	NULL
+fx_made	fx_mid
+fx_mid	fx_implicit
+
+statement ok
+drop table my_datalake.fx_implicit.fx_mid.fx_made.t;
+
+statement ok
+drop schema my_datalake.fx_implicit.fx_mid.fx_made;
+
+statement ok
+drop table my_datalake.fx_parent.fx_child.t;
+
+statement ok
+drop table my_datalake.fx_child.t;
+
+# drop at depth 3 and 2; the sibling keeps existing until it is dropped by its own name
+statement ok
+drop schema my_datalake.fx_parent.fx_child.fx_leaf;
+
+statement ok
+drop schema my_datalake.fx_parent.fx_child;
+
+query II
+select schema_name, parent_schema from duckdb_schemas() where database_name = 'my_datalake' and schema_name in ('fx_parent', 'fx_child', 'fx_leaf') order by all;
+----
+fx_child	NULL
+fx_parent	NULL
+
+statement ok
+drop schema my_datalake.fx_parent;
+
+statement ok
+drop schema my_datalake.fx_child;

@@ -54,7 +54,7 @@ void IcebergWrittenFiles::Record(ClientContext &context, const IcebergTable &tab
 		return;
 	}
 	auto table_name = StringUtil::Format("%s.%s.%s", table.catalog.GetName().GetIdentifierName(),
-	                                     table.schema.name.GetIdentifierName(), table.name);
+	                                     table.schema.GetNamespaceKey(), table.name);
 	const string operation_name = WriteOperationName(operation);
 	// A transaction may stage several statements. Its start timestamp would give all of them the same time.
 	const timestamp_tz_t written_at(Timestamp::GetCurrentTimestamp());

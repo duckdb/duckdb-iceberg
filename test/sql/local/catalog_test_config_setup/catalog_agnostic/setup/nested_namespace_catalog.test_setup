@@ -1,0 +1,22 @@
+# Attaches the mock catalog a second time, as nested_lake, with SUPPORT_NESTED_NAMESPACES.
+# The catalog's address comes from a logged request, so the tests run on both mock backends.
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.default;
+
+statement ok
+SET VARIABLE mock_catalog_uri = (
+	SELECT regexp_extract(request.url, '^[a-z]+://[^/]+') FROM duckdb_logs_parsed('HTTP') LIMIT 1);
+
+statement ok
+CALL disable_logging();
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+ATTACH '' AS nested_lake (TYPE ICEBERG, URI getvariable('mock_catalog_uri'), AUTHORIZATION_TYPE 'none',
+	ACCESS_DELEGATION_MODE 'none', STAGE_CREATE_TABLES true, SUPPORT_NESTED_NAMESPACES true);

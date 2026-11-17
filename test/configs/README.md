@@ -67,6 +67,7 @@ certification was performed.
 | `MULTI_TABLE_COMMIT_SUPPORT` | Support the REST multi-table transaction commit endpoint. |
 | `FILE_CLEANUP_SUPPORT` | Allow deletion of uncommitted files using the configured credentials. |
 | `NAMESPACE_PROPERTIES_SUPPORT` | Support setting and removing namespace properties. Does not require an automatically populated `namespace_id`. |
+| `NESTED_NAMESPACE_SUPPORT` | Create, list and drop namespaces with more than one level, and tables in them. Declared for the mock and the standard fixture; omitted for the other configurations pending validation. |
 | `CASE_SENSITIVE_TABLE_NAMES_SUPPORT` | Support distinct table names differing only in case. |
 | `VIEW_SUPPORT` | Expose the Iceberg REST view endpoints, so views can be created and loaded. Omitted for S3 Tables, whose endpoint set has none. |
 | `ATOMIC_COMMIT_CONFLICT_SUPPORT` | Reject concurrent commits with stale parent state so retries preserve every successful write. Declared for Lakekeeper and S3 Tables; omitted for the standard fixture, which lacks support, and for the other configurations pending validation. |

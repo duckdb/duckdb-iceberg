@@ -1,0 +1,257 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/nested_namespaces/test_nested_namespace_functions.test
+# description: functions that take a table or schema name resolve a nested schema path to its own namespace
+# group: [nested_namespaces]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env NESTED_NAMESPACE_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+drop table if exists my_datalake.nf_parent.nf_child.t;
+
+statement ok
+drop table if exists my_datalake.nf_child.t;
+
+statement ok
+drop schema if exists my_datalake.nf_parent.nf_child;
+
+statement ok
+drop schema if exists my_datalake.nf_parent;
+
+statement ok
+drop schema if exists my_datalake.nf_child;
+
+statement ok
+create schema my_datalake.nf_parent;
+
+statement ok
+create schema my_datalake.nf_parent.nf_child;
+
+statement ok
+create schema my_datalake.nf_child;
+
+# the nested table has three snapshots and six rows, its top-level namesake one snapshot and one row
+statement ok
+create table my_datalake.nf_parent.nf_child.t (i INTEGER);
+
+statement ok
+create table my_datalake.nf_child.t (i INTEGER);
+
+foreach value 1 2 3
+
+statement ok
+insert into my_datalake.nf_parent.nf_child.t values ({value}), ({value} + 10);
+
+endloop
+
+statement ok
+insert into my_datalake.nf_child.t values (100);
+
+foreach name my_datalake.nf_parent.nf_child.t my_datalake."nf_parent.nf_child".t my_datalake.nf_parent."nf_child".t
+
+query I
+select count(*) from iceberg_scan('{name}');
+----
+6
+
+query I
+select count(*) from iceberg_snapshots('{name}');
+----
+3
+
+query I
+select count(*) from iceberg_history('{name}');
+----
+3
+
+query I
+select sum(record_count) from iceberg_metadata('{name}') where manifest_content = 'DATA';
+----
+6
+
+query I
+select count(*) from iceberg_load_table_response('{name}');
+----
+1
+
+endloop
+
+query I
+select count(*) from iceberg_scan('my_datalake.nf_child.t');
+----
+1
+
+query I
+select count(*) from iceberg_snapshots('my_datalake.nf_child.t');
+----
+1
+
+# table properties are set on the nested table only
+statement ok
+select * from set_iceberg_table_properties('my_datalake.nf_parent.nf_child.t', {'nested.path': 'true'});
+
+query I
+select count(*) from iceberg_table_properties('my_datalake.nf_parent.nf_child.t') where key = 'nested.path';
+----
+1
+
+query I
+select count(*) from iceberg_table_properties('my_datalake."nf_parent.nf_child".t') where key = 'nested.path';
+----
+1
+
+query I
+select count(*) from iceberg_table_properties('my_datalake.nf_child.t') where key = 'nested.path';
+----
+0
+
+statement ok
+select * from remove_iceberg_table_properties('my_datalake.nf_parent.nf_child.t', ['nested.path']);
+
+query I
+select count(*) from iceberg_table_properties('my_datalake.nf_parent.nf_child.t') where key = 'nested.path';
+----
+0
+
+# a name through a namespace that does not exist names no table: these also accept a table location
+foreach function iceberg_scan iceberg_snapshots iceberg_metadata iceberg_history iceberg_files iceberg_manifests iceberg_schemas iceberg_refs iceberg_partitions iceberg_partition_specs iceberg_partition_stats iceberg_column_stats iceberg_scan_plan
+
+statement error
+select * from {function}('my_datalake.nf_missing.nf_child.t');
+----
+no version-hint could be found
+
+endloop
+
+# these only accept a table name
+foreach function iceberg_table_properties iceberg_load_table_response iceberg_view_metadata iceberg_rewrite_data_files
+
+statement error
+select * from {function}('my_datalake.nf_missing.nf_child.t');
+----
+does not exist
+
+endloop
+
+statement error
+select * from set_iceberg_table_properties('my_datalake.nf_missing.nf_child.t', {'nested.path': 'true'});
+----
+does not exist
+
+statement error
+select * from remove_iceberg_table_properties('my_datalake.nf_missing.nf_child.t', ['nested.path']);
+----
+does not exist
+
+statement error
+select * from iceberg_rollback_to_snapshot('my_datalake.nf_missing.nf_child.t', 1);
+----
+does not exist
+
+statement error
+select * from iceberg_expire_snapshots('my_datalake.nf_missing.nf_child.t');
+----
+not found
+
+# a longer name that does not start with an attached catalog is not a table name
+statement error
+select * from iceberg_table_properties('nf_missing.my_datalake.nf_parent.nf_child.t');
+----
+Too many identifiers in table name
+
+# a path separator keeps the string a table location, whatever it starts with
+statement error
+select * from iceberg_snapshots('my_datalake.nf_parent/x.nf_child.t');
+----
+no version-hint could be found
+
+# maintenance functions act on the nested table
+query II
+select rewritten_data_files_count, added_data_files_count from iceberg_rewrite_data_files('my_datalake.nf_parent.nf_child.t', min_input_files => 2);
+----
+3	1
+
+query I
+select count(*) from iceberg_snapshots('my_datalake.nf_parent.nf_child.t');
+----
+4
+
+query II
+select * from iceberg_expire_snapshots('my_datalake.nf_parent.nf_child.t', retain_last => 1, older_than => timestamp '2999-01-01');
+----
+3	1
+
+query I
+select count(*) from iceberg_snapshots('my_datalake.nf_parent.nf_child.t');
+----
+1
+
+query II
+select * from iceberg_expire_snapshots('my_datalake."nf_parent.nf_child".t', retain_last => 1, older_than => timestamp '2999-01-01');
+----
+0	1
+
+query II
+select count(*), sum(i) from my_datalake.nf_parent.nf_child.t;
+----
+6	42
+
+# the namesake kept its snapshot and its row
+query II
+select count(*), sum(i) from my_datalake.nf_child.t;
+----
+1	100
+
+query I
+select count(*) from iceberg_snapshots('my_datalake.nf_child.t');
+----
+1
+
+# schema properties
+statement ok
+select * from set_iceberg_schema_properties('my_datalake.nf_parent.nf_child', {'nested.owner': 'child'});
+
+query I
+select value from iceberg_schema_properties('my_datalake.nf_parent.nf_child') where key = 'nested.owner';
+----
+child
+
+query I
+select value from iceberg_schema_properties('my_datalake."nf_parent.nf_child"') where key = 'nested.owner';
+----
+child
+
+query I
+select count(*) from iceberg_schema_properties('my_datalake.nf_child') where key = 'nested.owner';
+----
+0
+
+query I
+select count(*) from iceberg_schema_properties('my_datalake.nf_parent') where key = 'nested.owner';
+----
+0
+
+statement ok
+select * from remove_iceberg_schema_properties('my_datalake.nf_parent.nf_child', ['nested.owner']);
+
+query I
+select count(*) from iceberg_schema_properties('my_datalake.nf_parent.nf_child') where key = 'nested.owner';
+----
+0
+
+statement ok
+drop table my_datalake.nf_parent.nf_child.t;
+
+statement ok
+drop table my_datalake.nf_child.t;
+
+statement ok
+drop schema my_datalake.nf_parent.nf_child;
+
+statement ok
+drop schema my_datalake.nf_parent;
+
+statement ok
+drop schema my_datalake.nf_child;
