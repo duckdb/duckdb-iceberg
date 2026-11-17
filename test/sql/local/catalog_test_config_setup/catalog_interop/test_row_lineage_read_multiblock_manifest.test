@@ -1,0 +1,28 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_interop/test_row_lineage_read_multiblock_manifest.test
+# description: inherited _row_id from a manifest with several Avro blocks, read with many threads
+# group: [catalog_interop]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+SET threads = 16;
+
+# Parse the manifests on every read, so each read can get a different block order
+statement ok
+SET iceberg_enable_manifest_cache = false;
+
+# Spark wrote 200 files without a first_row_id into one manifest of 10 Avro blocks
+loop i 0 10
+
+query II
+SELECT count(*), count(*) FILTER (WHERE t._row_id IS DISTINCT FROM e.row_id)
+FROM my_datalake.default.row_lineage_multiblock_manifest t
+JOIN my_datalake.default.row_lineage_multiblock_manifest_expected e USING (id);
+----
+2200	0
+
+endloop
