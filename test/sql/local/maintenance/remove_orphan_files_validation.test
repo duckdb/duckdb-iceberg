@@ -1,0 +1,80 @@
+# name: test/sql/local/maintenance/remove_orphan_files_validation.test
+# description: bind-time validation for iceberg_remove_orphan_files parameters
+# group: [maintenance]
+
+require avro
+
+require parquet
+
+require iceberg
+
+statement error
+SELECT * FROM iceberg_remove_orphan_files(NULL);
+----
+table identifier cannot be NULL
+
+foreach identifier cat..t cat.sch.t.
+
+statement error
+SELECT * FROM iceberg_remove_orphan_files('{identifier}');
+----
+empty component
+
+endloop
+
+statement error
+SELECT * FROM iceberg_remove_orphan_files('cat.sch.extra.t');
+----
+Too many identifiers in table name
+
+statement error
+SELECT * FROM iceberg_remove_orphan_files('cat.sch.t', location => '');
+----
+'location' cannot be empty
+
+# The maintenance function rejects WITH ORDINALITY explicitly.
+statement error
+SELECT * FROM iceberg_remove_orphan_files('a.b.c') WITH ORDINALITY;
+----
+does not support WITH ORDINALITY
+
+statement error
+SELECT * FROM iceberg_remove_orphan_files('a.b.c', unsafe_allow_short_retention => true);
+----
+Invalid named parameter
+
+statement error
+SELECT * FROM iceberg_remove_orphan_files(
+    'a.b.c',
+    older_than => TIMESTAMP 'infinity'
+);
+----
+'older_than' must be a finite timestamp
+
+# Omitting dry_run binds the catalog for physical deletion.
+statement error
+SELECT error_code FROM iceberg_remove_orphan_files('cat.sch.tbl');
+----
+Catalog "cat" does not exist
+
+query TT
+EXPLAIN SELECT error_code FROM iceberg_remove_orphan_files('cat.sch.tbl', dry_run => true);
+----
+physical_plan	<REGEX>:(?s).*Iceberg Remove Orphan Files.*Dry Run: true.*
+
+# A preview binds column aliases and reports the catalog error at execution.
+statement ok
+PREPARE remove_orphan_files_operator AS
+SELECT count(*)
+FROM iceberg_remove_orphan_files(
+    'cat.sch.tbl',
+    older_than => TIMESTAMP '2026-01-01 00:00:00',
+    location => 's3://bucket/path/',
+    dry_run => true
+) AS t(files, deleted, scanned, referenced, code, failed, failed_count)
+WHERE t.code = 'SUCCESS';
+
+statement error
+EXECUTE remove_orphan_files_operator;
+----
+Catalog "cat" does not exist

@@ -34,6 +34,7 @@ public:
 		return *catalog_table;
 	}
 	const IcebergTable &GetInfo() const;
+	bool IsUnmodifiedCatalogTable() const;
 	IcebergTable &GetOrCreateTransactionInfo(IcebergTransaction &transaction);
 
 public:

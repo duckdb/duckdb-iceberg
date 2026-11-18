@@ -718,13 +718,13 @@ static void AddHTTPSecretsToOptions(SecretEntry &http_secret_entry, case_insensi
 	                            : http_kv_secret.TryGetValue("verify_ssl").DefaultCastAs(LogicalType::BOOLEAN);
 }
 
-void IcebergTable::LoadCredentials(ClientContext &context) const {
+void IcebergTable::LoadCredentials(ClientContext &context, optional_ptr<ClientContext> destination) const {
 	VerifyReadEncryptionSupported();
 	if (catalog.attach_options.access_mode != IRCAccessDelegationMode::VENDED_CREDENTIALS) {
 		// assume secret already exists
 		return;
 	}
-	LoadCredentials(context, GetVendedCredentials(context));
+	LoadCredentials(context, GetVendedCredentials(context), destination);
 }
 
 //! Stores the secret of one vended credential. A credential of a storage type the Iceberg provider supports is built by
@@ -746,8 +746,10 @@ static void StoreVendedSecret(ClientContext &context, CreateSecretInput &info) {
 	                                    info.storage_type.GetIdentifierName());
 }
 
-void IcebergTable::LoadCredentials(ClientContext &context, IRCAPITableCredentials table_credentials) const {
-	auto &transaction = IcebergTransaction::Get(context, catalog);
+void IcebergTable::LoadCredentials(ClientContext &context, IRCAPITableCredentials table_credentials,
+                                   optional_ptr<ClientContext> destination) const {
+	auto &secret_context = destination ? *destination : context;
+	IcebergTransaction::Get(secret_context, catalog);
 	if (catalog.attach_options.access_mode != IRCAccessDelegationMode::VENDED_CREDENTIALS) {
 		// assume secret already exists
 		return;
@@ -763,7 +765,7 @@ void IcebergTable::LoadCredentials(ClientContext &context, IRCAPITableCredential
 			if (http_secret_entry) {
 				IcebergTableSecretProvider::AddHTTPSecretsToOptions(*http_secret_entry, info.options);
 			}
-			StoreVendedSecret(context, info);
+			StoreVendedSecret(secret_context, info);
 		}
 		return;
 	}
@@ -838,7 +840,7 @@ void IcebergTable::LoadCredentials(ClientContext &context, IRCAPITableCredential
 		IcebergTableSecretProvider::AddHTTPSecretsToOptions(*http_secret_entry, info.options);
 	}
 
-	StoreVendedSecret(context, info);
+	StoreVendedSecret(secret_context, info);
 	// if there is no key_id, secret, token (S3/GCS) or account_name, connection_string (Azure) in the info,
 	// log that vended credentials has not worked
 	bool has_s3_creds = info.options.find("key_id") != info.options.end() ||

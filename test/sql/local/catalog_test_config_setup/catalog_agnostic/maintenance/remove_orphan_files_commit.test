@@ -1,0 +1,156 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/remove_orphan_files_commit.test
+# description: find unreferenced files while protecting retained table files
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FILE_CLEANUP_SUPPORT true
+
+require-env METADATA_FILE_READ_SUPPORT true
+
+include test/sql/init_requires
+
+statement ok
+drop table if exists my_datalake.default.remove_orphan_basic;
+
+statement ok
+create table my_datalake.default.remove_orphan_basic (id INTEGER, payload VARCHAR);
+
+statement ok
+insert into my_datalake.default.remove_orphan_basic values (1, 'a'), (2, 'b');
+
+statement ok
+insert into my_datalake.default.remove_orphan_basic values (3, 'c');
+
+statement ok
+BEGIN;
+
+statement ok
+set variable table_location = (
+    select metadata."location"::VARCHAR
+    from iceberg_load_table_response(my_datalake.default.remove_orphan_basic)
+);
+
+statement ok
+set variable data_path = concat(getvariable('table_location'), '/data');
+
+statement ok
+set variable live_files = (select list(distinct file_path) from iceberg_metadata(my_datalake.default.remove_orphan_basic));
+
+statement ok
+set variable orphan_path_1 = concat(getvariable('data_path'), '/duckdb-orphan-basic-1.parquet');
+
+statement ok
+set variable orphan_metadata_path = concat(getvariable('table_location'), '/metadata/duckdb-orphan-basic.avro');
+
+statement ok
+set variable orphan_root_path = concat(getvariable('table_location'), '/duckdb-orphan-basic-root.parquet');
+
+statement ok
+set variable orphan_nested_path = concat(getvariable('data_path'), '/nested/duckdb-orphan-nested-0.parquet');
+
+# Create unreferenced files in each directory covered by the table-wide scan.
+foreach path data/duckdb-orphan-basic-1.parquet metadata/duckdb-orphan-basic.avro duckdb-orphan-basic-root.parquet
+
+statement ok
+copy (select 999::INTEGER as id, 'orphan'::VARCHAR as payload)
+to (getvariable('table_location') || '/{path}') (format parquet);
+
+endloop
+
+statement ok
+copy (select 1003::INTEGER as id, 'nested-orphan'::VARCHAR as payload)
+to (concat(getvariable('data_path'), '/nested'))
+    (format parquet, per_thread_output true, filename_pattern 'duckdb-orphan-nested-{i}', overwrite_or_ignore true);
+
+statement ok
+COMMIT;
+
+# The local catalog can return paths with native directory separators.
+statement ok
+create macro orphan_test_paths(paths) as list_transform(paths, lambda path: replace(path, chr(92), '/'));
+
+# Default cutoff is now - 3 days, so a freshly written orphan is intentionally
+# protected.
+query II
+select list_contains(orphan_test_paths(orphan_file_locations), replace(getvariable('orphan_path_1'), chr(92), '/')),
+       error_code
+from iceberg_remove_orphan_files('my_datalake.default.remove_orphan_basic', dry_run => true);
+----
+false	SUCCESS
+
+# With an explicit future cutoff the stray files are reported, including files
+# directly under the table root and under metadata/.
+query IIII
+select list_has_all(orphan_test_paths(orphan_file_locations), orphan_test_paths([
+       getvariable('orphan_path_1'), getvariable('orphan_metadata_path'),
+       getvariable('orphan_root_path'), getvariable('orphan_nested_path')])),
+       list_has_any(orphan_test_paths(orphan_file_locations), orphan_test_paths(getvariable('live_files'))), deleted_file_count,
+       error_code
+from iceberg_remove_orphan_files(
+    'my_datalake.default.remove_orphan_basic',
+    older_than => TIMESTAMP '2999-01-01 00:00:00',
+    dry_run => true
+);
+----
+true	false	0	SUCCESS
+
+# A user-specified data location restricts the scan to that subtree and still
+# recurses into nested directories.
+query III
+select list_has_all(orphan_test_paths(orphan_file_locations), orphan_test_paths([
+       getvariable('orphan_path_1'), getvariable('orphan_nested_path')])),
+       list_has_any(orphan_test_paths(orphan_file_locations), orphan_test_paths([
+       getvariable('orphan_metadata_path'), getvariable('orphan_root_path')])),
+       error_code
+from iceberg_remove_orphan_files(
+    'my_datalake.default.remove_orphan_basic',
+    older_than => TIMESTAMP '2999-01-01 00:00:00',
+    location => getvariable('data_path')::VARCHAR,
+    dry_run => true
+);
+----
+true	false	SUCCESS
+
+# A successful object-store listing can return no keys under a subdirectory.
+query TII
+select error_code, scanned_files, len(orphan_file_locations)
+from iceberg_remove_orphan_files('my_datalake.default.remove_orphan_basic',
+    location => getvariable('table_location') || '/data/empty-prefix',
+    dry_run => true, older_than => timestamp '2999-01-01');
+----
+SUCCESS	0	0
+
+# Locations outside the table root are rejected.
+query I
+select error_code
+from iceberg_remove_orphan_files(
+    'my_datalake.default.remove_orphan_basic',
+    older_than => TIMESTAMP '2999-01-01 00:00:00',
+    location => 's3://rds-duckdb-oss/not-this-table',
+    dry_run => true
+);
+----
+PREFIX_MISMATCH
+
+# Table contents are preserved; the unreferenced parquet file never became part
+# of the Iceberg table.
+query II
+select count(*), sum(id) from my_datalake.default.remove_orphan_basic;
+----
+3	6
+
+statement ok
+call set_iceberg_table_properties(
+    my_datalake.default.remove_orphan_basic,
+    {'gc.enabled': 'false'}
+);
+
+query II
+select deleted_file_count, error_code
+from iceberg_remove_orphan_files('my_datalake.default.remove_orphan_basic', dry_run => true);
+----
+0	GC_DISABLED
+
+statement ok
+drop table if exists my_datalake.default.remove_orphan_basic;

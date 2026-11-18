@@ -1,0 +1,265 @@
+# name: test/sql/local/native_catalog/remove_orphan_files_retained_snapshots.test
+# description: Orphan cleanup protects live files across all retained snapshots
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+CREATE TABLE my_datalake.default.orphan_cow (id INTEGER)
+WITH ('format-version' = '2', 'write.delete.mode' = 'copy-on-write');
+
+statement ok
+INSERT INTO my_datalake.default.orphan_cow VALUES (1), (2);
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE old_snapshot = (SELECT snapshot_id::BIGINT FROM iceberg_snapshots(my_datalake.default.orphan_cow));
+
+statement ok
+SET VARIABLE old_file = (SELECT file_path FROM iceberg_metadata(my_datalake.default.orphan_cow));
+
+statement ok
+SET VARIABLE old_manifest_list = (SELECT manifest_list FROM iceberg_snapshots(my_datalake.default.orphan_cow));
+
+statement ok
+SET VARIABLE catalog_response = (
+	SELECT body::JSON FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/orphan_cow', NULL)
+);
+
+# Write zero-count manifest lists with absolute and relative manifest paths.
+foreach path_kind absolute relative
+
+statement ok
+COPY (
+	SELECT CASE WHEN '{path_kind}' = 'relative' THEN 'metadata/' || parse_filename(manifest_path)
+		ELSE manifest_path END AS manifest_path, manifest_length, partition_spec_id, content, sequence_number,
+		min_sequence_number, added_snapshot_id, 0::INTEGER AS added_files_count, 0::INTEGER AS existing_files_count,
+		deleted_files_count, added_rows_count, existing_rows_count, deleted_rows_count
+	FROM read_avro(getvariable('old_manifest_list'))
+) TO '{TEMP_DIR_ABSOLUTE}/{path_kind}-counts.avro' (FORMAT AVRO, FIELD_IDS {
+	manifest_path:500, manifest_length:501, partition_spec_id:502, content:517,
+	sequence_number:515, min_sequence_number:516, added_snapshot_id:503,
+	added_files_count:504, existing_files_count:505, deleted_files_count:506,
+	added_rows_count:512, existing_rows_count:513, deleted_rows_count:514
+});
+
+endloop
+
+statement ok
+COMMIT;
+
+statement ok
+CREATE MACRO orphan_load_response(metadata_updates) AS TABLE
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response', json_object(
+	'method', 'GET', 'path', '/v1/namespaces/default/tables/orphan_cow', 'status', 200,
+	'body', json_merge_patch(getvariable('catalog_response'), metadata_updates)
+)::VARCHAR);
+
+# Zero counts still protect retained files, and both levels of manifest paths must be absolute.
+foreach path_kind absolute relative list
+
+statement ok
+SET VARIABLE snapshot_metadata = json_merge_patch(getvariable('catalog_response')->'metadata', json_object('snapshots', (
+	SELECT list(json_merge_patch(value, json_object('manifest-list',
+		CASE WHEN '{path_kind}' = 'list' THEN 'metadata/snapshot.avro'
+			ELSE '{TEMP_DIR_ABSOLUTE}/{path_kind}-counts.avro' END)))
+	FROM json_each(getvariable('catalog_response'), '$.metadata.snapshots')
+)));
+
+statement ok
+COPY (SELECT getvariable('snapshot_metadata')::VARCHAR) TO '{TEMP_DIR_ABSOLUTE}/{path_kind}.metadata.json'
+	(FORMAT CSV, HEADER false, DELIMITER '\t', QUOTE '', ESCAPE '');
+
+query I
+SELECT * FROM orphan_load_response(json_object('metadata', getvariable('snapshot_metadata'),
+	'metadata-location', '{TEMP_DIR_ABSOLUTE}/{path_kind}.metadata.json'));
+----
+204
+
+onlyif path_kind=absolute
+query TI
+SELECT error_code, list_contains(orphan_file_locations, getvariable('old_file'))
+FROM iceberg_remove_orphan_files('my_datalake.default.orphan_cow', dry_run => true,
+	older_than => TIMESTAMP '2999-01-01');
+----
+SUCCESS	false
+
+skipif path_kind=absolute
+statement error
+SELECT * FROM iceberg_remove_orphan_files('my_datalake.default.orphan_cow', dry_run => true,
+	older_than => TIMESTAMP '2999-01-01');
+----
+requires an absolute manifest
+
+endloop
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+statement ok
+DELETE FROM my_datalake.default.orphan_cow WHERE id = 1;
+
+query II
+SELECT count(*) FILTER (WHERE status = 'DELETED'), count(*) FILTER (WHERE status <> 'DELETED')
+FROM iceberg_metadata(my_datalake.default.orphan_cow) WHERE file_path = getvariable('old_file');
+----
+1	0
+
+statement ok
+SET VARIABLE tombstone_manifest = (
+	SELECT manifest_path FROM iceberg_metadata(my_datalake.default.orphan_cow)
+	WHERE file_path = getvariable('old_file') AND status = 'DELETED'
+);
+
+query TI
+SELECT error_code, list_contains(orphan_file_locations, getvariable('old_file'))
+FROM iceberg_remove_orphan_files('my_datalake.default.orphan_cow', dry_run => true,
+	older_than => TIMESTAMP '2999-01-01');
+----
+SUCCESS	false
+
+# A metadata file missing a catalog-advertised snapshot cannot authorize cleanup.
+statement ok
+SET VARIABLE catalog_response = (
+	SELECT body::JSON FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/orphan_cow', NULL)
+);
+
+statement ok
+SET VARIABLE incomplete_snapshots_path = '{TEMP_DIR_ABSOLUTE}/incomplete-snapshots.metadata.json';
+
+statement ok
+COPY (
+	SELECT json_merge_patch(json_extract(getvariable('catalog_response'), '$.metadata'), json_object('snapshots', (
+		SELECT list(value) FROM json_each(getvariable('catalog_response'), '$.metadata.snapshots')
+		WHERE json_extract(value, '$."snapshot-id"')::BIGINT <> getvariable('old_snapshot')
+	)))::VARCHAR
+) TO (getvariable('incomplete_snapshots_path')) (FORMAT CSV, HEADER false, DELIMITER '\t', QUOTE '', ESCAPE '');
+
+query I
+SELECT * FROM orphan_load_response(json_object('metadata-location', getvariable('incomplete_snapshots_path')));
+----
+204
+
+statement error
+SELECT * FROM iceberg_remove_orphan_files('my_datalake.default.orphan_cow', dry_run => true,
+	location => parse_dirpath(getvariable('old_file')), older_than => TIMESTAMP '2999-01-01');
+----
+catalog and metadata file disagree on retained snapshot
+
+# A duplicate ID can hide a different manifest list when snapshots are indexed by ID.
+statement ok
+SET VARIABLE duplicate_path = '{TEMP_DIR_ABSOLUTE}/duplicate-snapshots.metadata.json';
+
+statement ok
+SET VARIABLE duplicate_metadata = json_merge_patch(getvariable('catalog_response')->'metadata', json_object('snapshots', (
+	SELECT list(json_merge_patch(value, json_object('snapshot-id',
+		(getvariable('catalog_response')->'metadata'->>'current-snapshot-id')::BIGINT)))
+	FROM json_each(getvariable('catalog_response'), '$.metadata.snapshots')
+)));
+
+statement ok
+COPY (SELECT getvariable('duplicate_metadata')::VARCHAR)
+TO (getvariable('duplicate_path')) (FORMAT CSV, HEADER false, DELIMITER '\t', QUOTE '', ESCAPE '');
+
+foreach metadata_source file catalog
+
+query I
+SELECT * FROM orphan_load_response(CASE WHEN '{metadata_source}' = 'file'
+	THEN json_object('metadata-location', getvariable('duplicate_path'))
+	ELSE json_object('metadata', getvariable('duplicate_metadata')) END);
+----
+204
+
+statement error
+SELECT * FROM iceberg_remove_orphan_files('my_datalake.default.orphan_cow', dry_run => true,
+	location => parse_dirpath(getvariable('old_file')), older_than => TIMESTAMP '2999-01-01');
+----
+Duplicate snapshot ID
+
+endloop
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+query II
+SELECT * FROM iceberg_expire_snapshots('my_datalake.default.orphan_cow', snapshot_ids => [getvariable('old_snapshot')]);
+----
+1	1
+
+statement ok
+SET cache_local_files = true;
+
+statement ok
+CALL enable_logging('FileSystem', storage='memory');
+
+query TIII
+SELECT error_code, list_contains(orphan_file_locations, getvariable('old_file')),
+	list_contains(orphan_file_locations, getvariable('tombstone_manifest')), deleted_file_count
+FROM iceberg_remove_orphan_files('my_datalake.default.orphan_cow', dry_run => true,
+	older_than => TIMESTAMP '2999-01-01');
+----
+SUCCESS	true	false	0
+
+# FileSystem log messages can contain unescaped Windows separators.
+query I
+SELECT count(*) > 0
+FROM duckdb_logs()
+WHERE type = 'FileSystem' AND contains(message, '"op":"OPEN"')
+	AND contains(message, parse_filename(getvariable('tombstone_manifest')) || '"');
+----
+true
+
+# The cleanup reads Avro without using the shared external file cache.
+query I
+SELECT count(*) FROM duckdb_external_file_cache() WHERE path LIKE '%.avro';
+----
+0
+
+statement ok
+CALL disable_logging();
+
+query I
+SELECT count(*) FROM glob(getvariable('old_file'));
+----
+1
+
+query I
+SELECT id FROM my_datalake.default.orphan_cow;
+----
+2
+
+# Declared tags must point to snapshots in the authoritative metadata file.
+statement ok
+SET VARIABLE catalog_response = (
+	SELECT body::JSON FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/orphan_cow', NULL)
+);
+
+statement ok
+SET VARIABLE incomplete_path = json_extract_string(getvariable('catalog_response'), '$.metadata.location') || '/metadata/incomplete.metadata.json';
+
+statement ok
+COPY (
+	SELECT json_merge_patch(json_extract(getvariable('catalog_response'), '$.metadata'),
+		json_object('refs', json_object('archive', json_object('snapshot-id', getvariable('old_snapshot'), 'type', 'tag'))))::VARCHAR
+) TO (getvariable('incomplete_path')) (FORMAT CSV, HEADER false, DELIMITER '\t', QUOTE '', ESCAPE '');
+
+query I
+SELECT * FROM orphan_load_response(json_object('metadata-location', getvariable('incomplete_path')));
+----
+204
+
+statement error
+SELECT * FROM iceberg_remove_orphan_files('my_datalake.default.orphan_cow', dry_run => true,
+	older_than => TIMESTAMP '2000-01-01');
+----
+snapshot reference 'archive' points to unknown snapshot

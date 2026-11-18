@@ -1,6 +1,8 @@
 #include "maintenance/maintenance_table_loader.hpp"
+#include "common/iceberg_utils.hpp"
 
 #include "duckdb/catalog/catalog.hpp"
+#include "duckdb/catalog/entry_lookup_info.hpp"
 #include "duckdb/common/enums/on_entry_not_found.hpp"
 #include "duckdb/common/exception.hpp"
 
@@ -13,12 +15,22 @@
 
 namespace duckdb {
 
-namespace {
+QualifiedName ResolveMaintenanceTableName(ClientContext &context, const string &identifier, const char *function_name) {
+	auto name = IcebergUtils::ParseTableName(identifier);
+	if (name.Path().size() == 3) {
+		return name;
+	}
+	//! The plan reloads the table by name when it runs, so keep the name it resolved to now
+	auto &entry = Catalog::GetEntry(context, EntryLookupInfo(CatalogType::TABLE_ENTRY, std::move(name)));
+	if (!IcebergUtils::IsIcebergCatalog(entry.Cast<InCatalogEntry>().catalog)) {
+		throw InvalidInputException("%s: '%s' is not an Iceberg table", function_name, identifier);
+	}
+	return IcebergUtils::GetQualifiedTableName(entry);
+}
 
 static IcebergSchemaEntry &LoadIcebergSchema(ClientContext &context, const QualifiedName &table_name,
                                              const string &function_name) {
 	auto &iceberg_catalog = GetMaintenanceIcebergCatalog(context, table_name, function_name);
-
 	auto &schema_set = iceberg_catalog.GetSchemas();
 	schema_set.LoadEntries(context);
 	auto schema_entry_opt =
@@ -29,8 +41,6 @@ static IcebergSchemaEntry &LoadIcebergSchema(ClientContext &context, const Quali
 	}
 	return schema_entry_opt->Cast<IcebergSchemaEntry>();
 }
-
-} // namespace
 
 IcebergCatalog &GetMaintenanceIcebergCatalog(ClientContext &context, const QualifiedName &table_name,
                                              const string &function_name) {

@@ -38,8 +38,10 @@ public:
 	                                                  const string &name);
 
 public:
-	void LoadCredentials(ClientContext &context) const;
-	void LoadCredentials(ClientContext &context, IRCAPITableCredentials table_credentials) const;
+	//! Resolve credential options in context and register the secrets in destination (defaults to context).
+	void LoadCredentials(ClientContext &context, optional_ptr<ClientContext> destination = nullptr) const;
+	void LoadCredentials(ClientContext &context, IRCAPITableCredentials table_credentials,
+	                     optional_ptr<ClientContext> destination = nullptr) const;
 	optional_ptr<CatalogEntry> GetLatestSchema();
 	idx_t GetIcebergVersion() const;
 	optional_ptr<CatalogEntry> GetSchemaVersion(optional_ptr<BoundAtClause> at);

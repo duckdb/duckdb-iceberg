@@ -1,0 +1,169 @@
+# name: test/sql/local/native_catalog/remove_orphan_files_local.test
+# description: Local orphan cleanup checks retention, autocommit, and literal file names
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+CREATE TABLE my_datalake.default.orphan_reused_path AS SELECT 1::INTEGER AS id;
+
+statement ok
+SET VARIABLE reused_path = (
+	SELECT json_extract_string(body::JSON, '$.metadata.location') || '/data/reused.parquet'
+	FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/orphan_reused_path', NULL)
+);
+
+statement ok
+COPY (SELECT 3::INTEGER AS id) TO (getvariable('reused_path')) (FORMAT PARQUET);
+
+statement error
+SELECT * FROM iceberg_remove_orphan_files('my_datalake.default.orphan_reused_path',
+	location => getvariable('reused_path'), dry_run => true);
+----
+list directory
+
+query TI
+SELECT error_code, scanned_files FROM iceberg_remove_orphan_files('my_datalake.default.orphan_reused_path',
+	location => getvariable('reused_path') || '.missing', dry_run => true);
+----
+SUCCESS	0
+
+query TII
+SELECT error_code, deleted_file_count, failed_file_count
+FROM iceberg_remove_orphan_files('my_datalake.default.orphan_reused_path',
+	older_than => TIMESTAMP '2999-01-01');
+----
+RETENTION_TOO_SHORT	0	0
+
+query TII
+SELECT error_code, deleted_file_count, failed_file_count
+FROM iceberg_remove_orphan_files('my_datalake.default.orphan_reused_path', dry_run => false);
+----
+SUCCESS	0	0
+
+statement ok
+BEGIN;
+
+query I
+SELECT id FROM my_datalake.default.orphan_reused_path;
+----
+1
+
+query T
+SELECT error_code FROM iceberg_remove_orphan_files('my_datalake.default.orphan_reused_path', dry_run => true);
+----
+SUCCESS
+
+statement error
+SELECT * FROM iceberg_remove_orphan_files('my_datalake.default.orphan_reused_path');
+----
+requires autocommit
+
+statement ok
+ROLLBACK;
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.orphan_reused_path VALUES (2);
+
+statement error
+SELECT error_code FROM iceberg_remove_orphan_files('my_datalake.default.orphan_reused_path', dry_run => true);
+----
+requires an unmodified catalog table
+
+statement ok
+ROLLBACK;
+
+# A backslash is a literal filename character on POSIX and a separator on Windows.
+statement ok
+SET VARIABLE filename_separator = (
+	SELECT CASE WHEN platform LIKE 'windows%' THEN 'both_slash' ELSE 'forward_slash' END FROM pragma_platform()
+);
+
+statement ok
+SET VARIABLE extra_filename = CASE WHEN getvariable('filename_separator') = 'forward_slash'
+	THEN 'part' || chr(92) || '01.csv' ELSE 'part-01.csv' END;
+
+statement ok
+COPY (SELECT 2) TO (parse_dirpath(getvariable('reused_path')) || '/' || getvariable('extra_filename'))
+	(FORMAT CSV, USE_TMP_FILE false);
+
+# Require the literal name whenever the session filesystem lists it.
+statement ok
+SET VARIABLE extra_is_listed = EXISTS (
+	SELECT 1 FROM glob(parse_dirpath(getvariable('reused_path')) || '/*')
+	WHERE parse_filename(file, getvariable('filename_separator')) = getvariable('extra_filename')
+);
+
+query TIIII
+SELECT error_code, list_sort(list_transform(orphan_file_locations,
+		lambda path: parse_filename(path, getvariable('filename_separator'))))
+		= CASE WHEN getvariable('extra_is_listed') THEN list_sort(['reused.parquet', getvariable('extra_filename')])
+		  ELSE ['reused.parquet'] END,
+	deleted_file_count, scanned_files = 2 + getvariable('extra_is_listed')::INTEGER, referenced_files > 0
+FROM iceberg_remove_orphan_files('my_datalake.default.orphan_reused_path',
+	location => parse_dirpath(getvariable('reused_path')), older_than => TIMESTAMP '2999-01-01', dry_run => true);
+----
+SUCCESS	true	0	true	true
+
+query II
+SELECT id, (SELECT id FROM read_parquet(getvariable('reused_path')))
+FROM my_datalake.default.orphan_reused_path;
+----
+1	3
+
+# A previously read table and a replacement with the same name have different identities.
+statement ok
+BEGIN;
+
+query I
+SELECT id FROM my_datalake.default.orphan_reused_path;
+----
+1
+
+statement ok writer
+DROP TABLE my_datalake.default.orphan_reused_path;
+
+statement ok writer
+CREATE TABLE my_datalake.default.orphan_reused_path (id INTEGER);
+
+statement error
+SELECT * FROM iceberg_remove_orphan_files('my_datalake.default.orphan_reused_path', dry_run => true);
+----
+table identity or location changed
+
+statement ok
+ROLLBACK;
+
+statement ok
+CREATE TABLE my_datalake.default."9.orders" AS SELECT 1 AS id;
+
+statement ok
+USE my_datalake.default;
+
+query T
+SELECT error_code FROM iceberg_remove_orphan_files('"9.orders"', dry_run => true)
+UNION ALL
+SELECT error_code FROM iceberg_remove_orphan_files('my_datalake.default."9.orders"', dry_run => true);
+----
+SUCCESS
+SUCCESS
+
+query TII
+SELECT error_code, deleted_file_count, failed_file_count FROM iceberg_remove_orphan_files('default."9.orders"');
+----
+SUCCESS	0	0
+
+statement ok
+CREATE TEMP TABLE local_orphan_target (id INTEGER);
+
+statement error
+SELECT * FROM iceberg_remove_orphan_files('local_orphan_target', dry_run => true);
+----
+'local_orphan_target' is not an Iceberg table

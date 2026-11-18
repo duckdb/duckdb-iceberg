@@ -1,0 +1,596 @@
+# name: test/sql/local/native_catalog/remove_orphan_files_safety.test
+# description: Orphan cleanup protects effective metadata and stays within the table location
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+CREATE TABLE my_datalake.default.orphan_metadata AS SELECT 1::INTEGER AS id;
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE load_response = (
+	SELECT body::JSON
+	FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/orphan_metadata', NULL)
+);
+
+statement ok
+SET VARIABLE table_location = json_extract_string(getvariable('load_response'), '$.metadata.location');
+
+statement ok
+SET VARIABLE stats_path = getvariable('table_location') || '/metadata/stats.puffin';
+
+statement ok
+SET VARIABLE partition_stats_path = getvariable('table_location') || '/metadata/partition-stats.parquet';
+
+statement ok
+SET VARIABLE metadata_path = getvariable('table_location') || '/metadata/authoritative.metadata.json';
+
+statement ok
+SET VARIABLE hint_path = getvariable('table_location') || '/metadata/version-hint.text';
+
+statement ok
+SET VARIABLE stray_hint_path = getvariable('table_location') || '/data/version-hint.text';
+
+# Cleanup needs the referenced paths but does not read the contents of these files.
+statement ok
+COPY (SELECT 1 AS id) TO (getvariable('stats_path')) (FORMAT PARQUET);
+
+statement ok
+COPY (SELECT 1 AS id) TO (getvariable('partition_stats_path')) (FORMAT PARQUET);
+
+statement ok
+SET VARIABLE alternate_stats_path = getvariable('table_location') || '/metadata/STATS.PUFFIN';
+
+statement ok
+SET VARIABLE stats_reference_path = (
+	SELECT IF(count(*) > 0, getvariable('alternate_stats_path'), getvariable('stats_path'))
+	FROM glob(getvariable('alternate_stats_path'))
+);
+
+statement ok
+SET VARIABLE snapshot_id = json_extract_string(getvariable('load_response'), '$.metadata."current-snapshot-id"')::BIGINT;
+
+statement ok
+SET VARIABLE effective_metadata = json_merge_patch(
+	json_extract(getvariable('load_response'), '$.metadata'),
+	json_object(
+		'statistics', json_array(json_object(
+			'snapshot-id', getvariable('snapshot_id'), 'statistics-path', getvariable('stats_reference_path'),
+			'file-size-in-bytes', 1, 'file-footer-size-in-bytes', 0, 'blob-metadata', json_array())),
+		'partition-statistics', json_array(json_object(
+			'snapshot-id', getvariable('snapshot_id'), 'statistics-path', getvariable('partition_stats_path'),
+			'file-size-in-bytes', 1)),
+		'snapshots', (
+			SELECT list(json_merge_patch(value, '{"schema-id":null}'))
+			FROM json_each(getvariable('load_response'), '$.metadata.snapshots')
+		)
+	)
+);
+
+statement ok
+COPY (SELECT getvariable('effective_metadata')::VARCHAR) TO (getvariable('metadata_path'))
+	(FORMAT CSV, HEADER false, DELIMITER '\t', QUOTE '', ESCAPE '');
+
+statement ok
+SET VARIABLE foreign_metadata = getvariable('table_location') || '/metadata/foreign-reference.metadata.json';
+
+statement ok
+COPY (SELECT json_merge_patch(getvariable('effective_metadata'), json_object('metadata-log', json_array(json_object(
+	'timestamp-ms', 1, 'metadata-file', 's3://bucket/table/metadata/previous.metadata.json'))))::VARCHAR)
+TO (getvariable('foreign_metadata')) (FORMAT CSV, HEADER false, DELIMITER '\t', QUOTE '', ESCAPE '');
+
+statement ok
+COPY (SELECT '' WHERE false) TO (getvariable('hint_path')) (FORMAT CSV, HEADER false, PREFIX 'author', SUFFIX 'itative');
+
+statement ok
+COPY (SELECT '' WHERE false) TO (getvariable('table_location') || '/metadata/current-version.txt')
+	(FORMAT CSV, HEADER false, PREFIX 'author', SUFFIX 'itative');
+
+statement ok
+COPY (SELECT 1) TO (getvariable('stray_hint_path')) (FORMAT CSV, HEADER false);
+
+query II
+SELECT (SELECT id FROM iceberg_scan(getvariable('table_location'))),
+	(SELECT id FROM iceberg_scan(getvariable('table_location'), version => 'current-version.txt'));
+----
+1	1
+
+statement ok
+COMMIT;
+
+statement ok
+CREATE MACRO orphan_load_response(payload, status_code := 200) AS TABLE
+SELECT CASE WHEN status = 204 THEN status ELSE error('Could not set test LoadTable response') END
+FROM iceberg_test_catalog_request('POST', '/__test/response', json_object(
+	'method', 'GET', 'path', '/v1/namespaces/default/tables/orphan_metadata', 'status', status_code,
+	'body', payload::JSON
+)::VARCHAR);
+
+statement ok
+CREATE MACRO orphan_patch_response(patch) AS TABLE
+FROM orphan_load_response(json_merge_patch(getvariable('load_response'), patch::JSON));
+
+statement ok
+SET home_directory = getvariable('table_location');
+
+foreach metadata_location metadata/current.metadata.json ~/metadata/authoritative.metadata.json
+
+statement ok
+FROM orphan_patch_response(json_object('metadata-location', '{metadata_location}'));
+
+statement error
+SELECT * FROM iceberg_remove_orphan_files('my_datalake.default.orphan_metadata', dry_run => true);
+----
+requires an absolute metadata-location path
+
+endloop
+
+statement ok
+FROM orphan_patch_response('{"metadata":{"location":"~/data"}}');
+
+statement error
+SELECT * FROM iceberg_remove_orphan_files('my_datalake.default.orphan_metadata', dry_run => true);
+----
+requires an absolute table location path
+
+statement ok
+FROM orphan_patch_response(
+	'{"metadata":{"metadata-log":[{"timestamp-ms":1,"metadata-file":"~/metadata/authoritative.metadata.json"}]}}');
+
+statement error
+SELECT error_code FROM iceberg_remove_orphan_files('my_datalake.default.orphan_metadata', dry_run => true);
+----
+requires an absolute metadata log path
+
+statement ok
+RESET home_directory;
+
+foreach suffix ?rev=1 #old %20old
+
+statement ok
+FROM orphan_patch_response(
+	'{"metadata":{"metadata-log":[{"timestamp-ms":1,"metadata-file":"file:///warehouse/previous.metadata.json{suffix}"}]}}');
+
+statement error
+SELECT * FROM iceberg_remove_orphan_files('my_datalake.default.orphan_metadata', dry_run => false);
+----
+cannot verify a file URI with a query, fragment or percent sign
+
+endloop
+
+statement ok
+FROM orphan_patch_response('{"metadata":{"location":"s3://warehouse/"}}');
+
+statement error
+SELECT * FROM iceberg_remove_orphan_files('my_datalake.default.orphan_metadata', dry_run => false);
+----
+physical deletion requires a directory below the storage root
+
+statement ok
+SET GLOBAL s3_enable_deprecated_url_parameters = true;
+
+statement ok
+FROM orphan_patch_response(
+	'{"metadata-location":"s3://bucket/table/metadata/current.metadata.json?s3_region=us-east-1",
+	  "metadata":{"location":"s3://bucket/table"}}');
+
+statement error
+SELECT * FROM iceberg_remove_orphan_files('my_datalake.default.orphan_metadata',
+	dry_run => true, older_than => TIMESTAMP '2999-01-01');
+----
+cannot verify S3 paths containing '?'
+
+statement ok
+RESET GLOBAL s3_enable_deprecated_url_parameters;
+
+# A retained S3 reference cannot be compared with a local scan.
+statement ok
+FROM orphan_patch_response(json_object('metadata-location', getvariable('foreign_metadata')));
+
+statement error
+SELECT error_code FROM iceberg_remove_orphan_files('my_datalake.default.orphan_metadata',
+	dry_run => true, older_than => TIMESTAMP '2000-01-01');
+----
+cannot compare reference
+
+# Scheme aliases for the same bucket must select equivalent endpoint routes.
+statement ok
+CREATE SECRET orphan_scan (TYPE s3, ENDPOINT 'iceberg-mock.invalid', URL_STYLE 'path', SCOPE 's3://warehouse/');
+
+statement ok
+CREATE SECRET orphan_reference (TYPE s3, ENDPOINT 'iceberg-mock.invalid/warehouse', URL_STYLE 'path', SCOPE 's3a://warehouse/');
+
+statement ok
+FROM orphan_patch_response(
+	'{"metadata-location":"s3a://warehouse/files/table/metadata/current.metadata.json",
+	  "metadata":{"location":"s3://warehouse/files/table"}}');
+
+statement error
+SELECT * FROM iceberg_remove_orphan_files('my_datalake.default.orphan_metadata', dry_run => true);
+----
+across different S3 storage routes
+
+# Uncommitted credentials for a listed subtree or the referenced metadata must be visible.
+foreach scope s3://warehouse/files/table/data/ s3a://warehouse/files/table/metadata/
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE SECRET orphan_pending (TYPE s3, SCOPE '{scope}');
+
+statement error
+SELECT * FROM iceberg_remove_orphan_files('my_datalake.default.orphan_metadata', dry_run => true);
+----
+Storage credentials changed before orphan cleanup
+
+statement ok
+ROLLBACK;
+
+endloop
+
+statement ok
+CREATE OR REPLACE SECRET orphan_reference (TYPE s3, ENDPOINT 'iceberg-mock.invalid', URL_STYLE 'path',
+	SCOPE 's3://warehouse/files/table/**');
+
+statement error
+SELECT * FROM iceberg_remove_orphan_files('my_datalake.default.orphan_metadata', dry_run => true);
+----
+requires the S3 listing secret to cover the scan prefix
+
+# A narrower scope can select a different route for files returned by LIST.
+statement ok
+CREATE OR REPLACE SECRET orphan_reference (TYPE s3, ENDPOINT 'peer.invalid', SCOPE 's3://warehouse/files/table/data/');
+
+statement ok
+FROM orphan_patch_response(json_object(
+	'metadata-location', getvariable('metadata_path'), 'metadata', json_object('location', 's3://warehouse/files/table')));
+
+statement error
+SELECT * FROM iceberg_remove_orphan_files('my_datalake.default.orphan_metadata', dry_run => true);
+----
+across different S3 storage routes
+
+# After a DROP, only the private connection's catalog snapshot still contains the narrower scope.
+statement ok
+BEGIN;
+
+statement ok
+DROP SECRET orphan_reference;
+
+statement error
+SELECT * FROM iceberg_remove_orphan_files('my_datalake.default.orphan_metadata', dry_run => true);
+----
+Storage credentials changed before orphan cleanup
+
+statement ok
+ROLLBACK;
+
+# A shadowed fallback or a secret for another bucket leaves only the mixed storage paths to reject.
+foreach scope s3://ware s3://archive/
+
+statement ok
+CREATE OR REPLACE SECRET orphan_reference (TYPE s3, ENDPOINT 'peer.invalid', SCOPE '{scope}');
+
+statement error
+SELECT error_code, scanned_files, len(orphan_file_locations)
+FROM iceberg_remove_orphan_files('my_datalake.default.orphan_metadata', dry_run => true);
+----
+cannot compare reference
+
+endloop
+
+statement ok
+DROP SECRET orphan_scan;
+
+statement ok
+DROP SECRET orphan_reference;
+
+# A single secret can cover a bucket and its access point alias.
+statement ok
+CREATE SECRET orphan_scan (TYPE s3, ENDPOINT 'iceberg-mock.invalid', URL_STYLE 'path', SCOPE ['s3://', 's3a://']);
+
+statement ok
+FROM orphan_patch_response(
+	'{"metadata-location":"s3a://warehouse-ap-s3alias/files/table/metadata/current.metadata.json",
+	  "metadata":{"location":"s3://warehouse/files/table"}}');
+
+statement error
+SELECT error_code FROM iceberg_remove_orphan_files('my_datalake.default.orphan_metadata', dry_run => true);
+----
+requires S3 references to use the scan bucket
+
+statement ok
+DROP SECRET orphan_scan;
+
+# Azure storage is outside the scope of orphan cleanup, including previews.
+foreach root az://container/table abfss://container@acct.dfs.core.windows.net/table
+
+statement ok
+FROM orphan_patch_response(json_object(
+	'metadata-location', '{root}/current.metadata.json', 'metadata', json_object('location', '{root}')));
+
+statement error
+SELECT error_code, scanned_files, len(orphan_file_locations)
+FROM iceberg_remove_orphan_files('my_datalake.default.orphan_metadata', dry_run => true);
+----
+unsupported remote scan location
+
+endloop
+
+# Statistics references from either the metadata file or the catalog protect files.
+statement ok
+SET VARIABLE catalog_stats_path = getvariable('table_location') || '/metadata/catalog-stats.puffin';
+
+statement ok
+COPY (SELECT 1 AS id) TO (getvariable('catalog_stats_path')) (FORMAT PARQUET);
+
+statement ok
+FROM orphan_patch_response(json_object(
+	'metadata-location', getvariable('metadata_path'),
+	'metadata', json_object('statistics', json_array(json_merge_patch(
+		json_extract(getvariable('effective_metadata'), '$.statistics[0]'),
+		json_object('statistics-path', getvariable('catalog_stats_path'))
+	)))
+));
+
+statement ok
+ATTACH '' AS orphan_authoritative (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none', USE_METADATA_LOCATION true);
+
+# Directory listings can use native separators in these local paths.
+statement ok
+CREATE MACRO has_orphan_path(paths, expected) AS
+	list_contains(list_transform(paths, lambda path: replace(path, chr(92), '/')), replace(expected, chr(92), '/'));
+
+foreach catalog my_datalake orphan_authoritative
+
+query TIIIIIIII
+SELECT error_code, scanned_files > 0,
+	has_orphan_path(orphan_file_locations, getvariable('metadata_path')),
+	has_orphan_path(orphan_file_locations, getvariable('stats_path')),
+	has_orphan_path(orphan_file_locations, getvariable('partition_stats_path')),
+	has_orphan_path(orphan_file_locations, getvariable('catalog_stats_path')),
+	has_orphan_path(orphan_file_locations, getvariable('hint_path')),
+	has_orphan_path(orphan_file_locations, getvariable('table_location') || '/metadata/current-version.txt'),
+	has_orphan_path(orphan_file_locations, getvariable('stray_hint_path'))
+FROM iceberg_remove_orphan_files('{catalog}.default.orphan_metadata',
+	dry_run => true, older_than => TIMESTAMP '2999-01-01');
+----
+SUCCESS	true	false	false	false	false	false	false	true
+
+endloop
+
+# Iceberg also accepts the older .metadata.json.gz naming convention.
+statement ok
+SET VARIABLE legacy_metadata_path = getvariable('metadata_path') || '.gz';
+
+statement ok
+COPY (SELECT getvariable('effective_metadata')::VARCHAR) TO (getvariable('legacy_metadata_path'))
+	(FORMAT CSV, COMPRESSION gzip, HEADER false, DELIMITER '\t', QUOTE '', ESCAPE '');
+
+statement ok
+FROM orphan_patch_response(json_object('metadata-location', getvariable('legacy_metadata_path')));
+
+query TII
+SELECT error_code, has_orphan_path(orphan_file_locations, getvariable('legacy_metadata_path')),
+	has_orphan_path(orphan_file_locations, getvariable('stats_path'))
+FROM iceberg_remove_orphan_files('my_datalake.default.orphan_metadata', dry_run => true, older_than => TIMESTAMP '2999-01-01');
+----
+SUCCESS	false	false
+
+# Cleanup requires the current metadata file even when the catalog embeds metadata.
+foreach metadata_case absent missing
+
+statement ok
+FROM orphan_patch_response(json_object('metadata-location',
+	CASE WHEN '{metadata_case}' = 'missing' THEN getvariable('metadata_path') || '.missing' END));
+
+query ITII
+SELECT deleted_file_count, error_code, scanned_files, len(orphan_file_locations)
+FROM iceberg_remove_orphan_files('orphan_authoritative.default.orphan_metadata',
+	dry_run => true, older_than => TIMESTAMP '2999-01-01');
+----
+0	MISSING_METADATA_LOCATION	0	0
+
+endloop
+
+statement ok
+FROM orphan_load_response(json_object('error', json_object(
+	'code', 403, 'type', 'ForbiddenException', 'message', 'Caller lacks permission')), status_code := 403);
+
+statement error
+SELECT error_code FROM iceberg_remove_orphan_files('my_datalake.default.orphan_metadata', dry_run => true);
+----
+Caller lacks permission
+
+statement ok
+FROM orphan_load_response(json_object('error', json_object(
+	'code', 500, 'type', 'InternalServerError', 'message', 'Internal server error')), status_code := 500);
+
+statement error
+SELECT * FROM iceberg_remove_orphan_files('my_datalake.default.orphan_metadata', dry_run => true);
+----
+HTTP 500
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+statement error
+SELECT error_code FROM iceberg_remove_orphan_files('my_datalake.default.orphan_does_not_exist', dry_run => true);
+----
+Table does not exist: orphan_does_not_exist
+
+statement ok
+CREATE TABLE my_datalake.default.OrphanBuy AS SELECT 31::INTEGER AS id;
+
+statement ok
+CREATE TABLE my_datalake.default.orphanbuy AS SELECT 32::INTEGER AS id;
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE upper_orphan = (
+	SELECT json_extract_string(body::JSON, '$.metadata.location') || '/data/orphan.csv'
+	FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/OrphanBuy', NULL)
+);
+
+statement ok
+SET VARIABLE lower_orphan = (
+	SELECT json_extract_string(body::JSON, '$.metadata.location') || '/data/orphan.csv'
+	FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/orphanbuy', NULL)
+);
+
+statement ok
+COPY (SELECT 31) TO (getvariable('upper_orphan')) (FORMAT CSV);
+
+statement ok
+COPY (SELECT 32) TO (getvariable('lower_orphan')) (FORMAT CSV);
+
+statement ok
+COMMIT;
+
+statement ok
+ATTACH '' AS orphan_read_only (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none', READ_ONLY);
+
+statement ok
+SET home_directory = parse_dirpath(parse_dirpath(getvariable('upper_orphan')));
+
+statement ok
+CALL enable_logging(['HTTP'], storage='memory');
+
+query TIII
+SELECT error_code, has_orphan_path(orphan_file_locations, getvariable('upper_orphan')),
+	has_orphan_path(orphan_file_locations, getvariable('lower_orphan')), deleted_file_count
+FROM iceberg_remove_orphan_files('orphan_read_only.default.OrphanBuy',
+	location => '~/data', older_than => TIMESTAMP '2999-01-01', dry_run => true);
+----
+SUCCESS	true	false	0
+
+query II
+SELECT count(*) FILTER (WHERE request.url LIKE '%/tables/OrphanBuy'), count(*) FILTER (WHERE request.url LIKE '%/v1/namespaces')
+FROM duckdb_logs_parsed('HTTP');
+----
+1	0
+
+statement ok
+CALL disable_logging();
+
+statement ok
+RESET home_directory;
+
+statement error
+SELECT * FROM iceberg_remove_orphan_files('orphan_read_only.default.OrphanBuy', dry_run => false);
+----
+read-only mode
+
+query II
+SELECT (SELECT count(*) FROM glob(getvariable('upper_orphan'))), (SELECT count(*) FROM glob(getvariable('lower_orphan')));
+----
+1	1
+
+statement ok
+ATTACH '' AS orphan_lowercase (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none', IDENTIFIER_CASE 'lowercase');
+
+foreach schema_name default DEFAULT
+
+query TII
+SELECT error_code, has_orphan_path(orphan_file_locations, getvariable('lower_orphan')),
+	has_orphan_path(orphan_file_locations, getvariable('upper_orphan'))
+FROM iceberg_remove_orphan_files('orphan_lowercase.{schema_name}.OrphanBuy', dry_run => true, older_than => TIMESTAMP '2999-01-01');
+----
+SUCCESS	true	false
+
+endloop
+
+# Reuse the two tables to verify the bounds of cleanup on a shared write path.
+foreach table_name OrphanBuy orphanbuy
+
+statement ok
+ALTER TABLE my_datalake.default.{table_name} SET ('write.data.path' = '{TEMP_DIR_ABSOLUTE}/orphan-shared');
+
+statement ok
+INSERT INTO my_datalake.default.{table_name} VALUES (42);
+
+endloop
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE other_table_file = (
+	SELECT file_path
+	FROM iceberg_metadata(my_datalake.default.orphanbuy)
+	WHERE content = 'DATA' AND parse_filename(parse_dirpath(file_path)) = 'orphan-shared'
+);
+
+query TII
+SELECT error_code, scanned_files > 0, has_orphan_path(orphan_file_locations, getvariable('other_table_file'))
+FROM iceberg_remove_orphan_files('my_datalake.default.OrphanBuy',
+	dry_run => true, older_than => TIMESTAMP '2999-01-01');
+----
+SUCCESS	true	false
+
+statement ok
+COMMIT;
+
+query TI
+SELECT error_code, scanned_files
+FROM iceberg_remove_orphan_files('my_datalake.default.OrphanBuy',
+	location => '{TEMP_DIR_ABSOLUTE}/orphan-shared', dry_run => true, older_than => TIMESTAMP '2999-01-01');
+----
+PREFIX_MISMATCH	0
+
+statement ok
+ALTER TABLE my_datalake.default.OrphanBuy SET ('gc.enabled' = 'not-a-boolean');
+
+statement error
+SELECT * FROM iceberg_remove_orphan_files('my_datalake.default.OrphanBuy', dry_run => true);
+----
+expected 'true' or 'false'
+
+# COPY writes version-hint.text into the configured metadata directory.
+statement ok
+COPY (SELECT 42::INTEGER AS val) TO '{TEMP_DIR_ABSOLUTE}/orphan-custom'
+	(FORMAT ICEBERG, "write.metadata.path" '{TEMP_DIR_ABSOLUTE}/orphan-custom/custom-meta');
+
+statement ok
+COPY (SELECT 1) TO '{TEMP_DIR_ABSOLUTE}/orphan-custom/custom-meta/current-version.txt' (FORMAT CSV);
+
+statement ok
+COPY (SELECT 1) TO '{TEMP_DIR_ABSOLUTE}/orphan-custom/unrelated.txt' (FORMAT CSV);
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE custom_metadata_path = (SELECT file FROM glob('{TEMP_DIR_ABSOLUTE}/orphan-custom/custom-meta/*.metadata.json'));
+
+statement ok
+SET VARIABLE custom_metadata = (SELECT content::JSON FROM read_text(getvariable('custom_metadata_path')));
+
+statement ok
+FROM orphan_load_response(json_object('metadata-location', getvariable('custom_metadata_path'),
+	'metadata', getvariable('custom_metadata')));
+
+statement ok
+COMMIT;
+
+query TI
+SELECT error_code, len(orphan_file_locations) = 1 AND parse_filename(orphan_file_locations[1]) = 'unrelated.txt'
+FROM iceberg_remove_orphan_files('my_datalake.default.orphan_metadata',
+	dry_run => true, older_than => TIMESTAMP '2999-01-01');
+----
+SUCCESS	true
