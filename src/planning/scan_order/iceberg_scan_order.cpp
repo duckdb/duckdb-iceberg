@@ -71,6 +71,8 @@ void IcebergScanOrder::Apply(ClientContext &context, const IcebergTableSchema &s
 	}
 	auto &order_column = *schema_columns[schema_idx];
 	auto field_id = order_column.id;
+	const bool is_floating_point =
+	    order_column.type.id() == LogicalTypeId::FLOAT || order_column.type.id() == LogicalTypeId::DOUBLE;
 
 	bool can_prune = opts.row_limit.IsValid();
 	vector<IcebergOrderEntry> order_entries;
@@ -91,8 +93,16 @@ void IcebergScanOrder::Apply(ClientContext &context, const IcebergTableSchema &s
 		if (null_it == data_file.null_value_counts.end() || null_it->second > 0) {
 			can_prune = false;
 		}
+		auto upper_bound = *stats.upper_bound;
+		if (is_floating_point) {
+			// Iceberg bounds exclude NaN, which sorts after every other value
+			auto nan_it = data_file.nan_value_counts.find(field_id);
+			if (nan_it == data_file.nan_value_counts.end() || nan_it->second > 0) {
+				upper_bound = Value("nan").DefaultCastAs(order_column.type);
+			}
+		}
 		order_entries.push_back(
-		    {i, *stats.lower_bound, *stats.upper_bound, NumericCast<idx_t>(data_file.record_count)});
+		    {i, *stats.lower_bound, std::move(upper_bound), NumericCast<idx_t>(data_file.record_count)});
 	}
 
 	if (has_matching_delete_manifests) {
