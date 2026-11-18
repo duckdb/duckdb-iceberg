@@ -67,25 +67,35 @@ private:
 shared_ptr<IcebergDeletionVectorData> IcebergDeletionVectorData::FromBlob(const IcebergFileIdentity &file,
                                                                           data_ptr_t blob_start, idx_t blob_length) {
 	//! https://iceberg.apache.org/puffin-spec/#deletion-vector-v1-blob-type
+	//! The blob is a 4-byte length field, the magic bytes, the bitmaps and a 4-byte checksum. It comes from a file,
+	//! so every read is checked against the blob length before it happens.
 
-	auto blob_end = blob_start + blob_length;
-	auto vector_size = Load<uint32_t>(blob_start);
-	vector_size = BSwap(vector_size);
-	blob_start += sizeof(uint32_t);
-	D_ASSERT(blob_start < blob_end);
-
-	if (blob_length < 12) {
+	//! The length field, the magic bytes, the bitmap count and the checksum
+	constexpr idx_t MIN_BLOB_LENGTH = sizeof(uint32_t) + 4 + sizeof(int64_t) + sizeof(uint32_t);
+	if (blob_length < MIN_BLOB_LENGTH) {
 		throw InvalidConfigurationException("Blob is too small (length of %d bytes) to be a deletion-vector-v1",
 		                                    blob_length);
 	}
+
+	//! The length field covers the magic bytes and the bitmaps, so it must equal the blob length minus the length
+	//! field and the checksum. Iceberg Java refuses a blob otherwise.
+	auto vector_size = BSwap(Load<uint32_t>(blob_start));
+	blob_start += sizeof(uint32_t);
+	idx_t expected_vector_size = blob_length - 2 * sizeof(uint32_t);
+	if (vector_size != expected_vector_size) {
+		throw InvalidInputException("Invalid bitmap data length (%d) in deletion vector of %d bytes, expected %d, the "
+		                            "DeletionVector is corrupted",
+		                            vector_size, blob_length, expected_vector_size);
+	}
+	//! Where the bitmaps end and the checksum starts
+	auto vector_end = blob_start + vector_size;
+
 	constexpr char DELETION_VECTOR_MAGIC[] = {'\xD1', '\xD3', '\x39', '\x64'};
 	char magic_bytes[4];
 
 	auto checksummed_data_start = blob_start;
 	memcpy(magic_bytes, blob_start, 4);
 	blob_start += 4;
-	vector_size -= 4;
-	D_ASSERT(blob_start < blob_end);
 
 	auto memcmp_res = memcmp(DELETION_VECTOR_MAGIC, magic_bytes, 4);
 	if (memcmp_res != 0) {
@@ -94,15 +104,10 @@ shared_ptr<IcebergDeletionVectorData> IcebergDeletionVectorData::FromBlob(const 
 
 	int64_t amount_of_bitmaps = Load<int64_t>(blob_start);
 	blob_start += sizeof(int64_t);
-	vector_size -= sizeof(int64_t);
-	D_ASSERT(blob_start < blob_end);
 
-	//! Every bitmap takes at least its key, so the declared count is bounded by the remaining bytes (the checksum
-	//! trails the bitmaps)
-	auto remaining_bytes = NumericCast<idx_t>(blob_end - blob_start);
-	if (remaining_bytes < sizeof(uint32_t) ||
-	    (amount_of_bitmaps < 0 ||
-	     NumericCast<idx_t>(amount_of_bitmaps) > (remaining_bytes - sizeof(uint32_t)) / sizeof(int32_t))) {
+	//! Every bitmap takes at least its key, so the declared count is bounded by the bytes before the checksum
+	auto remaining_bytes = NumericCast<idx_t>(vector_end - blob_start);
+	if (amount_of_bitmaps < 0 || NumericCast<idx_t>(amount_of_bitmaps) > remaining_bytes / sizeof(int32_t)) {
 		throw InvalidInputException("Invalid bitmap count (%d) in deletion vector of %d bytes, the DeletionVector is "
 		                            "corrupted",
 		                            amount_of_bitmaps, blob_length);
@@ -112,27 +117,32 @@ shared_ptr<IcebergDeletionVectorData> IcebergDeletionVectorData::FromBlob(const 
 	auto &result = *result_p;
 	result.bitmaps.reserve(amount_of_bitmaps);
 	for (int64_t i = 0; i < amount_of_bitmaps; i++) {
-		if (NumericCast<idx_t>(blob_end - blob_start) < sizeof(int32_t) + sizeof(uint32_t)) {
+		if (NumericCast<idx_t>(vector_end - blob_start) < sizeof(int32_t)) {
 			throw InvalidInputException("Deletion vector is truncated, the DeletionVector is corrupted");
 		}
 		auto key = Load<int32_t>(blob_start);
 		blob_start += sizeof(int32_t);
-		vector_size -= sizeof(int32_t);
-		D_ASSERT(blob_start < blob_end);
 
+		//! roaring reads at most the bytes before the checksum, and returns 0 if no valid bitmap fits in them
+		auto available = NumericCast<idx_t>(vector_end - blob_start);
 		size_t bitmap_size =
-		    roaring::api::roaring_bitmap_portable_deserialize_size((const char *)blob_start, vector_size);
+		    roaring::api::roaring_bitmap_portable_deserialize_size((const char *)blob_start, available);
+		if (bitmap_size == 0) {
+			throw InvalidInputException("Invalid bitmap in deletion vector, the DeletionVector is corrupted");
+		}
 		auto bitmap = roaring::Roaring::readSafe((const char *)blob_start, bitmap_size);
 		blob_start += bitmap_size;
-		vector_size -= bitmap_size;
-		D_ASSERT(blob_start < blob_end);
 		result.bitmaps.emplace(key, std::move(bitmap));
 	}
-	//! Compute and compare the checksum
+	//! The bitmaps must fill the blob up to the checksum
+	if (blob_start != vector_end) {
+		throw InvalidInputException("Deletion vector has %d bytes after its bitmaps, the DeletionVector is corrupted",
+		                            NumericCast<idx_t>(vector_end - blob_start));
+	}
+
+	//! Compute and compare the checksum, the last 4 bytes of the blob
 	auto checksummed_data_length = blob_start - checksummed_data_start;
 	auto stored_checksum = BSwap(Load<uint32_t>(blob_start));
-	blob_start += sizeof(uint32_t);
-	D_ASSERT(blob_start == blob_end);
 
 	CRC32 crc;
 	crc.Update(checksummed_data_start, checksummed_data_length);
