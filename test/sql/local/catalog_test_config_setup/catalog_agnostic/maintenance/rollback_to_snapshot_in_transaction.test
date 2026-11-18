@@ -203,5 +203,44 @@ select list(id order by id) from my_datalake.default.rollback_in_transaction;
 ----
 [1]
 
+# property changes in the same statement commit with the rollback as well. The three calls run at the same time
+# only because the aggregates are on top: a bare union all runs its branches one after the other.
+statement ok
+set threads=4;
+
+loop i 0 5
+
+statement ok
+insert into my_datalake.default.rollback_in_transaction values (2);
+
+statement ok
+set variable latest_snapshot = (
+	select snapshot_id from iceberg_snapshots(my_datalake.default.rollback_in_transaction) order by sequence_number desc limit 1
+);
+
+query II
+select count(*), bool_and(ok) from (
+	select previous_snapshot_id = getvariable('latest_snapshot') and current_snapshot_id = getvariable('first_snapshot') as ok
+	from iceberg_rollback_to_snapshot('my_datalake.default.rollback_in_transaction', getvariable('first_snapshot'))
+	union all
+	select Success = 1 from set_iceberg_table_properties(my_datalake.default.rollback_in_transaction, {'p{i}': 'v'})
+	union all
+	select Success = 1 from set_iceberg_table_properties(my_datalake.default.rollback_in_transaction, {'q{i}': 'v'})
+);
+----
+3	true
+
+query I
+select list(id order by id) from my_datalake.default.rollback_in_transaction;
+----
+[1]
+
+endloop
+
+query I
+select count(*) from iceberg_table_properties(my_datalake.default.rollback_in_transaction) where key similar to '[pq][0-9]+';
+----
+10
+
 statement ok
 drop table my_datalake.default.rollback_in_transaction;

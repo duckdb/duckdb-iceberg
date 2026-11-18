@@ -1,0 +1,71 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_table_updates_in_one_statement_multi_table.test
+# description: Table functions that change different tables in the same statement run on different threads; every table is committed
+# group: [transactions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env MULTI_TABLE_COMMIT_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+SET threads=8;
+
+foreach t 0 1 2 3 4 5 6 7
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.one_statement_{t};
+
+statement ok
+CREATE TABLE my_datalake.default.one_statement_{t} (a INTEGER);
+
+endloop
+
+# Every statement is a transaction of its own that registers the eight tables, one call per table. The branches run at
+# the same time only because count(*) is on top: a bare UNION ALL returns its branches in order and runs them one
+# after the other.
+loop i 0 30
+
+query I
+SELECT count(*) FROM (
+	SELECT * FROM set_iceberg_table_properties(my_datalake.default.one_statement_0, {'k{i}': 'v'})
+	UNION ALL
+	SELECT * FROM set_iceberg_table_properties(my_datalake.default.one_statement_1, {'k{i}': 'v'})
+	UNION ALL
+	SELECT * FROM set_iceberg_table_properties(my_datalake.default.one_statement_2, {'k{i}': 'v'})
+	UNION ALL
+	SELECT * FROM set_iceberg_table_properties(my_datalake.default.one_statement_3, {'k{i}': 'v'})
+	UNION ALL
+	SELECT * FROM set_iceberg_table_properties(my_datalake.default.one_statement_4, {'k{i}': 'v'})
+	UNION ALL
+	SELECT * FROM set_iceberg_table_properties(my_datalake.default.one_statement_5, {'k{i}': 'v'})
+	UNION ALL
+	SELECT * FROM set_iceberg_table_properties(my_datalake.default.one_statement_6, {'k{i}': 'v'})
+	UNION ALL
+	SELECT * FROM set_iceberg_table_properties(my_datalake.default.one_statement_7, {'k{i}': 'v'})
+);
+----
+8
+
+endloop
+
+# every table has every property
+query IIIIIIII
+SELECT
+	(SELECT count(*) FROM iceberg_table_properties(my_datalake.default.one_statement_0) WHERE key SIMILAR TO 'k[0-9]+'),
+	(SELECT count(*) FROM iceberg_table_properties(my_datalake.default.one_statement_1) WHERE key SIMILAR TO 'k[0-9]+'),
+	(SELECT count(*) FROM iceberg_table_properties(my_datalake.default.one_statement_2) WHERE key SIMILAR TO 'k[0-9]+'),
+	(SELECT count(*) FROM iceberg_table_properties(my_datalake.default.one_statement_3) WHERE key SIMILAR TO 'k[0-9]+'),
+	(SELECT count(*) FROM iceberg_table_properties(my_datalake.default.one_statement_4) WHERE key SIMILAR TO 'k[0-9]+'),
+	(SELECT count(*) FROM iceberg_table_properties(my_datalake.default.one_statement_5) WHERE key SIMILAR TO 'k[0-9]+'),
+	(SELECT count(*) FROM iceberg_table_properties(my_datalake.default.one_statement_6) WHERE key SIMILAR TO 'k[0-9]+'),
+	(SELECT count(*) FROM iceberg_table_properties(my_datalake.default.one_statement_7) WHERE key SIMILAR TO 'k[0-9]+');
+----
+30	30	30	30	30	30	30	30
+
+foreach t 0 1 2 3 4 5 6 7
+
+statement ok
+DROP TABLE my_datalake.default.one_statement_{t};
+
+endloop

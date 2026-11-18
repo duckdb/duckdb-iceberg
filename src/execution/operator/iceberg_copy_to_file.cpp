@@ -7,6 +7,7 @@
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "execution/operator/iceberg_insert.hpp"
 
 namespace duckdb {
@@ -72,7 +73,13 @@ void IcebergCopyToFile::EnsureTableCreated(ClientContext &context) const {
 	auto &catalog = schema_entry.catalog;
 	auto transaction = catalog.GetCatalogTransaction(context);
 
-	auto table = schema_entry.CreateTable(transaction, context, *op.ctas_info);
+	optional_ptr<CatalogEntry> table;
+	{
+		//! The table is created while the statement runs: another operator or table function of the statement may
+		//! change tables of this transaction at the same time
+		lock_guard<mutex> table_update_guard(IcebergTransaction::Get(context, catalog).table_update_lock);
+		table = schema_entry.CreateTable(transaction, context, *op.ctas_info);
+	}
 	if (!table) {
 		throw InternalException("Iceberg CTAS: CreateTable request failed");
 	}

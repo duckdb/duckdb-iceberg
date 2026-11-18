@@ -211,19 +211,22 @@ static void RemoveIcebergTablePropertiesFunction(ClientContext &context, TableFu
 	auto iceberg_table = bind_data.iceberg_table;
 	auto &table_info = iceberg_table->table_info;
 	auto &iceberg_transaction = IcebergTransaction::Get(context, iceberg_table->catalog);
+	idx_t property_count = 0;
 	ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTable &tbl) {
 		auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
 		transaction_data.TableRemoveProperties(bind_data.remove_properties);
 		for (auto &property : bind_data.remove_properties) {
 			tbl.GetMetadataMutable().table_properties.erase(property);
 		}
+		//! Read under the lock: another function of this statement may be changing this table
+		property_count = table_info.GetMetadata().table_properties.size();
 	});
 
 	auto schema = iceberg_table->schema.name;
 	auto table_name = iceberg_table->name;
 	global_state.properties_removed = true;
 	// set success output, failure happens during transaction commit.
-	FlatVector::GetDataMutable<int64_t>(output.data[0])[0] = table_info.GetMetadata().table_properties.size();
+	FlatVector::GetDataMutable<int64_t>(output.data[0])[0] = NumericCast<int64_t>(property_count);
 	output.SetChildCardinality(1);
 }
 
