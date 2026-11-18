@@ -505,8 +505,6 @@ TEST_CASE("Iceberg deletion vector blobs that are cut short or padded are refuse
 			IcebergDeletionVectorData::FromBlob(file, cut.data(), cut.size());
 		} catch (InvalidInputException &) {
 			return true;
-		} catch (InvalidConfigurationException &) {
-			return true;
 		}
 		return false;
 	};

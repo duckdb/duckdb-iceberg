@@ -73,8 +73,7 @@ shared_ptr<IcebergDeletionVectorData> IcebergDeletionVectorData::FromBlob(const 
 	//! The length field, the magic bytes, the bitmap count and the checksum
 	constexpr idx_t MIN_BLOB_LENGTH = sizeof(uint32_t) + 4 + sizeof(int64_t) + sizeof(uint32_t);
 	if (blob_length < MIN_BLOB_LENGTH) {
-		throw InvalidConfigurationException("Blob is too small (length of %d bytes) to be a deletion-vector-v1",
-		                                    blob_length);
+		throw InvalidInputException("Blob is too small (length of %d bytes) to be a deletion-vector-v1", blob_length);
 	}
 
 	//! The length field covers the magic bytes and the bitmaps, so it must equal the blob length minus the length
@@ -130,7 +129,12 @@ shared_ptr<IcebergDeletionVectorData> IcebergDeletionVectorData::FromBlob(const 
 		if (bitmap_size == 0) {
 			throw InvalidInputException("Invalid bitmap in deletion vector, the DeletionVector is corrupted");
 		}
-		auto bitmap = roaring::Roaring::readSafe((const char *)blob_start, bitmap_size);
+		//! readSafe throws a plain std::runtime_error when it fails, so call the C function and check for NULL
+		auto bitmap_p = roaring::api::roaring_bitmap_portable_deserialize_safe((const char *)blob_start, bitmap_size);
+		if (!bitmap_p) {
+			throw InvalidInputException("Invalid bitmap in deletion vector, the DeletionVector is corrupted");
+		}
+		roaring::Roaring bitmap(bitmap_p);
 		blob_start += bitmap_size;
 		result.bitmaps.emplace(key, std::move(bitmap));
 	}
