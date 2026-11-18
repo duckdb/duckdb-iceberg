@@ -2150,6 +2150,17 @@
         "test/sql/catalog/nested_schema/nested_show_tables.test",
         "test/sql/tpch/dbgen_nested_schema.test"
       ]
+    },
+    {
+      "reason": "Temporary DuckDB core regression: Catalog::TryLookupEntry rejects nested-schema candidates before qualified method-call and replacement-scan fallbacks; ordinary alias.column.function() calls and dotted file paths fail when Iceberg is the default catalog",
+      "paths": [
+        "test/sql/binder/alias_qualification_select_projection.test",
+        "test/sql/binder/qualified_alias_method_call.test",
+        "test/sql/binder/test_function_chaining_alias.test",
+        "test/sql/catalog/function/query_table_file_paths.test",
+        "test/sql/join/non_inner_join_subquery_binding.test",
+        "test/sql/parser/function_chaining.test"
+      ]
     }
   ]
 }
