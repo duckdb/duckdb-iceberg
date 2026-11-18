@@ -219,7 +219,7 @@ static void RemoveIcebergTablePropertiesFunction(ClientContext &context, TableFu
 			tbl.GetMetadataMutable().table_properties.erase(property);
 		}
 		//! Read under the lock: another function of this statement may be changing this table
-		property_count = table_info.GetMetadata().table_properties.size();
+		property_count = tbl.GetMetadata().table_properties.size();
 	});
 
 	auto schema = iceberg_table->schema.name;

@@ -14,6 +14,17 @@ drop table if exists my_datalake.default.rollback_in_transaction;
 statement ok
 create table my_datalake.default.rollback_in_transaction (id INTEGER);
 
+# An empty table has no previous snapshot. A failed rollback leaves it empty and writable.
+statement error
+select * from iceberg_rollback_to_snapshot('my_datalake.default.rollback_in_transaction', 42);
+----
+Cannot roll back to unknown snapshot id: 42
+
+query I
+select count(*) from iceberg_snapshots(my_datalake.default.rollback_in_transaction);
+----
+0
+
 statement ok
 insert into my_datalake.default.rollback_in_transaction values (1);
 
@@ -69,6 +80,29 @@ select * from iceberg_rollback_to_snapshot('my_datalake.default.rollback_in_tran
 
 statement ok
 ROLLBACK;
+
+# The same rejection must be atomic when the two rollbacks execute in parallel.
+statement ok
+set threads=4;
+
+statement error
+select count(*) from (
+	select * from iceberg_rollback_to_snapshot('my_datalake.default.rollback_in_transaction', getvariable('first_snapshot'))
+	union all
+	select * from iceberg_rollback_to_snapshot('my_datalake.default.rollback_in_transaction', getvariable('first_snapshot'))
+);
+----
+it was already changed in this transaction
+
+query I
+select list(id order by id) from my_datalake.default.rollback_in_transaction;
+----
+[1, 2]
+
+query I
+select count(*) from iceberg_snapshots(my_datalake.default.rollback_in_transaction);
+----
+2
 
 statement ok
 BEGIN;
