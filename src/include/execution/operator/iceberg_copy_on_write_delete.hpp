@@ -39,10 +39,6 @@ public:
 
 	//! The filename and file_row_number columns of the build side
 	vector<idx_t> match_row_id_indexes;
-	//! The filename and file_row_number columns of the probe side
-	vector<idx_t> keep_row_id_indexes;
-	//! The probe-side columns that make up the output (the table's columns), in output order
-	vector<idx_t> keep_column_indexes;
 	//! The probe-side scan, if it is a plain table scan: it gets a runtime filter on the matched files
 	optional_ptr<PhysicalTableScan> keep_scan;
 	ProjectionIndex keep_scan_filename_index;

@@ -110,9 +110,7 @@ optional_ptr<PhysicalTableScan> FindTableScan(PhysicalOperator &plan) {
 
 //! Bind `SELECT * FROM <table>`, then add the filename and file_row_number virtual columns to its scan. They are
 //! added by column id, not by name, so a table column that happens to be called `filename` cannot shadow them.
-//! row_id_indexes receives the positions of the filename and file_row_number columns in the projection's output.
-unique_ptr<LogicalOperator> BindKeepScan(ClientContext &context, IcebergTableSchemaVersion &table,
-                                         vector<idx_t> &row_id_indexes) {
+unique_ptr<LogicalOperator> BindKeepScan(ClientContext &context, IcebergTableSchemaVersion &table) {
 	auto select = make_uniq<SelectNode>();
 	select->select_list.push_back(make_uniq<StarExpression>());
 	auto table_ref = make_uniq<BaseTableRef>();
@@ -138,7 +136,6 @@ unique_ptr<LogicalOperator> BindKeepScan(ClientContext &context, IcebergTableSch
 		auto &column_ids = get.GetMutableColumnIds();
 		column_ids.emplace_back(virtual_column);
 		ColumnBinding binding(get.table_index, ProjectionIndex(column_ids.size() - 1));
-		row_id_indexes.push_back(projection.expressions.size());
 		projection.expressions.push_back(
 		    make_uniq<BoundColumnRefExpression>(entry->second.name, entry->second.type, binding));
 	}
@@ -176,34 +173,20 @@ PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanDelete(ClientContext &cont
 
 	//! Probe side: the whole table again, so the rows of each matched file that survive can be rewritten. It is
 	//! planned here, after optimization, like PhysicalPlanGenerator::Plan does for a full statement.
-	vector<idx_t> keep_row_id_indexes;
-	auto keep_logical_plan = BindKeepScan(context, table, keep_row_id_indexes);
+	auto keep_logical_plan = BindKeepScan(context, table);
 	ColumnBindingResolver resolver;
 	resolver.VisitOperator(*keep_logical_plan);
 	keep_logical_plan->ResolveOperatorTypes();
 	auto &keep_plan = planner.CreatePlan(*keep_logical_plan);
 
-	//! The output is every probe-side column except filename and file_row_number, in the same order
-	auto &keep_types = keep_plan.GetTypes();
-	D_ASSERT(keep_row_id_indexes.size() == 2);
-	D_ASSERT(keep_types[keep_row_id_indexes[0]].id() == LogicalTypeId::VARCHAR);
-	D_ASSERT(keep_types[keep_row_id_indexes[1]].id() == LogicalTypeId::BIGINT);
-	vector<idx_t> keep_column_indexes;
-	vector<LogicalType> output_types;
-	for (idx_t i = 0; i < keep_types.size(); i++) {
-		if (i == keep_row_id_indexes[0] || i == keep_row_id_indexes[1]) {
-			continue;
-		}
-		keep_column_indexes.push_back(i);
-		output_types.push_back(keep_types[i]);
-	}
+	auto keep_types = keep_plan.GetTypes();
+	D_ASSERT(keep_types.size() > 2);
+	vector<LogicalType> output_types(keep_types.begin(), keep_types.end() - 2);
 
 	auto &filter = planner
 	                   .Make<IcebergCopyOnWriteDeleteFilter>(std::move(output_types), keep_plan, match_plan,
 	                                                         std::move(match_row_id_indexes))
 	                   .Cast<IcebergCopyOnWriteDeleteFilter>();
-	filter.keep_row_id_indexes = std::move(keep_row_id_indexes);
-	filter.keep_column_indexes = std::move(keep_column_indexes);
 	filter.keep_logical_plan = std::move(keep_logical_plan);
 
 	auto keep_scan = FindTableScan(keep_plan);
@@ -335,14 +318,16 @@ OperatorResultType IcebergCopyOnWriteDeleteFilter::Execute(ExecutionContext &con
 	auto &state = state_p.Cast<CopyOnWriteDeleteOperatorState>();
 	auto &rows_by_file = GetDeletes().rows_by_file;
 
-	D_ASSERT(input.ColumnCount() == keep_column_indexes.size() + 2);
-	auto &file_name_vector = input.data[keep_row_id_indexes[0]];
+	//! The probe side emits the table's columns followed by filename and file_row_number
+	auto column_count = types.size();
+	D_ASSERT(input.ColumnCount() == column_count + 2);
 
+	auto &file_name_vector = input.data[column_count];
 	UnifiedVectorFormat file_name_data;
 	file_name_vector.ToUnifiedFormat(file_name_data);
 	auto file_names = UnifiedVectorFormat::GetData<string_t>(file_name_data);
 	UnifiedVectorFormat row_number_data;
-	input.data[keep_row_id_indexes[1]].ToUnifiedFormat(row_number_data);
+	input.data[column_count + 1].ToUnifiedFormat(row_number_data);
 	auto row_numbers = UnifiedVectorFormat::GetData<int64_t>(row_number_data);
 
 	//! A file with no matching row stays as it is, so none of its rows are kept for the rewrite
@@ -374,8 +359,8 @@ OperatorResultType IcebergCopyOnWriteDeleteFilter::Execute(ExecutionContext &con
 		}
 	}
 
-	for (idx_t col = 0; col < keep_column_indexes.size(); col++) {
-		chunk.data[col].Slice(input.data[keep_column_indexes[col]], state.keep, kept);
+	for (idx_t col = 0; col < column_count; col++) {
+		chunk.data[col].Slice(input.data[col], state.keep, kept);
 	}
 	chunk.SetChildCardinality(kept);
 	return OperatorResultType::NEED_MORE_INPUT;
