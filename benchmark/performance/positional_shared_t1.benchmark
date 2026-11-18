@@ -1,0 +1,7 @@
+# name: benchmark/performance/positional_shared_t1.benchmark
+# description: positional delete files shared by eight data files, one thread and no async threads
+# group: [performance]
+
+template benchmark/performance/positional_shared_delete.benchmark.in
+THREADS=1
+ASYNC_THREADS=0

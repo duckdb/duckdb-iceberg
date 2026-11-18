@@ -202,7 +202,10 @@ static void CreateTableRequirements(DatabaseInstance &db, ClientContext &context
 		auto uuid_requirement = AssertTableUUIDRequirement(transaction_data.initial_table_uuid);
 		uuid_requirement.CreateRequirement(db, context, commit_state);
 	}
-	if (current_snapshot && !transaction_data.alters.empty()) {
+	if (transaction_data.replaces_table) {
+		AssertRefSnapshotId requirement(transaction_data.initial_snapshot_id);
+		requirement.CreateRequirement(db, context, commit_state);
+	} else if (current_snapshot && !transaction_data.alters.empty()) {
 		commit_state.table_change.requirements.push_back(CreateAssertRefSnapshotIdRequirement(*current_snapshot));
 	} else if (!current_snapshot && !transaction_data.alters.empty() && !has_assert_create) {
 		commit_state.table_change.requirements.push_back(CreateAssertNoSnapshotRequirement());
@@ -210,10 +213,8 @@ static void CreateTableRequirements(DatabaseInstance &db, ClientContext &context
 }
 
 //! Safe to re-apply a DELETE on retry only if every commit in (base, tip] was a
-//! pure append; anything else may have removed/rewritten the target data. Ranges
-//! over sequence numbers (parent links aren't populated on read snapshots). A
-//! scan/tip snapshot the catalog doesn't expose (e.g. no history) can't be
-//! proven safe, so it counts as not reappliable.
+//! pure append and the tip descends from the scanned snapshot. Keep the sequence
+//! range validation, then verify ancestry to reject replacement lineage breaks.
 static bool DeleteCanReapply(const IcebergTableMetadata &metadata, int64_t base_snapshot_id, int64_t tip_snapshot_id) {
 	if (base_snapshot_id == tip_snapshot_id) {
 		return true;
@@ -238,6 +239,19 @@ static bool DeleteCanReapply(const IcebergTableMetadata &metadata, int64_t base_
 			continue;
 		}
 		if (snapshot.operation != IcebergSnapshotOperationType::APPEND) {
+			return false;
+		}
+	}
+	// Replacement can publish a newer append with no parent. Sequence order alone
+	// does not prove that the tip continues the history the DELETE scanned.
+	unordered_set<int64_t> visited;
+	auto ancestor = tip;
+	while (ancestor->snapshot_id != base_snapshot_id) {
+		if (!ancestor->parent_snapshot_id || !visited.insert(ancestor->snapshot_id).second) {
+			return false;
+		}
+		ancestor = metadata.FindSnapshotByIdInternal(*ancestor->parent_snapshot_id);
+		if (!ancestor) {
 			return false;
 		}
 	}
@@ -524,6 +538,7 @@ void IcebergTransaction::Commit() {
 	if (view_operations && (view_operations > 1 || HasTableUpdate() || !created_schemas.Empty() ||
 	                        !deleted_schemas.empty() || !schema_property_updates.empty())) {
 		CleanupFiles();
+		DropCreatedTables();
 		throw TransactionException("Iceberg REST Catalog cannot commit view changes atomically with other catalog "
 		                           "changes; commit each view create or drop separately");
 	}
@@ -561,6 +576,7 @@ void IcebergTransaction::Commit() {
 		ErrorData error(ex);
 		commit_state_unknown = CommitStateUnknown(error);
 		CleanupFiles();
+		DropCreatedTables();
 		temp_con.Rollback();
 		EvictCachedTables();
 		error.Throw("Failed to commit Iceberg transaction: ");
@@ -966,8 +982,70 @@ void IcebergTransaction::EvictCachedTables() {
 	    transaction_update);
 }
 
+void IcebergTransaction::TableCreatedInCatalog(const string &table_key, const vector<string> &namespace_items,
+                                               const string &name, shared_ptr<const IcebergLoadTableResponse> created) {
+	created_tables.push_back({table_key, namespace_items, name, std::move(created)});
+}
+
+//! Whether the catalog still holds the table version that the create request returned.
+static bool IsCreatedVersion(const rest_api_objects::LoadTableResult &current,
+                             const rest_api_objects::LoadTableResult &created) {
+	if (!current.metadata_location || !created.metadata_location) {
+		//! Without a metadata location, a commit by another transaction cannot be ruled out.
+		return false;
+	}
+	if (*current.metadata_location != *created.metadata_location) {
+		return false;
+	}
+	return current.metadata.table_uuid == created.metadata.table_uuid;
+}
+
+void IcebergTransaction::DropCreatedTables() {
+	if (created_tables.empty()) {
+		return;
+	}
+	if (commit_state_unknown) {
+		// Commit may have landed (CommitStateUnknownException); keep the tables.
+		return;
+	}
+	ScopedTransaction temp_con(db);
+	auto &temp_context = temp_con.GetContext();
+	for (auto &table : created_tables) {
+		auto state = GetLatestTableState(table.table_key);
+		if (state && state->IsAlive()) {
+			catalog.table_request_cache.EvictIfCurrent(state->GetInfo());
+		}
+		auto table_name = IcebergLogType::Redact(temp_context, table.table_key);
+		try {
+			//! The table has been visible to other transactions since it was created, so it is dropped only while
+			//! the catalog still holds the version that the create request returned.
+			auto current = IcebergLoadTableRequest(table.namespace_items, table.name).Execute(temp_context, catalog);
+			if (current.error_) {
+				DUCKDB_LOG(temp_context, IcebergLogType,
+				           "Iceberg Transaction Cleanup, did not drop table '%s': loading it returned %s", table_name,
+				           EnumUtil::ToString(current.status_));
+				continue;
+			}
+			if (!IsCreatedVersion(current.result_->result, table.created->result)) {
+				DUCKDB_LOG(temp_context, IcebergLogType,
+				           "Iceberg Transaction Cleanup, did not drop table '%s': the catalog does not report the "
+				           "version this transaction created",
+				           table_name);
+				continue;
+			}
+			IRCAPI::CommitTableDelete(temp_context, catalog, table.namespace_items, table.name);
+			DUCKDB_LOG(temp_context, IcebergLogType, "Iceberg Transaction Cleanup, dropped table '%s'", table_name);
+		} catch (std::exception &ex) {
+			DUCKDB_LOG(temp_context, IcebergLogType, "Iceberg Transaction Cleanup, failed to drop table '%s': %s",
+			           table_name, ex.what());
+		}
+	}
+	created_tables.clear();
+}
+
 void IcebergTransaction::Rollback() {
 	CleanupFiles();
+	DropCreatedTables();
 }
 
 IcebergTransaction &IcebergTransaction::Get(ClientContext &context, Catalog &catalog) {
@@ -1082,11 +1160,19 @@ IcebergTable &IcebergTransaction::RenameTable(IcebergTable &table, const string 
 	return state->GetInfo();
 }
 
-void ApplyTableUpdate(IcebergTable &table_info, IcebergTransaction &iceberg_transaction,
-                      const std::function<void(IcebergTable &)> &callback) {
+void ApplyTableUpdate(unique_lock<mutex> &table_update_guard, IcebergTable &table_info,
+                      IcebergTransaction &iceberg_transaction, const std::function<void(IcebergTable &)> &callback) {
+	D_ASSERT(table_update_guard.owns_lock() && table_update_guard.mutex() == &iceberg_transaction.table_update_lock);
 	auto &alter = iceberg_transaction.GetOrCreateAlter();
 	auto &updated_table = alter.GetOrInitializeTable(table_info);
 	callback(updated_table);
+}
+
+void ApplyTableUpdate(IcebergTable &table_info, IcebergTransaction &iceberg_transaction,
+                      const std::function<void(IcebergTable &)> &callback) {
+	//! Several operators or table functions of one statement can change tables of this transaction concurrently
+	unique_lock<mutex> guard(iceberg_transaction.table_update_lock);
+	ApplyTableUpdate(guard, table_info, iceberg_transaction, callback);
 }
 
 } // namespace duckdb

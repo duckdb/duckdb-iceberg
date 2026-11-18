@@ -1,0 +1,256 @@
+# name: test/sql/local/native_catalog/create_table_rollback.test
+# description: A table created without stage-create is removed from the catalog when its transaction does not commit
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+ATTACH '' AS eager_catalog (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none', STAGE_CREATE_TABLES false);
+
+statement ok
+CREATE SCHEMA eager_catalog.create_rollback;
+
+# A CTAS that fails while it runs has already created its table in the catalog
+statement error
+CREATE TABLE eager_catalog.create_rollback.failed_ctas AS
+SELECT CAST(x AS INTEGER) AS id FROM (VALUES ('1'), ('not_a_number')) AS t(x);
+----
+Conversion Error
+
+query I
+SELECT status FROM iceberg_test_catalog_request('GET', '/v1/namespaces/create_rollback/tables/failed_ctas', NULL);
+----
+404
+
+# so a retry creates the table and writes its rows
+statement ok
+CREATE TABLE IF NOT EXISTS eager_catalog.create_rollback.failed_ctas AS
+SELECT CAST(x AS INTEGER) AS id FROM (VALUES ('1'), ('2')) AS t(x);
+
+query I
+SELECT id FROM eager_catalog.create_rollback.failed_ctas ORDER BY id;
+----
+1
+2
+
+# An explicit rollback removes the table as well
+statement ok
+BEGIN;
+
+statement ok
+CREATE TABLE eager_catalog.create_rollback.rolled_back (id INTEGER);
+
+query I
+SELECT status FROM iceberg_test_catalog_request('GET', '/v1/namespaces/create_rollback/tables/rolled_back', NULL);
+----
+200
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT status FROM iceberg_test_catalog_request('GET', '/v1/namespaces/create_rollback/tables/rolled_back', NULL);
+----
+404
+
+statement ok
+CREATE TABLE eager_catalog.create_rollback.rolled_back (id INTEGER);
+
+# A committed table stays
+statement ok
+BEGIN;
+
+statement ok
+CREATE TABLE eager_catalog.create_rollback.committed (id INTEGER);
+
+statement ok
+INSERT INTO eager_catalog.create_rollback.committed VALUES (1), (2);
+
+statement ok
+COMMIT;
+
+query I
+SELECT status FROM iceberg_test_catalog_request('GET', '/v1/namespaces/create_rollback/tables/committed', NULL);
+----
+200
+
+query I
+SELECT id FROM eager_catalog.create_rollback.committed ORDER BY id;
+----
+1
+2
+
+# A rollback does not drop a table that another transaction has committed to since it was created
+statement ok con1
+BEGIN;
+
+statement ok con1
+CREATE TABLE eager_catalog.create_rollback.shared (id INTEGER);
+
+# con2 never runs BEGIN: its INSERT is committed before con1 rolls back
+statement ok con2
+INSERT INTO eager_catalog.create_rollback.shared VALUES (42);
+
+statement ok con1
+ROLLBACK;
+
+query I
+SELECT id FROM eager_catalog.create_rollback.shared;
+----
+42
+
+# A statement refused after its create request was sent leaves no table either
+statement ok
+CREATE TABLE eager_catalog.create_rollback.existing (id INTEGER);
+
+statement ok
+BEGIN;
+
+statement ok
+DROP TABLE eager_catalog.create_rollback.existing;
+
+statement error
+CREATE TABLE eager_catalog.create_rollback.refused (id INTEGER);
+----
+mixes table updates
+
+# probed from con2: the refused statement aborted this connection's transaction
+query I con2
+SELECT status FROM iceberg_test_catalog_request('GET', '/v1/namespaces/create_rollback/tables/refused', NULL);
+----
+200
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT status FROM iceberg_test_catalog_request('GET', '/v1/namespaces/create_rollback/tables/refused', NULL);
+----
+404
+
+query I
+SELECT status FROM iceberg_test_catalog_request('GET', '/v1/namespaces/create_rollback/tables/existing', NULL);
+----
+200
+
+# A table that is already gone when its creator rolls back is not an error
+statement ok
+CALL enable_logging('Iceberg', storage='memory');
+
+statement ok con1
+BEGIN;
+
+statement ok con1
+CREATE TABLE eager_catalog.create_rollback.gone (id INTEGER);
+
+# con2 is in autocommit: the table is dropped before con1 rolls back
+statement ok con2
+DROP TABLE eager_catalog.create_rollback.gone;
+
+statement ok con1
+ROLLBACK;
+
+query I
+SELECT status FROM iceberg_test_catalog_request('GET', '/v1/namespaces/create_rollback/tables/gone', NULL);
+----
+404
+
+query I
+SELECT count(*) FROM duckdb_logs WHERE type = 'Iceberg'
+	AND message LIKE 'Iceberg Transaction Cleanup, did not drop table%loading it returned NotFound_404';
+----
+1
+
+# A catalog that returns no metadata-location gives nothing to compare, so the table is kept.
+# The create response is scripted from the body of a table that already exists, minus its metadata-location.
+statement ok
+CREATE TABLE eager_catalog.create_rollback.no_location (id INTEGER);
+
+statement ok
+SET VARIABLE created_body = (
+	SELECT json_merge_patch(body, '{"metadata-location": null}')
+	FROM iceberg_test_catalog_request('GET', '/v1/namespaces/create_rollback/tables/no_location', NULL)
+);
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	json_object('method', 'GET', 'path', '/v1/namespaces/create_rollback/tables/no_location', 'status', 404,
+		'body', json_object('error',
+			json_object('message', 'scripted', 'type', 'NoSuchTableException', 'code', 404)))::VARCHAR);
+----
+204
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	json_object('method', 'POST', 'path', '/v1/namespaces/create_rollback/tables', 'status', 200,
+		'body', json(getvariable('created_body')))::VARCHAR);
+----
+204
+
+statement ok con1
+BEGIN;
+
+statement ok con1
+CREATE TABLE eager_catalog.create_rollback.no_location (id INTEGER);
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+# con2 is in autocommit: another writer commits to the table
+statement ok con2
+INSERT INTO eager_catalog.create_rollback.no_location VALUES (42);
+
+statement ok
+SET VARIABLE current_body = (
+	SELECT json_merge_patch(body, '{"metadata-location": null}')
+	FROM iceberg_test_catalog_request('GET', '/v1/namespaces/create_rollback/tables/no_location', NULL)
+);
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	json_object('method', 'GET', 'path', '/v1/namespaces/create_rollback/tables/no_location', 'status', 200,
+		'body', json(getvariable('current_body')))::VARCHAR);
+----
+204
+
+statement ok con1
+ROLLBACK;
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+query I
+SELECT status FROM iceberg_test_catalog_request('GET', '/v1/namespaces/create_rollback/tables/no_location', NULL);
+----
+200
+
+query I
+SELECT id FROM eager_catalog.create_rollback.no_location;
+----
+42
+
+# With a staleness window the created table is cached, and the rollback removes it from the cache
+statement ok
+ATTACH '' AS stale_catalog (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none', STAGE_CREATE_TABLES false,
+	MAX_TABLE_STALENESS '1 hour');
+
+statement error
+CREATE TABLE stale_catalog.create_rollback.cached AS
+SELECT CAST(x AS INTEGER) AS id FROM (VALUES ('1'), ('not_a_number')) AS t(x);
+----
+Conversion Error
+
+statement error
+SELECT * FROM stale_catalog.create_rollback.cached;
+----
+does not exist

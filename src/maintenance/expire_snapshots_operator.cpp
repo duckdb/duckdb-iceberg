@@ -90,6 +90,9 @@ void ApplyExpirationToTransactionMetadata(IcebergTableMetadata &metadata, const 
 ExpireSnapshotsPlan ExecuteSnapshotExpiration(ClientContext &context, const ExpireSnapshotsPlanInput &input) {
 	auto &catalog = GetMaintenanceIcebergCatalog(context, input.table_name, EXPIRE_SNAPSHOTS_NAME);
 	auto &transaction = IcebergTransaction::Get(context, catalog);
+	//! Held from loading the table to staging the removal, so that a second expiration of the same table in this
+	//! statement reuses the pinned table instead of loading it again.
+	unique_lock<mutex> guard(transaction.table_update_lock);
 	//! Planning and staging must use the same transaction-visible table state.
 	auto &visible_table = LoadTransactionVisibleTable(context, input.table_name, catalog, transaction);
 	if (visible_table.transaction_data) {
@@ -103,7 +106,7 @@ ExpireSnapshotsPlan ExecuteSnapshotExpiration(ClientContext &context, const Expi
 		return plan;
 	}
 
-	ApplyTableUpdate(visible_table, transaction, [&](IcebergTable &table) {
+	ApplyTableUpdate(guard, visible_table, transaction, [&](IcebergTable &table) {
 		auto &transaction_data = table.GetOrCreateTransactionData(transaction);
 		transaction_data.TableRemoveSnapshotRefs(plan.refs_to_remove);
 		if (!plan.to_expire.empty()) {

@@ -554,53 +554,9 @@ void IcebergAvroMultiFileReader::FinalizeChunk(ClientContext &context, const Mul
 	auto scan_info = shared_ptr_cast<TableFunctionInfo, IcebergAvroScanInfo>(function_info);
 	auto &metadata = scan_info->metadata;
 	switch (scan_info->type) {
-	case AvroScanInfoType::MANIFEST_FILE: {
-		auto &manifest_scan_info = scan_info->Cast<IcebergManifestFileScanInfo>();
-		auto manifest_file_idx = manifest_scan_info.GetManifestIndex(reader.file_list_idx.GetIndex());
-		auto &manifest_file = manifest_scan_info.manifest_files[manifest_file_idx];
-
-		//! InitializeReader publishes this immutable value under the per-manifest lock
-		//! before this reader can produce chunks.
-		D_ASSERT(manifest_file.manifest_metadata);
-		auto &manifest_metadata = *manifest_file.manifest_metadata;
-		auto spec_id = manifest_metadata.partition_spec_id;
-		auto partition_spec_p = metadata.FindPartitionSpecById(spec_id);
-		if (!partition_spec_p) {
-			throw InvalidConfigurationException("Manifest file '%s' key-value metadata references partition-spec-id: "
-			                                    "%d, but no spec with that ID exists in the metadata",
-			                                    manifest_file.GetFile().manifest_path, spec_id);
-		}
-		auto &partition_spec = *partition_spec_p;
-
-		IcebergManifestReaderInput input(manifest_metadata, partition_spec, metadata.iceberg_version);
-
-		vector<IcebergManifestEntry> decoded_entries;
-		manifest_file::ManifestReader::ReadChunk(output_chunk, manifest_scan_info.partition_field_id_to_type, input,
-		                                         decoded_entries);
-		manifest_scan_info.manifest_entries_converted += decoded_entries.size();
-
-		lock_guard<mutex> manifest_guard(manifest_scan_info.GetManifestLock(manifest_file_idx));
-		auto &manifest_entries = manifest_file.GetOrCreateManifestEntries();
-		idx_t start_index = manifest_entries.size();
-		if (manifest_scan_info.read_state) {
-			//! Streaming consumers retain references into this vector after publication. AvroScan
-			//! reserves the exact manifest-list file count for selected misses, so exceeding the
-			//! reserved capacity means the advertised count was wrong; appending would invalidate those
-			//! references.
-			if (decoded_entries.size() > manifest_entries.capacity() - manifest_entries.size()) {
-				throw InvalidConfigurationException("Manifest '%s' contains more entries than its manifest-list counts",
-				                                    manifest_file.GetFile().manifest_path);
-			}
-		}
-		for (auto &entry : decoded_entries) {
-			manifest_entries.push_back(std::move(entry));
-		}
-		if (manifest_scan_info.read_state) {
-			auto &read_state = *manifest_scan_info.read_state;
-			read_state.PushBatch(ManifestReadBatch(manifest_file_idx, start_index, manifest_entries.size()));
-		}
+	case AvroScanInfoType::MANIFEST_FILE:
+		//! Decoded in ManifestReader::Read, which knows the Avro block of the chunk
 		break;
-	}
 	case AvroScanInfoType::MANIFEST_LIST: {
 		auto &manifest_scan_info = scan_info->Cast<IcebergManifestListScanInfo>();
 		manifest_list::ManifestListReader::ReadChunk(output_chunk, metadata.iceberg_version, manifest_scan_info.result);

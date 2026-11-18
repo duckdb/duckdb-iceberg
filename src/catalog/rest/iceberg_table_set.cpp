@@ -468,6 +468,10 @@ IcebergTable &IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCat
 	    IRCAPI::CommitNewTable(context, catalog, schema.namespace_items, create_table_request));
 
 	auto key = IcebergTable::GetTableKey(catalog, schema.namespace_items, info.GetTableName().GetIdentifierName());
+	if (!catalog.attach_options.stage_create_tables) {
+		iceberg_transaction.TableCreatedInCatalog(key, schema.namespace_items, info.GetTableName().GetIdentifierName(),
+		                                          new_table_result);
+	}
 	auto load_table_result = new_table_result;
 	auto &alter_update = iceberg_transaction.GetOrCreateAlter();
 	auto &table_info = alter_update.CreateTable(

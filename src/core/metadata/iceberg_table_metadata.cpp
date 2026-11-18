@@ -1,6 +1,7 @@
 #include "core/metadata/iceberg_table_metadata.hpp"
 
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/open_file_info.hpp"
 
 #include "common/iceberg_utils.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
@@ -382,11 +383,20 @@ int32_t IcebergTableMetadata::GetLastPartitionFieldId() const {
 
 rest_api_objects::TableMetadata IcebergTableMetadata::Parse(const OpenFileInfo &file, FileSystem &fs,
                                                             const string &metadata_compression_codec) {
+	// Metadata files are immutable, unlike version-hint.text. Reuse cached bytes without reopening for validation.
+	// Preserve an explicit per-file validation policy.
+	OpenFileInfo metadata_file = file;
+	metadata_file.extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
+	if (file.extended_info) {
+		*metadata_file.extended_info = *file.extended_info;
+	}
+	metadata_file.extended_info->options.emplace("validate_external_file_cache", Value::BOOLEAN(false));
+
 	string json_content;
 	if (metadata_compression_codec == "gzip" || StringUtil::EndsWith(file.path, "gz.metadata.json")) {
-		json_content = IcebergUtils::GzFileToString(file, fs);
+		json_content = IcebergUtils::GzFileToString(metadata_file, fs);
 	} else {
-		json_content = IcebergUtils::FileToString(file, fs);
+		json_content = IcebergUtils::FileToString(metadata_file, fs);
 	}
 	auto doc = JSONDocument::Parse(json_content.c_str(), json_content.size());
 	return rest_api_objects::TableMetadata::FromJSON(doc->GetRoot());
