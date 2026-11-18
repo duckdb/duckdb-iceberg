@@ -8,6 +8,7 @@
 #include "duckdb/main/database_manager.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/filter/table_filter_functions.hpp"
+#include "duckdb/storage/table/row_group_order_options.hpp"
 #include "duckdb/transaction/meta_transaction.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "core/expression/iceberg_value.hpp"
@@ -17,6 +18,8 @@
 #include "planning/metadata_io/avro/iceberg_manifest_cache.hpp"
 #include "planning/metadata_io/avro/avro_scan.hpp"
 #include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
+#include "planning/metadata_io/manifest_list/bound_iceberg_manifest_list_entry.hpp"
+#include "planning/scan_order/iceberg_scan_order.hpp"
 
 #include <future>
 #include <condition_variable>
@@ -151,6 +154,68 @@ struct PlanningTest {
 };
 
 } // namespace
+
+TEST_CASE("Iceberg scan order requires known zero NaN counts to prune floating-point files", "[iceberg_planning]") {
+	DuckDB database(nullptr);
+	Connection connection(database);
+	for (const auto &type : {LogicalType::FLOAT, LogicalType::DOUBLE}) {
+		CAPTURE(type);
+		IcebergTableSchema schema;
+		auto column = make_uniq<IcebergColumnDefinition>();
+		column->id = 17;
+		column->name = "a";
+		column->type = type;
+		column->required = false;
+		schema.columns.push_back(std::move(column));
+
+		IcebergManifestListEntry manifest(
+		    IcebergManifestFile("manifest.avro", 0, 1, IcebergManifest(0, IcebergManifestContentType::DATA, 1)));
+		BoundIcebergManifestListEntry binding(0, manifest, IcebergRowLineageMode::NONE);
+
+		// Missing NaN counts are distinct from an explicit zero. Bounds omit NaNs in either case.
+		for (int64_t nan_count : {-1, 0, 1}) {
+			CAPTURE(nan_count);
+			vector<IcebergManifestEntry> files(3);
+			vector<BoundIcebergManifestEntry> entries;
+			for (idx_t i = 0; i < files.size(); i++) {
+				auto &file = files[i].data_file;
+				files[i].status = IcebergManifestEntryStatusType::ADDED;
+				file.content = IcebergManifestEntryContentType::DATA;
+				file.record_count = 2;
+				auto value = Value::DOUBLE(static_cast<double>(i + 1)).DefaultCastAs(type);
+				auto bound = IcebergValue::SerializeValue(value, type, SerializeBound::LOWER_BOUND);
+				REQUIRE_FALSE(bound.HasError());
+				REQUIRE(bound.HasValue());
+				file.lower_bounds[17] = bound.GetValue();
+				file.upper_bounds[17] = bound.GetValue();
+				file.null_value_counts[17] = 0;
+				if (nan_count >= 0) {
+					file.nan_value_counts[17] = nan_count;
+				}
+				entries.push_back(binding.BindEntry(files[i]));
+			}
+
+			IcebergScanOrder order;
+			order.Set(make_uniq<RowGroupOrderOptions>(StorageIndex(0), OrderByStatistics::MAX, OrderType::DESCENDING,
+			                                          OrderByNullType::NULLS_LAST, OrderByColumnType::NUMERIC, 1));
+			order.Apply(*connection.context, schema, false, entries);
+			if (nan_count == 0) {
+				REQUIRE(entries.size() == 1);
+				REQUIRE(&entries[0].entry == &files[2]);
+			} else {
+				// Every file can contain a NaN tied for first place, with an unknown secondary sort key.
+				REQUIRE(entries.size() == files.size());
+				for (auto &file : files) {
+					bool retained = false;
+					for (auto &entry : entries) {
+						retained |= &entry.entry == &file;
+					}
+					REQUIRE(retained);
+				}
+			}
+		}
+	}
+}
 
 TEST_CASE("Iceberg partition filters borrow originals and own extracted paths", "[iceberg_planning]") {
 	DuckDB database(nullptr);
