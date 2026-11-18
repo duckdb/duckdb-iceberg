@@ -15,6 +15,15 @@
 
 namespace duckdb {
 
+class IcebergCommitPlan;
+//! How DROP SCHEMA behaves
+enum class IcebergDropNamespaceMode : uint8_t {
+	//! A namespace must be empty to be dropped; CASCADE is refused
+	RESTRICT,
+	//! Dropping a namespace drops its tables, so DROP SCHEMA requires CASCADE
+	CASCADE_ONLY
+};
+
 //! What a backend supports. The shared code checks these at statement time, to fail early with the same messages
 //! for every backend.
 struct IcebergBackendCapabilities {
@@ -22,6 +31,15 @@ struct IcebergBackendCapabilities {
 	bool list_views = false;
 	bool load_views = false;
 	bool create_views = false;
+	IcebergDropNamespaceMode drop_namespace = IcebergDropNamespaceMode::RESTRICT;
+	//! The changes of several tables are published atomically
+	bool atomic_multi_table_commit = false;
+	//! A table created in the transaction can be part of that atomic multi-table commit
+	bool atomic_commit_with_creates = false;
+	//! Table changes, drops and renames, namespaces and views are published together
+	bool atomic_catalog_commit = false;
+	//! DuckDB may delete the files it wrote when a commit definitely failed
+	bool delete_written_files = true;
 };
 
 //! Backend type ids are strings, so another extension can add a backend type, and Cast<T>() works across shared
@@ -43,6 +61,10 @@ public:
 public:
 	//! The catalog type in user-facing messages, e.g. "REST Catalog"
 	virtual string Name() const = 0;
+	//! The product behind the catalog in user-facing messages, e.g. "AWS Glue"
+	virtual string ProductName() const {
+		return Name();
+	}
 	const IcebergBackendCapabilities &Capabilities() const {
 		return capabilities;
 	}
@@ -83,6 +105,22 @@ public:
 	                                                                           const IcebergEntryId &id);
 	//! Table properties the catalog applies to all of its tables, below a table's own configuration
 	virtual const case_insensitive_map_t<string> &GetCatalogProperties() const;
+
+	//===--------------------------------------------------------------------===//
+	// Statement time
+	//===--------------------------------------------------------------------===//
+	//! Prepares the creation of a table (e.g. to obtain its location); the table is committed with the transaction
+	virtual IcebergCreatedTable CreateTable(ClientContext &context, const IcebergEntryId &id,
+	                                        IcebergNewTable &table) = 0;
+
+	//===--------------------------------------------------------------------===//
+	// Commit
+	//===--------------------------------------------------------------------===//
+	//! Publishes the changes of a transaction. On failure, calls MarkOutcomeUnknown on the plan if the changes may
+	//! have been published, and throws
+	virtual void Commit(ClientContext &context, IcebergCommitPlan &plan) = 0;
+	//! Undoes what was published ahead of the commit (CreatedTables of the plan). Must not throw
+	virtual void Abort(ClientContext &context, IcebergCommitPlan &plan);
 
 	//===--------------------------------------------------------------------===//
 	// Typed access, for the functionality of one backend type

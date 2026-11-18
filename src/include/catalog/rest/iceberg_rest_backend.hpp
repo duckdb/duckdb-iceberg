@@ -49,6 +49,7 @@ public:
 	string Name() const override {
 		return "REST Catalog";
 	}
+	string ProductName() const override;
 	bool IsInstanceOf(IcebergBackendTypeId id) const override {
 		return StringUtil::Equals(id, TYPE) || IcebergCatalogBackend::IsInstanceOf(id);
 	}
@@ -71,6 +72,10 @@ public:
 	const case_insensitive_map_t<string> &GetCatalogProperties() const override {
 		return catalog_properties;
 	}
+
+	IcebergCreatedTable CreateTable(ClientContext &context, const IcebergEntryId &id, IcebergNewTable &table) override;
+	void Commit(ClientContext &context, IcebergCommitPlan &plan) override;
+	void Abort(ClientContext &context, IcebergCommitPlan &plan) override;
 
 public:
 	//===--------------------------------------------------------------------===//

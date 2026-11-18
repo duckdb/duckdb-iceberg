@@ -4,6 +4,8 @@
 #include "duckdb/logging/logger.hpp"
 
 #include "catalog/rest/api/catalog_api.hpp"
+#include "catalog/rest/api/iceberg_create_table_request.hpp"
+#include "catalog/rest/iceberg_rest_commit.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "iceberg_logging.hpp"
 #include "rest_catalog/objects/catalog_config.hpp"
@@ -230,6 +232,26 @@ void IcebergRestBackend::Configure(ClientContext &context, const rest_api_object
 	capabilities.list_views = supported_urls.count("GET /v1/{prefix}/namespaces/{namespace}/views");
 	capabilities.load_views = supported_urls.count("GET /v1/{prefix}/namespaces/{namespace}/views/{view}");
 	capabilities.create_views = supported_urls.count("POST /v1/{prefix}/namespaces/{namespace}/views");
+	//! Deleting a Glue namespace also deletes its tables
+	capabilities.drop_namespace = endpoint_type == IcebergEndpointType::AWS_GLUE
+	                                  ? IcebergDropNamespaceMode::CASCADE_ONLY
+	                                  : IcebergDropNamespaceMode::RESTRICT;
+	// some catalogs reject the multi-table transactions/commit endpoint; DISABLE_MULTI_TABLE_COMMIT opts out of it
+	capabilities.atomic_multi_table_commit =
+	    !options.disable_multi_table_commit && supported_urls.count("POST /v1/{prefix}/transactions/commit");
+	//! A stage-created table is created by its first commit, a single-table request
+	capabilities.atomic_commit_with_creates = false;
+	//! Every namespace, view, drop and rename is its own request
+	capabilities.atomic_catalog_commit = false;
+	//! certain catalogs (S3 Tables) don't allow deletes and garbage-collect the files themselves
+	capabilities.delete_written_files = options.remove_files_on_delete;
+}
+
+string IcebergRestBackend::ProductName() const {
+	if (endpoint_type == IcebergEndpointType::AWS_GLUE) {
+		return "AWS Glue";
+	}
+	return Name();
 }
 
 //===--------------------------------------------------------------------===//
@@ -381,6 +403,58 @@ IcebergCatalogResult<shared_ptr<const IcebergLoadedView>> IcebergRestBackend::Lo
 	auto view = make_shared_ptr<IcebergLoadedView>();
 	view->metadata = std::move(result.result_->metadata);
 	return shared_ptr<const IcebergLoadedView>(std::move(view));
+}
+
+//===--------------------------------------------------------------------===//
+// Statement time and commit
+//===--------------------------------------------------------------------===//
+
+IcebergCreatedTable IcebergRestBackend::CreateTable(ClientContext &context, const IcebergEntryId &id,
+                                                    IcebergNewTable &table) {
+	// some catalogs (e.g. AWS Glue) do not assign a table location server-side; derive one from the namespace's
+	// 'location' property
+	if (table.location.empty() && options.default_table_location_from_namespace) {
+		auto &properties = table.namespace_properties();
+		auto ns_location_it = properties.find("location");
+		if (ns_location_it != properties.end() && !ns_location_it->second.empty()) {
+			auto location = ns_location_it->second;
+			StringUtil::RTrim(location, "/");
+			table.location = location + "/" + table.name;
+		}
+	}
+	IcebergCreateTableRequest request(table.name, table.schema, std::move(table.partition_spec),
+	                                  std::move(table.sort_order), table.format_version, table.properties,
+	                                  table.location);
+
+	// Immediately create the table with stage_create = true to get metadata & data location(s)
+	// transaction commit will either commit with data (OR) create the table with stage_create = false
+	IcebergCreatedTable created;
+	created.initial =
+	    make_shared_ptr<const IcebergLoadTableResponse>(IRCAPI::CommitNewTable(context, *this, id.ns.levels, request));
+	const bool stage_create = options.stage_create_tables;
+	//! Without stage-create, the table exists in the catalog already
+	created.exists_in_catalog = !stage_create;
+	//! if we stage created the table, we add an assert create
+	created.needs_assert_create = stage_create;
+	// some catalogs fully initialize metadata during non-staged CREATE TABLE and reject follow-up metadata updates
+	created.add_create_updates = stage_create || !options.skip_create_table_metadata_updates;
+	return created;
+}
+
+void IcebergRestBackend::Commit(ClientContext &context, IcebergCommitPlan &plan) {
+	try {
+		IcebergRestCommit(*this, context, plan).Run();
+	} catch (std::exception &ex) {
+		if (IcebergRestCommit::CommitOutcomeUnknown(ErrorData(ex))) {
+			// Commit may have landed (CommitStateUnknownException); keep the written files and created tables.
+			plan.MarkOutcomeUnknown();
+		}
+		throw;
+	}
+}
+
+void IcebergRestBackend::Abort(ClientContext &context, IcebergCommitPlan &plan) {
+	IcebergRestCommit::DropCreatedTables(*this, context, plan);
 }
 
 } // namespace duckdb

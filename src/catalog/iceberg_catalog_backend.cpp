@@ -45,4 +45,7 @@ const case_insensitive_map_t<string> &IcebergCatalogBackend::GetCatalogPropertie
 	return NO_PROPERTIES;
 }
 
+void IcebergCatalogBackend::Abort(ClientContext &context, IcebergCommitPlan &plan) {
+}
+
 } // namespace duckdb

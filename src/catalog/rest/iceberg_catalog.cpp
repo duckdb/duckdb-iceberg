@@ -13,7 +13,6 @@
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
-#include "catalog/rest/iceberg_rest_backend.hpp"
 #include "catalog/rest/api/catalog_api.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "common/iceberg_utils.hpp"
@@ -119,14 +118,15 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 }
 
 void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
-	auto endpoint_type = IcebergRestBackend::Get(*this).GetEndpointType();
-	if (info.cascade && endpoint_type != IcebergEndpointType::AWS_GLUE) {
+	auto cascade_only = backend->Capabilities().drop_namespace == IcebergDropNamespaceMode::CASCADE_ONLY;
+	if (info.cascade && !cascade_only) {
 		throw NotImplementedException(
 		    "DROP SCHEMA <schema_name> CASCADE is not supported for Iceberg schemas currently");
 	}
-	if (!info.cascade && endpoint_type == IcebergEndpointType::AWS_GLUE) {
-		throw NotImplementedException("DROP SCHEMA without CASCADE is not supported for AWS Glue: deleting a namespace "
-		                              "also deletes its tables. Use DROP SCHEMA <schema_name> CASCADE");
+	if (!info.cascade && cascade_only) {
+		throw NotImplementedException("DROP SCHEMA without CASCADE is not supported for %s: deleting a namespace "
+		                              "also deletes its tables. Use DROP SCHEMA <schema_name> CASCADE",
+		                              backend->ProductName());
 	}
 	info.SetQualifiedName(FoldName(info.GetQualifiedName()));
 

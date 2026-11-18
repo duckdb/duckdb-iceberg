@@ -12,8 +12,15 @@
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/shared_ptr.hpp"
 #include "duckdb/common/string.hpp"
+#include "duckdb/common/types.hpp"
 #include "duckdb/common/vector.hpp"
 
+#include <functional>
+
+#include "core/metadata/partition/iceberg_partition_spec.hpp"
+#include "core/metadata/schema/iceberg_table_schema.hpp"
+#include "core/metadata/sort/iceberg_sort_order.hpp"
+#include "rest_catalog/objects/commit_table_request.hpp"
 #include "rest_catalog/objects/table_metadata.hpp"
 #include "rest_catalog/objects/view_metadata.hpp"
 
@@ -193,6 +200,59 @@ public:
 
 public:
 	const IcebergEntryId id;
+};
+
+//! The spec's change of one table: its identifier, requirements and updates
+using IcebergTableChange = rest_api_objects::CommitTableRequest;
+
+//! A table to create; everything DuckDB decides about it
+struct IcebergNewTable {
+	IcebergNewTable(string name_p, shared_ptr<IcebergTableSchema> schema_p, IcebergPartitionSpec partition_spec_p,
+	                IcebergSortOrder sort_order_p, idx_t format_version_p)
+	    : name(std::move(name_p)), schema(std::move(schema_p)), partition_spec(std::move(partition_spec_p)),
+	      sort_order(std::move(sort_order_p)), format_version(format_version_p) {
+	}
+
+	string name;
+	shared_ptr<IcebergTableSchema> schema;
+	IcebergPartitionSpec partition_spec;
+	IcebergSortOrder sort_order;
+	idx_t format_version;
+	case_insensitive_map_t<string> properties;
+	//! Empty: the backend chooses
+	string location;
+	//! The properties of the namespace, loaded on first use
+	std::function<const case_insensitive_map_t<string> &()> namespace_properties;
+};
+
+//! What a backend did to create a table at statement time
+struct IcebergCreatedTable {
+	//! The metadata the table's first commit is staged against
+	shared_ptr<const IcebergLoadedTable> initial;
+	//! The table was published in the catalog already, ahead of the commit; an abort must drop it
+	bool exists_in_catalog = false;
+	//! The first commit asserts that the table doesn't exist yet
+	bool needs_assert_create = true;
+	//! The first commit carries the updates that set up the new table's metadata
+	bool add_create_updates = true;
+};
+
+//! A view to create, as DuckDB defines it
+struct IcebergNewView {
+	IcebergEntryId id;
+	string sql;
+	//! The output columns, with unique names
+	vector<string> column_names;
+	vector<LogicalType> column_types;
+	//! The namespace unqualified references in 'sql' resolve against
+	IcebergNamespace default_namespace;
+};
+
+//! The property changes of one namespace
+struct IcebergNamespacePropertyUpdate {
+	IcebergNamespace ns;
+	case_insensitive_map_t<string> updates;
+	vector<string> removals;
 };
 
 } // namespace duckdb

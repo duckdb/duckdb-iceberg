@@ -15,7 +15,7 @@ namespace duckdb {
 
 IcebergFileRewriteGlobalState::IcebergFileRewriteGlobalState(ClientContext &context, IcebergTable &table_info)
     : IcebergInsertGlobalState(context), table_info(table_info),
-      cleanup_enabled(table_info.catalog.attach_options.remove_files_on_delete) {
+      cleanup_enabled(table_info.catalog.GetBackend().Capabilities().delete_written_files) {
 }
 
 IcebergFileRewriteGlobalState::~IcebergFileRewriteGlobalState() {
