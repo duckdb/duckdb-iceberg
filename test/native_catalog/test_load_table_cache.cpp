@@ -7,6 +7,7 @@
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/rest/iceberg_rest_backend.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/storage/iceberg_table_secret_provider.hpp"
 
@@ -54,8 +55,13 @@ struct LoadTableCacheTest {
 		return duckdb::Catalog::GetCatalog(*connection.context, Identifier("lake")).Cast<IcebergCatalog>();
 	}
 
+	//! The LoadTable cache and its ETags belong to the REST backend of the catalog
+	IcebergRestBackend &Rest() {
+		return IcebergRestBackend::Get(Catalog());
+	}
+
 	LoadTableResultCache &Cache() {
-		return Catalog().table_request_cache;
+		return Rest().table_request_cache;
 	}
 
 	IcebergTable &Table() {
@@ -76,8 +82,7 @@ struct LoadTableCacheTest {
 	void Publish(const string &version, const string &etag) {
 		Respond(etag, 200, "{\"config\":{\"test-version\":\"" + version + "\"}}");
 		auto publication = Cache().BeginLoad(key);
-		auto result =
-		    IcebergLoadTableRequest({"default"}, "t", publication.get()).Execute(*connection.context, Catalog());
+		auto result = IcebergLoadTableRequest({"default"}, "t", publication.get()).Execute(*connection.context, Rest());
 		REQUIRE_FALSE(result.error_);
 		REQUIRE(publication->TryPublish(std::move(result.result_), std::move(result.etag)));
 	}
@@ -131,7 +136,7 @@ TEST_CASE("LoadTable revalidation retains its response when the cache is replace
 
 	test.Respond("\"A\"", 304);
 	test.Query("CALL truncate_duckdb_logs()");
-	auto result = request.Execute(*test.connection.context, test.Catalog());
+	auto result = request.Execute(*test.connection.context, test.Rest());
 	REQUIRE(result.status_ == HTTPStatusCode::NotModified_304);
 	REQUIRE(result.result_);
 	REQUIRE(result.result_->result.config->at("test-version") == "old");
@@ -151,8 +156,7 @@ TEST_CASE("Superseded LoadTable revalidations cannot publish after a newer load 
 	auto first = test.Cache().BeginLoad(test.key);
 	auto second = test.Cache().BeginLoad(test.key);
 	test.Respond("\"A\"", 304);
-	auto result =
-	    IcebergLoadTableRequest({"default"}, "t", first.get()).Execute(*test.connection.context, test.Catalog());
+	auto result = IcebergLoadTableRequest({"default"}, "t", first.get()).Execute(*test.connection.context, test.Rest());
 
 	SECTION("The newer load is still pending") {
 		REQUIRE_FALSE(first->TryPublish(result.result_, "\"stale\""));
@@ -178,7 +182,7 @@ TEST_CASE("An evicted LoadTable response stays alive for its request but cannot 
 	test.Cache().EvictIfCurrent(table);
 
 	test.Respond("\"A\"", 304);
-	auto result = request.Execute(*test.connection.context, test.Catalog());
+	auto result = request.Execute(*test.connection.context, test.Rest());
 	REQUIRE(result.result_);
 	REQUIRE(result.result_->result.config->at("test-version") == "old");
 	REQUIRE_FALSE(publication->TryPublish(std::move(result.result_), std::move(result.etag)));
@@ -190,7 +194,7 @@ TEST_CASE("An evicted LoadTable response stays alive for its request but cannot 
 TEST_CASE("LoadTable refresh revalidates metadata while credential refresh remains unconditional", "[iceberg_cache]") {
 	LoadTableCacheTest test;
 	auto &table = test.Table();
-	test.Catalog().attach_options.access_mode = IRCAccessDelegationMode::VENDED_CREDENTIALS;
+	test.Rest().options.access_mode = IRCAccessDelegationMode::VENDED_CREDENTIALS;
 	test.Respond("\"A\"", 200, R"({"metadata":{"location":"s3://test/t"},
 	    "config":{"s3.region":"us-east-1","s3.session-token":"EXPIRED_TOKEN","s3.session-token-expires-at-ms":"1"}})");
 	table.RefreshFromCatalog(*test.connection.context);
@@ -212,11 +216,12 @@ TEST_CASE("LoadTable refresh revalidates metadata while credential refresh remai
 	REQUIRE(prepared.config->options.at("session_token").ToString() == "EXPIRED_TOKEN");
 	REQUIRE(prepared.config->options.at("expires_at").ToString() == "1");
 
-	test.Catalog().supported_urls.erase("GET /v1/{prefix}/namespaces/{namespace}/tables/{table}/credentials");
+	test.Rest().supported_urls.erase("GET /v1/{prefix}/namespaces/{namespace}/tables/{table}/credentials");
 	test.Respond("\"B\"", 200, R"({"config":{"s3.region":"us-east-1","s3.access-key-id":"NEW_CONFIG_KEY"},
 	    "storage-credentials":[{"prefix":"s3://test/","config":{"s3.access-key-id":"NEW_SCOPED_KEY"}}]})");
 	test.Query("CALL truncate_duckdb_logs()");
-	auto credentials = IRCAPI::GetTableCredentials(*test.connection.context, test.Catalog(), table.schema, table.name);
+	auto credentials =
+	    IRCAPI::GetTableCredentials(*test.connection.context, test.Rest(), table.schema.namespace_items, table.name);
 	REQUIRE_FALSE(credentials.error_);
 	REQUIRE(credentials.result_.config);
 	REQUIRE(credentials.result_.config->at("s3.access-key-id") == "NEW_CONFIG_KEY");
@@ -237,8 +242,9 @@ TEST_CASE("LoadTable refresh revalidates metadata while credential refresh remai
 	REQUIRE(test.LastValidator().IsNull());
 
 	test.Respond("\"B\"", 304);
-	REQUIRE_THROWS_WITH(IRCAPI::GetTableCredentials(*test.connection.context, test.Catalog(), table.schema, table.name),
-	                    Catch::Contains("HTTP 304 without a cached response"));
+	REQUIRE_THROWS_WITH(
+	    IRCAPI::GetTableCredentials(*test.connection.context, test.Rest(), table.schema.namespace_items, table.name),
+	    Catch::Contains("HTTP 304 without a cached response"));
 }
 
 TEST_CASE("Parsed LoadTable generations survive replacement and rejected publication", "[iceberg_cache]") {
@@ -253,7 +259,7 @@ TEST_CASE("Parsed LoadTable generations survive replacement and rejected publica
 
 	test.Respond("\"rotated\"", 304);
 	auto unchanged =
-	    IcebergLoadTableRequest({"default"}, "t", first.get()).Execute(*test.connection.context, test.Catalog());
+	    IcebergLoadTableRequest({"default"}, "t", first.get()).Execute(*test.connection.context, test.Rest());
 	REQUIRE(unchanged.result_ == response);
 	REQUIRE(unchanged.result_->GetMetadata(*test.connection.context, table) == parsed);
 	REQUIRE(first->TryPublish(unchanged.result_, unchanged.etag));
@@ -274,7 +280,7 @@ TEST_CASE("Parsed LoadTable generations survive replacement and rejected publica
 		REQUIRE_FALSE(empty->cached_result);
 	}
 	test.Respond("\"late\"", 304);
-	auto old = request.Execute(*test.connection.context, test.Catalog());
+	auto old = request.Execute(*test.connection.context, test.Rest());
 	REQUIRE(old.result_ == response);
 	REQUIRE(old.result_->GetMetadata(*test.connection.context, table) == parsed);
 	REQUIRE_FALSE(late->TryPublish(old.result_, old.etag));
@@ -293,7 +299,7 @@ TEST_CASE("Staleness reads and table copies share metadata until a writer detach
 	REQUIRE(transaction_copy.GetMetadataOwner() == parsed);
 
 	// The existing entry has no staleness expiry; republish it with a configured lifetime.
-	test.Catalog().attach_options.max_table_staleness_micros = 3600000000ULL;
+	test.Rest().options.max_table_staleness_micros = 3600000000ULL;
 	auto publication = test.Cache().BeginLoad(test.key);
 	REQUIRE(publication->TryPublish(publication->cached_result, publication->etag));
 	auto reader = IcebergTable::CreatePlaceholder(test.Catalog(), table.schema, table.name);
@@ -320,8 +326,8 @@ TEST_CASE("Staleness reads and table copies share metadata until a writer detach
 TEST_CASE("Authoritative metadata fallback does not poison a parsed generation", "[iceberg_cache]") {
 	LoadTableCacheTest test;
 	auto &table = test.Table();
-	test.Catalog().attach_options.use_metadata_location = true;
-	auto wire = table.initialization_source->result.Copy();
+	test.Rest().options.use_metadata_location = true;
+	auto wire = table.initialization_source->Cast<IcebergLoadTableResponse>().result.Copy();
 	const auto path = test.root + "/authoritative.metadata.json";
 	wire.metadata_location = path;
 	auto response = make_shared_ptr<const IcebergLoadTableResponse>(std::move(wire));
@@ -335,7 +341,7 @@ TEST_CASE("Authoritative metadata fallback does not poison a parsed generation",
 	REQUIRE(fallback->GetTableProperty("owner-test").empty());
 	REQUIRE(response->GetMetadata(*test.connection.context, table) == from_file);
 	// A different response generation with no authoritative location must use its embedded metadata.
-	auto embedded_wire = table.initialization_source->result.Copy();
+	auto embedded_wire = table.initialization_source->Cast<IcebergLoadTableResponse>().result.Copy();
 	embedded_wire.metadata_location.reset();
 	auto embedded = make_shared_ptr<const IcebergLoadTableResponse>(std::move(embedded_wire));
 	REQUIRE(embedded->GetMetadata(*test.connection.context, table) != from_file);
@@ -345,7 +351,8 @@ TEST_CASE("Authoritative metadata fallback does not poison a parsed generation",
 TEST_CASE("Concurrent readers share one parsed payload and release superseded generations", "[iceberg_cache]") {
 	LoadTableCacheTest test;
 	auto &table = test.Table();
-	auto response = make_shared_ptr<const IcebergLoadTableResponse>(table.initialization_source->result.Copy());
+	auto response = make_shared_ptr<const IcebergLoadTableResponse>(
+	    table.initialization_source->Cast<IcebergLoadTableResponse>().result.Copy());
 	test.Cache().SetOrOverwrite(test.key, response);
 	weak_ptr<const IcebergLoadTableResponse> response_lifetime(response);
 	Connection left(test.database);
@@ -388,7 +395,8 @@ TEST_CASE("Concurrent readers share one parsed payload and release superseded ge
 	REQUIRE(readers[0] == readers[1]);
 	REQUIRE(readers[0] != table.GetMetadataOwner());
 	weak_ptr<const IcebergTableMetadata> parsed_lifetime(readers[0]);
-	test.Cache().SetOrOverwrite(test.key, table.initialization_source);
+	test.Cache().SetOrOverwrite(test.key, shared_ptr_cast<const IcebergLoadedTable, const IcebergLoadTableResponse>(
+	                                          table.initialization_source));
 	response.reset();
 	REQUIRE(response_lifetime.expired());
 	REQUIRE_FALSE(parsed_lifetime.expired());
@@ -432,7 +440,8 @@ TEST_CASE("LoadTable does not revalidate expired Azure vended credentials", "[ic
 				LoadTableCacheTest test;
 				auto &schema = test.Table().schema;
 				auto &catalog = test.Catalog();
-				catalog.attach_options.access_mode = IRCAccessDelegationMode::VENDED_CREDENTIALS;
+				auto &rest = test.Rest();
+				rest.options.access_mode = IRCAccessDelegationMode::VENDED_CREDENTIALS;
 				const auto location = scheme + "://container@account.dfs.core.windows.net/t";
 				const string expired = "se=2000-01-01T00%3A00%3A00Z&sig=expired";
 				const string fresh = "se=2999-01-01T00%3A00%3A00Z&sig=fresh";
@@ -450,7 +459,7 @@ TEST_CASE("LoadTable does not revalidate expired Azure vended credentials", "[ic
 
 				// Seed an old cached response whose SAS has expired, without a timing-dependent sleep.
 				respond(expired);
-				auto initial = IcebergLoadTableRequest({"default"}, "t").Execute(*test.connection.context, catalog);
+				auto initial = IcebergLoadTableRequest({"default"}, "t").Execute(*test.connection.context, rest);
 				REQUIRE_FALSE(initial.error_);
 				auto publication = test.Cache().BeginLoad(test.key);
 				REQUIRE(publication->TryPublish(initial.result_, initial.etag));
@@ -464,7 +473,7 @@ TEST_CASE("LoadTable does not revalidate expired Azure vended credentials", "[ic
 				test.Query("CALL truncate_duckdb_logs()");
 				auto reload = test.Cache().BeginLoad(test.key);
 				REQUIRE_THROWS_WITH(
-				    IcebergLoadTableRequest({"default"}, "t", reload.get()).Execute(*test.connection.context, catalog),
+				    IcebergLoadTableRequest({"default"}, "t", reload.get()).Execute(*test.connection.context, rest),
 				    Catch::Contains("HTTP 304 without a cached response to revalidate"));
 				REQUIRE(test.LastValidator().IsNull());
 
@@ -472,7 +481,7 @@ TEST_CASE("LoadTable does not revalidate expired Azure vended credentials", "[ic
 				respond(fresh);
 				test.Query("CALL truncate_duckdb_logs()");
 				auto result =
-				    IcebergLoadTableRequest({"default"}, "t", reload.get()).Execute(*test.connection.context, catalog);
+				    IcebergLoadTableRequest({"default"}, "t", reload.get()).Execute(*test.connection.context, rest);
 				REQUIRE_FALSE(result.error_);
 				REQUIRE(result.status_ == HTTPStatusCode::OK_200);
 				REQUIRE(test.LastValidator().IsNull());
@@ -483,12 +492,12 @@ TEST_CASE("LoadTable does not revalidate expired Azure vended credentials", "[ic
 				REQUIRE(reload->TryPublish(result.result_, result.etag));
 
 				// With user-managed credentials, the Azure metadata remains safe to revalidate.
-				catalog.attach_options.access_mode = IRCAccessDelegationMode::NONE;
+				rest.options.access_mode = IRCAccessDelegationMode::NONE;
 				test.Respond("\"A\"", 304);
 				test.Query("CALL truncate_duckdb_logs()");
 				auto metadata_only = test.Cache().BeginLoad(test.key);
 				auto unchanged = IcebergLoadTableRequest({"default"}, "t", metadata_only.get())
-				                     .Execute(*test.connection.context, catalog);
+				                     .Execute(*test.connection.context, rest);
 				REQUIRE(unchanged.status_ == HTTPStatusCode::NotModified_304);
 				REQUIRE(unchanged.result_ == result.result_);
 				REQUIRE(test.LastValidator().ToString() == "\"A\"");

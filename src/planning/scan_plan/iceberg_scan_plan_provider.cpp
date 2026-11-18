@@ -1,4 +1,5 @@
 #include "planning/scan_plan/iceberg_scan_plan_provider.hpp"
+#include "catalog/rest/iceberg_rest_backend.hpp"
 
 #include "catalog/rest/api/iceberg_expression.hpp"
 #include "catalog/rest/api/iceberg_type.hpp"
@@ -65,7 +66,8 @@ unique_ptr<IcebergScanPlanProvider> IcebergScanPlanProvider::Create(IcebergScanP
 	unique_ptr<IcebergScanPlanProvider> provider;
 	if (server_side_planning_enabled) {
 		auto &table_info = table_entry->table_info;
-		if (table_info.catalog.supported_urls.count(IcebergServerSideScanPlanning::PLAN_ENDPOINT)) {
+		if (IcebergRestBackend::Get(table_info.catalog)
+		        .supported_urls.count(IcebergServerSideScanPlanning::PLAN_ENDPOINT)) {
 			rest_api_objects::PlanTableScanRequest request;
 			request.snapshot_id = context.snapshot.snapshot->snapshot_id;
 			request.case_sensitive = true;
@@ -116,8 +118,10 @@ unique_ptr<IcebergScanPlanProvider> IcebergScanPlanProvider::Create(IcebergScanP
 						}
 					}
 					if (!plan.storage_credentials.empty()) {
-						table_info.LoadCredentials(context.context, table_info.GetVendedCredentials(
-						                                                context.context, plan.storage_credentials));
+						table_info.LoadCredentials(
+						    context.context,
+						    table_info.GetVendedCredentials(
+						        context.context, IcebergRestBackend::ToStorageCredentials(plan.storage_credentials)));
 					}
 					provider =
 					    make_uniq<ServerSideScanPlanProvider>(std::move(plan), context.metadata, context.context);

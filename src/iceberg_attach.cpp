@@ -1,5 +1,7 @@
 #include "iceberg_attach.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/rest/iceberg_rest_backend.hpp"
+#include "catalog/rest/api/catalog_api.hpp"
 
 #include "catalog/rest/storage/iceberg_authorization.hpp"
 #include "catalog/rest/storage/authorization/oauth2.hpp"
@@ -480,9 +482,7 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 	auto auth_handler = CreateAuthorization(db, context, attach_options, &client_options);
 	// The bootstrap URI may have come from a secret or an endpoint preset.
 	client_options["uri"] = attach_options.catalog_uri;
-	auto catalog =
-	    make_uniq<IcebergCatalog>(db, options.access_mode, std::move(auth_handler), attach_options, default_schema);
-	catalog->SetAttachOptions(options.options);
+	auto backend = make_uniq<IcebergRestBackend>(Identifier(name), attach_options, std::move(auth_handler));
 
 	// /config is requested exactly once, using the bootstrap URI/warehouse/auth.
 	// A server prefix or URI override applies only to subsequent requests.
@@ -490,7 +490,7 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 	if (endpoint_type == IcebergEndpointType::AWS_GLUE && config_warehouse == ":") {
 		config_warehouse.clear();
 	}
-	auto config = IRCAPI::GetCatalogConfig(context, *catalog, config_warehouse);
+	auto config = IRCAPI::GetCatalogConfig(context, *backend, config_warehouse);
 	// OAuth2 SECRET was expanded into client properties by CreateAuthorization.
 	// Do not retain the now-consumed secret selector in the fallback layer.
 	if (attach_options.authorization_type == IcebergAuthorizationType::OAUTH2) {
@@ -514,17 +514,20 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 	FilterIcebergAuthorizationOptions(resolved_options, authorization_type);
 	ParseAttachOptions(attach_options, default_schema, resolved_options);
 	if (AuthorizationChanged(bootstrap_options, resolved_options)) {
-		catalog->auth_handler = CreateAuthorization(db, context, attach_options);
+		backend->auth_handler = CreateAuthorization(db, context, attach_options);
 	} else {
 		// Already validated/consumed by the bootstrap authorization handler.
 		attach_options.options.clear();
 	}
-	catalog->attach_options = attach_options;
+	backend->options = attach_options;
+	backend->Configure(context, config, endpoint_type);
+	auto &rest = *backend;
+	auto catalog = make_uniq<IcebergCatalog>(db, options.access_mode, attach_options, info.path, std::move(backend));
+	catalog->SetAttachOptions(options.options);
 	if (default_schema) {
 		default_schema = Identifier(catalog->FoldIdentifier(default_schema->GetIdentifierName()));
 	}
 	catalog->default_schema = default_schema;
-	catalog->Configure(context, config, endpoint_type);
 	auto policy = attach_options.default_schema_policy;
 	if (!default_schema) {
 		return std::move(catalog);
@@ -535,7 +538,7 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 		// no round trip here: IcebergSchemaSet verifies the default schema on its first lookup
 		return std::move(catalog);
 	case IcebergDefaultSchemaPolicy::THROW:
-		if (!IRCAPI::VerifySchemaExistence(context, *catalog, schema_name)) {
+		if (!IRCAPI::VerifySchemaExistence(context, rest, IRCAPI::ParseSchemaName(schema_name))) {
 			throw InvalidConfigurationException(
 			    "default_schema '%s' does not exist. ATTACH with no DEFAULT_SCHEMA to successfully attach, or with "
 			    "DEFAULT_SCHEMA_POLICY 'create' to create it",
@@ -544,7 +547,7 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 		return std::move(catalog);
 	case IcebergDefaultSchemaPolicy::CREATE: {
 		// check before creating: a create of an existing namespace costs a 409 plus a re-check
-		if (IRCAPI::VerifySchemaExistence(context, *catalog, schema_name)) {
+		if (IRCAPI::VerifySchemaExistence(context, rest, IRCAPI::ParseSchemaName(schema_name))) {
 			return std::move(catalog);
 		}
 		if (options.access_mode == AccessMode::READ_ONLY) {
@@ -557,8 +560,7 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 		request.properties = case_insensitive_map_t<string>();
 		JSONWriter writer;
 		writer.SetRoot(request.ToJSON(writer));
-		IRCAPI::CommitNamespaceCreate(context, *catalog, schema_name,
-		                              writer.ToString(JSONWriteFlags::ALLOW_INF_AND_NAN));
+		IRCAPI::CommitNamespaceCreate(context, rest, schema_name, writer.ToString(JSONWriteFlags::ALLOW_INF_AND_NAN));
 		return std::move(catalog);
 	}
 	}

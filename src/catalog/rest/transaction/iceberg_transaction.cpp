@@ -24,6 +24,7 @@
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/api/iceberg_retry.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/rest/iceberg_rest_backend.hpp"
 #include "catalog/rest/iceberg_table_prefetch.hpp"
 #include "catalog/rest/storage/iceberg_authorization.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
@@ -401,8 +402,9 @@ void IcebergTransaction::VerifyAlterUpdateAtomicity(const IcebergTransactionAlte
 }
 
 bool IcebergTransaction::MultiTableCommitAvailable() const {
-	return !catalog.attach_options.disable_multi_table_commit &&
-	       catalog.supported_urls.count("POST /v1/{prefix}/transactions/commit");
+	auto &rest = IcebergRestBackend::Get(catalog);
+	return !rest.options.disable_multi_table_commit &&
+	       rest.supported_urls.count("POST /v1/{prefix}/transactions/commit");
 }
 
 bool IcebergTransaction::HasTableUpdate() const {
@@ -439,7 +441,7 @@ void RemoveFilesBestEffort(ClientContext &context, FileSystem &fs, const vector<
 } // namespace
 
 void IcebergTransaction::CleanupMetadataFiles(ClientContext &context, const vector<string> &paths) {
-	if (!catalog.attach_options.remove_files_on_delete || paths.empty()) {
+	if (!IcebergRestBackend::Get(catalog).options.remove_files_on_delete || paths.empty()) {
 		return;
 	}
 	auto &fs = FileSystem::GetFileSystem(context);
@@ -581,11 +583,10 @@ void IcebergTransaction::DoTableUpdates(IcebergTransactionAlterUpdate &alter_upd
 		DoSingleTableCommitUpdates(alter_update, context);
 	}
 
-	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
-	if (ic_catalog.attach_options.max_table_staleness_micros.IsValid()) {
-		for (auto &entry : alter_update.updated_tables) {
-			ic_catalog.table_request_cache.EvictIfCurrent(entry.second.get());
-		}
+	auto &backend = catalog.GetBackend();
+	for (auto &entry : alter_update.updated_tables) {
+		auto &table = entry.second.get();
+		backend.OnTableChanged(table.GetTableKey(), table.initialization_source.get(), false);
 	}
 }
 
@@ -602,13 +603,12 @@ void IcebergTransaction::DoTableRename(IcebergTransactionRenameUpdate &rename_up
 	request.destination._namespace.value = schema.namespace_items;
 	request.destination.name = new_name;
 	auto transaction_json = RESTObjectToJSONString(request);
-	IRCAPI::CommitTableRename(context, catalog, transaction_json);
+	IRCAPI::CommitTableRename(context, IcebergRestBackend::Get(catalog), transaction_json);
 
-	if (catalog.attach_options.max_table_staleness_micros.IsValid()) {
-		//! The shared cache must only change once the catalog rename is durable.
-		catalog.table_request_cache.EvictIfCurrent(original_table);
-		catalog.table_request_cache.EvictIfCurrent(new_table);
-	}
+	//! The shared cache must only change once the catalog rename is durable.
+	auto &backend = catalog.GetBackend();
+	backend.OnTableChanged(original_table.GetTableKey(), original_table.initialization_source.get(), false);
+	backend.OnTableChanged(new_table.GetTableKey(), new_table.initialization_source.get(), false);
 
 	schema.tables.RenameEntry(table_name, new_name, std::move(new_table));
 }
@@ -630,27 +630,29 @@ void IcebergTransaction::DoMultiTableCommitUpdates(IcebergTransactionAlterUpdate
 		}
 
 		auto transaction_json = RESTObjectToJSONString(transaction_info.request);
-		auto result = IRCAPI::CommitMultiTableUpdate(context, catalog, transaction_json);
+		auto &rest = IcebergRestBackend::Get(catalog);
+		auto result = IRCAPI::CommitMultiTableUpdate(context, rest, transaction_json);
 		if (result.Success()) {
 			return;
 		}
 		if (!CommitIsRetryable(transaction_info.retryable, transaction_info.retry_config.num_retries, result,
 		                       attempt)) {
-			result.Throw(catalog.GetBaseUrl().GetURLEncoded());
+			result.Throw(rest.GetBaseUrl().GetURLEncoded());
 		}
 		CleanupMetadataFiles(context, transaction_info.created_metadata_files);
 		RefreshRetryTables(alter_update, transaction_info.table_keys, context);
 		//! Back off before the next attempt to de-synchronize concurrent writers; stop if the
 		//! cumulative retry budget (commit.retry.total-timeout-ms) would be exceeded.
 		if (!backoff->WaitBeforeRetry(attempt)) {
-			result.Throw(catalog.GetBaseUrl().GetURLEncoded());
+			result.Throw(rest.GetBaseUrl().GetURLEncoded());
 		}
 	}
 }
 
 void IcebergTransaction::DoSingleTableCommitUpdates(IcebergTransactionAlterUpdate &alter_update,
                                                     ClientContext &context) {
-	D_ASSERT(catalog.supported_urls.count("POST /v1/{prefix}/namespaces/{namespace}/tables/{table}"));
+	auto &rest = IcebergRestBackend::Get(catalog);
+	D_ASSERT(rest.supported_urls.count("POST /v1/{prefix}/namespaces/{namespace}/tables/{table}"));
 	auto table_info = GetSingleUpdatedTable(alter_update);
 	if (!table_info) {
 		return;
@@ -669,14 +671,14 @@ void IcebergTransaction::DoSingleTableCommitUpdates(IcebergTransactionAlterUpdat
 		auto &identifier = *table_change.identifier;
 		auto transaction_json = ConstructTableUpdateJSON(table_change);
 		auto result =
-		    IRCAPI::CommitTableUpdate(context, catalog, identifier._namespace.value, identifier.name, transaction_json);
+		    IRCAPI::CommitTableUpdate(context, rest, identifier._namespace.value, identifier.name, transaction_json);
 		if (result.Success()) {
 			return;
 		}
 
 		if (!CommitIsRetryable(table_transaction_info.retryable, table_transaction_info.retry_config.num_retries,
 		                       result, attempt)) {
-			result.Throw(catalog.GetBaseUrl().GetURLEncoded());
+			result.Throw(rest.GetBaseUrl().GetURLEncoded());
 		}
 		CleanupMetadataFiles(context, table_transaction_info.created_metadata_files);
 		unordered_set<string> retry_tables;
@@ -684,18 +686,17 @@ void IcebergTransaction::DoSingleTableCommitUpdates(IcebergTransactionAlterUpdat
 		RefreshRetryTables(alter_update, retry_tables, context);
 		//! Back off before the next attempt; stop if the retry budget would be exceeded.
 		if (!backoff->WaitBeforeRetry(attempt)) {
-			result.Throw(catalog.GetBaseUrl().GetURLEncoded());
+			result.Throw(rest.GetBaseUrl().GetURLEncoded());
 		}
 	}
 }
 
 void IcebergTransaction::DoTableDeletes(IcebergTransactionDeleteUpdate &delete_update, ClientContext &context) {
-	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto &table = delete_update.deleted_table.get();
 	auto &table_name = table.name;
-	IRCAPI::CommitTableDelete(context, catalog, table.schema.namespace_items, table_name);
+	IRCAPI::CommitTableDelete(context, IcebergRestBackend::Get(catalog), table.schema.namespace_items, table_name);
 	// remove the load table result
-	ic_catalog.table_request_cache.EvictIfCurrent(table);
+	catalog.GetBackend().OnTableChanged(table.GetTableKey(), table.initialization_source.get(), true);
 	// remove the table entry from the catalog
 	DropInfo drop_info;
 	drop_info.type = CatalogType::TABLE_ENTRY;
@@ -715,7 +716,7 @@ void IcebergTransaction::DoSchemaCreates(ClientContext &context) {
 		request.properties = case_insensitive_map_t<string>();
 		auto create_body = RESTObjectToJSONString(request);
 
-		if (!IRCAPI::CommitNamespaceCreate(context, ic_catalog, schema_name, create_body)) {
+		if (!IRCAPI::CommitNamespaceCreate(context, IcebergRestBackend::Get(ic_catalog), schema_name, create_body)) {
 			created_schemas.OnNamespaceExists(schema_name);
 		}
 		ic_catalog.GetSchemas().AddEntry(schema_name, created_schema.second.entry);
@@ -727,7 +728,7 @@ void IcebergTransaction::DoSchemaDeletes(ClientContext &context) {
 	for (auto &schema_name : deleted_schemas) {
 		vector<string> namespace_items;
 		auto namespace_identifier = IRCAPI::ParseSchemaName(schema_name);
-		IRCAPI::CommitNamespaceDrop(context, ic_catalog, namespace_identifier);
+		IRCAPI::CommitNamespaceDrop(context, IcebergRestBackend::Get(ic_catalog), namespace_identifier);
 		ic_catalog.GetSchemas().RemoveEntry(schema_name);
 	}
 	deleted_schemas.clear();
@@ -749,7 +750,8 @@ void IcebergTransaction::DoSchemaPropertyUpdates(ClientContext &context) {
 		request.updates = schema_property_updates.updates;
 		auto create_body = RESTObjectToJSONString(request);
 
-		IRCAPI::CommitNamespacePropertiesUpdate(context, ic_catalog, create_body, namespace_identifiers);
+		IRCAPI::CommitNamespacePropertiesUpdate(context, IcebergRestBackend::Get(ic_catalog), create_body,
+		                                        namespace_identifiers);
 	}
 }
 
@@ -875,7 +877,7 @@ void IcebergTransaction::DoViewCreates(ClientContext &context) {
 		root_object.Add("properties", writer.CreateObject());
 
 		auto json_body = writer.ToString();
-		IRCAPI::CommitNewView(context, catalog, schema_entry, json_body);
+		IRCAPI::CommitNewView(context, IcebergRestBackend::Get(catalog), schema_entry.namespace_items, json_body);
 	}
 	created_views.clear();
 }
@@ -883,7 +885,7 @@ void IcebergTransaction::DoViewCreates(ClientContext &context) {
 void IcebergTransaction::DoViewDeletes(ClientContext &context) {
 	for (auto &deleted_view : deleted_views) {
 		auto &info = deleted_view.second;
-		IRCAPI::CommitViewDelete(context, catalog, info.namespace_items, info.view_name);
+		IRCAPI::CommitViewDelete(context, IcebergRestBackend::Get(catalog), info.namespace_items, info.view_name);
 	}
 	deleted_views.clear();
 }
@@ -898,7 +900,7 @@ void IcebergTransaction::InvalidateViewEntry(const string &view_key) {
 
 void IcebergTransaction::CleanupFiles() {
 	// remove any files that were written
-	if (!catalog.attach_options.remove_files_on_delete) {
+	if (!IcebergRestBackend::Get(catalog).options.remove_files_on_delete) {
 		// certain catalogs don't allow deletes and will have a s3.deletes attribute in the config describing this
 		// aws s3 tables rejects deletes and will handle garbage collection on its own, any attempt to delete the files
 		// on the aws side will result in an error.
@@ -951,18 +953,19 @@ void IcebergTransaction::CleanupFiles() {
 }
 
 void IcebergTransaction::EvictCachedTables() {
-	if (!catalog.attach_options.max_table_staleness_micros.IsValid()) {
-		return;
-	}
+	auto &backend = catalog.GetBackend();
+	auto evict = [&](const IcebergTable &table) {
+		backend.OnTableChanged(table.GetTableKey(), table.initialization_source.get(), false);
+	};
 	std::visit(
 	    [&](auto &update) {
 		    using T = std::decay_t<decltype(update)>;
 		    if constexpr (std::is_same_v<T, IcebergTransactionAlterUpdate>) {
 			    for (auto &up_table : update.updated_tables) {
-				    catalog.table_request_cache.EvictIfCurrent(up_table.second.get());
+				    evict(up_table.second.get());
 			    }
 		    } else if constexpr (std::is_same_v<T, IcebergTransactionDeleteUpdate>) {
-			    catalog.table_request_cache.EvictIfCurrent(update.deleted_table.get());
+			    evict(update.deleted_table.get());
 		    }
 	    },
 	    transaction_update);
@@ -999,13 +1002,16 @@ void IcebergTransaction::DropCreatedTables() {
 	for (auto &table : created_tables) {
 		auto state = GetLatestTableState(table.table_key);
 		if (state && state->IsAlive()) {
-			catalog.table_request_cache.EvictIfCurrent(state->GetInfo());
+			auto &created_table = state->GetInfo();
+			catalog.GetBackend().OnTableChanged(created_table.GetTableKey(), created_table.initialization_source.get(),
+			                                    true);
 		}
 		auto table_name = IcebergLogType::Redact(temp_context, table.table_key);
 		try {
 			//! The table has been visible to other transactions since it was created, so it is dropped only while
 			//! the catalog still holds the version that the create request returned.
-			auto current = IcebergLoadTableRequest(table.namespace_items, table.name).Execute(temp_context, catalog);
+			auto &rest = IcebergRestBackend::Get(catalog);
+			auto current = IcebergLoadTableRequest(table.namespace_items, table.name).Execute(temp_context, rest);
 			if (current.error_) {
 				DUCKDB_LOG(temp_context, IcebergLogType,
 				           "Iceberg Transaction Cleanup, did not drop table '%s': loading it returned %s", table_name,
@@ -1019,7 +1025,7 @@ void IcebergTransaction::DropCreatedTables() {
 				           table_name);
 				continue;
 			}
-			IRCAPI::CommitTableDelete(temp_context, catalog, table.namespace_items, table.name);
+			IRCAPI::CommitTableDelete(temp_context, rest, table.namespace_items, table.name);
 			DUCKDB_LOG(temp_context, IcebergLogType, "Iceberg Transaction Cleanup, dropped table '%s'", table_name);
 		} catch (std::exception &ex) {
 			DUCKDB_LOG(temp_context, IcebergLogType, "Iceberg Transaction Cleanup, failed to drop table '%s': %s",

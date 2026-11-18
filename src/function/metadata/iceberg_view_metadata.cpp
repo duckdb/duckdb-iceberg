@@ -9,6 +9,7 @@
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "catalog/rest/api/url_utils.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/rest/iceberg_rest_backend.hpp"
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
 #include "rest_catalog/objects/list.hpp"
 #include "rest_catalog/objects/load_view_result.hpp"
@@ -44,17 +45,18 @@ static unique_ptr<HTTPResponse> MakeRequest(ClientContext &context, const Iceber
 	auto &ic_catalog = bind_data.ic_catalog;
 	auto &ic_schema = bind_data.ic_schema;
 
-	auto url_builder = ic_catalog.GetBaseUrl();
-	url_builder.AddPrefixComponents(ic_catalog.prefix);
+	auto &rest = IcebergRestBackend::Get(ic_catalog);
+	auto url_builder = rest.GetBaseUrl();
+	url_builder.AddPrefixComponents(rest.prefix);
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("namespaces"));
 	url_builder.AddPathComponent(
-	    IRCPathComponent::NamespaceComponent(ic_schema.namespace_items, ic_catalog.namespace_separator));
+	    IRCPathComponent::NamespaceComponent(ic_schema.namespace_items, rest.namespace_separator));
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("views"));
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent(bind_data.view_name));
 
 	HTTPHeaders headers(*context.db);
 	unique_ptr<HTTPResponse> response =
-	    ic_catalog.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers);
+	    rest.auth_handler->Request(RequestType::GET_REQUEST, context, url_builder, headers);
 	if (!response->Success()) {
 		throw IOException("GET request to '%s' failed with status %s: %s", url_builder.GetURLEncoded(),
 		                  EnumUtil::ToString(response->status), response->body);
