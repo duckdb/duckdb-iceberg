@@ -8,6 +8,7 @@
 #pragma once
 
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/types/value.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/unique_ptr.hpp"
 
@@ -16,6 +17,55 @@
 namespace duckdb {
 
 class IcebergCommitPlan;
+class IcebergScanOrder;
+struct IcebergTableFilters;
+class SecretEntry;
+struct CreateSecretInput;
+struct IcebergScanPlanContext;
+struct IcebergServerSideScanPlan;
+
+//! Credentials a catalog vended anew for a table
+struct IcebergVendedCredentials {
+	vector<IcebergStorageCredential> storage_credentials;
+	//! Table config that replaces the config the table was loaded with; unset keeps it
+	optional<case_insensitive_map_t<string>> config;
+};
+
+//! Optional backend functionality: the catalog vends storage credentials with its tables (IcebergTableAccess) and
+//! refreshes them when they expire.
+class IcebergCredentialVending {
+public:
+	virtual ~IcebergCredentialVending();
+
+public:
+	//! Whether the tables of this catalog are read with the credentials it vends
+	virtual bool VendsCredentials() const = 0;
+	//! The secret options every vended secret of this catalog starts from (e.g. the region of the catalog's own
+	//! credentials)
+	virtual case_insensitive_map_t<Value> GetSecretDefaults(ClientContext &context) = 0;
+	//! Adjusts the secret built from a table's vended config before it is stored
+	virtual void AdjustConfigSecret(ClientContext &context, CreateSecretInput &info) = 0;
+	//! The HTTP secret (e.g. a proxy) whose options every vended secret carries, if any
+	virtual unique_ptr<SecretEntry> GetHTTPSecret(ClientContext &context) = 0;
+	//! Newly vended credentials for a table
+	virtual IcebergCatalogResult<IcebergVendedCredentials> LoadCredentials(ClientContext &context,
+	                                                                       const IcebergEntryId &id) = 0;
+};
+
+//! Optional backend functionality: the catalog plans table scans on the server.
+class IcebergServerScanPlanning {
+public:
+	virtual ~IcebergServerScanPlanning();
+
+public:
+	//! Whether the catalog plans scans at all
+	virtual bool PlansScans() const = 0;
+	//! Plans the scan of 'table' at the snapshot of 'context'. Returns false if the server declines to plan it;
+	//! throws if planning fails
+	virtual bool PlanScan(IcebergScanPlanContext &context, IcebergTable &table, const IcebergTableFilters &filters,
+	                      const IcebergScanOrder &scan_order, IcebergServerSideScanPlan &result) = 0;
+};
+
 //! How DROP SCHEMA behaves
 enum class IcebergDropNamespaceMode : uint8_t {
 	//! A namespace must be empty to be dropped; CASCADE is refused
@@ -121,6 +171,16 @@ public:
 	virtual void Commit(ClientContext &context, IcebergCommitPlan &plan) = 0;
 	//! Undoes what was published ahead of the commit (CreatedTables of the plan). Must not throw
 	virtual void Abort(ClientContext &context, IcebergCommitPlan &plan);
+
+	//===--------------------------------------------------------------------===//
+	// Optional functionality
+	//===--------------------------------------------------------------------===//
+	virtual optional_ptr<IcebergCredentialVending> GetCredentialVending() {
+		return nullptr;
+	}
+	virtual optional_ptr<IcebergServerScanPlanning> GetServerScanPlanning() {
+		return nullptr;
+	}
 
 	//===--------------------------------------------------------------------===//
 	// Typed access, for the functionality of one backend type

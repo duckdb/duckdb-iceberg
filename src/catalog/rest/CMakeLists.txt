@@ -9,6 +9,7 @@ add_library(
   iceberg_load_table_cache.cpp
   iceberg_rest_backend.cpp
   iceberg_rest_commit.cpp
+  iceberg_rest_scan_planning.cpp
   iceberg_schema_set.cpp
   iceberg_table_prefetch.cpp
   iceberg_table_set.cpp

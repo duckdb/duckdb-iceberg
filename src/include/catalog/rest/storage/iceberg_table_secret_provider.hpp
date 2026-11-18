@@ -8,7 +8,7 @@ namespace duckdb {
 class ExtensionLoader;
 class ClientContext;
 class BaseSecret;
-class IcebergCatalog;
+class IcebergRestBackend;
 struct SecretEntry;
 
 //! Secret provider for Iceberg vended table credentials.
@@ -23,7 +23,7 @@ public:
 	static bool SupportsStorageType(const string &storage_type);
 	static void Register(ExtensionLoader &loader);
 	static void AddHTTPSecretsToOptions(SecretEntry &http_secret_entry, case_insensitive_map_t<Value> &options);
-	static unique_ptr<SecretEntry> GetHTTPSecretForCatalog(ClientContext &context, IcebergCatalog &catalog);
+	static unique_ptr<SecretEntry> GetHTTPSecretForCatalog(ClientContext &context, IcebergRestBackend &catalog);
 	static Value MakeRefreshInfo(const string &catalog_name, const string &schema_name, const string &table_name);
 	static unique_ptr<BaseSecret> CreateSecret(ClientContext &context, CreateSecretInput &input);
 };

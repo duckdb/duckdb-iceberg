@@ -4,6 +4,12 @@
 
 namespace duckdb {
 
+IcebergCredentialVending::~IcebergCredentialVending() {
+}
+
+IcebergServerScanPlanning::~IcebergServerScanPlanning() {
+}
+
 IcebergCatalogBackend::IcebergCatalogBackend() {
 }
 

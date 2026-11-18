@@ -29,7 +29,9 @@ class IcebergCatalog;
 //! A catalog backend that speaks the Iceberg REST protocol. It owns everything about the server: the authorization,
 //! the base URL and prefix, the endpoints and properties the server advertised in /v1/config, and the LoadTable
 //! responses it returned (the MAX_TABLE_STALENESS cache and their ETags).
-class IcebergRestBackend : public IcebergCatalogBackend {
+class IcebergRestBackend : public IcebergCatalogBackend,
+                           public IcebergCredentialVending,
+                           public IcebergServerScanPlanning {
 public:
 	static constexpr IcebergBackendTypeId TYPE = "iceberg.rest";
 	static constexpr const char *DESCRIPTION = "REST Catalog";
@@ -76,6 +78,32 @@ public:
 	IcebergCreatedTable CreateTable(ClientContext &context, const IcebergEntryId &id, IcebergNewTable &table) override;
 	void Commit(ClientContext &context, IcebergCommitPlan &plan) override;
 	void Abort(ClientContext &context, IcebergCommitPlan &plan) override;
+
+	optional_ptr<IcebergCredentialVending> GetCredentialVending() override {
+		return this;
+	}
+	optional_ptr<IcebergServerScanPlanning> GetServerScanPlanning() override {
+		return this;
+	}
+
+	//===--------------------------------------------------------------------===//
+	// IcebergCredentialVending
+	//===--------------------------------------------------------------------===//
+	//! ACCESS_DELEGATION_MODE 'vended_credentials'
+	bool VendsCredentials() const override;
+	case_insensitive_map_t<Value> GetSecretDefaults(ClientContext &context) override;
+	void AdjustConfigSecret(ClientContext &context, CreateSecretInput &info) override;
+	unique_ptr<SecretEntry> GetHTTPSecret(ClientContext &context) override;
+	IcebergCatalogResult<IcebergVendedCredentials> LoadCredentials(ClientContext &context,
+	                                                               const IcebergEntryId &id) override;
+
+	//===--------------------------------------------------------------------===//
+	// IcebergServerScanPlanning
+	//===--------------------------------------------------------------------===//
+	//! Whether the server advertises the plan endpoint
+	bool PlansScans() const override;
+	bool PlanScan(IcebergScanPlanContext &context, IcebergTable &table, const IcebergTableFilters &filters,
+	              const IcebergScanOrder &scan_order, IcebergServerSideScanPlan &result) override;
 
 public:
 	//===--------------------------------------------------------------------===//

@@ -357,7 +357,7 @@ static void FetchCredentials(ClientContext &context, IcebergTable &table_info, c
 	}
 	auto doc = ICUtils::APIResultToDoc(response->body);
 	auto credentials = rest_api_objects::LoadCredentialsResponse::FromJSON(doc->GetRoot());
-	result.storage_credentials = std::move(credentials.storage_credentials);
+	result.storage_credentials = IcebergRestBackend::ToStorageCredentials(credentials.storage_credentials);
 }
 
 static idx_t GetPollDelay(ClientContext &context, const HTTPResponse &response, idx_t fallback_ms) {
@@ -453,7 +453,8 @@ bool IcebergServerSideScanPlanning::Plan(ClientContext &context, IcebergTable &t
 				auto completed = rest_api_objects::CompletedPlanningResult::FromJSON(root);
 				AppendTasks(std::move(completed.scan_tasks), table_info.GetMetadata(), accumulator);
 				if (completed.object_10.storage_credentials) {
-					result.storage_credentials = std::move(*completed.object_10.storage_credentials);
+					result.storage_credentials =
+					    IcebergRestBackend::ToStorageCredentials(*completed.object_10.storage_credentials);
 				}
 				auto plan_id = root.GetMember("plan-id");
 				if (plan_id.IsString()) {

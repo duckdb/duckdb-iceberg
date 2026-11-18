@@ -261,31 +261,11 @@ IRCAPITableCredentials
 IcebergTable::GetVendedCredentials(ClientContext &context, const vector<IcebergStorageCredential> &storage_credentials,
                                    optional_ptr<const case_insensitive_map_t<string>> config_override) const {
 	IRCAPITableCredentials result;
-	auto &rest = IcebergRestBackend::Get(catalog);
 	auto secret_base_name = UUID::ToString(UUID::GenerateRandomUUID());
 	case_insensitive_map_t<Value> user_defaults;
-	if (rest.auth_handler->type == IcebergAuthorizationType::SIGV4) {
-		auto &sigv4_auth = rest.auth_handler->Cast<SIGV4Authorization>();
-		auto catalog_credentials = IcebergCatalog::GetStorageSecret(context, sigv4_auth.secret);
-		// start with the credentials needed for the catalog and overwrite information contained
-		// in the vended credentials. We do it this way to maintain the region info from the catalog credentials
-		if (catalog_credentials) {
-			auto kv_secret = dynamic_cast<const KeyValueSecret &>(*catalog_credentials->secret);
-			for (auto &option : kv_secret.secret_map) {
-				// Ignore refresh info.
-				// if the credentials are the same as for the catalog, then refreshing the catalog secret is enough
-				// otherwise the vended credentials contain their own information for refreshing.
-				if (option.first != "refresh_info" && option.first != "refresh" && option.first != "expiration_epoch") {
-					user_defaults.emplace(option);
-				}
-			}
-		}
-		if (!sigv4_auth.sigv4_region.empty()) {
-			user_defaults.emplace("region", Value(sigv4_auth.sigv4_region));
-		}
-	}
-	if (!rest.options.default_region.empty()) {
-		user_defaults["region"] = rest.options.default_region;
+	auto vending = catalog.GetBackend().GetCredentialVending();
+	if (vending) {
+		user_defaults = vending->GetSecretDefaults(context);
 	}
 
 	// Detect storage type from metadata location
@@ -716,7 +696,8 @@ static void AddHTTPSecretsToOptions(SecretEntry &http_secret_entry, case_insensi
 
 void IcebergTable::LoadCredentials(ClientContext &context) const {
 	VerifyReadEncryptionSupported();
-	if (IcebergRestBackend::Get(catalog).options.access_mode != IRCAccessDelegationMode::VENDED_CREDENTIALS) {
+	auto vending = catalog.GetBackend().GetCredentialVending();
+	if (!vending || !vending->VendsCredentials()) {
 		// assume secret already exists
 		return;
 	}
@@ -744,8 +725,8 @@ static void StoreVendedSecret(ClientContext &context, CreateSecretInput &info) {
 
 void IcebergTable::LoadCredentials(ClientContext &context, IRCAPITableCredentials table_credentials) const {
 	auto &transaction = IcebergTransaction::Get(context, catalog);
-	auto &rest = IcebergRestBackend::Get(catalog);
-	if (rest.options.access_mode != IRCAccessDelegationMode::VENDED_CREDENTIALS) {
+	auto vending = catalog.GetBackend().GetCredentialVending();
+	if (!vending || !vending->VendsCredentials()) {
 		// assume secret already exists
 		return;
 	}
@@ -753,7 +734,7 @@ void IcebergTable::LoadCredentials(ClientContext &context, IRCAPITableCredential
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto metadata_path = GetMetadata().GetMetadataPath(fs);
 
-	auto http_secret_entry = IcebergTableSecretProvider::GetHTTPSecretForCatalog(context, catalog);
+	auto http_secret_entry = vending->GetHTTPSecret(context);
 
 	if (!table_credentials.config) {
 		for (auto &info : table_credentials.storage_credentials) {
@@ -802,34 +783,7 @@ void IcebergTable::LoadCredentials(ClientContext &context, IRCAPITableCredential
 	                 IcebergLogType::Redact(context, info.name.GetIdentifierName()),
 	                 IcebergLogType::Redact(context, info.scope), scope_source);
 
-	if (StringUtil::StartsWith(rest.base_uri, "glue")) {
-		auto &sigv4 = rest.auth_handler->Cast<SIGV4Authorization>();
-		auto secret_entry = IcebergCatalog::GetStorageSecret(context, sigv4.secret);
-		auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
-
-		//! Override the endpoint if 'glue' is the host of the catalog
-		auto region = kv_secret.TryGetValue("region").ToString();
-		auto endpoint = "s3." + region + ".amazonaws.com";
-		info.options["endpoint"] = endpoint;
-	} else if (StringUtil::StartsWith(rest.base_uri, "s3tables")) {
-		auto &sigv4 = rest.auth_handler->Cast<SIGV4Authorization>();
-		auto secret_entry = IcebergCatalog::GetStorageSecret(context, sigv4.secret);
-		auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
-
-		//! Override all the options if 's3tables' is the host of the catalog
-		auto substrings = StringUtil::Split(rest.GetWarehouse(), ":");
-		D_ASSERT(substrings.size() == 6);
-		auto region = substrings[3];
-		auto endpoint = "s3." + region + ".amazonaws.com";
-
-		info.options = {{"key_id", kv_secret.TryGetValue("key_id").ToString()},
-		                {"secret", kv_secret.TryGetValue("secret").ToString()},
-		                {"session_token", kv_secret.TryGetValue("session_token").IsNull()
-		                                      ? ""
-		                                      : kv_secret.TryGetValue("session_token").ToString()},
-		                {"region", region},
-		                {"endpoint", endpoint}};
-	}
+	vending->AdjustConfigSecret(context, info);
 
 	if (http_secret_entry) {
 		IcebergTableSecretProvider::AddHTTPSecretsToOptions(*http_secret_entry, info.options);

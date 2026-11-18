@@ -140,8 +140,7 @@ static unique_ptr<SecretEntry> LookupHTTPSecretForCatalog(ClientContext &context
 }
 
 unique_ptr<SecretEntry> IcebergTableSecretProvider::GetHTTPSecretForCatalog(ClientContext &context,
-                                                                            IcebergCatalog &ic_catalog) {
-	auto &catalog = IcebergRestBackend::Get(ic_catalog);
+                                                                            IcebergRestBackend &catalog) {
 	switch (catalog.auth_handler->type) {
 	case IcebergAuthorizationType::SIGV4: {
 		auto &sigv4 = catalog.auth_handler->Cast<SIGV4Authorization>();
@@ -179,22 +178,24 @@ static CreateSecretInput ReVendVendedCredentials(ClientContext &context, CreateS
 	auto &table_entry = table_entry_p->Cast<IcebergTableSchemaVersion>();
 	auto &table_info = table_entry.table_info;
 
-	auto refreshed_credentials = IRCAPI::GetTableCredentials(
-	    context, IcebergRestBackend::Get(ic_catalog), iceberg_schema.namespace_items, table_name.GetIdentifierName());
-	if (refreshed_credentials.error_) {
-		throw HTTPException(StringUtil::Format("Could not refresh Iceberg vended credentials for table '%s': "
-		                                       "GetTableInformation returned response code %s with message \"%s\"",
-		                                       table_name.GetIdentifierName(),
-		                                       EnumUtil::ToString(refreshed_credentials.status_),
-		                                       refreshed_credentials.error_->_error.message));
+	auto vending = ic_catalog.GetBackend().GetCredentialVending();
+	if (!vending) {
+		throw InvalidInputException("Iceberg %s '%s' does not vend credentials", ic_catalog.GetBackend().Name(),
+		                            catalog_name);
 	}
-	auto &response = refreshed_credentials.result_;
+	auto refreshed_credentials = vending->LoadCredentials(
+	    context, IcebergEntryId(IcebergNamespace(iceberg_schema.namespace_items), table_name.GetIdentifierName()));
+	if (refreshed_credentials.error) {
+		throw HTTPException(StringUtil::Format("Could not refresh Iceberg vended credentials for table '%s': %s",
+		                                       table_name.GetIdentifierName(),
+		                                       refreshed_credentials.error->error.RawMessage()));
+	}
+	auto &response = refreshed_credentials.value;
 	optional_ptr<const case_insensitive_map_t<string>> config_override;
 	if (response.config) {
 		config_override = *response.config;
 	}
-	auto credentials = table_info.GetVendedCredentials(
-	    context, IcebergRestBackend::ToStorageCredentials(response.storage_credentials), config_override);
+	auto credentials = table_info.GetVendedCredentials(context, response.storage_credentials, config_override);
 	auto log_table_name =
 	    IcebergLogType::Redact(context, StringUtil::Format("%s.%s.%s", catalog_name, schema_name, table_name));
 
@@ -246,7 +247,7 @@ static CreateSecretInput ReVendVendedCredentials(ClientContext &context, CreateS
 	result.on_conflict = OnCreateConflict::REPLACE_ON_CONFLICT;
 	result.persist_type = input.persist_type;
 
-	auto http_secret_entry = IcebergTableSecretProvider::GetHTTPSecretForCatalog(context, ic_catalog);
+	auto http_secret_entry = vending->GetHTTPSecret(context);
 	if (http_secret_entry) {
 		IcebergTableSecretProvider::AddHTTPSecretsToOptions(*http_secret_entry, result.options);
 	}
