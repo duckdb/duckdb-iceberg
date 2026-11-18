@@ -14,7 +14,7 @@
 
 #include "catalog/rest/iceberg_table_metadata_cache.hpp"
 #include "common/iceberg_utils.hpp"
-#include "iceberg_attach.hpp"
+#include "catalog/rest/iceberg_rest_options.hpp"
 
 namespace duckdb {
 
@@ -64,7 +64,7 @@ private:
 
 class LoadTableResultCache {
 public:
-	LoadTableResultCache(IcebergAttachOptions &attach_options) : attach_options(attach_options) {
+	LoadTableResultCache(IcebergRestOptions &attach_options) : attach_options(attach_options) {
 	}
 
 public:
@@ -110,7 +110,7 @@ private:
 	void Store(const string &table_key, shared_ptr<const IcebergLoadTableResponse> result, string etag)
 	    DUCKDB_REQUIRES(lock);
 
-	IcebergAttachOptions &attach_options;
+	IcebergRestOptions &attach_options;
 	annotated_mutex lock;
 	unordered_map<string, MetadataCacheValue> tables DUCKDB_GUARDED_BY(lock);
 	unordered_map<string, PendingLoads> pending_loads DUCKDB_GUARDED_BY(lock);

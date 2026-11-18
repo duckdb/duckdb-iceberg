@@ -2,16 +2,19 @@ add_subdirectory(api)
 add_subdirectory(catalog_entry)
 add_subdirectory(storage)
 add_subdirectory(transaction)
+add_subdirectory(vendor)
 
 add_library(
   iceberg_catalog_rest OBJECT
   iceberg_catalog.cpp
   iceberg_load_table_cache.cpp
+  iceberg_rest_attach.cpp
   iceberg_rest_backend.cpp
   iceberg_rest_commit.cpp
   iceberg_rest_scan_planning.cpp
   iceberg_schema_set.cpp
   iceberg_table_prefetch.cpp
+  iceberg_table_metadata_cache.cpp
   iceberg_table_set.cpp
   iceberg_view_entry.cpp)
 set(ALL_OBJECT_FILES

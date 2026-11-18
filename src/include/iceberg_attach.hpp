@@ -9,8 +9,6 @@
 
 namespace duckdb {
 
-enum class IcebergEndpointType : uint8_t { AWS_S3TABLES, AWS_GLUE, INVALID };
-
 enum class IcebergAuthorizationType : uint8_t { OAUTH2, SIGV4, NONE, INVALID };
 
 enum class IRCAccessDelegationMode : uint8_t { NONE, VENDED_CREDENTIALS };
@@ -31,40 +29,12 @@ enum class IcebergDefaultSchemaPolicy : uint8_t { THROW, CREATE, UNENFORCED };
 //! (S3 Tables) or only store (Glue) lowercase names; column names are never changed.
 enum class IcebergIdentifierCase : uint8_t { PRESERVE_CASE, LOWERCASE };
 
+//! The ATTACH options every Iceberg catalog type accepts. The options of a catalog type (e.g. IcebergRestOptions)
+//! belong to its backend.
 struct IcebergAttachOptions {
-	string catalog_uri;
-	string warehouse;
-	string prefix;
-	string namespace_separator = "\x1f";
-	string default_region;
-	string secret;
-	string name;
-	// some catalogs do not yet support stage create
-	bool stage_create_tables = true;
-	// some catalogs reject the multi-table transactions/commit endpoint; opt out of it here
-	bool disable_multi_table_commit = false;
-	// some catalogs fully initialize metadata during non-staged CREATE TABLE and reject follow-up metadata updates
-	bool skip_create_table_metadata_updates = false;
-	// if the catalog allows manual cleaning up of storage files.
-	bool remove_files_on_delete = true;
-	bool support_nested_namespaces = false;
-	bool encode_entire_prefix = false;
-	// in rest api spec, purge requested defaults to false.
-	bool purge_requested = false;
-	// some catalogs (e.g. AWS Glue) do not assign a table location server-side; derive one from the namespace's
-	// 'location' property
-	bool default_table_location_from_namespace = false;
-	// load the authoritative table metadata from the LoadTableResult's 'metadata-location' instead of
-	// the embedded response metadata, see duckdb-iceberg#1403
-	bool use_metadata_location = false;
 	IcebergTableResolution table_resolution = IcebergTableResolution::LAZY;
 	IcebergDefaultSchemaPolicy default_schema_policy = IcebergDefaultSchemaPolicy::THROW;
 	IcebergIdentifierCase identifier_case = IcebergIdentifierCase::PRESERVE_CASE;
-	IRCAccessDelegationMode access_mode = IRCAccessDelegationMode::VENDED_CREDENTIALS;
-	IcebergAuthorizationType authorization_type = IcebergAuthorizationType::INVALID;
-	unordered_map<string, Value> options;
-	// max staleness for cached table metadata in minutes (optional - if not set, always request fresh metadata)
-	optional_idx max_table_staleness_micros;
 };
 
 unordered_map<string, Value> NormalizeIcebergAttachOptions(const unordered_map<string, Value> &options);
@@ -76,6 +46,8 @@ void MergeIcebergOptions(unordered_map<string, Value> &target, const unordered_m
 bool IsIcebergAuthorizationOption(const string &name);
 void FilterIcebergAuthorizationOptions(unordered_map<string, Value> &options, IcebergAuthorizationType type);
 
+//! ATTACH ... (TYPE ICEBERG): resolves the backend factory of the catalog type (CATALOG_TYPE, ENDPOINT_TYPE), lets it
+//! create the backend, and creates the IcebergCatalog that owns it
 struct IcebergAttach {
 	static unique_ptr<Catalog> Attach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,
 	                                  AttachedDatabase &db, const string &name, AttachInfo &info,

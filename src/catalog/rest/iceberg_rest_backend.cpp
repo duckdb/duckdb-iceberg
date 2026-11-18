@@ -17,10 +17,8 @@
 
 namespace duckdb {
 
-IcebergRestBackend::IcebergRestBackend(const Identifier &catalog_name, IcebergAttachOptions options_p,
-                                       unique_ptr<IcebergAuthorization> auth_handler_p)
-    : catalog_name(catalog_name), auth_handler(std::move(auth_handler_p)), base_uri(options_p.catalog_uri),
-      version("v1"), options(std::move(options_p)), table_request_cache(options), warehouse(options.warehouse) {
+IcebergRestBackend::IcebergRestBackend(const Identifier &catalog_name)
+    : catalog_name(catalog_name), version("v1"), table_request_cache(options) {
 }
 
 IcebergRestBackend::~IcebergRestBackend() {
@@ -93,7 +91,7 @@ IRCEndpointBuilder IcebergRestBackend::GetBaseUrl() const {
 	return url_builder;
 }
 
-void IcebergRestBackend::AddDefaultSupportedEndpoints() {
+void IcebergRestBackend::AddDefaultEndpoints() {
 	// insert namespaces based on REST API spec.
 	// List namespaces
 	supported_urls.insert("GET /v1/{prefix}/namespaces");
@@ -126,58 +124,6 @@ void IcebergRestBackend::AddDefaultSupportedEndpoints() {
 	// Views aren't in the spec defaults; catalogs that support them advertise via /v1/config
 }
 
-void IcebergRestBackend::AddS3TablesEndpoints() {
-	// insert namespaces based on REST API spec.
-	// List namespaces
-	supported_urls.insert("GET /v1/{prefix}/namespaces");
-	// create namespace
-	supported_urls.insert("POST /v1/{prefix}/namespaces");
-	// Load metadata for a Namespace
-	supported_urls.insert("GET /v1/{prefix}/namespaces/{namespace}");
-	// Drop a namespace
-	supported_urls.insert("DELETE /v1/{prefix}/namespaces/{namespace}");
-	// list all table identifiers
-	supported_urls.insert("GET /v1/{prefix}/namespaces/{namespace}/tables");
-	// create table in the namespace
-	supported_urls.insert("POST /v1/{prefix}/namespaces/{namespace}/tables");
-	// get table from the catalog
-	supported_urls.insert("GET /v1/{prefix}/namespaces/{namespace}/tables/{table}");
-	// commit updates to a table
-	supported_urls.insert("POST /v1/{prefix}/namespaces/{namespace}/tables/{table}");
-	// drop table from a catalog
-	supported_urls.insert("DELETE /v1/{prefix}/namespaces/{namespace}/tables/{table}");
-	// Rename a table from one identifier to another.
-	supported_urls.insert("POST /v1/{prefix}/tables/rename");
-	// table exists
-	supported_urls.insert("HEAD /v1/{prefix}/namespaces/{namespace}/tables/{table}");
-	// namespace exists
-	supported_urls.insert("HEAD /v1/{prefix}/namespaces/{namespace}");
-}
-
-void IcebergRestBackend::AddGlueEndpoints() {
-	// insert namespaces based on REST API spec.
-	// List namespaces
-	supported_urls.insert("GET /v1/{prefix}/namespaces");
-	// create namespace
-	supported_urls.insert("POST /v1/{prefix}/namespaces");
-	// Load metadata for a Namespace
-	supported_urls.insert("GET /v1/{prefix}/namespaces/{namespace}");
-	// Drop a namespace
-	supported_urls.insert("DELETE /v1/{prefix}/namespaces/{namespace}");
-	// list all table identifiers
-	supported_urls.insert("GET /v1/{prefix}/namespaces/{namespace}/tables");
-	// create table in the namespace
-	supported_urls.insert("POST /v1/{prefix}/namespaces/{namespace}/tables");
-	// get table from the catalog
-	supported_urls.insert("GET /v1/{prefix}/namespaces/{namespace}/tables/{table}");
-	// table exists
-	supported_urls.insert("HEAD /v1/{prefix}/namespaces/{namespace}/tables/{table}");
-	// commit updates to a table
-	supported_urls.insert("POST /v1/{prefix}/namespaces/{namespace}/tables/{table}");
-	// drop table from a catalog
-	supported_urls.insert("DELETE /v1/{prefix}/namespaces/{namespace}/tables/{table}");
-}
-
 void IcebergRestBackend::ParsePrefix() {
 	prefix.clear();
 	auto &prefix_property = options.prefix;
@@ -193,9 +139,7 @@ void IcebergRestBackend::ParsePrefix() {
 	}
 }
 
-void IcebergRestBackend::Configure(ClientContext &context, const rest_api_objects::CatalogConfig &catalog_config,
-                                   IcebergEndpointType endpoint_type) {
-	this->endpoint_type = endpoint_type;
+void IcebergRestBackend::Configure(ClientContext &context, const rest_api_objects::CatalogConfig &catalog_config) {
 	base_uri = options.catalog_uri;
 	StringUtil::RTrim(base_uri, "/");
 	if (base_uri.empty()) {
@@ -217,15 +161,9 @@ void IcebergRestBackend::Configure(ClientContext &context, const rest_api_object
 			supported_urls.insert(endpoint);
 		}
 	}
-	// should be if s3tables
-	if (!catalog_config.endpoints && endpoint_type == IcebergEndpointType::AWS_S3TABLES) {
-		supported_urls.clear();
-		AddS3TablesEndpoints();
-	} else if (!catalog_config.endpoints && endpoint_type == IcebergEndpointType::AWS_GLUE) {
-		supported_urls.clear();
-		AddGlueEndpoints();
-	} else if (!catalog_config.endpoints) {
-		AddDefaultSupportedEndpoints();
+	if (!catalog_config.endpoints) {
+		// The server advertises no endpoints: assume the ones this kind of catalog supports
+		AddDefaultEndpoints();
 	}
 
 	if (prefix.empty()) {
@@ -235,10 +173,7 @@ void IcebergRestBackend::Configure(ClientContext &context, const rest_api_object
 	capabilities.list_views = supported_urls.count("GET /v1/{prefix}/namespaces/{namespace}/views");
 	capabilities.load_views = supported_urls.count("GET /v1/{prefix}/namespaces/{namespace}/views/{view}");
 	capabilities.create_views = supported_urls.count("POST /v1/{prefix}/namespaces/{namespace}/views");
-	//! Deleting a Glue namespace also deletes its tables
-	capabilities.drop_namespace = endpoint_type == IcebergEndpointType::AWS_GLUE
-	                                  ? IcebergDropNamespaceMode::CASCADE_ONLY
-	                                  : IcebergDropNamespaceMode::RESTRICT;
+	capabilities.drop_namespace = IcebergDropNamespaceMode::RESTRICT;
 	// some catalogs reject the multi-table transactions/commit endpoint; DISABLE_MULTI_TABLE_COMMIT opts out of it
 	capabilities.atomic_multi_table_commit =
 	    !options.disable_multi_table_commit && supported_urls.count("POST /v1/{prefix}/transactions/commit");
@@ -248,13 +183,7 @@ void IcebergRestBackend::Configure(ClientContext &context, const rest_api_object
 	capabilities.atomic_catalog_commit = false;
 	//! certain catalogs (S3 Tables) don't allow deletes and garbage-collect the files themselves
 	capabilities.delete_written_files = options.remove_files_on_delete;
-}
-
-string IcebergRestBackend::ProductName() const {
-	if (endpoint_type == IcebergEndpointType::AWS_GLUE) {
-		return "AWS Glue";
-	}
-	return Name();
+	AdjustCapabilities(capabilities);
 }
 
 //===--------------------------------------------------------------------===//
@@ -445,6 +374,8 @@ case_insensitive_map_t<Value> IcebergRestBackend::GetSecretDefaults(ClientContex
 }
 
 void IcebergRestBackend::AdjustConfigSecret(ClientContext &context, CreateSecretInput &info) {
+	// The AWS storage secrets follow the host of the catalog URI rather than ENDPOINT_TYPE, as they always have: a
+	// URI-attached catalog on those hosts gets them too
 	if (StringUtil::StartsWith(base_uri, "glue")) {
 		auto &sigv4 = auth_handler->Cast<SIGV4Authorization>();
 		auto secret_entry = IcebergCatalog::GetStorageSecret(context, sigv4.secret);

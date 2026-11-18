@@ -50,6 +50,7 @@ static const IcebergOption OPTIONS[] = {
     {"encode_entire_prefix", "encode_entire_prefix"},
     {"max_table_staleness", "max_table_staleness"},
     // Local bootstrap controls are never accepted from a remote catalog.
+    {"catalog_type", "catalog_type", false, false},
     {"endpoint_type", "endpoint_type", false, false},
     {"secret", "secret", true, false},
 };

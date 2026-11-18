@@ -1,4 +1,7 @@
 #include "iceberg_extension.hpp"
+#include "catalog/iceberg_backend_registry.hpp"
+#include "catalog/rest/vendor/iceberg_glue_rest_backend.hpp"
+#include "catalog/rest/vendor/iceberg_s3tables_rest_backend.hpp"
 #include "execution/operator/iceberg_written_files.hpp"
 
 #include "duckdb/main/secret/secret_manager.hpp"
@@ -220,6 +223,11 @@ static void LoadInternal(ExtensionLoader &loader) {
 	auto &log_manager = instance.GetLogManager();
 	log_manager.RegisterLogType(make_uniq<IcebergLogType>());
 	log_manager.RegisterLogType(make_uniq<IcebergDataFileWrittenLogType>());
+	auto backend_registry = make_shared_ptr<IcebergBackendRegistry>();
+	backend_registry->Register(IcebergRestBackend::Factory());
+	backend_registry->Register(IcebergGlueRestBackend::Factory());
+	backend_registry->Register(IcebergS3TablesRestBackend::Factory());
+	ExtensionCallback::Register(config, std::move(backend_registry));
 	StorageExtension::Register(config, "iceberg", make_shared_ptr<IRCStorageExtension>());
 	PlannerExtension::Register(config, IcebergPlanner::Create());
 }

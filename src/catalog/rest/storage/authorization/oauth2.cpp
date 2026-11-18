@@ -230,7 +230,7 @@ string OAuth2Authorization::GetToken(ClientContext &context, const OAuth2Credent
 }
 
 unique_ptr<OAuth2Authorization>
-OAuth2Authorization::FromAttachOptions(AttachedDatabase &db, ClientContext &context, IcebergAttachOptions &input,
+OAuth2Authorization::FromAttachOptions(AttachedDatabase &db, ClientContext &context, IcebergRestOptions &input,
                                        optional_ptr<unordered_map<string, Value>> client_options) {
 	unordered_map<string, Value> remaining_options;
 	case_insensitive_map_t<Value> create_secret_options;

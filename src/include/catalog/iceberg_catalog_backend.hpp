@@ -126,6 +126,9 @@ public:
 	virtual IcebergNamespace ParseNamespace(const string &schema_name) const;
 	//! Throws if the existence can't be established (e.g. the request is refused)
 	virtual bool NamespaceExists(ClientContext &context, const IcebergNamespace &ns) = 0;
+	//! Creates a namespace right away, outside of a transaction (DEFAULT_SCHEMA_POLICY 'create'). A namespace that
+	//! exists already is not an error
+	virtual void CreateNamespace(ClientContext &context, const IcebergNamespace &ns) = 0;
 	//! Lists the namespaces under 'parent' (all levels, if the backend lists nested namespaces). A refused listing
 	//! returns the namespaces listed so far
 	virtual vector<IcebergNamespace> ListNamespaces(ClientContext &context, const IcebergNamespace &parent) = 0;
