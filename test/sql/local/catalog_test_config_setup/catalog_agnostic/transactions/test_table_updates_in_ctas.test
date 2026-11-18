@@ -1,0 +1,71 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_table_updates_in_ctas.test
+# description: Staged CTAS rejects input table updates without leaving partial changes
+# group: [transactions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env STAGED_CREATE_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+SET threads=4;
+
+foreach table source result
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.staged_ctas_updates_{table};
+
+endloop
+
+statement ok
+CREATE TABLE my_datalake.default.staged_ctas_updates_source (id INTEGER);
+
+# Staged creation cannot share an atomic commit with updates to another table.
+# Both the CTAS sink and its input operators register tables during execution.
+statement error
+CREATE TABLE my_datalake.default.staged_ctas_updates_result AS
+SELECT count(*) AS calls FROM (
+	SELECT * FROM set_iceberg_table_properties(my_datalake.default.staged_ctas_updates_source, {'a': '1'})
+	UNION ALL
+	SELECT * FROM set_iceberg_table_properties(my_datalake.default.staged_ctas_updates_source, {'b': '2'})
+);
+----
+cannot commit this transaction atomically
+
+statement error
+SELECT * FROM my_datalake.default.staged_ctas_updates_result;
+----
+does not exist
+
+query I
+SELECT count(*) FROM iceberg_table_properties(my_datalake.default.staged_ctas_updates_source)
+WHERE key IN ('a', 'b');
+----
+0
+
+# The failed statement must release its locks and leave the target name available.
+statement ok
+CREATE TABLE my_datalake.default.staged_ctas_updates_result AS SELECT 42 AS id;
+
+query I
+SELECT id FROM my_datalake.default.staged_ctas_updates_result;
+----
+42
+
+query I
+SELECT Success FROM set_iceberg_table_properties(my_datalake.default.staged_ctas_updates_source, {'a': 'recovered'});
+----
+1
+
+query T
+SELECT value FROM iceberg_table_properties(my_datalake.default.staged_ctas_updates_source) WHERE key = 'a';
+----
+recovered
+
+foreach table source result
+
+statement ok
+DROP TABLE my_datalake.default.staged_ctas_updates_{table};
+
+endloop

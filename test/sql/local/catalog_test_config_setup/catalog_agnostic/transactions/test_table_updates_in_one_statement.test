@@ -1,0 +1,53 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_table_updates_in_one_statement.test
+# description: Table functions that change one table in the same statement run on different threads; every change is applied
+# group: [transactions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+SET threads=4;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.one_statement;
+
+statement ok
+CREATE TABLE my_datalake.default.one_statement (a INTEGER);
+
+# Every statement is a transaction of its own, so each of them registers the table again.
+loop i 0 10
+
+# The two branches run at the same time only because count(*) is on top: a bare UNION ALL returns its branches in
+# order and runs them one after the other.
+query I
+SELECT count(*) FROM (
+	SELECT * FROM set_iceberg_table_properties(my_datalake.default.one_statement, {'a{i}': 'v'})
+	UNION ALL
+	SELECT * FROM set_iceberg_table_properties(my_datalake.default.one_statement, {'b{i}': 'v'})
+);
+----
+2
+
+# two scalar subqueries, one of them removing a property
+query II
+SELECT
+	(SELECT count(*) FROM set_iceberg_table_properties(my_datalake.default.one_statement, {'c{i}': 'v'})),
+	(SELECT count(*) FROM remove_iceberg_table_properties(my_datalake.default.one_statement, ['a{i}']));
+----
+1	1
+
+endloop
+
+# every a was removed again, every b and c is set
+query III
+SELECT
+	count(*) FILTER (key SIMILAR TO 'a[0-9]+'),
+	count(*) FILTER (key SIMILAR TO 'b[0-9]+'),
+	count(*) FILTER (key SIMILAR TO 'c[0-9]+')
+FROM iceberg_table_properties(my_datalake.default.one_statement);
+----
+0	10	10
+
+statement ok
+DROP TABLE my_datalake.default.one_statement;
