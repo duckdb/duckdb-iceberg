@@ -10,6 +10,7 @@ add_library(
   iceberg_schemas.cpp
   iceberg_partitions.cpp
   iceberg_refs.cpp
+  iceberg_remove_orphan_files.cpp
   iceberg_rewrite_data_files.cpp
   iceberg_rollback_to_snapshot.cpp
   iceberg_schema_properties_functions.cpp

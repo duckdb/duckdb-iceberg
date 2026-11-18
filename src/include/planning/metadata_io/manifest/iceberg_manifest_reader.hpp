@@ -2,6 +2,8 @@
 
 #include "planning/metadata_io/base_manifest_reader.hpp"
 
+#include <functional>
+
 namespace duckdb {
 
 struct IcebergManifestReaderInput {
@@ -26,6 +28,9 @@ public:
 
 public:
 	void Read();
+	static void ReadPaths(vector<IcebergManifestListEntry> &manifest_files, const IcebergTableMetadata &metadata,
+	                      ClientContext &context, const IcebergFileSecret &file_secret,
+	                      const std::function<void(const string &)> &visit_path);
 
 public:
 	static void ReadChunk(DataChunk &chunk, const map<idx_t, LogicalType> &partition_field_id_to_type,

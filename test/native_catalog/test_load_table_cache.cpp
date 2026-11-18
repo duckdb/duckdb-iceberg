@@ -1,6 +1,7 @@
 #define CATCH_CONFIG_RUNNER
 #include "catch.hpp"
 #include "duckdb.hpp"
+#include "duckdb/common/local_file_system.hpp"
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/logging/log_type.hpp"
 #include "catalog/rest/api/catalog_api.hpp"
@@ -9,8 +10,13 @@
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/storage/iceberg_table_secret_provider.hpp"
+#include "maintenance/orphan_scanner.hpp"
 
 #include <condition_variable>
+#include <filesystem>
+#include <functional>
+#include <initializer_list>
+#include <new>
 #include <thread>
 
 using namespace duckdb;
@@ -495,6 +501,259 @@ TEST_CASE("LoadTable does not revalidate expired Azure vended credentials", "[ic
 			}
 		}
 	}
+}
+
+TEST_CASE("Orphan cleanup compares storage references conservatively", "[iceberg_cache][orphan_cleanup]") {
+	DuckDB database(nullptr);
+	Connection connection(database);
+	auto referenced = [&](const string &candidate, std::initializer_list<const char *> paths) {
+		OrphanPathNormalizer normalizer(*connection.context);
+		auto candidate_key = normalizer.ReferenceKey(candidate);
+		OrphanFileReferences references(candidate_key);
+		for (const auto *path : paths) {
+			auto key = normalizer.ReferenceKey(path);
+			normalizer.ValidateReferenceRoute(path);
+			references.Add(path, std::move(key));
+		}
+		return references.Contains(candidate_key);
+	};
+
+	const auto *s3 = "s3://bucket/table/a.parquet";
+	CHECK(referenced(s3, {"s3a://bucket/table/a.parquet"}));
+	CHECK(referenced("s3n://bucket/table/a.parquet", {s3}));
+	CHECK(referenced(s3, {"s3://Bucket/table/a.parquet"}));
+	CHECK(referenced("s3://Bucket/table/a.parquet", {s3}));
+	CHECK_FALSE(referenced(s3, {"s3://Bucket/table/A.parquet"}));
+	CHECK(referenced("gs://bucket/table/a.parquet", {"gcs://bucket/table/a.parquet"}));
+	REQUIRE_FALSE(connection.Query("SET GLOBAL s3_url_scheme_aliases = '[oss]'::VARCHAR[]")->HasError());
+	CHECK(referenced(s3, {"oss://bucket/table/a.parquet"}));
+	CHECK_FALSE(referenced(s3, {"oss://bucket/table/b.parquet"}));
+	REQUIRE_FALSE(connection.Query("RESET GLOBAL s3_url_scheme_aliases")->HasError());
+	CHECK_THROWS_WITH(referenced(s3, {"oss://bucket/table/a.parquet"}),
+	                  Catch::Matchers::Contains("cannot verify a remote path with scheme 'oss'"));
+
+	for (const auto *path : {"s3a://bucket/table//a.parquet", "s3a://bucket/table/./a.parquet", "s3a://bucket/table/.",
+	                         "s3a://bucket/table/a.parquet/"}) {
+		CAPTURE(path);
+		CHECK_THROWS_WITH(referenced(s3, {path}), Catch::Matchers::Contains("cannot verify S3 object keys"));
+	}
+	for (const auto *path : {"s3://bucket/table/a.parquet?key=value", "s3://bucket/table/a.parquet#reference"}) {
+		CAPTURE(path);
+		CHECK_THROWS_WITH(referenced(s3, {path}), Catch::Matchers::Contains("cannot verify S3 paths containing"));
+	}
+	for (const auto *path : {"gs://bucket/table/a.parquet", "r2://bucket/table/a.parquet",
+	                         "az://bucket/table/a.parquet", "/mnt/bucket/table/a.parquet"}) {
+		CAPTURE(path);
+		CHECK_THROWS_WITH(referenced(s3, {path}), Catch::Matchers::Contains("cannot compare reference"));
+	}
+	CHECK_THROWS_WITH(referenced(s3, {"https://storage.example/bucket/table/a.parquet"}),
+	                  Catch::Matchers::Contains("cannot verify a remote path with scheme 'https'"));
+
+	const auto *dfs = "abfss://account.dfs.core.windows.net/container/a.parquet";
+	for (const auto *path : {"abfss://container@account.dfs.core.windows.net/a.parquet",
+	                         "abfs://account.dfs.core.windows.net/container/a.parquet",
+	                         "abfs://container@account.dfs.example.net/a.parquet",
+	                         "abfs://container@other.dfs.core.windows.net/a.parquet"}) {
+		CAPTURE(path);
+		CHECK(referenced(dfs, {path}));
+	}
+	const auto *blob = "azure://acct.blob.core.windows.net/archive/tab/a.parquet";
+	const auto *container = "az://archive/tab/a.parquet";
+	CHECK(referenced(container, {blob}));
+	CHECK(referenced(blob, {container}));
+	CHECK(referenced(blob, {"abfss://archive@acct.dfs.example.net:8443/tab/a.parquet"}));
+	CHECK_FALSE(referenced(container, {"azure://acct.blob.core.windows.net/other/tab/a.parquet"}));
+	CHECK_FALSE(referenced("abfss://acct.dfs.core.windows.net/archive/tab/a.parquet", {"az://archive/tab/A.parquet"}));
+	const auto *dfs_file = "abfss://archive@acct.dfs.core.windows.net/tab/a.parquet";
+	for (const auto *path :
+	     {"wasbs://archive@acct.blob.core.windows.net/tab/a.parquet",
+	      "wasbs://archive@acct.blob.core.windows.net/tab/a.parquet/",
+	      "abfss://archive@acct.dfs.core.windows.net/tab/a.parquet/", "az://archive/tab/a.parquet/"}) {
+		CAPTURE(path);
+		CHECK(referenced(dfs_file, {path}));
+		CHECK(referenced(container, {path}));
+	}
+	CHECK(referenced("az://archive/tab/a.parquet/", {"abfss://archive@acct.dfs.core.windows.net/tab/a.parquet/"}));
+	for (const auto *path : {"abfss://archive/tab/a.parquet?rev=1", "abfss://archive/tab/a.parquet#old"}) {
+		CAPTURE(path);
+		CHECK_THROWS_WITH(referenced(dfs_file, {path}),
+		                  Catch::Matchers::Contains("cannot verify Azure paths containing"));
+	}
+	for (const auto *path : {"abfs://archive@acct.dfs.core.windows.net/tab//a.parquet",
+	                         "abfss://acct.dfs.core.windows.net/archive/tab/./a.parquet", "abfss://archive/tab/.",
+	                         "azure://acct.blob.core.windows.net/archive//tab/a.parquet"}) {
+		CAPTURE(path);
+		CHECK_THROWS_WITH(referenced("abfss://archive/tab/a.parquet", {path}),
+		                  Catch::Matchers::Contains("cannot verify Azure paths"));
+	}
+
+#ifndef _WIN32
+	CHECK_FALSE(referenced("/tmp/table/back/slash/data", {"/tmp/table/back\\slash/data"}));
+	CHECK_FALSE(referenced("/tmp/Table://data/a.parquet", {"/tmp/table://data/a.parquet"}));
+#endif
+}
+
+TEST_CASE("Orphan cleanup compares scan boundaries using literal paths", "[iceberg_cache][orphan_cleanup]") {
+	const auto *s3 = "s3://bucket/table";
+	CHECK(HasOrphanPathPrefix("s3://bucket/table//metadata/v1.json", s3));
+	CHECK_FALSE(HasOrphanPathPrefix("s3a://bucket/table/data/a.parquet", s3));
+	CHECK_FALSE(HasOrphanPathPrefix("gs://bucket/table/data/a.parquet", s3));
+	CHECK_FALSE(HasOrphanPathPrefix("s3://bucket/table-other/data/a.parquet", s3));
+	CHECK_FALSE(HasOrphanPathPrefix("abfss://container@account.dfs.core.windows.net/data",
+	                                "abfss://account.dfs.core.windows.net/container/"));
+	CHECK(HasOrphanPathPrefix("/tmp/table/data/a.parquet", "/"));
+	CHECK(HasParentDirectoryReference("/tmp/table/../other"));
+	CHECK(HasParentDirectoryReference("s3://bucket/table/.."));
+	CHECK(HasParentDirectoryReference("../table"));
+	CHECK_FALSE(HasParentDirectoryReference("s3://bucket/table/.../file..parquet"));
+#ifndef _WIN32
+	CHECK_FALSE(HasOrphanPathPrefix("/tmp/table/back/slash/data", "/tmp/table/back\\slash"));
+	CHECK(HasParentDirectoryReference("/tmp/table://../outside"));
+#endif
+}
+
+class OrphanStatFileSystem final : public LocalFileSystem {
+public:
+	OrphanStatFileSystem(string path, std::function<void()> action) : path(std::move(path)), action(std::move(action)) {
+	}
+	string GetName() const override {
+		return "OrphanStatFileSystem";
+	}
+	bool CanHandleFile(const string &file) override {
+		return std::filesystem::path(file) == std::filesystem::path(path);
+	}
+	optional<FileMetadata> GetStatsIfExists(const OpenFileInfo &file, optional_ptr<FileOpener> opener) override {
+		if (action) {
+			auto run = std::move(action);
+			action = nullptr;
+			run();
+		}
+		return LocalFileSystem::GetStatsIfExists(file, opener);
+	}
+
+private:
+	string path;
+	std::function<void()> action;
+};
+
+TEST_CASE("Physical orphan cleanup deletes only the unreferenced aged file, once", "[iceberg_cache][orphan_cleanup]") {
+	LoadTableCacheTest test;
+	test.Query("COMMIT");
+	test.Query("SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL)");
+	auto fs = FileSystem::CreateLocal();
+	auto live = fs->ExpandPath(test.Query("SELECT file_path FROM iceberg_metadata(lake.default.t) WHERE content='DATA'")
+	                               ->Collection()
+	                               .GetValue(0, 0)
+	                               .ToString());
+#ifdef _WIN32
+	const auto *filename = "untracked.parquet";
+#else
+	// POSIX directory listings return literal basenames, including colons.
+	const auto *filename = "untracked:orphan.parquet";
+#endif
+	auto orphan = (std::filesystem::path(live).parent_path() / filename).string();
+	std::filesystem::copy_file(live, orphan);
+	auto old = std::filesystem::file_time_type::clock::now() - std::chrono::hours(24 * 7);
+	std::filesystem::last_write_time(live, old);
+	std::filesystem::last_write_time(orphan, old);
+	const char *cleanup = "SELECT error_code, deleted_file_count, failed_file_count "
+	                      "FROM iceberg_remove_orphan_files('lake.default.t')";
+
+	Connection writer(test.database);
+	string write_sql;
+	string expected_code = "SUCCESS";
+	SECTION("No concurrent write") {
+		auto stats = fs->GetStatsIfExists(OpenFileInfo(orphan));
+		REQUIRE(stats.has_value());
+		auto preview = test.Query("SELECT error_code, len(orphan_file_locations) "
+		                          "FROM iceberg_remove_orphan_files('lake.default.t', dry_run => true, "
+		                          "older_than => TIMESTAMP '" +
+		                          Timestamp::ToString(stats->last_modification_time) + "')");
+		REQUIRE(preview->Collection().GetValue(0, 0).ToString() == "SUCCESS");
+		REQUIRE(preview->Collection().GetValue(1, 0).GetValue<int64_t>() == 0);
+	}
+	SECTION("A concurrent append advances the snapshot") {
+		write_sql = "INSERT INTO lake.default.t VALUES (2)";
+	}
+	SECTION("GC is disabled during the scan") {
+		write_sql = "ALTER TABLE lake.default.t SET ('gc.enabled' = 'false')";
+		expected_code = "GC_DISABLED";
+	}
+	SECTION("A new table is registered under the same name") {
+		write_sql = "DROP TABLE lake.default.t; CREATE TABLE lake.default.t AS SELECT 3 AS id";
+		expected_code = "CATALOG_CONFLICT_GIVEUP";
+	}
+	bool committed = false;
+	if (!write_sql.empty()) {
+		// Put the commit between the two LoadTable requests without timing a race.
+		test.database.GetFileSystem().RegisterSubSystem(make_uniq<OrphanStatFileSystem>(orphan, [&] {
+			auto write = writer.Query(write_sql);
+			REQUIRE_FALSE(write->HasError());
+			committed = true;
+		}));
+	}
+	auto result = test.Query(cleanup);
+	REQUIRE(committed == !write_sql.empty());
+	REQUIRE(result->Collection().GetValue(0, 0).ToString() == expected_code);
+	if (expected_code != "SUCCESS") {
+		REQUIRE(result->Collection().GetValue(1, 0).GetValue<int64_t>() == 0);
+		REQUIRE(fs->FileExists(orphan));
+		return;
+	}
+	REQUIRE(result->Collection().GetValue(1, 0).GetValue<int64_t>() == 1);
+	REQUIRE(result->Collection().GetValue(2, 0).GetValue<int64_t>() == 0);
+	REQUIRE_FALSE(fs->FileExists(orphan));
+	REQUIRE(test.Query(cleanup)->Collection().GetValue(1, 0).GetValue<int64_t>() == 0);
+	REQUIRE(fs->FileExists(live));
+	auto rows = test.Query("SELECT id FROM lake.default.t ORDER BY id");
+	REQUIRE(rows->Collection().Count() == (committed ? 2 : 1));
+	REQUIRE(rows->Collection().GetValue(0, 0).GetValue<int32_t>() == 1);
+	if (committed) {
+		REQUIRE(rows->Collection().GetValue(0, 1).GetValue<int32_t>() == 2);
+	}
+}
+
+TEST_CASE("Orphan cleanup propagates interrupts and allocation failures", "[iceberg_cache][orphan_cleanup]") {
+	LoadTableCacheTest test;
+	test.Query("COMMIT");
+	test.Query("SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL)");
+	auto metadata_location =
+	    test.Query("SELECT json_extract_string(getvariable('original_response'), '$.metadata-location')")
+	        ->Collection()
+	        .GetValue(0, 0)
+	        .ToString();
+
+	std::function<void()> raise;
+	string expected_error;
+	SECTION("Interrupt") {
+		raise = [] {
+			throw InterruptException();
+		};
+		expected_error = "Interrupted!";
+	}
+	SECTION("Out of memory") {
+		raise = [] {
+			throw OutOfMemoryException("orphan metadata stat failed");
+		};
+		expected_error = "orphan metadata stat failed";
+	}
+	SECTION("Allocation failure") {
+		raise = [] {
+			throw std::bad_alloc();
+		};
+		expected_error = "Allocation failure";
+	}
+	auto &fs = test.database.GetFileSystem();
+	fs.RegisterSubSystem(make_uniq<OrphanStatFileSystem>(fs.ExpandPath(metadata_location), std::move(raise)));
+	auto preview = test.connection.Prepare(
+	    "SELECT error_code FROM iceberg_remove_orphan_files('lake.default.t', dry_run => true)");
+	REQUIRE_FALSE(preview->HasError());
+	auto failure = preview->Execute();
+	REQUIRE(failure->HasError());
+	REQUIRE(StringUtil::Contains(failure->GetError(), expected_error));
+	auto retry = preview->Execute();
+	REQUIRE_FALSE(retry->HasError());
+	REQUIRE(retry->Collection().GetValue(0, 0).ToString() == "SUCCESS");
 }
 
 int main(int argc, char **argv) {

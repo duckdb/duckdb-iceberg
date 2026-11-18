@@ -8,6 +8,10 @@ namespace duckdb {
 
 class IcebergCatalog;
 struct IcebergTable;
+class IcebergSchemaEntry;
+
+IcebergSchemaEntry &LoadIcebergSchema(ClientContext &context, const QualifiedName &table_name,
+                                      const string &function_name);
 
 IcebergCatalog &GetMaintenanceIcebergCatalog(ClientContext &context, const QualifiedName &table_name,
                                              const string &function_name);

@@ -1,0 +1,75 @@
+# name: test/sql/local/native_catalog/remove_orphan_files_local.test
+# description: Local orphan cleanup checks retention, autocommit, and literal file names
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+CREATE TABLE my_datalake.default.orphan_reused_path AS SELECT 1::INTEGER AS id;
+
+statement ok
+SET VARIABLE reused_path = (
+	SELECT json_extract_string(body::JSON, '$.metadata.location') || '/data/reused.parquet'
+	FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/orphan_reused_path', NULL)
+);
+
+statement ok
+COPY (SELECT 3::INTEGER AS id) TO (getvariable('reused_path')) (FORMAT PARQUET);
+
+query TII
+SELECT error_code, deleted_file_count, failed_file_count
+FROM iceberg_remove_orphan_files('my_datalake.default.orphan_reused_path',
+	older_than => TIMESTAMP '2999-01-01');
+----
+RETENTION_TOO_SHORT	0	0
+
+query TII
+SELECT error_code, deleted_file_count, failed_file_count
+FROM iceberg_remove_orphan_files('my_datalake.default.orphan_reused_path', dry_run => false);
+----
+SUCCESS	0	0
+
+statement ok
+BEGIN;
+
+statement error
+SELECT * FROM iceberg_remove_orphan_files('my_datalake.default.orphan_reused_path');
+----
+requires autocommit
+
+statement ok
+ROLLBACK;
+
+# POSIX listings preserve literal backslashes in file names. Windows treats them as separators.
+statement ok
+SET VARIABLE filename_separator = (
+	SELECT CASE WHEN platform LIKE 'windows%' THEN 'both_slash' ELSE 'forward_slash' END FROM pragma_platform()
+);
+
+statement ok
+SET VARIABLE extra_filename = CASE WHEN getvariable('filename_separator') = 'forward_slash'
+	THEN chr(92) || 'part' || chr(92) || '01.csv' ELSE 'part-01.csv' END;
+
+statement ok
+COPY (SELECT 2) TO (parse_dirpath(getvariable('reused_path')) || '/' || getvariable('extra_filename'))
+	(FORMAT CSV, USE_TMP_FILE false);
+
+query TIIII
+SELECT error_code, list_sort(list_transform(orphan_file_locations,
+		lambda path: parse_filename(path, getvariable('filename_separator'))))
+		= list_sort(['reused.parquet', getvariable('extra_filename')]),
+	deleted_file_count, scanned_files, referenced_files > 0
+FROM iceberg_remove_orphan_files('my_datalake.default.orphan_reused_path',
+	location => parse_dirpath(getvariable('reused_path')), older_than => TIMESTAMP '2999-01-01', dry_run => true);
+----
+SUCCESS	true	0	3	true
+
+query II
+SELECT id, (SELECT id FROM read_parquet(getvariable('reused_path')))
+FROM my_datalake.default.orphan_reused_path;
+----
+1	3
