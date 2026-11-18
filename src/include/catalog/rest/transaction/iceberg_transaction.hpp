@@ -196,13 +196,22 @@ public:
 
 	unordered_set<string> looked_up_entries;
 	mutex lock;
-	//! Serialize rewrite finalization, including the initialization of transaction table state.
-	mutex rewrite_commit_lock;
+	//! Operators and table functions of one statement run on different threads. This lock serializes the ones that
+	//! change the table state of this transaction: ApplyTableUpdate, a snapshot expiration from loading its table to
+	//! staging its update, and the table creation of a CREATE TABLE AS.
+	//! Lock order: IcebergCopyToFile::create_lock before table_update_lock, and table_update_lock before
+	//! IcebergTransaction::lock and IcebergTransactionData::lock.
+	mutex table_update_lock;
 
 	unordered_map<string, SchemaPropertyUpdates> schema_property_updates;
 };
 
+//! Registers 'table_info' as changed in the transaction and applies 'callback' to its transaction-local state, while
+//! holding IcebergTransaction::table_update_lock. The lock is not recursive: 'callback' must not call ApplyTableUpdate
 void ApplyTableUpdate(IcebergTable &table_info, IcebergTransaction &iceberg_transaction,
                       const std::function<void(IcebergTable &)> &callback);
+//! The same for a caller that holds the lock already: 'table_update_guard' has to own table_update_lock
+void ApplyTableUpdate(unique_lock<mutex> &table_update_guard, IcebergTable &table_info,
+                      IcebergTransaction &iceberg_transaction, const std::function<void(IcebergTable &)> &callback);
 
 } // namespace duckdb

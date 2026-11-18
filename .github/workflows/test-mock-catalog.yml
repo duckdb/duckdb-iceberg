@@ -45,6 +45,9 @@ jobs:
           )
           PY
 
+      - name: Run mock metadata model tests
+        run: python3 -m unittest scripts.mock_rest_catalog.test_model
+
       - name: Run catalog-agnostic SQL tests
         run: make test_mock_relassert
 

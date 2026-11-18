@@ -1,0 +1,198 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/nested_default_runtime_filters.test
+# description: CTE runtime filters retain nested defaults and NULL parents across executions and new files
+# group: [filtering]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env COLUMN_DEFAULT_SUPPORT
+
+require-env FORMAT_V3_SUPPORT
+
+require-env SCAN_PLANNING_MODE client
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.nested_default_runtime_filters;
+
+statement ok
+CREATE TABLE my_datalake.default.nested_default_runtime_filters (
+	id INTEGER, s STRUCT(n STRUCT(b INTEGER))
+) WITH ('format-version' = '3', 'write.metadata.metrics.default' = 'full');
+
+statement ok
+INSERT INTO my_datalake.default.nested_default_runtime_filters VALUES
+	(1, {'n': {'b': 1}}), (2, {'n': NULL}), (3, NULL);
+
+statement ok
+INSERT INTO my_datalake.default.nested_default_runtime_filters VALUES (4, {'n': {'b': 2}});
+
+statement ok
+ALTER TABLE my_datalake.default.nested_default_runtime_filters ADD COLUMN s.n.y INTEGER DEFAULT 5;
+
+statement ok
+ALTER TABLE my_datalake.default.nested_default_runtime_filters DROP COLUMN s.n.b;
+
+# The old files supply only parent validity; the new file physically stores y.
+statement ok
+INSERT INTO my_datalake.default.nested_default_runtime_filters VALUES
+	(5, {'n': {'y': 9}}), (6, {'n': {'y': NULL}}), (7, NULL);
+
+statement ok
+CREATE TEMP TABLE default_filter_b(k INTEGER);
+
+statement ok
+CREATE TEMP TABLE default_filter_c(k INTEGER);
+
+# Keep the build inputs on the right and prevent static predicates from replacing runtime filters.
+statement ok
+SET disabled_optimizers='cte_filter_pusher,statistics_propagation,join_order,build_side_probe_side,compressed_materialization';
+
+statement ok
+SET threads=4;
+
+statement ok
+INSERT INTO default_filter_b VALUES (5);
+
+statement ok
+INSERT INTO default_filter_c VALUES (9);
+
+statement ok
+PREPARE default_consumers AS
+WITH p AS MATERIALIZED (
+	SELECT id, s.n.y AS k FROM my_datalake.default.nested_default_runtime_filters
+)
+SELECT consumer, count(*), sum(id), count(*) FILTER (WHERE k IS NULL)
+FROM (
+	SELECT p.*, 'b' AS consumer FROM p JOIN default_filter_b b ON p.k = b.k
+	UNION ALL
+	SELECT p.*, 'c' AS consumer FROM p JOIN default_filter_c c ON p.k = c.k
+) matches
+GROUP BY consumer ORDER BY consumer;
+
+statement ok
+PREPARE null_safe_default_consumers AS
+WITH p AS MATERIALIZED (
+	SELECT id, s.n.y AS k FROM my_datalake.default.nested_default_runtime_filters
+)
+SELECT consumer, count(*), sum(id), count(*) FILTER (WHERE k IS NULL)
+FROM (
+	SELECT p.*, 'b' AS consumer FROM p JOIN default_filter_b b ON p.k IS NOT DISTINCT FROM b.k
+	UNION ALL
+	SELECT p.*, 'c' AS consumer FROM p JOIN default_filter_c c ON p.k IS NOT DISTINCT FROM c.k
+) matches
+GROUP BY consumer ORDER BY consumer;
+
+# Verify that both consumers contribute runtime filters to the nested Iceberg field.
+query II
+EXPLAIN (ANALYZE, FORMAT JSON) EXECUTE default_consumers;
+----
+analyzed_plan	<REGEX>:(?s).*"Function": "ICEBERG_SCAN"[^}]*"Dynamic Filters": "[^"]*s\.n\.y[^"]* OR [^"]*s\.n\.y[^"]*".*
+
+statement ok
+DELETE FROM default_filter_b;
+
+statement ok
+DELETE FROM default_filter_c;
+
+foreach threads 4 1
+
+statement ok
+SET threads={threads};
+
+statement ok
+INSERT INTO default_filter_b VALUES (5);
+
+statement ok
+INSERT INTO default_filter_c VALUES (9);
+
+query TIII
+EXECUTE default_consumers;
+----
+b	2	5	0
+c	1	5	0
+
+statement ok
+DELETE FROM default_filter_b;
+
+statement ok
+INSERT INTO default_filter_b VALUES (NULL);
+
+statement ok
+INSERT INTO default_filter_c VALUES (NULL);
+
+query TIII
+EXECUTE default_consumers;
+----
+c	1	5	0
+
+# NULL-safe consumers need NULL outer structs, NULL inner structs and physically NULL fields.
+query TIII
+EXECUTE null_safe_default_consumers;
+----
+b	4	18	4
+c	5	23	4
+
+statement ok
+DELETE FROM default_filter_c;
+
+query TIII
+EXECUTE default_consumers;
+----
+
+query TIII
+EXECUTE null_safe_default_consumers;
+----
+b	4	18	4
+
+statement ok
+DELETE FROM default_filter_b;
+
+query TIII
+EXECUTE null_safe_default_consumers;
+----
+
+endloop
+
+# A prepared producer must pick up a new snapshot and discard the previous empty build filters.
+statement ok
+INSERT INTO my_datalake.default.nested_default_runtime_filters VALUES
+	(8, {'n': {'y': 5}}), (9, {'n': {'y': 9}});
+
+statement ok
+INSERT INTO default_filter_b VALUES (5);
+
+statement ok
+INSERT INTO default_filter_c VALUES (9);
+
+query TIII
+EXECUTE default_consumers;
+----
+b	3	13	0
+c	2	14	0
+
+# A consumer without a join filter must still see the entire producer.
+query III
+WITH p AS MATERIALIZED (
+	SELECT id, s.n.y AS k FROM my_datalake.default.nested_default_runtime_filters
+)
+SELECT (SELECT count(*) FROM p),
+       (SELECT count(*) FROM p JOIN default_filter_b b ON p.k = b.k),
+       (SELECT count(*) FROM p JOIN default_filter_c c ON p.k = c.k);
+----
+9	3	2
+
+statement ok
+RESET disabled_optimizers;
+
+query TIII
+EXECUTE default_consumers;
+----
+b	3	13	0
+c	2	14	0
+
+statement ok
+DROP TABLE my_datalake.default.nested_default_runtime_filters;
+
+statement ok
+RESET threads;

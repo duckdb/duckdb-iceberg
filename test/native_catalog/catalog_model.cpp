@@ -648,6 +648,12 @@ void Catalog::Apply(Json &metadata, const Json &update, map<string, int64_t> &la
 			                   [&](const Json &entry) { return entry.At("snapshot-id").Integer() == snapshot_id; }),
 			    files.end());
 		}
+	} else if (action == "remove-snapshot-ref") {
+		if (update.At("ref-name").String() != "main") {
+			Unsupported("Only the main branch is implemented");
+		}
+		metadata.At("refs").Erase("main");
+		metadata.Erase("current-snapshot-id");
 	} else {
 		Invalid("Unknown update action: " + action);
 	}

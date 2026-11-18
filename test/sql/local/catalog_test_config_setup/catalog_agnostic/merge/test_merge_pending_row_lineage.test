@@ -148,7 +148,7 @@ MERGE INTO my_datalake.default.merge_pending_lineage t
 USING (VALUES (1, 11), (1, 12)) s(id, val) ON t.id = s.id
 WHEN MATCHED THEN UPDATE SET val = s.val;
 ----
-cannot affect the same target row more than once
+The same row was updated multiple times
 
 statement ok
 ROLLBACK;

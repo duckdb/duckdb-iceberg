@@ -1,0 +1,71 @@
+# name: test/sql/local/native_catalog/expire_snapshots_one_statement_cache.test
+# description: Two iceberg_expire_snapshots calls on one table in the same statement request the table once, and the commit evicts the cached response
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+statement ok
+ATTACH OR REPLACE '' AS my_datalake (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none', STAGE_CREATE_TABLES true,
+	MAX_TABLE_STALENESS '10 minutes');
+
+statement ok
+SET threads=4;
+
+statement ok
+CALL enable_logging('HTTP', storage='memory');
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.expire_one_statement_cache;
+
+statement ok
+CREATE TABLE my_datalake.default.expire_one_statement_cache (id INTEGER);
+
+statement ok
+INSERT INTO my_datalake.default.expire_one_statement_cache VALUES (0);
+
+loop i 0 5
+
+statement ok
+INSERT INTO my_datalake.default.expire_one_statement_cache VALUES (1);
+
+statement ok
+INSERT INTO my_datalake.default.expire_one_statement_cache VALUES (2);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# The two calls run at the same time only because the aggregate is on top: a bare UNION ALL runs its branches one
+# after the other.
+query IIII
+SELECT count(*), sum(deleted_snapshots), min(retained_snapshots), max(retained_snapshots) FROM (
+	SELECT * FROM iceberg_expire_snapshots(
+		'my_datalake.default.expire_one_statement_cache', retain_last => 1, older_than => timestamp '2999-01-01')
+	UNION ALL
+	SELECT * FROM iceberg_expire_snapshots(
+		'my_datalake.default.expire_one_statement_cache', retain_last => 1, older_than => timestamp '2999-01-01')
+);
+----
+2	2	1	1
+
+# Only the first call loads the table: the other one plans from the table that call pinned.
+query I
+SELECT count(*)
+FROM duckdb_logs_parsed('HTTP')
+WHERE request.type = 'GET'
+  AND request.url LIKE '%/v1/namespaces/default/tables/expire_one_statement_cache';
+----
+1
+
+# A second response left in the cache would not be the one the commit evicts, and would be read here.
+query I
+SELECT count(*) FROM iceberg_snapshots('my_datalake.default.expire_one_statement_cache');
+----
+1
+
+endloop
+
+statement ok
+DROP TABLE my_datalake.default.expire_one_statement_cache;
