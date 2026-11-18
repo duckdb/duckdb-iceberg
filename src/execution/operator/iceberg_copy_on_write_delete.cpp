@@ -78,6 +78,18 @@ public:
 	explicit CopyOnWriteDeleteOperatorState() : keep(STANDARD_VECTOR_SIZE) {
 	}
 
+	//! The positions removed from file_name, or nullptr when the file holds no matching row
+	optional_ptr<const unordered_set<int64_t>>
+	FindDeleted(const unordered_map<string, unordered_set<int64_t>> &rows_by_file, const string_t &file_name) {
+		if (!has_last_file || !(file_name == string_t(last_file))) {
+			has_last_file = true;
+			last_file = file_name.GetString();
+			auto entry = rows_by_file.find(last_file);
+			last_deleted = entry == rows_by_file.end() ? nullptr : &entry->second;
+		}
+		return last_deleted;
+	}
+
 	SelectionVector keep;
 	//! The probe side reads one file at a time, so the last lookup is usually the next one
 	bool has_last_file = false;
@@ -98,7 +110,9 @@ optional_ptr<PhysicalTableScan> FindTableScan(PhysicalOperator &plan) {
 
 //! Bind `SELECT * FROM <table>`, then add the filename and file_row_number virtual columns to its scan. They are
 //! added by column id, not by name, so a table column that happens to be called `filename` cannot shadow them.
-unique_ptr<LogicalOperator> BindKeepScan(ClientContext &context, IcebergTableSchemaVersion &table) {
+//! row_id_indexes receives the positions of the filename and file_row_number columns in the projection's output.
+unique_ptr<LogicalOperator> BindKeepScan(ClientContext &context, IcebergTableSchemaVersion &table,
+                                         vector<idx_t> &row_id_indexes) {
 	auto select = make_uniq<SelectNode>();
 	select->select_list.push_back(make_uniq<StarExpression>());
 	auto table_ref = make_uniq<BaseTableRef>();
@@ -124,6 +138,7 @@ unique_ptr<LogicalOperator> BindKeepScan(ClientContext &context, IcebergTableSch
 		auto &column_ids = get.GetMutableColumnIds();
 		column_ids.emplace_back(virtual_column);
 		ColumnBinding binding(get.table_index, ProjectionIndex(column_ids.size() - 1));
+		row_id_indexes.push_back(projection.expressions.size());
 		projection.expressions.push_back(
 		    make_uniq<BoundColumnRefExpression>(entry->second.name, entry->second.type, binding));
 	}
@@ -161,20 +176,34 @@ PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanDelete(ClientContext &cont
 
 	//! Probe side: the whole table again, so the rows of each matched file that survive can be rewritten. It is
 	//! planned here, after optimization, like PhysicalPlanGenerator::Plan does for a full statement.
-	auto keep_logical_plan = BindKeepScan(context, table);
+	vector<idx_t> keep_row_id_indexes;
+	auto keep_logical_plan = BindKeepScan(context, table, keep_row_id_indexes);
 	ColumnBindingResolver resolver;
 	resolver.VisitOperator(*keep_logical_plan);
 	keep_logical_plan->ResolveOperatorTypes();
 	auto &keep_plan = planner.CreatePlan(*keep_logical_plan);
 
-	auto keep_types = keep_plan.GetTypes();
-	D_ASSERT(keep_types.size() > 2);
-	vector<LogicalType> output_types(keep_types.begin(), keep_types.end() - 2);
+	//! The output is every probe-side column except filename and file_row_number, in the same order
+	auto &keep_types = keep_plan.GetTypes();
+	D_ASSERT(keep_row_id_indexes.size() == 2);
+	D_ASSERT(keep_types[keep_row_id_indexes[0]].id() == LogicalTypeId::VARCHAR);
+	D_ASSERT(keep_types[keep_row_id_indexes[1]].id() == LogicalTypeId::BIGINT);
+	vector<idx_t> keep_column_indexes;
+	vector<LogicalType> output_types;
+	for (idx_t i = 0; i < keep_types.size(); i++) {
+		if (i == keep_row_id_indexes[0] || i == keep_row_id_indexes[1]) {
+			continue;
+		}
+		keep_column_indexes.push_back(i);
+		output_types.push_back(keep_types[i]);
+	}
 
 	auto &filter = planner
 	                   .Make<IcebergCopyOnWriteDeleteFilter>(std::move(output_types), keep_plan, match_plan,
 	                                                         std::move(match_row_id_indexes))
 	                   .Cast<IcebergCopyOnWriteDeleteFilter>();
+	filter.keep_row_id_indexes = std::move(keep_row_id_indexes);
+	filter.keep_column_indexes = std::move(keep_column_indexes);
 	filter.keep_logical_plan = std::move(keep_logical_plan);
 
 	auto keep_scan = FindTableScan(keep_plan);
@@ -306,39 +335,47 @@ OperatorResultType IcebergCopyOnWriteDeleteFilter::Execute(ExecutionContext &con
 	auto &state = state_p.Cast<CopyOnWriteDeleteOperatorState>();
 	auto &rows_by_file = GetDeletes().rows_by_file;
 
-	//! The probe side emits the table's columns followed by filename and file_row_number
-	auto column_count = types.size();
-	D_ASSERT(input.ColumnCount() == column_count + 2);
+	D_ASSERT(input.ColumnCount() == keep_column_indexes.size() + 2);
+	auto &file_name_vector = input.data[keep_row_id_indexes[0]];
 
 	UnifiedVectorFormat file_name_data;
-	input.data[column_count].ToUnifiedFormat(file_name_data);
+	file_name_vector.ToUnifiedFormat(file_name_data);
 	auto file_names = UnifiedVectorFormat::GetData<string_t>(file_name_data);
 	UnifiedVectorFormat row_number_data;
-	input.data[column_count + 1].ToUnifiedFormat(row_number_data);
+	input.data[keep_row_id_indexes[1]].ToUnifiedFormat(row_number_data);
 	auto row_numbers = UnifiedVectorFormat::GetData<int64_t>(row_number_data);
 
+	//! A file with no matching row stays as it is, so none of its rows are kept for the rewrite
 	idx_t kept = 0;
-	for (idx_t i = 0; i < input.size(); i++) {
-		auto file_name = file_names[file_name_data.sel->get_index(i)];
-		if (!state.has_last_file || !(file_name == string_t(state.last_file))) {
-			state.has_last_file = true;
-			state.last_file = file_name.GetString();
-			auto entry = rows_by_file.find(state.last_file);
-			state.last_deleted = entry == rows_by_file.end() ? nullptr : &entry->second;
+	if (file_name_vector.GetVectorType() == VectorType::CONSTANT_VECTOR) {
+		//! The scan emits one file per chunk as a constant: look it up once, not for every row
+		if (ConstantVector::IsNull(file_name_vector)) {
+			throw InternalException("Filename cannot be NULL!");
 		}
-		if (!state.last_deleted) {
-			//! The file has no matching row, so it stays as it is and none of its rows are rewritten
-			continue;
+		auto deleted = state.FindDeleted(rows_by_file, file_names[0]);
+		if (deleted) {
+			for (idx_t i = 0; i < input.size(); i++) {
+				if (!deleted->count(row_numbers[row_number_data.sel->get_index(i)])) {
+					state.keep.set_index(kept++, i);
+				}
+			}
 		}
-		auto row_number = row_numbers[row_number_data.sel->get_index(i)];
-		if (state.last_deleted->count(row_number)) {
-			continue;
+	} else {
+		for (idx_t i = 0; i < input.size(); i++) {
+			auto file_idx = file_name_data.sel->get_index(i);
+			if (!file_name_data.validity.RowIsValid(file_idx)) {
+				throw InternalException("Filename cannot be NULL!");
+			}
+			auto deleted = state.FindDeleted(rows_by_file, file_names[file_idx]);
+			if (!deleted || deleted->count(row_numbers[row_number_data.sel->get_index(i)])) {
+				continue;
+			}
+			state.keep.set_index(kept++, i);
 		}
-		state.keep.set_index(kept++, i);
 	}
 
-	for (idx_t col = 0; col < column_count; col++) {
-		chunk.data[col].Slice(input.data[col], state.keep, kept);
+	for (idx_t col = 0; col < keep_column_indexes.size(); col++) {
+		chunk.data[col].Slice(input.data[keep_column_indexes[col]], state.keep, kept);
 	}
 	chunk.SetChildCardinality(kept);
 	return OperatorResultType::NEED_MORE_INPUT;
