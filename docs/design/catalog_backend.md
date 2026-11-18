@@ -761,21 +761,21 @@ and each comes with its own config. Phases 6/7 (Glue Hive tables) would later ad
 - **Transaction model unchanged.** The alter/drop/rename variant and the "views alone" rule remain even for SQL,
   which could do better. That's deliberate for review size.
 
-## 12. Open questions
+## 12. Decisions
 
-1. **Spec model.** Keep `rest_api_objects` as the neutral spec types (maybe aliased, e.g.
-   `using IcebergTableChange = rest_api_objects::CommitTableRequest`), or introduce our own update/requirement
-   types?
-2. **Metastore composition.** `IcebergMetastoreBackend` *owns* an `IcebergMetastore` (proposed, the shape of
-   Java's catalog + `TableOperations`), or SQL/Glue/filesystem *subclass* a metastore backend?
-3. **Vendor packaging.** Should Glue/S3 Tables REST stay in this repo as subclasses (proposed), and is the
-   registry plus a source-level API with `api_version` the stability promise we want for external extensions?
-4. **Bulk listing and snapshots for SQL.** Add `ListAllEntries` in PR 7, and should one DuckDB transaction see
-   one SQL snapshot of the catalog tables?
-5. **Atomic catalog commit for SQL.** Lift the mixed table/drop/rename and the views-alone restrictions in PR 7,
-   or in a follow-up?
-6. **Staleness for metastores.** Apply `MAX_TABLE_STALENESS` to metastores too, now that revalidating a pointer
-   is cheap? Or always revalidate?
-7. **File-move timing.** A separate rename-only PR 5, or moves folded into PRs 1–4?
-8. **Names.** `CATALOG_TYPE 'glue'` (native) next to `ENDPOINT_TYPE 'glue'` (REST) can confuse users. Should
-   `'jdbc'`/`'hadoop'` be accepted as aliases of `'sql'`/`'filesystem'`?
+The open questions of the proposal are settled:
+
+1. **Spec model.** `rest_api_objects` stay the neutral update and requirement types for now, aliased where a
+   neutral name helps (e.g. `using IcebergTableChange = rest_api_objects::CommitTableRequest`). Our own types can
+   replace them later without changing the backend interface's shape.
+2. **Metastore composition.** `IcebergMetastoreBackend` *owns* an `IcebergMetastore`. SQL, Glue and filesystem
+   are metastores, not subclasses of the backend.
+3. **Vendor packaging.** Glue REST and S3 Tables stay in this repository, as subclasses of `IcebergRestBackend`.
+4. **Bulk listing.** `ListAllEntries` is a follow-up, not part of PR 7.
+5. **Atomic catalog commit for SQL.** Lifting the mixed table/drop/rename and the views-alone restrictions for SQL
+   catalogs is a follow-up.
+6. **Staleness for metastores.** Metastore catalogs always revalidate. `MAX_TABLE_STALENESS` stays a REST-only
+   option, so the load-table cache and its ETags belong to the REST backend, not to the generic catalog.
+7. **File moves.** The moves of §9 are their own rename-only PR, after PRs 1–4.
+8. **Names.** `'jdbc'` and `'hadoop'` will be accepted as aliases of `'sql'` and `'filesystem'`, in the phases that
+   add those catalog types.
