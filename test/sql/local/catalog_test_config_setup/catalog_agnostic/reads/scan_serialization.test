@@ -97,8 +97,10 @@ SELECT count(*) FROM copied a, copied b;
 statement ok
 SET iceberg_enable_scan_serialization = true;
 
-# This is the relevant shape of TPC-DS Q95: a two-scan CTE is referenced twice under a LIMIT. DuckDB
-# automatically inlines it by deep-copying its Iceberg scans; before serialization support it retained a CTE_SCAN.
+# This is the relevant shape of TPC-DS Q95: a two-scan CTE is referenced twice under a LIMIT. DuckDB used to
+# inline it by deep-copying its Iceberg scans, so the plan had no CTE_SCAN. It now factors the two identical
+# copies back into a shared __common_subplan instead, which is why this asserts the subplan rather than the
+# absence of a CTE_SCAN. The deep copy itself is covered by the assertions below, where the scans differ.
 query II
 EXPLAIN WITH pairs AS (
     SELECT a.order_no
@@ -117,7 +119,7 @@ WHERE s.order_no IN (SELECT order_no FROM pairs)
   )
 LIMIT 100;
 ----
-logical_opt	<!REGEX>:.*CTE_SCAN.*
+logical_opt	<REGEX>:.*__common_subplan.*
 
 query I
 WITH pairs AS NOT MATERIALIZED (
