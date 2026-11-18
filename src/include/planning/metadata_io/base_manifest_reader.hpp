@@ -22,6 +22,7 @@ public:
 protected:
 	void ScanInternal();
 	const IcebergAvroScanInfo &GetScanInfo() const;
+	bool AllReadersFinished() const;
 
 private:
 	void InitializeInternal();

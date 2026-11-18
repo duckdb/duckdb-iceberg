@@ -1,0 +1,149 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/nested_extract_schema_evolution.test
+# description: Extracted nested values are mapped by field ID before casts and filters
+# group: [reads]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.nested_extract_evolution;
+
+statement ok
+CREATE TABLE my_datalake.default.nested_extract_evolution (
+	id INTEGER,
+	s STRUCT(n STRUCT(a INTEGER, gone VARCHAR), l STRUCT(a INTEGER, gone VARCHAR)[],
+	         m MAP(VARCHAR, STRUCT(a INTEGER, gone VARCHAR)))
+) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.nested_extract_evolution VALUES
+	(1, {'n': {'a': 11, 'gone': 'old'}, 'l': [{'a': 12, 'gone': 'old'}, NULL],
+	     'm': MAP {'k': {'a': 13, 'gone': 'old'}, 'z': NULL}}),
+	(2, NULL),
+	(3, {'n': NULL, 'l': NULL, 'm': NULL}),
+	(4, {'n': {'a': NULL, 'gone': NULL}, 'l': [], 'm': MAP {}});
+
+foreach parent s.n s.l.element s.m.value
+
+statement ok
+ALTER TABLE my_datalake.default.nested_extract_evolution RENAME COLUMN {parent}.a TO renamed;
+
+statement ok
+ALTER TABLE my_datalake.default.nested_extract_evolution ALTER COLUMN {parent}.renamed TYPE BIGINT;
+
+statement ok
+ALTER TABLE my_datalake.default.nested_extract_evolution DROP COLUMN {parent}.gone;
+
+# Reusing the original name must not read the original field ID.
+statement ok
+ALTER TABLE my_datalake.default.nested_extract_evolution ADD COLUMN {parent}.a INTEGER;
+
+endloop
+
+statement ok
+INSERT INTO my_datalake.default.nested_extract_evolution VALUES
+	(5, {'n': {'renamed': 2147483648, 'a': 21},
+	     'l': [{'renamed': 2147483649, 'a': 22}],
+	     'm': MAP {'k': {'renamed': 2147483650, 'a': 23}}});
+
+# Casts must see the current schema, including renamed, dropped and added fields.
+query ITTT
+SELECT id, s.n::VARCHAR, s.l::VARCHAR, s.m::VARCHAR
+FROM my_datalake.default.nested_extract_evolution ORDER BY id;
+----
+1	{'renamed': 11, 'a': NULL}	[{'renamed': 12, 'a': NULL}, NULL]	{k={'renamed': 13, 'a': NULL}, z=NULL}
+2	NULL	NULL	NULL
+3	NULL	NULL	NULL
+4	{'renamed': NULL, 'a': NULL}	[]	{}
+5	{'renamed': 2147483648, 'a': 21}	[{'renamed': 2147483649, 'a': 22}]	{k={'renamed': 2147483650, 'a': 23}}
+
+# Each projection has its own scan type and field selection.
+query ITTIII
+SELECT id, s.n::VARCHAR, s.n.renamed::VARCHAR, s.n.renamed, s.n.a, s.l[1].renamed
+FROM my_datalake.default.nested_extract_evolution ORDER BY id;
+----
+1	{'renamed': 11, 'a': NULL}	11	11	NULL	12
+2	NULL	NULL	NULL	NULL	NULL
+3	NULL	NULL	NULL	NULL	NULL
+4	{'renamed': NULL, 'a': NULL}	NULL	NULL	NULL	NULL
+5	{'renamed': 2147483648, 'a': 21}	2147483648	2147483648	21	2147483649
+
+# A filter on a cast is evaluated after remapping, not against the physical struct.
+query I
+SELECT id FROM my_datalake.default.nested_extract_evolution
+WHERE s.n::VARCHAR = '{''renamed'': 11, ''a'': NULL}' ORDER BY id;
+----
+1
+
+query I
+SELECT id FROM my_datalake.default.nested_extract_evolution
+WHERE s.l::VARCHAR = '[{''renamed'': 12, ''a'': NULL}, NULL]'
+  AND s.m::VARCHAR = '{k={''renamed'': 13, ''a'': NULL}, z=NULL}' ORDER BY id;
+----
+1
+
+query I
+SELECT id FROM my_datalake.default.nested_extract_evolution
+WHERE s.n::VARCHAR IS NULL ORDER BY id;
+----
+2
+3
+
+query I
+SELECT id FROM my_datalake.default.nested_extract_evolution
+WHERE s.n::VARCHAR = '{''renamed'': 11, ''a'': NULL}' OR s.n IS NULL ORDER BY id;
+----
+1
+2
+3
+
+query I
+SELECT id FROM my_datalake.default.nested_extract_evolution
+WHERE s.n.a IS NOT NULL ORDER BY id;
+----
+5
+
+# Scan tasks use the same mapping and retain it when the plan is serialized.
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE nested_extract_tasks = (
+	SELECT list(task) FROM (FROM iceberg_scan_plan('my_datalake.default.nested_extract_evolution')) task
+);
+
+query IT
+SELECT id, s.n::VARCHAR FROM iceberg_scan_tasks(getvariable('nested_extract_tasks'))
+WHERE s.n::VARCHAR = '{''renamed'': 11, ''a'': NULL}' OR id = 5 ORDER BY id;
+----
+1	{'renamed': 11, 'a': NULL}
+5	{'renamed': 2147483648, 'a': 21}
+
+statement ok
+SET debug_verify_serializer = true;
+
+query IT
+SELECT id, s.n::VARCHAR FROM my_datalake.default.nested_extract_evolution
+WHERE s.n::VARCHAR = '{''renamed'': 11, ''a'': NULL}' ORDER BY id;
+----
+1	{'renamed': 11, 'a': NULL}
+
+statement ok
+RESET debug_verify_serializer;
+
+statement ok
+COMMIT;
+
+statement ok
+CALL iceberg_rewrite_data_files('my_datalake.default.nested_extract_evolution', rewrite_all = true);
+
+query IT
+SELECT id, s.n::VARCHAR FROM my_datalake.default.nested_extract_evolution
+WHERE s.n::VARCHAR = '{''renamed'': 11, ''a'': NULL}' OR id = 5 ORDER BY id;
+----
+1	{'renamed': 11, 'a': NULL}
+5	{'renamed': 2147483648, 'a': 21}
+
+statement ok
+DROP TABLE my_datalake.default.nested_extract_evolution;
