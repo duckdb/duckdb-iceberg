@@ -1,0 +1,95 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/scan_order_touching_ranges.test
+# description: LIMIT pruning keeps files whose nonconstant ranges touch at the ordering boundary
+# group: [reads]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SCAN_PLANNING_MODE client
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.scan_order_touching_ranges;
+
+statement ok
+CREATE TABLE my_datalake.default.scan_order_touching_ranges (a BIGINT, b BIGINT);
+
+# Three files with ranges [0, 1], [1, 2], [2, 3]. The second key chooses
+# between rows at a boundary even though the files have different first bounds.
+statement ok
+INSERT INTO my_datalake.default.scan_order_touching_ranges VALUES (0, 10), (1, 0);
+
+statement ok
+INSERT INTO my_datalake.default.scan_order_touching_ranges VALUES (1, 20), (2, 0);
+
+statement ok
+INSERT INTO my_datalake.default.scan_order_touching_ranges VALUES (2, 30), (3, 0);
+
+query I
+SELECT count(DISTINCT file_path) FROM iceberg_metadata(my_datalake.default.scan_order_touching_ranges);
+----
+3
+
+query II
+SELECT a, b FROM my_datalake.default.scan_order_touching_ranges ORDER BY a ASC, b ASC LIMIT 2;
+----
+0	10
+1	0
+
+query II
+SELECT a, b FROM my_datalake.default.scan_order_touching_ranges ORDER BY a ASC, b DESC LIMIT 2;
+----
+0	10
+1	20
+
+query II
+SELECT a, b FROM my_datalake.default.scan_order_touching_ranges ORDER BY a DESC, b ASC LIMIT 2;
+----
+3	0
+2	0
+
+query II
+SELECT a, b FROM my_datalake.default.scan_order_touching_ranges ORDER BY a DESC, b DESC LIMIT 2;
+----
+3	0
+2	30
+
+# OFFSET consumes part of the guaranteed row count, including rows before a tie.
+query II
+SELECT a, b FROM my_datalake.default.scan_order_touching_ranges ORDER BY a ASC, b DESC LIMIT 1 OFFSET 1;
+----
+1	20
+
+query II
+SELECT a, b FROM my_datalake.default.scan_order_touching_ranges ORDER BY a DESC, b ASC LIMIT 1 OFFSET 1;
+----
+2	0
+
+query II
+SELECT a, b FROM my_datalake.default.scan_order_touching_ranges ORDER BY a ASC, b DESC LIMIT 2 OFFSET 3;
+----
+2	30
+2	0
+
+# Strictly separated files can still be pruned in either direction.
+statement ok
+CALL enable_logging('Iceberg');
+
+foreach direction ASC DESC
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+SELECT a, b FROM my_datalake.default.scan_order_touching_ranges ORDER BY a {direction}, b DESC LIMIT 2;
+
+query I
+SELECT count(*) > 0 FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message LIKE '%Scan Order Pushdown, kept 2 of 3%';
+----
+true
+
+endloop
+
+statement ok
+DROP TABLE my_datalake.default.scan_order_touching_ranges;
