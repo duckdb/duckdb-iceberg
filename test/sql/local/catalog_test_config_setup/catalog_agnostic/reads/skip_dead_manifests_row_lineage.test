@@ -1,0 +1,79 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/skip_dead_manifests_row_lineage.test
+# description: Skipping tombstone-only manifests does not change V3 row IDs or sequence numbers of other manifests
+# group: [reads]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+set enable_logging=true
+
+statement ok
+set logging_level='debug'
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.skip_dead_manifests_row_lineage;
+
+# iceberg_rewrite_data_files does not support V3 tables yet, so leave the tombstones in V2 and upgrade afterwards.
+statement ok
+CREATE TABLE my_datalake.default.skip_dead_manifests_row_lineage (id INTEGER, payload VARCHAR)
+WITH ('format-version' = 2, 'commit.manifest-merge.enabled' = false);
+
+statement ok
+INSERT INTO my_datalake.default.skip_dead_manifests_row_lineage VALUES (1, 'a'), (2, 'b');
+
+statement ok
+INSERT INTO my_datalake.default.skip_dead_manifests_row_lineage VALUES (3, 'c');
+
+statement ok
+CALL iceberg_rewrite_data_files('my_datalake.default.skip_dead_manifests_row_lineage', rewrite_all => true);
+
+statement ok
+ALTER TABLE my_datalake.default.skip_dead_manifests_row_lineage SET ('format-version' = 3);
+
+# The first V3 commit assigns row IDs to the rewritten file's manifest.
+statement ok
+INSERT INTO my_datalake.default.skip_dead_manifests_row_lineage VALUES (4, 'd');
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query II
+SELECT id, _last_updated_sequence_number
+FROM my_datalake.default.skip_dead_manifests_row_lineage WHERE id >= 1 ORDER BY id;
+----
+1	2
+2	2
+3	2
+4	4
+
+# One scan has just run: every manifest without added or existing files was skipped, whether or not the
+# commit above kept the tombstones.
+query I
+SELECT (
+    SELECT count(*) FROM duckdb_logs()
+    WHERE type = 'Iceberg' AND message.contains('DATA manifest has no added or existing files')
+) = (
+    SELECT count(*) FROM iceberg_manifests(my_datalake.default.skip_dead_manifests_row_lineage)
+    WHERE content = 0 AND added_data_files_count = 0 AND existing_data_files_count = 0
+);
+----
+true
+
+# The rewritten file's rows take IDs 0-2 and the new row takes 3: the tombstone-only manifests consumed no IDs.
+query III
+SELECT count(DISTINCT _row_id), min(_row_id), max(_row_id)
+FROM my_datalake.default.skip_dead_manifests_row_lineage WHERE id >= 1;
+----
+4	0	3
+
+query I
+SELECT _row_id FROM my_datalake.default.skip_dead_manifests_row_lineage WHERE id = 4;
+----
+3
+
+statement ok
+DROP TABLE my_datalake.default.skip_dead_manifests_row_lineage;
