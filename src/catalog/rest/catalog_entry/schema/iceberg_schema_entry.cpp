@@ -52,20 +52,36 @@ IcebergTransaction &GetICTransaction(CatalogTransaction transaction) {
 }
 
 bool IcebergSchemaEntry::HandleCreateConflict(CatalogTransaction &transaction, CatalogType catalog_type,
-                                              const string &entry_name, OnCreateConflict on_conflict) {
+                                              const string &entry_name, OnCreateConflict on_conflict,
+                                              optional_ptr<IcebergTable> &replacement_table) {
+	replacement_table = nullptr;
 	auto existing_entry = GetEntry(transaction, catalog_type, Identifier(entry_name));
+	auto &iceberg_transaction = GetICTransaction(transaction);
+	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
+	auto table_key = IcebergTable::GetTableKey(ic_catalog, namespace_items, entry_name);
+	auto latest_state = iceberg_transaction.GetLatestTableState(table_key);
 	if (on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT) {
-		throw NotImplementedException(
-		    "CREATE OR REPLACE not supported in DuckDB-Iceberg. Please use separate Drop and Create Statements");
+		if (latest_state && latest_state->IsDroppedOrRenamed()) {
+			throw NotImplementedException(
+			    "Cannot replace Iceberg table '%s' that was dropped or renamed in the same transaction", entry_name);
+		}
+		if (!existing_entry) {
+			return true;
+		}
+		if (existing_entry->type != CatalogType::TABLE_ENTRY) {
+			throw CatalogException("Existing object \"%s\" is of type %s, trying to replace with type Table",
+			                       entry_name, CatalogTypeToString(existing_entry->type));
+		}
+		if (latest_state && latest_state->GetInfo().HasTransactionUpdates()) {
+			throw NotImplementedException("Cannot replace Iceberg table '%s' that has pending updates in the same "
+			                              "transaction. Commit or rollback the transaction before replacing the table.",
+			                              entry_name);
+		}
+		replacement_table = existing_entry->Cast<IcebergTableSchemaVersion>().table_info;
+		return true;
 	}
 	if (!existing_entry) {
-		// If there is no existing entry, make sure the entry has not been deleted in this transaction.
-		// We cannot create (or stage create) a table replace within a transaction yet.
-		// FIXME: With Snapshot operation type overwrite, you can handle create or replace for tables.
-		auto &iceberg_transaction = GetICTransaction(transaction);
-		auto &ic_catalog = catalog.Cast<IcebergCatalog>();
-		auto table_key = IcebergTable::GetTableKey(ic_catalog, namespace_items, entry_name);
-		auto latest_state = iceberg_transaction.GetLatestTableState(table_key);
+		// A missing entry can be a pending drop or rename, which cannot be combined with creation.
 		if (latest_state && latest_state->IsDroppedOrRenamed()) {
 			vector<string> qualified_name = {ic_catalog.GetName().GetIdentifierName()};
 			qualified_name.insert(qualified_name.end(), namespace_items.begin(), namespace_items.end());
@@ -119,9 +135,17 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateTable(CatalogTransaction &t
 	}
 	auto &ir_catalog = catalog.Cast<IcebergCatalog>();
 	// check if we have an existing entry with this name
+	optional_ptr<IcebergTable> replacement_table;
 	if (!HandleCreateConflict(transaction, CatalogType::TABLE_ENTRY, base_info.GetTableName().GetIdentifierName(),
-	                          base_info.on_conflict)) {
+	                          base_info.on_conflict, replacement_table)) {
 		return nullptr;
+	}
+	if (replacement_table) {
+		auto &table_info = iceberg_transaction.GetOrCreateAlter().GetOrInitializeTable(*replacement_table);
+		IcebergTableSet::ReplaceDefinition(context, table_info, base_info);
+		table_info.GetOrCreateTransactionData(iceberg_transaction)
+		    .TableReplaceContents(table_info.GetMetadataMutable());
+		return table_info.GetLatestSchema();
 	}
 
 	auto &table_info = IcebergTableSet::CreateNewEntry(context, ir_catalog, *this, base_info);
