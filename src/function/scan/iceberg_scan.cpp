@@ -287,8 +287,20 @@ static vector<column_t> IcebergGetRowIdColumns(ClientContext &, optional_ptr<Fun
 	return result;
 }
 
-//! Column statistics for the optimizer, from the table statistics file of the scanned snapshot
-static unique_ptr<BaseStatistics> IcebergScanColumnStatistics(ClientContext &, TableFunctionGetStatisticsInput &input) {
+//! The statistics callback of the multi-file scan iceberg_scan is built from; it returns the statistics given with
+//! the column_statistics option
+static table_statistics_extended_t multi_file_scan_statistics = nullptr;
+
+//! Column statistics for the optimizer: those given with column_statistics, else the distinct count from the table
+//! statistics file of the scanned snapshot
+static unique_ptr<BaseStatistics> IcebergScanColumnStatistics(ClientContext &context,
+                                                              TableFunctionGetStatisticsInput &input) {
+	if (multi_file_scan_statistics) {
+		auto given = multi_file_scan_statistics(context, input);
+		if (given) {
+			return given;
+		}
+	}
 	auto &column_index = input.column_index;
 	if (column_index.IsVirtualColumn() || column_index.HasChildren()) {
 		return nullptr;
@@ -331,6 +343,7 @@ TableFunctionSet IcebergFunctions::GetIcebergScanFunction(ExtensionLoader &loade
 		function.statistics = nullptr;
 		function.table_scan_progress = nullptr;
 		// Column statistics come from the table statistics files listed in the metadata, not from the Parquet files
+		multi_file_scan_statistics = function.statistics_extended;
 		function.statistics_extended = IcebergScanColumnStatistics;
 
 		function.get_bind_info = IcebergBindInfo;

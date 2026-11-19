@@ -1,0 +1,18 @@
+# name: test/sql/local/iceberg_scans/iceberg_scan_column_statistics_option.test
+# description: Statistics given with the column_statistics option reach the optimizer through iceberg_scan
+# group: [iceberg_scans]
+
+require avro
+
+require parquet
+
+require iceberg
+
+query I
+SELECT s.approx_unique::BIGINT FROM (
+	SELECT stats(l_orderkey) s FROM iceberg_scan('data/persistent/iceberg/lineitem_iceberg', allow_moved_paths => true,
+		column_statistics := MAP {'l_orderkey': MAP {'distinct_count': '77'}})
+	LIMIT 1
+);
+----
+77
