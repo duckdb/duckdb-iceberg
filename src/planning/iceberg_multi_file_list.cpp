@@ -188,14 +188,22 @@ vector<OpenFileInfo> IcebergMultiFileList::GetAllFiles() const {
 }
 
 FileExpandResult IcebergMultiFileList::GetExpandResult() const {
-	if (have_bound) {
-		GetFileInternal(1);
-	}
+	// DuckDB also calls this on the original list after a filtered view starts the shared scan.
 	return FileExpandResult::MULTIPLE_FILES;
 }
 
 idx_t IcebergMultiFileList::GetTotalFileCount() const {
 	return planner->GetTotalFileCount();
+}
+
+MultiFileCount IcebergMultiFileList::GetFileCount(idx_t min_exact_count) const {
+	auto count = planner->GetFileCount(min_exact_count);
+	return MultiFileCount(count.count, count.all_files_known ? FileExpansionType::ALL_FILES_EXPANDED
+	                                                         : FileExpansionType::NOT_ALL_FILES_KNOWN);
+}
+
+bool IcebergMultiFileList::FileIsAvailable(idx_t file_id) const {
+	return planner->FileIsAvailable(file_id);
 }
 
 unique_ptr<NodeStatistics> IcebergMultiFileList::GetCardinality(ClientContext &) const {

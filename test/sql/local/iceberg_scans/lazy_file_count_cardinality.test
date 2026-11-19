@@ -1,0 +1,55 @@
+# name: test/sql/local/iceberg_scans/lazy_file_count_cardinality.test
+# description: Cardinality fallback does not enumerate Iceberg files, even with cached Parquet metadata
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+statement ok
+SET iceberg_enable_manifest_cache=false;
+
+statement ok
+CALL enable_logging('Iceberg', storage='memory');
+
+foreach cache_enabled false true
+
+statement ok
+SET parquet_metadata_cache={cache_enabled};
+
+# Prime the Parquet cache when enabled. V1 has no manifest-list row estimate.
+query I
+SELECT id
+FROM iceberg_scan('data/persistent/iceberg_v1_deprecated/default/legacy_v1/metadata/v2.metadata.json')
+ORDER BY id;
+----
+1
+2
+3
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+EXPLAIN SELECT id
+FROM iceberg_scan('data/persistent/iceberg_v1_deprecated/default/legacy_v1/metadata/v2.metadata.json');
+
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE type='Iceberg' AND (
+	message LIKE 'Iceberg metadata phase=manifest_list_loaded%'
+	OR message LIKE 'Iceberg metadata phase=%manifest_scan_started%'
+	OR message LIKE 'Iceberg metadata phase=manifest_parse%'
+);
+----
+0
+
+# The estimate must not restrict which files execution discovers.
+query I
+SELECT id
+FROM iceberg_scan('data/persistent/iceberg_v1_deprecated/default/legacy_v1/metadata/v2.metadata.json')
+ORDER BY id;
+----
+1
+2
+3
+
+endloop

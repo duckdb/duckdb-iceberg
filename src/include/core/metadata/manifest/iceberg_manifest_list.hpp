@@ -59,7 +59,9 @@ public:
 	//! True only when the counts prove the manifest holds nothing but DELETED entries. Unknown counts
 	//! (optional in V1 manifest lists) are treated as possibly non-zero.
 	bool HasNoLiveFiles() const {
-		return added_files_count && existing_files_count && *added_files_count == 0 && *existing_files_count == 0;
+		// Positive live-row counts contradict zero live-file counts, so the manifest still needs to be read.
+		return added_files_count && existing_files_count && *added_files_count == 0 && *existing_files_count == 0 &&
+		       (!added_rows_count || *added_rows_count == 0) && (!existing_rows_count || *existing_rows_count == 0);
 	}
 
 public:
