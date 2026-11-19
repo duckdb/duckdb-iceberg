@@ -123,6 +123,9 @@ public:
 	bool has_assert_create = false;
 	//! Whether this transaction rolls main back (TableRollbackToSnapshot)
 	bool rolls_back = false;
+	//! Whether iceberg_expire_snapshots staged updates for this table. A table replacement also removes the main
+	//! ref, so the staged update types alone do not say whether snapshots are expired.
+	bool expires_snapshots = false;
 	//! Set explicitly by maintenance; its committed-table plan cannot be combined with later row changes.
 	bool has_maintenance_rewrite = false;
 	//! A MERGE chose its actions against the snapshot it read, so its commit can't be re-applied to a newer one.
