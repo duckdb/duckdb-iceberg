@@ -117,13 +117,11 @@ class SnapshotRemovalTests(unittest.TestCase):
         self.assertEqual(result["next-row-id"], 3)
         self.assertEqual(result["snapshots"][:-1], removed["snapshots"])
 
-    def test_removing_other_refs_is_unsupported_and_does_not_remove_main(self):
+    def test_removing_another_ref_does_not_remove_main(self):
         before = copy.deepcopy(self.catalog.tables[self.key])
-        with self.assertRaises(CatalogError) as error:
-            self.commit([{"action": "remove-snapshot-ref", "ref-name": "branch"}])
-        self.assertEqual(error.exception.code, 501)
-        self.assertIn("Only the main branch", str(error.exception))
-        self.assertEqual(self.catalog.tables[self.key], before)
+        result = self.commit([{"action": "remove-snapshot-ref", "ref-name": "branch"}])["metadata"]
+        self.assertEqual(result["refs"], before["metadata"]["refs"])
+        self.assertEqual(result["current-snapshot-id"], before["metadata"]["current-snapshot-id"])
 
     def test_later_invalid_update_does_not_publish_removal(self):
         before = copy.deepcopy(self.catalog.tables[self.key])
