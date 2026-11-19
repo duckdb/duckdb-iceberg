@@ -29,6 +29,8 @@ public:
 	int64_t GetCommitRetryCount() const;
 	bool SupportsAppendRetry() const;
 	bool RetryStateMatches(const IcebergTable &table_info) const;
+	//! Whether an update of this type is part of the transaction
+	bool HasUpdate(IcebergTableUpdateType type) const;
 	//! Whether this transaction stages a DELETE snapshot; gates the commit-retry safety check.
 	bool ContainsDelete() const;
 	void VerifySnapshotExpirationAllowed() const;
@@ -51,9 +53,6 @@ public:
 	void TableAddAssertCreate();
 	void TableAddAssertUUID();
 	void TableAddAssertCurrentSchemaId();
-	void TableAddAssertLastAssignedFieldId();
-	void TableAddAssertLastAssignedPartitionId();
-	void TableAddAssertDefaultSpecId();
 	void TableAssignUUID();
 	void TableAddUpradeFormatVersion();
 	void TableAddPartitionSpec();
@@ -89,6 +88,8 @@ public:
 	string initial_table_uuid;
 	int32_t initial_format_version;
 	int32_t initial_schema_id;
+	optional_idx initial_last_column_id;
+	optional_idx initial_last_partition_field_id;
 	int32_t initial_default_spec_id = 0;
 	optional_idx initial_default_sort_order_id;
 	optional<int64_t> initial_snapshot_id;

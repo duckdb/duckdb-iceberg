@@ -1,0 +1,48 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/test_alter_add_column_conflict_after_drop.test
+# description: ADD COLUMN conflicts with a concurrent ADD COLUMN and DROP COLUMN that end on the schema they started from
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+drop table if exists my_datalake.default.add_column_conflict;
+
+statement ok
+CREATE TABLE my_datalake.default.add_column_conflict (id INTEGER, amount INTEGER);
+
+statement ok
+INSERT INTO my_datalake.default.add_column_conflict VALUES (0, 0);
+
+statement ok con1
+begin;
+
+statement ok con1
+ALTER TABLE my_datalake.default.add_column_conflict ADD COLUMN y INTEGER;
+
+# con2 is in autocommit, so these are three commits: it adds a column, writes to it and drops it again.
+# The current schema id is back where it was, but the field id that con1 picked for its column is taken
+statement ok con2
+ALTER TABLE my_datalake.default.add_column_conflict ADD COLUMN x INTEGER;
+
+statement ok con2
+INSERT INTO my_datalake.default.add_column_conflict VALUES (1, 100, 42);
+
+statement ok con2
+ALTER TABLE my_datalake.default.add_column_conflict DROP COLUMN x;
+
+statement error con1
+commit;
+----
+<REGEX>:.*Conflict_409.*
+
+# the dropped column stays dropped
+query II
+select * from my_datalake.default.add_column_conflict order by id;
+----
+0	0
+1	100
+
+statement ok
+drop table my_datalake.default.add_column_conflict;

@@ -218,3 +218,33 @@ unnest(metadata."sort-orders"::VARIANT[]) AS t(sort_order)
 WHERE try_cast(sort_order."order-id" AS INTEGER) = metadata."default-sort-order-id";
 ----
 year	desc	nulls-first
+
+# Create and sort a table in one transaction
+statement ok
+drop table if exists my_datalake.default.test_set_sorted_by_in_create_transaction;
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE TABLE my_datalake.default.test_set_sorted_by_in_create_transaction (a INTEGER, b INTEGER);
+
+statement ok
+ALTER TABLE my_datalake.default.test_set_sorted_by_in_create_transaction SET SORTED BY (b DESC NULLS LAST);
+
+statement ok
+COMMIT;
+
+query TTT
+SELECT
+	sort_order.fields[1].transform,
+	sort_order.fields[1].direction,
+	sort_order.fields[1]."null-order"
+FROM iceberg_load_table_response('my_datalake.default.test_set_sorted_by_in_create_transaction'),
+unnest(metadata."sort-orders"::VARIANT[]) AS t(sort_order)
+WHERE try_cast(sort_order."order-id" AS INTEGER) = metadata."default-sort-order-id";
+----
+identity	desc	nulls-last
+
+statement ok
+drop table my_datalake.default.test_set_sorted_by_in_create_transaction;
