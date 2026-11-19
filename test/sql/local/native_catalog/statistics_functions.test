@@ -1,0 +1,183 @@
+# name: test/sql/local/native_catalog/statistics_functions.test
+# description: iceberg_table_stats and iceberg_partition_statistics on a catalog table whose statistics files another writer registered
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+CREATE TABLE my_datalake.default.statistics_functions (id INTEGER, region VARCHAR) PARTITIONED BY (region);
+
+statement ok
+INSERT INTO my_datalake.default.statistics_functions SELECT range, CASE WHEN range < 7 THEN 'eu' ELSE 'us' END FROM range(10);
+
+statement ok
+SET VARIABLE snapshot = (SELECT snapshot_id FROM iceberg_snapshots(my_datalake.default.statistics_functions));
+
+statement ok
+SET VARIABLE region_field = (SELECT field_id FROM iceberg_schemas(my_datalake.default.statistics_functions) WHERE name = 'region' AND is_current);
+
+# No statistics files yet
+query II
+SELECT (SELECT count(*) FROM iceberg_table_stats(my_datalake.default.statistics_functions)),
+       (SELECT count(*) FROM iceberg_partition_statistics(my_datalake.default.statistics_functions));
+----
+0	0
+
+# The partition statistics file: the spec's columns, one row per partition
+statement ok
+COPY (
+	SELECT * FROM (VALUES
+		({'region': 'eu'}, 0, 7::BIGINT, 1, 700::BIGINT, 0::BIGINT, 0, 0::BIGINT, 0, 7::BIGINT, 1700000000000::BIGINT, getvariable('snapshot')::BIGINT, 0),
+		({'region': 'us'}, 0, 3::BIGINT, 1, 300::BIGINT, 0::BIGINT, 0, 0::BIGINT, 0, 3::BIGINT, 1700000000000::BIGINT, getvariable('snapshot')::BIGINT, 0)
+	) t(partition, spec_id, data_record_count, data_file_count, total_data_file_size_in_bytes, position_delete_record_count,
+	    position_delete_file_count, equality_delete_record_count, equality_delete_file_count, total_record_count,
+	    last_updated_at, last_updated_snapshot_id, dv_count)
+) TO '{TEST_DIR}/statistics_functions_partitions.parquet' (FORMAT PARQUET);
+
+statement ok
+SET VARIABLE partition_file_size = (SELECT size FROM read_blob('{TEST_DIR}/statistics_functions_partitions.parquet'));
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/statistics_functions',
+	json_object('requirements', json_array(), 'updates', json_array(
+		json_object('action', 'set-partition-statistics', 'partition-statistics', json_object(
+			'snapshot-id', getvariable('snapshot'), 'statistics-path', '{WORKING_DIRECTORY}/{TEST_DIR}/statistics_functions_partitions.parquet',
+			'file-size-in-bytes', getvariable('partition_file_size')))))::VARCHAR);
+----
+200
+
+query IIIIIII
+SELECT statistics_snapshot_id = getvariable('snapshot'), partition, spec_id, data_record_count, data_file_count,
+       total_record_count, last_updated_at
+FROM iceberg_partition_statistics(my_datalake.default.statistics_functions)
+ORDER BY ALL;
+----
+true	{'region': eu}	0	7	1	7	2023-11-14 22:13:20
+true	{'region': us}	0	3	1	3	2023-11-14 22:13:20
+
+query I
+SELECT typeof(partition) FROM iceberg_partition_statistics(my_datalake.default.statistics_functions) LIMIT 1;
+----
+STRUCT(region VARCHAR)
+
+# A snapshot without a file lists nothing
+statement ok
+INSERT INTO my_datalake.default.statistics_functions VALUES (10, 'eu');
+
+statement ok
+SET VARIABLE second_snapshot = (SELECT snapshot_id FROM iceberg_snapshots(my_datalake.default.statistics_functions) ORDER BY sequence_number DESC LIMIT 1);
+
+query I
+SELECT count(*) FROM iceberg_partition_statistics(my_datalake.default.statistics_functions, snapshot_from_id => getvariable('second_snapshot'));
+----
+0
+
+query I
+SELECT count(*) FROM iceberg_partition_statistics(my_datalake.default.statistics_functions, snapshot_from_id => getvariable('snapshot'));
+----
+2
+
+# A registered size that does not match the file is refused
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/statistics_functions',
+	json_object('requirements', json_array(), 'updates', json_array(
+		json_object('action', 'set-partition-statistics', 'partition-statistics', json_object(
+			'snapshot-id', getvariable('second_snapshot'), 'statistics-path', '{WORKING_DIRECTORY}/{TEST_DIR}/statistics_functions_partitions.parquet',
+			'file-size-in-bytes', 1))))::VARCHAR);
+----
+200
+
+statement error
+SELECT * FROM iceberg_partition_statistics(my_datalake.default.statistics_functions, snapshot_from_id => getvariable('second_snapshot'));
+----
+Invalid Configuration Error: Partition statistics file
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/statistics_functions',
+	json_object('requirements', json_array(), 'updates', json_array(
+		json_object('action', 'remove-partition-statistics', 'snapshot-id', getvariable('second_snapshot'))))::VARCHAR);
+----
+200
+
+query I
+SELECT count(*) FROM iceberg_partition_statistics(my_datalake.default.statistics_functions);
+----
+2
+
+# A statistics file: a Puffin file with one theta sketch blob, registered with the blob metadata its footer holds
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/statistics_functions',
+	json_object('requirements', json_array(), 'updates', json_array(
+		json_object('action', 'set-statistics', 'statistics', json_object(
+			'snapshot-id', getvariable('snapshot'), 'statistics-path', '{WORKING_DIRECTORY}/data/persistent/table_statistics/metadata/stats-1001.puffin',
+			'file-size-in-bytes', 180, 'file-footer-size-in-bytes', 167,
+			'blob-metadata', json_array(json_object('type', 'apache-datasketches-theta-v1', 'snapshot-id', 1001,
+				'sequence-number', 1, 'fields', json_array(1), 'properties', json_object('ndv', '42')))))))::VARCHAR);
+----
+200
+
+query IIIIII
+SELECT statistics_snapshot_id = getvariable('snapshot'), blob_type, blob_snapshot_id, field_ids, field_names, ndv
+FROM iceberg_table_stats(my_datalake.default.statistics_functions);
+----
+true	apache-datasketches-theta-v1	1001	[1]	[id]	42
+
+# Each row shows its own blob's distinct count: a blob of another type for the same field has none, and properties
+# are listed in key order
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/statistics_functions',
+	json_object('requirements', json_array(), 'updates', json_array(
+		json_object('action', 'set-statistics', 'statistics', json_object(
+			'snapshot-id', getvariable('snapshot'), 'statistics-path', '{WORKING_DIRECTORY}/data/persistent/table_statistics/metadata/stats-1001.puffin',
+			'file-size-in-bytes', 180, 'file-footer-size-in-bytes', 167,
+			'blob-metadata', json_array(
+				json_object('type', 'apache-datasketches-theta-v1', 'snapshot-id', 1001, 'sequence-number', 1, 'fields', json_array(1),
+					'properties', json_object('ndv', '42', 'created-by', 'test')),
+				json_object('type', 'some-other-blob-v1', 'snapshot-id', 1001, 'sequence-number', 1, 'fields', json_array(1),
+					'properties', json_object('ndv', '7')))))))::VARCHAR);
+----
+200
+
+statement error
+SELECT * FROM iceberg_table_stats(my_datalake.default.statistics_functions);
+----
+Invalid Configuration Error: Statistics file
+
+# A statistics file whose footer does not describe the registered blob is refused
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/statistics_functions',
+	json_object('requirements', json_array(), 'updates', json_array(
+		json_object('action', 'set-statistics', 'statistics', json_object(
+			'snapshot-id', getvariable('second_snapshot'), 'statistics-path', '{WORKING_DIRECTORY}/data/persistent/table_statistics/metadata/stats-1001.puffin',
+			'file-size-in-bytes', 180, 'file-footer-size-in-bytes', 167,
+			'blob-metadata', json_array(json_object('type', 'apache-datasketches-theta-v1', 'snapshot-id', getvariable('second_snapshot'),
+				'sequence-number', 2, 'fields', json_array(getvariable('region_field')), 'properties', json_object('ndv', '2')))))))::VARCHAR);
+----
+200
+
+statement error
+SELECT * FROM iceberg_table_stats(my_datalake.default.statistics_functions, snapshot_from_id => getvariable('second_snapshot'));
+----
+Invalid Configuration Error: Statistics file
+
+# A registered size the file does not have is refused
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/statistics_functions',
+	json_object('requirements', json_array(), 'updates', json_array(
+		json_object('action', 'set-statistics', 'statistics', json_object(
+			'snapshot-id', getvariable('second_snapshot'), 'statistics-path', '{WORKING_DIRECTORY}/data/persistent/table_statistics/metadata/stats-1001.puffin',
+			'file-size-in-bytes', 181, 'file-footer-size-in-bytes', 167, 'blob-metadata', json_array()))))::VARCHAR);
+----
+200
+
+statement error
+SELECT * FROM iceberg_table_stats(my_datalake.default.statistics_functions, snapshot_from_id => getvariable('second_snapshot'));
+----
+Invalid Configuration Error: Statistics file of snapshot
+
+statement ok
+DROP TABLE my_datalake.default.statistics_functions;

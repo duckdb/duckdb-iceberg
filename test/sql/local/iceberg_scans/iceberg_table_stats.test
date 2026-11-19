@@ -1,0 +1,45 @@
+# name: test/sql/local/iceberg_scans/iceberg_table_stats.test
+# description: iceberg_table_stats lists the blobs of a table's statistics files
+# group: [iceberg_scans]
+
+require avro
+
+require parquet
+
+require iceberg
+
+# Every statistics file of the table, one row per blob
+query IIIIIII
+SELECT statistics_snapshot_id, blob_type, blob_snapshot_id, blob_sequence_number, field_ids, field_names, ndv
+FROM iceberg_table_stats('data/persistent/table_statistics')
+ORDER BY ALL;
+----
+1001	apache-datasketches-theta-v1	1001	1	[1]	[id]	42
+1002	apache-datasketches-theta-v1	1002	2	[2]	[region]	7
+
+query IIII
+SELECT statistics_path, file_size_in_bytes, file_footer_size_in_bytes, properties
+FROM iceberg_table_stats('data/persistent/table_statistics')
+ORDER BY ALL;
+----
+data/persistent/table_statistics/metadata/stats-1001.puffin	180	167	{ndv=42}
+data/persistent/table_statistics/metadata/stats-1002.puffin	179	166	{ndv=7}
+
+# A snapshot lookup selects the file of that snapshot
+query II
+SELECT statistics_snapshot_id, ndv
+FROM iceberg_table_stats('data/persistent/table_statistics', snapshot_from_id => 1001);
+----
+1001	42
+
+# The footer of the file must match the registered sizes
+statement error
+SELECT * FROM iceberg_table_stats('data/persistent/table_statistics_bad_footer');
+----
+Invalid Configuration Error: Statistics file of snapshot 1001
+
+# A table without statistics files
+query I
+SELECT count(*) FROM iceberg_table_stats('data/persistent/table_partition_statistics');
+----
+0

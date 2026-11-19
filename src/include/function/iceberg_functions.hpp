@@ -39,6 +39,8 @@ private:
 	static TableFunctionSet GetIcebergViewMetadataFunction();
 	static TableFunctionSet GetIcebergColumnStatsFunction();
 	static TableFunctionSet GetIcebergPartitionStatsFunction();
+	static TableFunctionSet GetIcebergTableStatsFunction();
+	static TableFunctionSet GetIcebergPartitionStatisticsFunction();
 	static TableFunctionSet GetIcebergManifestsFunction();
 	static TableFunctionSet GetIcebergFilesFunction();
 	static TableFunctionSet GetIcebergToDuckLakeFunction();
