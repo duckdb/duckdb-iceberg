@@ -8,9 +8,12 @@
 #include "planning/pruning/iceberg_file_pruner.hpp"
 #include "planning/scan_plan/iceberg_scan_plan_provider.hpp"
 #include "planning/scan_plan/iceberg_scan_statistics.hpp"
+#include "duckdb/common/operator/numeric_cast.hpp"
+#include "duckdb/storage/statistics/base_statistics.hpp"
 #include "duckdb/storage/table/row_group_reorderer.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "iceberg_logging.hpp"
+#include "iceberg_options.hpp"
 
 namespace duckdb {
 
@@ -342,6 +345,41 @@ unique_ptr<NodeStatistics> IcebergScanPlanner::GetCardinality() const {
 		return nullptr;
 	}
 	return make_uniq<NodeStatistics>(*cardinality, *cardinality);
+}
+
+static bool TableStatisticsEnabled(ClientContext &context) {
+	Value setting;
+	if (context.TryGetCurrentSetting(ENABLE_TABLE_STATISTICS_CONFIG_VARIABLE, setting) && !setting.IsNull()) {
+		return setting.GetValue<bool>();
+	}
+	return DEFAULT_ENABLE_TABLE_STATISTICS;
+}
+
+unique_ptr<BaseStatistics> IcebergScanPlanner::GetColumnStatistics(column_t column_index) const {
+	//! Changes made earlier in this transaction are not in any statistics file
+	if (!HasScanInfo() || HasTransactionData() || !TableStatisticsEnabled(context)) {
+		return nullptr;
+	}
+	auto snapshot = GetSnapshot().snapshot;
+	if (!snapshot) {
+		return nullptr;
+	}
+	auto statistics_file = GetMetadata().FindStatisticsFile(snapshot->snapshot_id);
+	if (!statistics_file) {
+		return nullptr;
+	}
+	auto &columns = GetSchema().columns;
+	if (column_index >= columns.size()) {
+		return nullptr;
+	}
+	auto &column = *columns[column_index];
+	auto distinct_count = statistics_file->GetDistinctCount(column.id);
+	if (!distinct_count || *distinct_count == 0) {
+		return nullptr;
+	}
+	auto result = BaseStatistics::CreateUnknown(column.type);
+	result.SetDistinctCount(NumericCast<idx_t>(*distinct_count));
+	return result.ToUnique();
 }
 
 void IcebergScanPlanner::GetStatistics(vector<PartitionStatistics> &result) const {

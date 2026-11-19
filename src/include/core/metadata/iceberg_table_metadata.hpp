@@ -37,6 +37,30 @@ public:
 	timestamp_ms_t timestamp_ms;
 };
 
+//! One blob of a table statistics file, as listed in the table metadata ("blob-metadata")
+struct IcebergStatisticsBlob {
+public:
+	string type;
+	int64_t snapshot_id = 0;
+	int64_t sequence_number = 0;
+	vector<int32_t> fields;
+	unordered_map<string, string> properties;
+};
+
+//! A table statistics file (Puffin), one entry of the table metadata's "statistics" list
+struct IcebergStatisticsFile {
+public:
+	//! The number of distinct values of the field, when the file records a theta sketch for it
+	optional<int64_t> GetDistinctCount(int32_t field_id) const;
+
+public:
+	int64_t snapshot_id = 0;
+	string path;
+	int64_t file_size_in_bytes = 0;
+	int64_t file_footer_size_in_bytes = 0;
+	vector<IcebergStatisticsBlob> blobs;
+};
+
 struct IcebergTableMetadataSchemas {
 public:
 	IcebergTableMetadataSchemas() = default;
@@ -106,6 +130,7 @@ public:
 	optional_ptr<const IcebergColumnDefinition> FindColumnByFieldId(int32_t field_id) const;
 	optional_ptr<const IcebergPartitionSpec> FindPartitionSpecById(int32_t spec_id) const;
 	optional_ptr<const IcebergSortOrder> FindSortOrderById(int32_t sort_id) const;
+	optional_ptr<const IcebergStatisticsFile> FindStatisticsFile(int64_t snapshot_id) const;
 	IcebergSnapshotScanInfo GetSnapshot(const IcebergSnapshotLookup &lookup) const;
 
 	const string &GetLocation() const;
@@ -179,6 +204,8 @@ public:
 	//! Stored as raw millis (matching the REST API representation and last_updated_ms)
 	//! to keep all timestamp comparisons in a single unit.
 	vector<pair<int64_t /*snapshot_id*/, timestamp_ms_t>> snapshot_log;
+	//! Table statistics files, at most one per snapshot
+	vector<IcebergStatisticsFile> statistics;
 	vector<IcebergFieldMapping> mappings;
 
 	//! Custom write paths from table properties
