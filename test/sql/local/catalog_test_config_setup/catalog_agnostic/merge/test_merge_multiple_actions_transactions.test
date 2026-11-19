@@ -151,7 +151,7 @@ USING (VALUES ({duplicate_target}, 'update'), ({duplicate_target}, 'delete')) s(
 WHEN MATCHED AND s.action = 'update' THEN UPDATE SET v = 'discarded'
 WHEN MATCHED THEN DELETE;
 ----
-cannot affect the same target row more than once
+The same row was updated multiple times
 
 statement ok
 ROLLBACK;

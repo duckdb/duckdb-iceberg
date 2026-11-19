@@ -1,5 +1,5 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/scan_order_nan.test
-# description: ORDER BY ... LIMIT over FLOAT and DOUBLE data files that hold NaN
+# description: File bounds exclude NaNs and cannot prove that every row ranks before a LIMIT frontier
 # group: [reads]
 
 require-env CATALOG_TEST_CONFIG_SETUP
@@ -8,226 +8,72 @@ require-env SCAN_PLANNING_MODE client
 
 include test/sql/init_requires
 
-foreach type double float
+foreach type FLOAT DOUBLE
 
 statement ok
-DROP TABLE IF EXISTS my_datalake.default.scan_order_nan_{type};
+DROP TABLE IF EXISTS my_datalake.default.scan_order_nan;
 
 statement ok
-CREATE TABLE my_datalake.default.scan_order_nan_{type} (a {type}, b BIGINT);
+CREATE TABLE my_datalake.default.scan_order_nan (a {type}, id INTEGER)
+WITH ('write.metadata.metrics.default' = 'full');
 
-# One data file per insert. The bounds on 'a' do not include the NaN: [1, 1] and [5, 6].
+# The files' bounds are [1, 1], [2, 3], [4, 4], but both outer files also
+# contain NaN, which sorts after every finite value in DuckDB.
 statement ok
-INSERT INTO my_datalake.default.scan_order_nan_{type} VALUES (1.0, 1), ('nan', 2);
+INSERT INTO my_datalake.default.scan_order_nan VALUES (1, 1), ('NaN', 10);
 
 statement ok
-INSERT INTO my_datalake.default.scan_order_nan_{type} VALUES (5.0, 3), (6.0, 4);
+INSERT INTO my_datalake.default.scan_order_nan VALUES (2, 2), (3, 3);
 
-query I
-SELECT count(DISTINCT file_path) FROM iceberg_metadata(my_datalake.default.scan_order_nan_{type});
+statement ok
+INSERT INTO my_datalake.default.scan_order_nan VALUES (4, 4), ('NaN', 20);
+
+query III
+SELECT count(*), count(*) FILTER (WHERE nan_value_count = 0), sum(nan_value_count)
+FROM iceberg_column_stats(my_datalake.default.scan_order_nan) WHERE column_name = 'a';
 ----
+3	1	2
+
+# Counting both rows of the first file as smaller than 2 would lose the second file.
+query I
+SELECT id FROM my_datalake.default.scan_order_nan ORDER BY a ASC, id DESC LIMIT 2;
+----
+1
 2
 
-# NaN sorts after every other value.
-query II
-SELECT a, b FROM my_datalake.default.scan_order_nan_{type} ORDER BY a DESC LIMIT 1;
+query I
+SELECT id FROM my_datalake.default.scan_order_nan ORDER BY a ASC, id DESC LIMIT 4;
 ----
-nan	2
+1
+2
+3
+4
 
-query II
-SELECT a, b FROM my_datalake.default.scan_order_nan_{type} ORDER BY a DESC LIMIT 2;
+# Both NaN files are candidates for the first row when a second key breaks the tie.
+query I
+SELECT id FROM my_datalake.default.scan_order_nan ORDER BY a DESC, id ASC LIMIT 1;
 ----
-nan	2
-6.0	4
+10
 
-query II
-SELECT a, b FROM my_datalake.default.scan_order_nan_{type} ORDER BY a ASC LIMIT 1;
+query I
+SELECT id FROM my_datalake.default.scan_order_nan ORDER BY a DESC, id DESC LIMIT 2;
 ----
-1.0	1
+20
+10
 
-query II
-SELECT a, b FROM my_datalake.default.scan_order_nan_{type} ORDER BY a ASC LIMIT 2;
+query I
+SELECT id FROM my_datalake.default.scan_order_nan ORDER BY a ASC, id DESC LIMIT 2 OFFSET 3;
 ----
-1.0	1
-5.0	3
+4
+20
 
-query II
-SELECT a, b FROM my_datalake.default.scan_order_nan_{type} ORDER BY a DESC NULLS FIRST LIMIT 1;
+query I
+SELECT id FROM my_datalake.default.scan_order_nan ORDER BY a DESC, id ASC LIMIT 2 OFFSET 1;
 ----
-nan	2
-
-query II
-SELECT a, b FROM my_datalake.default.scan_order_nan_{type} ORDER BY a ASC NULLS LAST LIMIT 2;
-----
-1.0	1
-5.0	3
-
-query II
-SELECT a, b FROM my_datalake.default.scan_order_nan_{type} ORDER BY a DESC, b ASC LIMIT 1;
-----
-nan	2
-
-query II
-SELECT a, b FROM my_datalake.default.scan_order_nan_{type} ORDER BY a ASC LIMIT 1 OFFSET 1;
-----
-5.0	3
+20
+4
 
 statement ok
-DROP TABLE my_datalake.default.scan_order_nan_{type};
+DROP TABLE my_datalake.default.scan_order_nan;
 
 endloop
-
-# A data file that holds only NaN has no bounds, so the pushdown does not skip files.
-statement ok
-DROP TABLE IF EXISTS my_datalake.default.scan_order_nan_only;
-
-statement ok
-CREATE TABLE my_datalake.default.scan_order_nan_only (a DOUBLE, b BIGINT);
-
-statement ok
-INSERT INTO my_datalake.default.scan_order_nan_only VALUES ('nan', 1), ('nan', 2);
-
-statement ok
-INSERT INTO my_datalake.default.scan_order_nan_only VALUES (5.0, 3), (6.0, 4);
-
-statement ok
-INSERT INTO my_datalake.default.scan_order_nan_only VALUES (7.0, 5), (8.0, 6);
-
-query II
-SELECT a, b FROM my_datalake.default.scan_order_nan_only ORDER BY a DESC, b ASC LIMIT 1;
-----
-nan	1
-
-query II
-SELECT a, b FROM my_datalake.default.scan_order_nan_only ORDER BY a DESC, b ASC LIMIT 3;
-----
-nan	1
-nan	2
-8.0	6
-
-query I
-SELECT a FROM my_datalake.default.scan_order_nan_only ORDER BY a DESC LIMIT 1;
-----
-nan
-
-query II
-SELECT a, b FROM my_datalake.default.scan_order_nan_only ORDER BY a ASC LIMIT 1;
-----
-5.0	3
-
-query II
-SELECT a, b FROM my_datalake.default.scan_order_nan_only ORDER BY a ASC LIMIT 2;
-----
-5.0	3
-6.0	4
-
-query II
-SELECT a, b FROM my_datalake.default.scan_order_nan_only ORDER BY a ASC, b ASC LIMIT 5;
-----
-5.0	3
-6.0	4
-7.0	5
-8.0	6
-nan	1
-
-statement ok
-DROP TABLE my_datalake.default.scan_order_nan_only;
-
-# Data files without NaN are still skipped.
-statement ok
-DROP TABLE IF EXISTS my_datalake.default.scan_order_no_nan;
-
-statement ok
-CREATE TABLE my_datalake.default.scan_order_no_nan (a DOUBLE, b BIGINT);
-
-statement ok
-INSERT INTO my_datalake.default.scan_order_no_nan VALUES (1.0, 1), (2.0, 2);
-
-statement ok
-INSERT INTO my_datalake.default.scan_order_no_nan VALUES (5.0, 3), (6.0, 4);
-
-statement ok
-INSERT INTO my_datalake.default.scan_order_no_nan VALUES (8.0, 5), (9.0, 6);
-
-statement ok
-CALL enable_logging('Iceberg');
-
-statement ok
-CALL truncate_duckdb_logs();
-
-query II
-SELECT a, b FROM my_datalake.default.scan_order_no_nan ORDER BY a DESC LIMIT 1;
-----
-9.0	6
-
-query I
-SELECT count(*) > 0 FROM duckdb_logs()
-WHERE type = 'Iceberg' AND message LIKE '%Scan Order Pushdown, kept % of 3%';
-----
-true
-
-statement ok
-CALL truncate_duckdb_logs();
-
-query II
-SELECT a, b FROM my_datalake.default.scan_order_no_nan ORDER BY a ASC LIMIT 2;
-----
-1.0	1
-2.0	2
-
-query I
-SELECT count(*) > 0 FROM duckdb_logs()
-WHERE type = 'Iceberg' AND message LIKE '%Scan Order Pushdown, kept % of 3%';
-----
-true
-
-statement ok
-DROP TABLE my_datalake.default.scan_order_no_nan;
-
-# A data file with NaN does not stop the pushdown from skipping the other data files.
-statement ok
-DROP TABLE IF EXISTS my_datalake.default.scan_order_some_nan;
-
-statement ok
-CREATE TABLE my_datalake.default.scan_order_some_nan (a DOUBLE, b BIGINT);
-
-statement ok
-INSERT INTO my_datalake.default.scan_order_some_nan VALUES (1.0, 1), ('nan', 2);
-
-statement ok
-INSERT INTO my_datalake.default.scan_order_some_nan VALUES (5.0, 3), (6.0, 4);
-
-statement ok
-INSERT INTO my_datalake.default.scan_order_some_nan VALUES (8.0, 5), (9.0, 6);
-
-statement ok
-CALL truncate_duckdb_logs();
-
-query II
-SELECT a, b FROM my_datalake.default.scan_order_some_nan ORDER BY a DESC LIMIT 1;
-----
-nan	2
-
-query I
-SELECT count(*) > 0 FROM duckdb_logs()
-WHERE type = 'Iceberg' AND message LIKE '%Scan Order Pushdown, kept % of 3%';
-----
-true
-
-statement ok
-CALL truncate_duckdb_logs();
-
-query II
-SELECT a, b FROM my_datalake.default.scan_order_some_nan ORDER BY a ASC LIMIT 2;
-----
-1.0	1
-5.0	3
-
-query I
-SELECT count(*) > 0 FROM duckdb_logs()
-WHERE type = 'Iceberg' AND message LIKE '%Scan Order Pushdown, kept % of 3%';
-----
-true
-
-statement ok
-DROP TABLE my_datalake.default.scan_order_some_nan;

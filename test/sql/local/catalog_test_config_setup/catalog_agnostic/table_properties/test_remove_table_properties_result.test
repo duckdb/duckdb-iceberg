@@ -1,0 +1,94 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/table_properties/test_remove_table_properties_result.test
+# description: Property removal reports the remaining transaction-visible properties after each update
+# group: [table_properties]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+foreach threads 1 4
+
+statement ok
+SET threads={threads};
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.remove_properties_result;
+
+statement ok
+CREATE TABLE my_datalake.default.remove_properties_result (id INTEGER);
+
+# Catalogs can supply default properties. Only compare the properties this test adds.
+statement ok
+SET VARIABLE default_property_count = (
+	SELECT count(*) FROM iceberg_table_properties(my_datalake.default.remove_properties_result)
+);
+
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.remove_properties_result, {'a': '1', 'b': '2', 'c': '3'});
+
+# The aggregate allows both branches to run concurrently. Whichever acquires the lock first
+# leaves two properties; the other leaves one. Repeated and absent keys remove nothing extra.
+query I
+SELECT list(Success - getvariable('default_property_count') ORDER BY Success) FROM (
+	SELECT * FROM remove_iceberg_table_properties(my_datalake.default.remove_properties_result, ['a', 'a', 'missing'])
+	UNION ALL
+	SELECT * FROM remove_iceberg_table_properties(my_datalake.default.remove_properties_result, ['b'])
+);
+----
+[1, 2]
+
+query TT
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.remove_properties_result)
+WHERE key IN ('a', 'b', 'c') ORDER BY key;
+----
+c	3
+
+# A no-op returns the unchanged count.
+query I
+SELECT Success - getvariable('default_property_count')
+FROM remove_iceberg_table_properties(my_datalake.default.remove_properties_result, []);
+----
+1
+
+# A single removal must also read the updated copy, including when no user properties remain.
+query I
+SELECT Success - getvariable('default_property_count')
+FROM remove_iceberg_table_properties(my_datalake.default.remove_properties_result, ['c']);
+----
+0
+
+# Repeat with a table that already has transaction-local state when the statement is bound.
+statement ok
+BEGIN;
+
+statement ok
+CALL set_iceberg_table_properties(my_datalake.default.remove_properties_result, {'a': '1', 'b': '2', 'c': '3'});
+
+query I
+SELECT list(Success - getvariable('default_property_count') ORDER BY Success) FROM (
+	SELECT * FROM remove_iceberg_table_properties(my_datalake.default.remove_properties_result, ['a'])
+	UNION ALL
+	SELECT * FROM remove_iceberg_table_properties(my_datalake.default.remove_properties_result, ['b'])
+);
+----
+[1, 2]
+
+query TT
+SELECT key, value FROM iceberg_table_properties(my_datalake.default.remove_properties_result)
+WHERE key IN ('a', 'b', 'c') ORDER BY key;
+----
+c	3
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT count(*) FROM iceberg_table_properties(my_datalake.default.remove_properties_result)
+WHERE key IN ('a', 'b', 'c');
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.remove_properties_result;
+
+endloop

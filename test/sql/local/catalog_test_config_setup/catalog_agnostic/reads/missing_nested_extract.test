@@ -1,0 +1,144 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/missing_nested_extract.test
+# description: Missing STRUCT and VARIANT roots preserve typed nested extracts across partition specs
+# group: [reads]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+require-env VARIANT_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.missing_nested_extract;
+
+statement ok
+CREATE TABLE my_datalake.default.missing_nested_extract(id INTEGER, part VARCHAR)
+WITH ('format-version' = '3');
+
+statement ok
+INSERT INTO my_datalake.default.missing_nested_extract VALUES (1, 'old');
+
+statement ok
+ALTER TABLE my_datalake.default.missing_nested_extract SET PARTITIONED BY (part);
+
+statement ok
+INSERT INTO my_datalake.default.missing_nested_extract VALUES (2, 'old');
+
+# Both older files lack these roots; only one has identity partition constants.
+statement ok
+ALTER TABLE my_datalake.default.missing_nested_extract ADD COLUMN payload VARIANT;
+
+statement ok
+ALTER TABLE my_datalake.default.missing_nested_extract ADD COLUMN s STRUCT(n STRUCT(x INTEGER));
+
+statement ok
+INSERT INTO my_datalake.default.missing_nested_extract VALUES
+	(3, 'new', {'n': {'x': 42, 'other': 9}}::VARIANT, {'n': {'x': 42}}),
+	(4, 'new', NULL, NULL),
+	(5, 'new', {'n': NULL}::VARIANT, {'n': NULL}),
+	(6, 'scalar', 5::VARIANT, {'n': {'x': 7}});
+
+query IITT
+SELECT id, payload.n.x::INTEGER, payload.n.x::VARCHAR, s.n.x::VARCHAR
+FROM my_datalake.default.missing_nested_extract ORDER BY id;
+----
+1	NULL	NULL	NULL
+2	NULL	NULL	NULL
+3	42	42	42
+4	NULL	NULL	NULL
+5	NULL	NULL	NULL
+6	NULL	NULL	7
+
+# A STRUCT cast between named extracts must retain the requested member order and both siblings.
+query TT
+SELECT (payload.n::STRUCT(other VARCHAR, x VARCHAR)).x,
+       (payload.n::STRUCT(other VARCHAR, x VARCHAR)).other
+FROM my_datalake.default.missing_nested_extract
+ORDER BY payload.n.x::INTEGER NULLS LAST LIMIT 1;
+----
+42	9
+
+query IT
+SELECT id, (payload.n::STRUCT(other VARCHAR, x VARCHAR)).x
+FROM my_datalake.default.missing_nested_extract ORDER BY id;
+----
+1	NULL
+2	NULL
+3	42
+4	NULL
+5	NULL
+6	NULL
+
+# Reading only missing extracts still needs to preserve the old files' row counts.
+query II
+SELECT count(*), count(payload.n.x::INTEGER)
+FROM my_datalake.default.missing_nested_extract WHERE part = 'old';
+----
+2	0
+
+query I
+SELECT id FROM my_datalake.default.missing_nested_extract
+WHERE payload.n.x::INTEGER = 42 AND s.n.x::VARCHAR = '42';
+----
+3
+
+query I
+SELECT id FROM my_datalake.default.missing_nested_extract
+WHERE payload.n.x::INTEGER IS NULL ORDER BY id;
+----
+1
+2
+4
+5
+6
+
+query I
+SELECT id FROM my_datalake.default.missing_nested_extract
+WHERE id = 1 OR payload.n.x::INTEGER = 42 ORDER BY id;
+----
+1
+3
+
+# Compare numeric and named extraction through a serialized scan with a nested filter.
+statement ok
+SET debug_verify_serializer = true;
+
+query IT
+SELECT id, payload.n.x::VARCHAR FROM my_datalake.default.missing_nested_extract
+WHERE s.n.x IS NULL OR payload.n.x::INTEGER = 42 ORDER BY id;
+----
+1	NULL
+2	NULL
+3	42
+4	NULL
+5	NULL
+
+statement ok
+RESET debug_verify_serializer;
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE missing_nested_tasks = (
+	SELECT list(task) FROM (FROM iceberg_scan_plan('my_datalake.default.missing_nested_extract')) task
+);
+
+query IITT
+SELECT id, payload.n.x::INTEGER, payload.n.x::VARCHAR, s.n.x::VARCHAR
+FROM iceberg_scan_tasks(getvariable('missing_nested_tasks')) ORDER BY id;
+----
+1	NULL	NULL	NULL
+2	NULL	NULL	NULL
+3	42	42	42
+4	NULL	NULL	NULL
+5	NULL	NULL	NULL
+6	NULL	NULL	7
+
+statement ok
+COMMIT;
+
+statement ok
+DROP TABLE my_datalake.default.missing_nested_extract;

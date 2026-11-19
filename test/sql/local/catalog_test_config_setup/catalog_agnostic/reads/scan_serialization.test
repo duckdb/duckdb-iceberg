@@ -99,6 +99,10 @@ SET iceberg_enable_scan_serialization = true;
 
 # This is the relevant shape of TPC-DS Q95: a two-scan CTE is referenced twice under a LIMIT. DuckDB
 # automatically inlines it by deep-copying its Iceberg scans; before serialization support it retained a CTE_SCAN.
+# Isolate that check from common-subplan elimination, which can introduce a new CTE after successful inlining.
+statement ok
+SET disabled_optimizers = 'common_subplan';
+
 query II
 EXPLAIN WITH pairs AS (
     SELECT a.order_no
@@ -118,6 +122,9 @@ WHERE s.order_no IN (SELECT order_no FROM pairs)
 LIMIT 100;
 ----
 logical_opt	<!REGEX>:.*CTE_SCAN.*
+
+statement ok
+RESET disabled_optimizers;
 
 query I
 WITH pairs AS NOT MATERIALIZED (

@@ -1,0 +1,140 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/add_field_default_dropped_children.test
+# description: Default-only structs retain parent validity after all original children are dropped
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env COLUMN_DEFAULT_SUPPORT
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.default_dropped_children;
+
+statement ok
+CREATE TABLE my_datalake.default.default_dropped_children (
+	id INTEGER,
+	s STRUCT(label VARCHAR, n STRUCT(b INTEGER)),
+	l STRUCT(b INTEGER)[],
+	m MAP(VARCHAR, STRUCT(b INTEGER))
+) WITH ('format-version' = '3');
+
+# A present struct with a NULL child is different from a NULL struct.
+statement ok
+INSERT INTO my_datalake.default.default_dropped_children VALUES
+	(1, {'label': 'one', 'n': {'b': 1}}, [{'b': 1}, NULL], MAP {'k': {'b': 1}, 'z': NULL}),
+	(2, {'label': 'two', 'n': NULL}, NULL, NULL),
+	(3, NULL, [], MAP {}),
+	(4, {'label': 'four', 'n': {'b': NULL}}, [{'b': NULL}], MAP {'k': {'b': NULL}});
+
+statement ok
+ALTER TABLE my_datalake.default.default_dropped_children ADD COLUMN s.x INTEGER DEFAULT 7;
+
+foreach parent s.n l.element m.value
+
+statement ok
+ALTER TABLE my_datalake.default.default_dropped_children ADD COLUMN {parent}.y INTEGER DEFAULT 5;
+
+endloop
+
+# This file contains the new fields; the first file must reconstruct them.
+statement ok
+INSERT INTO my_datalake.default.default_dropped_children VALUES
+	(5, {'label': 'five', 'n': {'b': 9, 'y': 9}, 'x': 8}, [{'b': 9, 'y': 9}], MAP {'k': {'b': 9, 'y': 9}});
+
+foreach parent s.n l.element m.value
+
+statement ok
+ALTER TABLE my_datalake.default.default_dropped_children DROP COLUMN {parent}.b;
+
+endloop
+
+# Neither whole-struct reconstruction nor an extracted field may invent a non-NULL parent.
+query ITII
+SELECT id, s.n, s.n.y, s.x FROM my_datalake.default.default_dropped_children ORDER BY id;
+----
+1	{'y': 5}	5	7
+2	NULL	NULL	7
+3	NULL	NULL	NULL
+4	{'y': 5}	5	7
+5	{'y': 9}	9	8
+
+query II
+SELECT id, s.n.y FROM my_datalake.default.default_dropped_children ORDER BY id;
+----
+1	5
+2	NULL
+3	NULL
+4	5
+5	9
+
+query IT
+SELECT id, s FROM my_datalake.default.default_dropped_children ORDER BY id;
+----
+1	{'label': one, 'n': {'y': 5}, 'x': 7}
+2	{'label': two, 'n': NULL, 'x': 7}
+3	NULL
+4	{'label': four, 'n': {'y': 5}, 'x': 7}
+5	{'label': five, 'n': {'y': 9}, 'x': 8}
+
+query ITT
+SELECT id, l, m FROM my_datalake.default.default_dropped_children ORDER BY id;
+----
+1	[{'y': 5}, NULL]	{k={'y': 5}, z=NULL}
+2	NULL	NULL
+3	[]	{}
+4	[{'y': 5}]	{k={'y': 5}}
+5	[{'y': 9}]	{k={'y': 9}}
+
+query I
+SELECT id FROM my_datalake.default.default_dropped_children WHERE s.n.y = 5 ORDER BY id;
+----
+1
+4
+
+query I
+SELECT id FROM my_datalake.default.default_dropped_children WHERE s.n.y IS NULL ORDER BY id;
+----
+2
+3
+
+query I
+SELECT id FROM my_datalake.default.default_dropped_children
+WHERE s.n::VARCHAR = '{''y'': 5}' ORDER BY id;
+----
+1
+4
+
+query III
+SELECT count(*) FILTER (WHERE e.y = 5), count(*) FILTER (WHERE e.y IS NULL), count(*) FILTER (WHERE e.y = 9)
+FROM (SELECT unnest(l) AS e FROM my_datalake.default.default_dropped_children);
+----
+2	1	1
+
+query III
+SELECT id, m['k'].y, m['z'].y FROM my_datalake.default.default_dropped_children ORDER BY id;
+----
+1	5	NULL
+2	NULL	NULL
+3	NULL	NULL
+4	5	NULL
+5	9	NULL
+
+# Rewriting the old files must preserve validity instead of materializing spurious defaults.
+statement ok
+UPDATE my_datalake.default.default_dropped_children SET s = s, l = l, m = m;
+
+query IIIIII
+SELECT id, s IS NULL, s.n IS NULL, s.n.y, l[1].y, m['k'].y
+FROM my_datalake.default.default_dropped_children ORDER BY id;
+----
+1	false	false	5	5	5
+2	false	true	NULL	NULL	NULL
+3	true	true	NULL	NULL	NULL
+4	false	false	5	5	5
+5	false	false	9	9	9
+
+statement ok
+DROP TABLE my_datalake.default.default_dropped_children;

@@ -71,8 +71,6 @@ void IcebergScanOrder::Apply(ClientContext &context, const IcebergTableSchema &s
 	}
 	auto &order_column = *schema_columns[schema_idx];
 	auto field_id = order_column.id;
-	const bool is_floating_point =
-	    order_column.type.id() == LogicalTypeId::FLOAT || order_column.type.id() == LogicalTypeId::DOUBLE;
 
 	bool can_prune = opts.row_limit.IsValid();
 	vector<IcebergOrderEntry> order_entries;
@@ -94,10 +92,10 @@ void IcebergScanOrder::Apply(ClientContext &context, const IcebergTableSchema &s
 			can_prune = false;
 		}
 		auto upper_bound = *stats.upper_bound;
-		if (is_floating_point) {
-			// Iceberg bounds exclude NaN, which sorts after every other value
+		if (order_column.type.id() == LogicalTypeId::FLOAT || order_column.type.id() == LogicalTypeId::DOUBLE) {
+			// Iceberg bounds exclude NaN, which sorts last: a file that may hold NaN is unbounded above
 			auto nan_it = data_file.nan_value_counts.find(field_id);
-			if (nan_it == data_file.nan_value_counts.end() || nan_it->second > 0) {
+			if (nan_it == data_file.nan_value_counts.end() || nan_it->second != 0) {
 				upper_bound = Value("nan").DefaultCastAs(order_column.type);
 			}
 		}
@@ -131,7 +129,8 @@ void IcebergScanOrder::Apply(ClientContext &context, const IcebergTableSchema &s
 			const auto &frontier = primary(order_entries[k]);
 			idx_t guaranteed = 0;
 			for (idx_t j = 0; j < k; j++) {
-				if (!ScanOrderCompare(opposite(order_entries[j]), frontier, stat_type)) {
+				// a file that ties with the frontier is not guaranteed: later ORDER BY keys can rank its rows
+				if (ScanOrderCompare(frontier, opposite(order_entries[j]), stat_type)) {
 					guaranteed += order_entries[j].count;
 				}
 				if (guaranteed >= row_limit) {
