@@ -1,0 +1,119 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/partitions/delete_partition_spec_evolution.test
+# description: Coverage is decided per file against the partition spec that file was written under, not against the table's current spec
+# group: [partitions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+
+statement ok
+CALL enable_logging('HTTP');
+
+statement ok
+set logging_level='debug'
+
+# ---- A predicate that covers a file under the new spec but not one under the old spec ----
+# The hour-partitioned file is entirely inside the predicate; the day-partitioned file holds only
+# rows outside it. Judging the day file by the table's current hour spec, rather than the day spec
+# it was written under, could drop it and take those rows with it.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_spec_evolution_mixed;
+
+statement ok
+CREATE TABLE my_datalake.default.test_spec_evolution_mixed (id INT, ts TIMESTAMP, val VARCHAR)
+PARTITIONED BY (day(ts));
+
+statement ok
+INSERT INTO my_datalake.default.test_spec_evolution_mixed VALUES
+    (1, '2021-05-01 09:00:00'::TIMESTAMP, 'day-early'),
+    (2, '2021-05-01 09:30:00'::TIMESTAMP, 'day-late');
+
+statement ok
+ALTER TABLE my_datalake.default.test_spec_evolution_mixed SET PARTITIONED BY (hour(ts));
+
+statement ok
+INSERT INTO my_datalake.default.test_spec_evolution_mixed VALUES
+    (3, '2021-05-01 10:15:00'::TIMESTAMP, 'hour-inside'),
+    (4, '2021-05-01 12:00:00'::TIMESTAMP, 'hour-outside');
+
+query III
+SELECT id, ts, val FROM my_datalake.default.test_spec_evolution_mixed ORDER BY id;
+----
+1	2021-05-01 09:00:00	day-early
+2	2021-05-01 09:30:00	day-late
+3	2021-05-01 10:15:00	hour-inside
+4	2021-05-01 12:00:00	hour-outside
+
+query I
+DELETE FROM my_datalake.default.test_spec_evolution_mixed
+WHERE ts >= '2021-05-01 10:00:00'::TIMESTAMP AND ts < '2021-05-01 11:00:00'::TIMESTAMP;
+----
+1
+
+query III
+SELECT id, ts, val FROM my_datalake.default.test_spec_evolution_mixed ORDER BY id;
+----
+1	2021-05-01 09:00:00	day-early
+2	2021-05-01 09:30:00	day-late
+4	2021-05-01 12:00:00	hour-outside
+
+# Only the covered hour file was dropped, and dropping it needed no delete file.
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_spec_evolution_mixed)
+WHERE content = 'POSITION_DELETES';
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.test_spec_evolution_mixed;
+
+# ---- A predicate that covers files under both specs ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_spec_evolution_covered;
+
+statement ok
+CREATE TABLE my_datalake.default.test_spec_evolution_covered (id INT, ts TIMESTAMP, val VARCHAR)
+PARTITIONED BY (day(ts));
+
+statement ok
+INSERT INTO my_datalake.default.test_spec_evolution_covered VALUES
+    (1, '2021-05-01 09:00:00'::TIMESTAMP, 'a'),
+    (2, '2021-05-01 23:00:00'::TIMESTAMP, 'b');
+
+statement ok
+ALTER TABLE my_datalake.default.test_spec_evolution_covered SET PARTITIONED BY (hour(ts));
+
+statement ok
+INSERT INTO my_datalake.default.test_spec_evolution_covered VALUES
+    (3, '2021-05-01 10:15:00'::TIMESTAMP, 'c'),
+    (4, '2021-05-02 12:00:00'::TIMESTAMP, 'd');
+
+# The whole of 2021-05-01: the day file and the 10:00 hour file are both entirely inside it.
+query I
+DELETE FROM my_datalake.default.test_spec_evolution_covered
+WHERE ts >= '2021-05-01 00:00:00'::TIMESTAMP AND ts < '2021-05-02 00:00:00'::TIMESTAMP;
+----
+3
+
+query III
+SELECT id, ts, val FROM my_datalake.default.test_spec_evolution_covered ORDER BY id;
+----
+4	2021-05-02 12:00:00	d
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_spec_evolution_covered)
+WHERE content = 'POSITION_DELETES';
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.test_spec_evolution_covered;

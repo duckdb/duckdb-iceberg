@@ -10,8 +10,8 @@ namespace duckdb {
 //! Identifies a file or an individual deletion-vector blob within a Puffin file.
 //! An absent offset identifies an ordinary data or delete file, not every blob at that path.
 struct IcebergFileIdentity {
-	IcebergFileIdentity(const string &file_path, optional<int64_t> content_offset = nullopt)
-	    : file_path(file_path), content_offset(content_offset) {
+	IcebergFileIdentity(string file_path, optional<int64_t> content_offset = nullopt)
+	    : file_path(std::move(file_path)), content_offset(content_offset) {
 	}
 
 	bool operator==(const IcebergFileIdentity &other) const {

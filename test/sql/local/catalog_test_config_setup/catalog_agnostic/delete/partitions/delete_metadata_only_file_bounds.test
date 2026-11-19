@@ -1,0 +1,153 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/partitions/delete_metadata_only_file_bounds.test
+# description: A data file's own column bounds can prove that a DELETE covers every row, also on a column without a partition field and on an unpartitioned table
+# group: [partitions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+# Server-side scan planning returns data files without column bounds unless they are requested, so only the
+# partition values can prove coverage there.
+require-env SCAN_PLANNING_MODE client
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# ---- Non-partition column bounds ----
+# Bounds for an ordinary data column can prove coverage even when there is no partition field for it.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_metadata_only_non_partition;
+
+statement ok
+CREATE TABLE my_datalake.default.test_metadata_only_non_partition (id INT, val VARCHAR)
+PARTITIONED BY (id);
+
+statement ok
+INSERT INTO my_datalake.default.test_metadata_only_non_partition VALUES (1, 'alpha'), (1, 'beta');
+
+query I
+DELETE FROM my_datalake.default.test_metadata_only_non_partition WHERE val >= 'alpha' AND val <= 'beta';
+----
+2
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_metadata_only_non_partition)
+WHERE content = 'DATA' AND status != 'DELETED';
+----
+0
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_metadata_only_non_partition)
+WHERE content = 'POSITION_DELETES';
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.test_metadata_only_non_partition;
+
+# ---- Several files in one partition ----
+# The partition value is the same for all three files, so it cannot tell them apart. Each file's own bounds
+# can: one sits entirely inside the predicate, one straddles it, one sits entirely outside.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_metadata_only_many_files;
+
+statement ok
+CREATE TABLE my_datalake.default.test_metadata_only_many_files (id INT, ts TIMESTAMP, val VARCHAR)
+PARTITIONED BY (day(ts));
+
+# One file per INSERT, all landing in the 2021-05-01 partition.
+
+statement ok
+INSERT INTO my_datalake.default.test_metadata_only_many_files VALUES
+    (1, '2021-05-01 00:05:00'::TIMESTAMP, 'inside-a'),
+    (2, '2021-05-01 10:30:00'::TIMESTAMP, 'inside-b');
+
+statement ok
+INSERT INTO my_datalake.default.test_metadata_only_many_files VALUES
+    (3, '2021-05-01 09:00:00'::TIMESTAMP, 'straddle-in'),
+    (4, '2021-05-01 14:00:00'::TIMESTAMP, 'straddle-out');
+
+statement ok
+INSERT INTO my_datalake.default.test_metadata_only_many_files VALUES
+    (5, '2021-05-01 12:00:00'::TIMESTAMP, 'outside-a'),
+    (6, '2021-05-01 23:50:00'::TIMESTAMP, 'outside-b');
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_metadata_only_many_files)
+WHERE content = 'DATA' AND status != 'DELETED';
+----
+3
+
+query I
+DELETE FROM my_datalake.default.test_metadata_only_many_files WHERE ts <= '2021-05-01 11:00:00'::TIMESTAMP;
+----
+3
+
+query III
+SELECT id, ts, val FROM my_datalake.default.test_metadata_only_many_files ORDER BY id;
+----
+4	2021-05-01 14:00:00	straddle-out
+5	2021-05-01 12:00:00	outside-a
+6	2021-05-01 23:50:00	outside-b
+
+# The file whose whole range is inside the predicate is dropped, leaving two data files. Only the straddling
+# file needed a delete file; the file entirely outside the predicate was never opened.
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_metadata_only_many_files)
+WHERE content = 'DATA' AND status != 'DELETED';
+----
+2
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_metadata_only_many_files)
+WHERE content = 'POSITION_DELETES';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.test_metadata_only_many_files;
+
+# ---- Unpartitioned table: there is no partition value, only the file bounds ----
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_guard_unpartitioned;
+
+statement ok
+CREATE TABLE my_datalake.default.test_guard_unpartitioned (id INT, val VARCHAR);
+
+statement ok
+INSERT INTO my_datalake.default.test_guard_unpartitioned VALUES (1, 'a'), (2, 'b');
+
+statement ok
+INSERT INTO my_datalake.default.test_guard_unpartitioned VALUES (2, 'c'), (3, 'd');
+
+query I
+DELETE FROM my_datalake.default.test_guard_unpartitioned WHERE id <= 2;
+----
+3
+
+query II
+SELECT id, val FROM my_datalake.default.test_guard_unpartitioned ORDER BY id;
+----
+3	d
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_guard_unpartitioned)
+WHERE content = 'DATA' AND status != 'DELETED';
+----
+1
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_guard_unpartitioned)
+WHERE content = 'POSITION_DELETES';
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.test_guard_unpartitioned;

@@ -11,8 +11,9 @@ struct VersionedIcebergManifestDeletes;
 
 struct IcebergManifestDeletes {
 public:
-	void InvalidateFile(const IcebergFileIdentity &file) {
-		data_files.emplace(file, optional_idx());
+	//! Returns whether the file was not invalidated yet.
+	bool InvalidateFile(IcebergFileIdentity file) {
+		return data_files.emplace(std::move(file), optional_idx()).second;
 	}
 	bool IsInvalidated(const IcebergFileIdentity &file) const {
 		return data_files.count(file);

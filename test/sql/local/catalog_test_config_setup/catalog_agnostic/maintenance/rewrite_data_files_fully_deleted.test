@@ -11,21 +11,22 @@ require json
 foreach untouched 0 1
 
 statement ok
-CREATE TABLE my_datalake.default.rewrite_fully_deleted (id INTEGER, p INTEGER)
+CREATE TABLE my_datalake.default.rewrite_fully_deleted (id INTEGER, p INTEGER, payload VARCHAR)
 PARTITIONED BY (p) WITH ('format-version' = 2);
 
 statement ok
-INSERT INTO my_datalake.default.rewrite_fully_deleted VALUES (1, NULL), (2, NULL);
+INSERT INTO my_datalake.default.rewrite_fully_deleted VALUES (1, NULL, 'x-aa'), (2, NULL, 'x-ba');
 
 statement ok
-INSERT INTO my_datalake.default.rewrite_fully_deleted VALUES (3, NULL), (4, NULL);
+INSERT INTO my_datalake.default.rewrite_fully_deleted VALUES (3, NULL, 'x-ca'), (4, NULL, 'x-da');
 
 # Also exercise an empty rewrite while another, ineligible partition still has live rows.
 statement ok
-INSERT INTO my_datalake.default.rewrite_fully_deleted SELECT 10, 42 WHERE {untouched} = 1;
+INSERT INTO my_datalake.default.rewrite_fully_deleted SELECT 10, 42, 'x-za' WHERE {untouched} = 1;
 
+# The partial LIKE remains a residual filter, keeping this DELETE on the position-delete path.
 statement ok
-DELETE FROM my_datalake.default.rewrite_fully_deleted WHERE id <= 4;
+DELETE FROM my_datalake.default.rewrite_fully_deleted WHERE id <= 4 AND payload LIKE 'x-%a';
 
 query I
 SELECT count(*) = {untouched} FROM my_datalake.default.rewrite_fully_deleted;

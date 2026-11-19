@@ -86,8 +86,18 @@ INSERT INTO my_datalake.default.rewrite_row_count_deletes VALUES (1), (2);
 statement ok
 INSERT INTO my_datalake.default.rewrite_row_count_deletes VALUES (3), (4);
 
+# Each equality deletes only part of its file, even when the loop deletes all four rows.
 statement ok
-DELETE FROM my_datalake.default.rewrite_row_count_deletes WHERE id <= {deleted};
+DELETE FROM my_datalake.default.rewrite_row_count_deletes WHERE id = 1;
+
+statement ok
+DELETE FROM my_datalake.default.rewrite_row_count_deletes WHERE id = 2;
+
+statement ok
+DELETE FROM my_datalake.default.rewrite_row_count_deletes WHERE id = 3 AND id <= {deleted};
+
+statement ok
+DELETE FROM my_datalake.default.rewrite_row_count_deletes WHERE id = 4 AND id <= {deleted};
 
 query I
 SELECT rewritten_data_files_count FROM iceberg_rewrite_data_files('my_datalake.default.rewrite_row_count_deletes', rewrite_all := true);
