@@ -220,10 +220,13 @@ static void CreateTableRequirements(DatabaseInstance &db, ClientContext &context
 		AssertDefaultSpecIdRequirement requirement(transaction_data.initial_default_spec_id);
 		requirement.CreateRequirement(db, context, commit_state);
 	}
-	if (!has_assert_create && transaction_data.HasUpdate(IcebergTableUpdateType::SET_DEFAULT_SORT_ORDER) &&
-	    transaction_data.initial_default_sort_order_id.IsValid()) {
-		AssertDefaultSortOrderIdRequirement requirement(
-		    NumericCast<int32_t>(transaction_data.initial_default_sort_order_id.GetIndex()));
+	if (!has_assert_create && transaction_data.HasUpdate(IcebergTableUpdateType::SET_DEFAULT_SORT_ORDER)) {
+		//! V1 metadata may omit sort orders; its implicit default is the unsorted order.
+		int32_t default_sort_order_id = UNSORTED_SORT_ORDER_ID;
+		if (transaction_data.initial_default_sort_order_id.IsValid()) {
+			default_sort_order_id = NumericCast<int32_t>(transaction_data.initial_default_sort_order_id.GetIndex());
+		}
+		AssertDefaultSortOrderIdRequirement requirement(default_sort_order_id);
 		requirement.CreateRequirement(db, context, commit_state);
 	}
 	if (!has_assert_create && commit_state.table_info.HasTransactionUpdates()) {

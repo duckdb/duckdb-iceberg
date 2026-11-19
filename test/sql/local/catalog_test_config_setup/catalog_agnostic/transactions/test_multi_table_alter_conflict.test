@@ -1,0 +1,123 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_multi_table_alter_conflict.test
+# description: A partition or sort conflict rolls back all schema and data changes in a multi-table commit
+# group: [transactions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env MULTI_TABLE_COMMIT_SUPPORT
+
+require-env ATOMIC_COMMIT_CONFLICT_SUPPORT
+
+include test/sql/init_requires
+
+foreach layout PARTITIONED SORTED
+
+# Conflict each table in turn so neither order of the batch can publish a partial result.
+foreach conflict a b
+
+foreach table a b
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.alter_atomic_{table};
+
+statement ok
+CREATE TABLE my_datalake.default.alter_atomic_{table} (id INTEGER, val INTEGER);
+
+statement ok
+INSERT INTO my_datalake.default.alter_atomic_{table} VALUES (1, 10);
+
+endloop
+
+statement ok writer
+BEGIN;
+
+foreach table a b
+
+statement ok writer
+ALTER TABLE my_datalake.default.alter_atomic_{table} ADD COLUMN pending INTEGER;
+
+statement ok writer
+ALTER TABLE my_datalake.default.alter_atomic_{table} SET {layout} BY (id);
+
+statement ok writer
+INSERT INTO my_datalake.default.alter_atomic_{table} VALUES (2, 20, 42);
+
+endloop
+
+# This only changes the layout: the schema and snapshot requirements still match.
+statement ok
+ALTER TABLE my_datalake.default.alter_atomic_{conflict} SET {layout} BY (val);
+
+statement ok
+SET VARIABLE alter_atomic_a_before = (
+	SELECT metadata_location FROM iceberg_load_table_response(my_datalake.default.alter_atomic_a)
+);
+
+statement ok
+SET VARIABLE alter_atomic_b_before = (
+	SELECT metadata_location FROM iceberg_load_table_response(my_datalake.default.alter_atomic_b)
+);
+
+statement error writer
+COMMIT;
+----
+<REGEX>:.*Conflict_409.*
+
+# Neither the new column nor the new rows may be published, even on the table without a conflict.
+foreach table a b
+
+query II fresh
+SELECT * FROM my_datalake.default.alter_atomic_{table};
+----
+1	10
+
+endloop
+
+query I
+SELECT metadata_location = getvariable('alter_atomic_a_before')
+FROM iceberg_load_table_response(my_datalake.default.alter_atomic_a);
+----
+true
+
+query I
+SELECT metadata_location = getvariable('alter_atomic_b_before')
+FROM iceberg_load_table_response(my_datalake.default.alter_atomic_b);
+----
+true
+
+# A new transaction can apply the same work on top of the winning layout.
+statement ok writer
+BEGIN;
+
+foreach table a b
+
+statement ok writer
+ALTER TABLE my_datalake.default.alter_atomic_{table} ADD COLUMN pending INTEGER;
+
+statement ok writer
+ALTER TABLE my_datalake.default.alter_atomic_{table} SET {layout} BY (id);
+
+statement ok writer
+INSERT INTO my_datalake.default.alter_atomic_{table} VALUES (2, 20, 42);
+
+endloop
+
+statement ok writer
+COMMIT;
+
+foreach table a b
+
+query III fresh
+SELECT * FROM my_datalake.default.alter_atomic_{table} ORDER BY id;
+----
+1	10	NULL
+2	20	42
+
+statement ok
+DROP TABLE my_datalake.default.alter_atomic_{table};
+
+endloop
+
+endloop
+
+endloop

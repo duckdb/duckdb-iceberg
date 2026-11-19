@@ -1,0 +1,139 @@
+# name: test/sql/local/native_catalog/alter_legacy_metadata.test
+# description: ALTERs bound to legacy V1 metadata protect the implicit unsorted order and unassigned partition IDs
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+# V1 may omit sort orders and last-partition-id. Its implicit sort order is unsorted (ID 0).
+# Script that older LoadTable response while the normal mock handles publication as a V2 catalog.
+statement ok
+CREATE MACRO legacy_metadata(response) AS json_merge_patch(response::JSON,
+	json_object('metadata', json_object(
+		'format-version', 1,
+		'schema', json_extract(response::JSON, '$.metadata.schemas[0]'),
+		'partition-spec', json('[]'),
+		'last-partition-id', NULL,
+		'sort-orders', NULL,
+		'default-sort-order-id', NULL)));
+
+statement ok
+ATTACH '' AS legacy_catalog (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none');
+
+statement ok
+CREATE TABLE my_datalake.default.legacy_sort_conflict (a INTEGER, b INTEGER);
+
+statement ok
+SET VARIABLE legacy_response = (
+	SELECT legacy_metadata(body)
+	FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/legacy_sort_conflict', NULL)
+);
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	json_object('method', 'GET', 'path', '/v1/namespaces/default/tables/legacy_sort_conflict',
+		'status', 200, 'body', getvariable('legacy_response')));
+----
+204
+
+statement ok writer
+BEGIN;
+
+query III writer
+SELECT metadata."format-version", metadata."default-sort-order-id" IS NULL, metadata."last-partition-id" IS NULL
+FROM iceberg_load_table_response('legacy_catalog.default.legacy_sort_conflict');
+----
+1	true	true
+
+statement ok writer
+ALTER TABLE legacy_catalog.default.legacy_sort_conflict SET ('format-version' = 2);
+
+statement ok writer
+ALTER TABLE legacy_catalog.default.legacy_sort_conflict RESET SORTED BY;
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+# Another writer publishes a V2 sort order after the first writer bound the legacy metadata.
+statement ok
+ALTER TABLE my_datalake.default.legacy_sort_conflict SET SORTED BY (a);
+
+statement error writer
+COMMIT;
+----
+<REGEX>:.*Conflict_409.*
+
+query II
+SELECT metadata."default-sort-order-id", sort_order.fields[1]."source-id"
+FROM iceberg_load_table_response('my_datalake.default.legacy_sort_conflict'),
+unnest(metadata."sort-orders"::VARIANT[]) AS t(sort_order)
+WHERE sort_order."order-id"::INTEGER = metadata."default-sort-order-id"::INTEGER;
+----
+1	1
+
+# With no concurrent change, the same implicit defaults must let an upgrade and new layout commit.
+statement ok
+CREATE TABLE my_datalake.default.legacy_layout_upgrade (a INTEGER, b INTEGER);
+
+statement ok
+SET VARIABLE legacy_response = (
+	SELECT legacy_metadata(body)
+	FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/legacy_layout_upgrade', NULL)
+);
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	json_object('method', 'GET', 'path', '/v1/namespaces/default/tables/legacy_layout_upgrade',
+		'status', 200, 'body', getvariable('legacy_response')));
+----
+204
+
+statement ok writer
+BEGIN;
+
+statement ok writer
+ALTER TABLE legacy_catalog.default.legacy_layout_upgrade SET ('format-version' = 2);
+
+statement ok writer
+ALTER TABLE legacy_catalog.default.legacy_layout_upgrade SET PARTITIONED BY (a);
+
+statement ok writer
+ALTER TABLE legacy_catalog.default.legacy_layout_upgrade SET SORTED BY (b);
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+statement ok writer
+COMMIT;
+
+query IIII
+SELECT metadata."format-version", metadata."default-spec-id",
+	metadata."last-partition-id", metadata."default-sort-order-id"
+FROM iceberg_load_table_response('my_datalake.default.legacy_layout_upgrade');
+----
+2	1	1000	1
+
+statement ok
+INSERT INTO my_datalake.default.legacy_layout_upgrade VALUES (1, 2);
+
+query II fresh
+SELECT * FROM my_datalake.default.legacy_layout_upgrade;
+----
+1	2
+
+statement ok
+DROP TABLE my_datalake.default.legacy_sort_conflict;
+
+statement ok
+DROP TABLE my_datalake.default.legacy_layout_upgrade;
+
+statement ok
+DETACH legacy_catalog;

@@ -102,5 +102,52 @@ WHERE try_cast(spec."spec-id" AS INTEGER) = metadata."default-spec-id";
 ----
 a
 
+# RESET also changes the default, even though it adds no sort order.
+statement ok con1
+BEGIN;
+
+statement ok con1
+ALTER TABLE my_datalake.default.sorted_by_conflict RESET SORTED BY;
+
+# Reuse the existing order on a instead of adding a new one.
+statement ok con2
+ALTER TABLE my_datalake.default.sorted_by_conflict SET SORTED BY (a ASC NULLS FIRST);
+
+statement error con1
+COMMIT;
+----
+<REGEX>:.*Conflict_409.*
+
+query IIT
+SELECT metadata."default-sort-order-id", sort_order.fields[1]."source-id", sort_order.fields[1].direction
+FROM iceberg_load_table_response('my_datalake.default.sorted_by_conflict'),
+unnest(metadata."sort-orders"::VARIANT[]) AS t(sort_order)
+WHERE try_cast(sort_order."order-id" AS INTEGER) = metadata."default-sort-order-id";
+----
+2	1	asc
+
+# The opposite direction conflicts too: a stale SET must not undo a committed RESET.
+statement ok con1
+BEGIN;
+
+statement ok con1
+ALTER TABLE my_datalake.default.sorted_by_conflict SET SORTED BY (b DESC NULLS LAST);
+
+statement ok con2
+ALTER TABLE my_datalake.default.sorted_by_conflict RESET SORTED BY;
+
+statement error con1
+COMMIT;
+----
+<REGEX>:.*Conflict_409.*
+
+query II
+SELECT metadata."default-sort-order-id", len(sort_order.fields::VARIANT[])
+FROM iceberg_load_table_response('my_datalake.default.sorted_by_conflict'),
+unnest(metadata."sort-orders"::VARIANT[]) AS t(sort_order)
+WHERE try_cast(sort_order."order-id" AS INTEGER) = metadata."default-sort-order-id";
+----
+0	0
+
 statement ok
 drop table my_datalake.default.sorted_by_conflict;
