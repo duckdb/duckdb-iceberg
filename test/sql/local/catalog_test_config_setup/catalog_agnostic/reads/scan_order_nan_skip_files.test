@@ -75,6 +75,52 @@ SELECT a, b FROM my_datalake.default.scan_order_nan_{type} ORDER BY a ASC LIMIT 
 statement ok
 DROP TABLE my_datalake.default.scan_order_nan_{type};
 
+# NULL rows and NaN rows in the same data files
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.scan_order_nan_null_{type};
+
+statement ok
+CREATE TABLE my_datalake.default.scan_order_nan_null_{type} (a {type}, b BIGINT);
+
+statement ok
+INSERT INTO my_datalake.default.scan_order_nan_null_{type} VALUES (1.0, 1), ('nan', 2), (NULL, 7);
+
+statement ok
+INSERT INTO my_datalake.default.scan_order_nan_null_{type} VALUES (5.0, 3), (6.0, 4);
+
+statement ok
+INSERT INTO my_datalake.default.scan_order_nan_null_{type} VALUES (NULL, 8), (8.0, 9);
+
+query II
+SELECT a, b FROM my_datalake.default.scan_order_nan_null_{type} ORDER BY a DESC NULLS FIRST, b LIMIT 3;
+----
+NULL	7
+NULL	8
+nan	2
+
+query II
+SELECT a, b FROM my_datalake.default.scan_order_nan_null_{type} ORDER BY a DESC NULLS LAST, b LIMIT 2;
+----
+nan	2
+8.0	9
+
+query II
+SELECT a, b FROM my_datalake.default.scan_order_nan_null_{type} ORDER BY a ASC NULLS FIRST, b LIMIT 3;
+----
+NULL	7
+NULL	8
+1.0	1
+
+query II
+SELECT a, b FROM my_datalake.default.scan_order_nan_null_{type} ORDER BY a ASC NULLS LAST, b LIMIT 3 OFFSET 3;
+----
+8.0	9
+nan	2
+NULL	7
+
+statement ok
+DROP TABLE my_datalake.default.scan_order_nan_null_{type};
+
 endloop
 
 # A data file that holds only NaN has no bounds, so the pushdown does not skip files.
