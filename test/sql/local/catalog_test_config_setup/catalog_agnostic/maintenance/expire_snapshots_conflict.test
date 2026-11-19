@@ -1,5 +1,5 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/expire_snapshots_conflict.test
-# description: expire_snapshots rejects a main-ref CAS conflict without partial expiry
+# description: expire_snapshots retries a main-ref CAS conflict by planning the expiration again on the refreshed table
 # group: [maintenance]
 
 require-env CATALOG_TEST_CONFIG_SETUP
@@ -44,10 +44,10 @@ insert into my_datalake.default.expire_snapshots_conflict values (4);
 statement ok con2
 commit;
 
-statement error con1
+# The commit conflicts on main. The retry plans the expiration again on the refreshed table, where the
+# appended snapshot is the retained head and the previous head is expired as well.
+statement ok con1
 commit;
-----
-<REGEX>:.*TransactionContext Error.*Conflict_409.*
 
 query II
 select count(*), sum(id) from my_datalake.default.expire_snapshots_conflict;
@@ -57,7 +57,55 @@ select count(*), sum(id) from my_datalake.default.expire_snapshots_conflict;
 query I
 select count(*) from iceberg_snapshots(my_datalake.default.expire_snapshots_conflict);
 ----
-4
+1
 
 statement ok
 drop table my_datalake.default.expire_snapshots_conflict;
+
+# Two expirations of one table in a transaction are not planned again; their commit keeps the conflict.
+statement ok
+drop table if exists my_datalake.default.expire_snapshots_conflict_twice;
+
+statement ok
+create table my_datalake.default.expire_snapshots_conflict_twice (id INTEGER);
+
+foreach value 1 2 3 4 5
+
+statement ok
+insert into my_datalake.default.expire_snapshots_conflict_twice values ({value});
+
+endloop
+
+statement ok con1
+begin;
+
+query II con1
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_conflict_twice', retain_last => 4, older_than => timestamp '2999-01-01');
+----
+1	4
+
+query II con1
+select * from iceberg_expire_snapshots('my_datalake.default.expire_snapshots_conflict_twice', retain_last => 2, older_than => timestamp '2999-01-01');
+----
+2	2
+
+statement ok con2
+insert into my_datalake.default.expire_snapshots_conflict_twice values (6);
+
+statement error con1
+commit;
+----
+<REGEX>:.*TransactionContext Error.*Conflict_409.*
+
+query II
+select count(*), sum(id) from my_datalake.default.expire_snapshots_conflict_twice;
+----
+6	21
+
+query I
+select count(*) from iceberg_snapshots(my_datalake.default.expire_snapshots_conflict_twice);
+----
+6
+
+statement ok
+drop table my_datalake.default.expire_snapshots_conflict_twice;

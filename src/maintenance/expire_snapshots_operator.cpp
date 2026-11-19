@@ -3,6 +3,7 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/timestamp.hpp"
+#include "duckdb/logging/logger.hpp"
 
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "catalog/rest/api/catalog_api.hpp"
@@ -10,6 +11,7 @@
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_data.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
+#include "iceberg_logging.hpp"
 #include "maintenance/maintenance_table_loader.hpp"
 
 namespace duckdb {
@@ -82,6 +84,31 @@ void ApplyExpirationToTransactionMetadata(IcebergTableMetadata &metadata, const 
 	metadata.snapshot_log.erase(metadata.snapshot_log.begin(), metadata.snapshot_log.begin() + retained_log_start);
 }
 
+void StageSnapshotExpiration(IcebergTransactionData &transaction_data, IcebergTable &table,
+                             const vector<int64_t> &to_expire) {
+	transaction_data.TableRemoveSnapshots(to_expire);
+	//! Mirror the staged update so another call in this transaction replans
+	//! from the remaining snapshots.
+	ApplyExpirationToTransactionMetadata(table.GetMetadataMutable(), to_expire);
+}
+
+//! Plans the expiration again, with the same input and the same 'now', on the
+//! table refreshed after a commit conflict.
+std::function<void(ClientContext &, IcebergTable &)> CreateExpirationReplan(ExpireSnapshotsPlanInput input,
+                                                                            timestamp_ms_t now) {
+	return [input, now](ClientContext &context, IcebergTable &table) {
+		auto &metadata = table.GetMetadata();
+		auto plan = PlanSnapshotExpiration(metadata, input, now);
+		ValidateGCEnabled(metadata);
+		DUCKDB_LOG(context, IcebergLogType, "%s: planned again on the refreshed table, %llu snapshot(s) to expire",
+		           EXPIRE_SNAPSHOTS_NAME, static_cast<uint64_t>(plan.to_expire.size()));
+		if (plan.to_expire.empty()) {
+			return;
+		}
+		StageSnapshotExpiration(*table.transaction_data, table, plan.to_expire);
+	};
+}
+
 ExpireSnapshotsPlan ExecuteSnapshotExpiration(ClientContext &context, const ExpireSnapshotsPlanInput &input) {
 	auto &catalog = GetMaintenanceIcebergCatalog(context, input.table_name, EXPIRE_SNAPSHOTS_NAME);
 	auto &transaction = IcebergTransaction::Get(context, catalog);
@@ -103,10 +130,13 @@ ExpireSnapshotsPlan ExecuteSnapshotExpiration(ClientContext &context, const Expi
 
 	ApplyTableUpdate(guard, visible_table, transaction, [&](IcebergTable &table) {
 		auto &transaction_data = table.GetOrCreateTransactionData(transaction);
-		transaction_data.TableRemoveSnapshots(plan.to_expire);
-		//! Mirror the staged update so another call in this transaction replans
-		//! from the remaining snapshots.
-		ApplyExpirationToTransactionMetadata(table.GetMetadataMutable(), plan.to_expire);
+		if (transaction_data.updates.empty()) {
+			transaction_data.expiration_replan = CreateExpirationReplan(input, now);
+		} else {
+			//! Two expirations of one table cannot be planned again in order; their commit is not retried.
+			transaction_data.expiration_replan = nullptr;
+		}
+		StageSnapshotExpiration(transaction_data, table, plan.to_expire);
 	});
 	return plan;
 }
