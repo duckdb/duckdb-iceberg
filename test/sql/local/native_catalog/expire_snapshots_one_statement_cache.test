@@ -38,14 +38,17 @@ statement ok
 CALL truncate_duckdb_logs();
 
 # The two calls run at the same time only because the aggregate is on top: a bare UNION ALL runs its branches one
-# after the other.
+# after the other. clean_expired_files is off: deleting the expired files reloads the table after the commit, and this
+# test counts the loads that planning makes.
 query IIII
 SELECT count(*), sum(deleted_snapshots), min(retained_snapshots), max(retained_snapshots) FROM (
 	SELECT * FROM iceberg_expire_snapshots(
-		'my_datalake.default.expire_one_statement_cache', retain_last => 1, older_than => timestamp '2999-01-01')
+		'my_datalake.default.expire_one_statement_cache', retain_last => 1, older_than => timestamp '2999-01-01',
+		clean_expired_files => false)
 	UNION ALL
 	SELECT * FROM iceberg_expire_snapshots(
-		'my_datalake.default.expire_one_statement_cache', retain_last => 1, older_than => timestamp '2999-01-01')
+		'my_datalake.default.expire_one_statement_cache', retain_last => 1, older_than => timestamp '2999-01-01',
+		clean_expired_files => false)
 );
 ----
 2	2	1	1

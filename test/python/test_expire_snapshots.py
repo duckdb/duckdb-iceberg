@@ -912,3 +912,36 @@ class TestExpireSnapshots:
             snapshots[2].snapshot_id,
             snapshots[3].snapshot_id,
         }
+
+    @JAVA_FIXTURE_ONLY
+    def test_cleanup_deletes_the_files_of_expired_snapshots(self, seeded_table, duckdb_runner):
+        statistics = pytest.importorskip("pyiceberg.table.statistics")
+        table, table_name = seeded_table("default.expire_snapshots_cleanup", 3)
+        snapshots = _ordered_snapshots(table)
+        # A statistics file on the oldest snapshot; expiration deletes the file and the catalog drops the entry.
+        statistics_path = f"{table.location()}/metadata/{snapshots[0].snapshot_id}.stats"
+        with table.io.new_output(statistics_path).create() as output_stream:
+            output_stream.write(b"statistics")
+        table.update_statistics().set_statistics(
+            statistics.StatisticsFile(
+                snapshot_id=snapshots[0].snapshot_id,
+                statistics_path=statistics_path,
+                file_size_in_bytes=10,
+                file_footer_size_in_bytes=0,
+                blob_metadata=[],
+            )
+        ).commit()
+        table.refresh()
+        manifest_lists = [snapshot.manifest_list for snapshot in snapshots]
+        assert all(table.io.new_input(path).exists() for path in manifest_lists)
+
+        with duckdb_runner() as test:
+            _check_expiration(test, table_name, (2, 1), "older_than => TIMESTAMP '2999-01-01'", "retain_last => 1")
+
+        table.refresh()
+        assert [snapshot.snapshot_id for snapshot in table.metadata.snapshots] == [snapshots[-1].snapshot_id]
+        assert table.metadata.statistics == []
+        assert not table.io.new_input(statistics_path).exists()
+        # The expired manifest lists are gone; the retained one and every data file (all still live) stay.
+        assert [table.io.new_input(path).exists() for path in manifest_lists] == [False, False, True]
+        assert sorted(table.scan().to_arrow()["id"].to_pylist()) == [1, 2, 3]

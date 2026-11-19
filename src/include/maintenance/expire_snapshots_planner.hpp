@@ -14,6 +14,8 @@ struct ExpireSnapshotsPlanInput {
 	optional<timestamp_t> older_than;
 	optional<int64_t> retain_last;
 	vector<int64_t> snapshot_ids;
+	//! Delete the files only the expired snapshots reach once the commit succeeded
+	bool clean_expired_files = true;
 };
 
 struct ExpireSnapshotsPlan {

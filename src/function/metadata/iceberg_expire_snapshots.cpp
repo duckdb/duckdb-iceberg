@@ -83,6 +83,8 @@ ExpireSnapshotsPlanInput BindExpireSnapshotsArguments(TableFunctionBindInput &in
 				}
 				result.snapshot_ids.push_back(child.DefaultCastAs(LogicalType::BIGINT).GetValue<int64_t>());
 			}
+		} else if (option == "clean_expired_files") {
+			result.clean_expired_files = value.GetValue<bool>();
 		}
 	}
 	return result;
@@ -115,7 +117,8 @@ TableFunctionSet IcebergFunctions::GetIcebergExpireSnapshotsFunction() {
 	function.GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
 		options.Add("older_than", LogicalType::TIMESTAMP)
 		    .Add("retain_last", LogicalType::BIGINT)
-		    .Add("snapshot_ids", LogicalType::ANY);
+		    .Add("snapshot_ids", LogicalType::ANY)
+		    .Add("clean_expired_files", LogicalType::BOOLEAN);
 	});
 	function_set.AddFunction(function);
 	return function_set;

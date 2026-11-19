@@ -615,6 +615,16 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 			res.statistics.push_back(std::move(statistics_file));
 		}
 	}
+	if (table_metadata.partition_statistics) {
+		res.partition_statistics.reserve(table_metadata.partition_statistics->size());
+		for (auto &file : *table_metadata.partition_statistics) {
+			IcebergStatisticsFile statistics_file;
+			statistics_file.snapshot_id = file.snapshot_id;
+			statistics_file.path = file.statistics_path;
+			statistics_file.file_size_in_bytes = file.file_size_in_bytes;
+			res.partition_statistics.push_back(std::move(statistics_file));
+		}
+	}
 	// Validate default references before a scan or writer can consume the metadata.
 	res.GetLatestSchema();
 	res.GetLatestPartitionSpec();
@@ -645,6 +655,7 @@ IcebergTableMetadata IcebergTableMetadata::Copy() const {
 	}
 	res.snapshot_log = snapshot_log;
 	res.statistics = statistics;
+	res.partition_statistics = partition_statistics;
 	res.mappings = mappings;
 	res.write_data_path = write_data_path;
 	res.write_metadata_path = write_metadata_path;
