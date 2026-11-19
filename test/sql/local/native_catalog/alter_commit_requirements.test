@@ -1,0 +1,182 @@
+# name: test/sql/local/native_catalog/alter_commit_requirements.test
+# description: Repeated ALTERs assert each transaction-start value once, while staged creation only asserts nonexistence
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+# Normalize the single-table and multi-table REST commit envelopes.
+statement ok
+CREATE VIEW alter_table_commits AS
+SELECT journal.path, table_change.value AS request
+FROM read_json_auto('{TEMP_DIR}/iceberg-native/*/requests.jsonl') AS journal,
+json_each(CASE WHEN journal.path = '/v1/transactions/commit'
+	THEN json_extract(try_cast(journal.request AS JSON), '$."table-changes"')
+	ELSE json_array(try_cast(journal.request AS JSON))
+END) AS table_change
+WHERE journal.method = 'POST' AND journal.status IN (200, 204)
+	AND (journal.path = '/v1/transactions/commit'
+		OR regexp_matches(journal.path, '/v1/namespaces/[^/]+/tables/[^/]+$'));
+
+foreach single_table true false
+
+statement ok
+ATTACH '' AS requirements_catalog (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none',
+	STAGE_CREATE_TABLES true, DISABLE_MULTI_TABLE_COMMIT {single_table});
+
+statement ok
+CREATE TABLE requirements_catalog.default.existing_{single_table} (a INTEGER);
+
+# Start the measured transaction with nonzero schema, field, partition and sort IDs.
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE requirements_catalog.default.existing_{single_table} ADD COLUMN b INTEGER;
+
+statement ok
+ALTER TABLE requirements_catalog.default.existing_{single_table} SET PARTITIONED BY (a);
+
+statement ok
+ALTER TABLE requirements_catalog.default.existing_{single_table} SET SORTED BY (a);
+
+statement ok
+COMMIT;
+
+statement ok
+SET VARIABLE starting_metadata = (
+	SELECT metadata::JSON
+	FROM iceberg_load_table_response('requirements_catalog.default.existing_{single_table}')
+);
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE requirements_catalog.default.existing_{single_table} ADD COLUMN c INTEGER;
+
+statement ok
+ALTER TABLE requirements_catalog.default.existing_{single_table} SET PARTITIONED BY (c);
+
+statement ok
+ALTER TABLE requirements_catalog.default.existing_{single_table} SET SORTED BY (c);
+
+statement ok
+ALTER TABLE requirements_catalog.default.existing_{single_table} ADD COLUMN d INTEGER;
+
+statement ok
+ALTER TABLE requirements_catalog.default.existing_{single_table} SET PARTITIONED BY (d);
+
+statement ok
+ALTER TABLE requirements_catalog.default.existing_{single_table} SET SORTED BY (d);
+
+statement ok
+COMMIT;
+
+# Only this commit selects schema 3. Earlier setup commits must not satisfy these assertions.
+statement ok
+CREATE OR REPLACE TEMP TABLE repeated_alter_commit AS
+SELECT path, request FROM alter_table_commits
+WHERE json_extract_string(request, '$.identifier.name') = 'existing_{single_table}'
+	AND EXISTS (
+		SELECT 1 FROM json_each(request, '$.updates') AS update_entry
+		WHERE json_extract_string(update_entry.value, '$.action') = 'set-current-schema'
+			AND json_extract(update_entry.value, '$."schema-id"')::INTEGER = 3
+	);
+
+query II
+SELECT count(*), bool_and((path = '/v1/transactions/commit') = NOT {single_table})
+FROM repeated_alter_commit;
+----
+1	true
+
+# The wire contract must use the original values, never intermediate ALTER results.
+# Listing the requirements also catches duplicates and accidental extra requirements.
+query TI rowsort
+SELECT json_extract_string(requirement.value, '$.type'),
+	CASE json_extract_string(requirement.value, '$.type')
+		WHEN 'assert-current-schema-id' THEN
+			json_extract(requirement.value, '$."current-schema-id"') =
+			json_extract(getvariable('starting_metadata'), '$."current-schema-id"')
+		WHEN 'assert-last-assigned-field-id' THEN
+			json_extract(requirement.value, '$."last-assigned-field-id"') =
+			json_extract(getvariable('starting_metadata'), '$."last-column-id"')
+		WHEN 'assert-last-assigned-partition-id' THEN
+			json_extract(requirement.value, '$."last-assigned-partition-id"') =
+			json_extract(getvariable('starting_metadata'), '$."last-partition-id"')
+		WHEN 'assert-default-spec-id' THEN
+			json_extract(requirement.value, '$."default-spec-id"') =
+			json_extract(getvariable('starting_metadata'), '$."default-spec-id"')
+		WHEN 'assert-default-sort-order-id' THEN
+			json_extract(requirement.value, '$."default-sort-order-id"') =
+			json_extract(getvariable('starting_metadata'), '$."default-sort-order-id"')
+		WHEN 'assert-table-uuid' THEN
+			json_extract(requirement.value, '$.uuid') =
+			json_extract(getvariable('starting_metadata'), '$."table-uuid"')
+		ELSE false
+	END
+FROM repeated_alter_commit, json_each(request, '$.requirements') AS requirement;
+----
+assert-current-schema-id	true
+assert-default-sort-order-id	true
+assert-default-spec-id	true
+assert-last-assigned-field-id	true
+assert-last-assigned-partition-id	true
+assert-table-uuid	true
+
+statement ok
+INSERT INTO requirements_catalog.default.existing_{single_table} VALUES (1, 2, 3, 4);
+
+query IIII fresh
+SELECT * FROM requirements_catalog.default.existing_{single_table};
+----
+1	2	3	4
+
+# A staged table has no published metadata against which to assert any of those values.
+statement ok
+BEGIN;
+
+statement ok
+CREATE TABLE requirements_catalog.default.staged_{single_table} (a INTEGER);
+
+statement ok
+ALTER TABLE requirements_catalog.default.staged_{single_table} ADD COLUMN b INTEGER;
+
+statement ok
+ALTER TABLE requirements_catalog.default.staged_{single_table} SET PARTITIONED BY (b);
+
+statement ok
+ALTER TABLE requirements_catalog.default.staged_{single_table} SET SORTED BY (b);
+
+statement ok
+COMMIT;
+
+query T
+SELECT json_extract_string(requirement.value, '$.type')
+FROM alter_table_commits, json_each(request, '$.requirements') AS requirement
+WHERE json_extract_string(request, '$.identifier.name') = 'staged_{single_table}';
+----
+assert-create
+
+statement ok
+INSERT INTO requirements_catalog.default.staged_{single_table} VALUES (5, 6);
+
+query II fresh
+SELECT * FROM requirements_catalog.default.staged_{single_table};
+----
+5	6
+
+statement ok
+DROP TABLE requirements_catalog.default.existing_{single_table};
+
+statement ok
+DROP TABLE requirements_catalog.default.staged_{single_table};
+
+statement ok
+DETACH requirements_catalog;
+
+endloop

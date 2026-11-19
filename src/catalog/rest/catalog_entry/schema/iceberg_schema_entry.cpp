@@ -723,8 +723,6 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 
 		// Ensure schema is the same as current
 		transaction_data.TableAddAssertCurrentSchemaId();
-		// Ensure last assigned partition field id is up to date
-		transaction_data.TableAddAssertLastAssignedPartitionId();
 
 		updated_table.SetPartitionedBy(irc_transaction, partition_info.partition_keys, current_schema);
 		return;
@@ -738,8 +736,6 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 
 		// Ensure schema is the same as current
 		transaction_data.TableAddAssertCurrentSchemaId();
-		// Ensure last assigned partition field id is up to date
-		transaction_data.TableAddAssertLastAssignedPartitionId();
 
 		updated_table.SetSortedBy(irc_transaction, sort_info.orders, current_schema);
 		return;

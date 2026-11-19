@@ -132,7 +132,7 @@ static rest_api_objects::TableRequirement CreateAssertNoSnapshotRequirement() {
 
 static bool NeedsAssertSchemaId(const IcebergTransactionData &transaction_data, const IcebergTable &table_info) {
 	(void)table_info;
-	return transaction_data.assert_schema_id;
+	return transaction_data.assert_schema_id || transaction_data.HasUpdate(IcebergTableUpdateType::SET_CURRENT_SCHEMA);
 }
 
 namespace {
@@ -196,6 +196,37 @@ static void CreateTableRequirements(DatabaseInstance &db, ClientContext &context
 	}
 	if (!has_assert_create && NeedsAssertSchemaId(transaction_data, commit_state.table_info)) {
 		AssertCurrentSchemaIdRequirement requirement(transaction_data.initial_schema_id);
+		requirement.CreateRequirement(db, context, commit_state);
+	}
+	//! As in Iceberg's UpdateRequirements: these updates are only valid on top of the table state this transaction
+	//! started from, so the commit asserts that state.
+	if (!has_assert_create && transaction_data.HasUpdate(IcebergTableUpdateType::ADD_SCHEMA) &&
+	    transaction_data.initial_last_column_id.IsValid()) {
+		AssertLastAssignedFieldIdRequirement requirement(
+		    NumericCast<int32_t>(transaction_data.initial_last_column_id.GetIndex()));
+		requirement.CreateRequirement(db, context, commit_state);
+	}
+	if (!has_assert_create && transaction_data.HasUpdate(IcebergTableUpdateType::ADD_PARTITION_SPEC)) {
+		//! Partition field ids start at 1000: 999 is asserted when the metadata has no last assigned partition id
+		int32_t last_assigned_partition_id = 999;
+		if (transaction_data.initial_last_partition_field_id.IsValid()) {
+			last_assigned_partition_id =
+			    NumericCast<int32_t>(transaction_data.initial_last_partition_field_id.GetIndex());
+		}
+		AssertLastAssignedPartitionIdRequirement requirement(last_assigned_partition_id);
+		requirement.CreateRequirement(db, context, commit_state);
+	}
+	if (!has_assert_create && transaction_data.HasUpdate(IcebergTableUpdateType::SET_DEFAULT_SPEC)) {
+		AssertDefaultSpecIdRequirement requirement(transaction_data.initial_default_spec_id);
+		requirement.CreateRequirement(db, context, commit_state);
+	}
+	if (!has_assert_create && transaction_data.HasUpdate(IcebergTableUpdateType::SET_DEFAULT_SORT_ORDER)) {
+		//! V1 metadata may omit sort orders; its implicit default is the unsorted order.
+		int32_t default_sort_order_id = UNSORTED_SORT_ORDER_ID;
+		if (transaction_data.initial_default_sort_order_id.IsValid()) {
+			default_sort_order_id = NumericCast<int32_t>(transaction_data.initial_default_sort_order_id.GetIndex());
+		}
+		AssertDefaultSortOrderIdRequirement requirement(default_sort_order_id);
 		requirement.CreateRequirement(db, context, commit_state);
 	}
 	if (!has_assert_create && commit_state.table_info.HasTransactionUpdates()) {
