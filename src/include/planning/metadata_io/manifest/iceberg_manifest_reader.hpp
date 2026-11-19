@@ -30,6 +30,9 @@ public:
 public:
 	static void ReadChunk(DataChunk &chunk, const map<idx_t, LogicalType> &partition_field_id_to_type,
 	                      IcebergManifestReaderInput &reader_input, vector<IcebergManifestEntry> &result);
+
+private:
+	optional_idx current_batch;
 };
 
 } // namespace manifest_file

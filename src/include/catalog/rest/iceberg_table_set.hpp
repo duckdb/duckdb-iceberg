@@ -30,6 +30,7 @@ public:
 	void RenameEntry(const string &name, const string &new_name, IcebergTable &&new_table);
 	static IcebergTable &CreateNewEntry(ClientContext &context, IcebergCatalog &catalog, IcebergSchemaEntry &schema,
 	                                    CreateTableInfo &info);
+	static void ReplaceDefinition(ClientContext &context, IcebergTable &table_info, const CreateTableInfo &info);
 
 private:
 	bool TryFillEntryFromCache(ClientContext &context, IcebergTable &table);

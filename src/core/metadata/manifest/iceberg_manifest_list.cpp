@@ -209,7 +209,7 @@ IcebergManifestMetadata IcebergManifestMetadata::FromAvroMetadata(const Insertio
 			content = IcebergManifestContentType::DELETE;
 		} else {
 			throw InvalidConfigurationException("%s has invalid Avro key-value metadata content '%s'",
-			                                    ManifestMetadataErrorPrefix(path), content);
+			                                    ManifestMetadataErrorPrefix(path), *content_str);
 		}
 	} else if (format_version > 1) {
 		throw InvalidConfigurationException("%s has invalid Avro key-value metadata, content is missing",

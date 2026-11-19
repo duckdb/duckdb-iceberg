@@ -26,6 +26,10 @@ const IcebergAvroScanInfo &BaseManifestReader::GetScanInfo() const {
 	return *scan.scan_info;
 }
 
+bool BaseManifestReader::AllReadersFinished() const {
+	return scan.readers_finished.load() == scan.readers_started.load();
+}
+
 void BaseManifestReader::ScanInternal() {
 	if (finished) {
 		return;

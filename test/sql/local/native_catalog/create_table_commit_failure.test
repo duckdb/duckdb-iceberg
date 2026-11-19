@@ -1,0 +1,60 @@
+# name: test/sql/local/native_catalog/create_table_commit_failure.test
+# description: A table created without stage-create is removed when its commit is rejected, and kept when the outcome is unknown
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+CREATE MACRO commit_response(status_code) AS TABLE
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	json_object('method', 'POST', 'path', '/v1/transactions/commit', 'status', status_code,
+		'body', json_object('error',
+			json_object('message', 'scripted', 'type', 'ScriptedException', 'code', status_code)))::VARCHAR);
+
+statement ok
+ATTACH '' AS eager_catalog (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none', STAGE_CREATE_TABLES false);
+
+statement ok
+CREATE SCHEMA eager_catalog.create_commit_failure;
+
+# The catalog rejects the commit: it did not land, so the table is removed
+query I
+SELECT * FROM commit_response(400);
+----
+204
+
+statement error
+CREATE TABLE eager_catalog.create_commit_failure.rejected (id INTEGER);
+----
+Failed to commit Iceberg transaction
+
+query I
+SELECT status FROM iceberg_test_catalog_request('GET', '/v1/namespaces/create_commit_failure/tables/rejected', NULL);
+----
+404
+
+# The commit outcome is unknown: it may have landed, so the table is kept
+query I
+SELECT * FROM commit_response(500);
+----
+204
+
+statement error
+CREATE TABLE eager_catalog.create_commit_failure.unknown (id INTEGER);
+----
+Failed to commit Iceberg transaction
+
+query I
+SELECT status FROM iceberg_test_catalog_request('GET', '/v1/namespaces/create_commit_failure/tables/unknown', NULL);
+----
+200
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204

@@ -1,6 +1,8 @@
 #include "core/metadata/iceberg_table_metadata.hpp"
 
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/open_file_info.hpp"
+#include "duckdb/common/operator/cast_operators.hpp"
 
 #include "common/iceberg_utils.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
@@ -10,6 +12,29 @@
 #include "iceberg_options.hpp"
 
 namespace duckdb {
+
+//! Puffin blob type of a column's distinct-value sketch; the writer records the estimate in the 'ndv' property
+static constexpr const char *THETA_SKETCH_BLOB_TYPE = "apache-datasketches-theta-v1";
+static constexpr const char *NDV_PROPERTY = "ndv";
+
+optional<int64_t> IcebergStatisticsFile::GetDistinctCount(int32_t field_id) const {
+	for (auto &blob : blobs) {
+		if (blob.type != THETA_SKETCH_BLOB_TYPE || blob.fields.size() != 1 || blob.fields[0] != field_id) {
+			continue;
+		}
+		auto property = blob.properties.find(NDV_PROPERTY);
+		if (property == blob.properties.end()) {
+			continue;
+		}
+		int64_t distinct_count;
+		if (!TryCast::Operation<string_t, int64_t>(string_t(property->second), distinct_count, true) ||
+		    distinct_count < 0) {
+			continue;
+		}
+		return distinct_count;
+	}
+	return optional<int64_t>();
+}
 
 optional_ptr<const IcebergColumnDefinition> IcebergTableMetadataSchemas::FindColumnByFieldId(int32_t field_id) const {
 	for (auto &schema_entry : schemas) {
@@ -104,6 +129,15 @@ optional_ptr<const IcebergSortOrder> IcebergTableMetadata::FindSortOrderById(int
 		return nullptr;
 	}
 	return it->second;
+}
+
+optional_ptr<const IcebergStatisticsFile> IcebergTableMetadata::FindStatisticsFile(int64_t snapshot_id) const {
+	for (auto &file : statistics) {
+		if (file.snapshot_id == snapshot_id) {
+			return &file;
+		}
+	}
+	return nullptr;
 }
 
 const unordered_map<int32_t, IcebergSortOrder> &IcebergTableMetadata::GetSortOrderSpecs() const {
@@ -382,11 +416,20 @@ int32_t IcebergTableMetadata::GetLastPartitionFieldId() const {
 
 rest_api_objects::TableMetadata IcebergTableMetadata::Parse(const OpenFileInfo &file, FileSystem &fs,
                                                             const string &metadata_compression_codec) {
+	// Metadata files are immutable, unlike version-hint.text. Reuse cached bytes without reopening for validation.
+	// Preserve an explicit per-file validation policy.
+	OpenFileInfo metadata_file = file;
+	metadata_file.extended_info = make_shared_ptr<ExtendedOpenFileInfo>();
+	if (file.extended_info) {
+		*metadata_file.extended_info = *file.extended_info;
+	}
+	metadata_file.extended_info->options.emplace("validate_external_file_cache", Value::BOOLEAN(false));
+
 	string json_content;
 	if (metadata_compression_codec == "gzip" || StringUtil::EndsWith(file.path, "gz.metadata.json")) {
-		json_content = IcebergUtils::GzFileToString(file, fs);
+		json_content = IcebergUtils::GzFileToString(metadata_file, fs);
 	} else {
-		json_content = IcebergUtils::FileToString(file, fs);
+		json_content = IcebergUtils::FileToString(metadata_file, fs);
 	}
 	auto doc = JSONDocument::Parse(json_content.c_str(), json_content.size());
 	return rest_api_objects::TableMetadata::FromJSON(doc->GetRoot());
@@ -448,16 +491,6 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 	}
 	if (table_metadata.refs) {
 		res.refs = table_metadata.refs->Copy();
-	}
-	if (table_metadata.statistics) {
-		for (auto &entry : *table_metadata.statistics) {
-			res.statistics.emplace_back(entry.snapshot_id, entry.statistics_path);
-		}
-	}
-	if (table_metadata.partition_statistics) {
-		for (auto &entry : *table_metadata.partition_statistics) {
-			res.partition_statistics.emplace_back(entry.snapshot_id, entry.statistics_path);
-		}
 	}
 	if (table_metadata.snapshot_log) {
 		res.snapshot_log.reserve(table_metadata.snapshot_log->value.size());
@@ -557,6 +590,39 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 	if (table_metadata.metadata_log) {
 		for (auto &item : table_metadata.metadata_log->value) {
 			res.metadata_log.emplace_back(item.metadata_file, timestamp_ms_t(item.timestamp_ms));
+		}
+	}
+	if (table_metadata.statistics) {
+		res.statistics.reserve(table_metadata.statistics->size());
+		for (auto &file : *table_metadata.statistics) {
+			IcebergStatisticsFile statistics_file;
+			statistics_file.snapshot_id = file.snapshot_id;
+			statistics_file.path = file.statistics_path;
+			statistics_file.file_size_in_bytes = file.file_size_in_bytes;
+			statistics_file.file_footer_size_in_bytes = file.file_footer_size_in_bytes;
+			statistics_file.blobs.reserve(file.blob_metadata.size());
+			for (auto &blob : file.blob_metadata) {
+				IcebergStatisticsBlob statistics_blob;
+				statistics_blob.type = blob.type;
+				statistics_blob.snapshot_id = blob.snapshot_id;
+				statistics_blob.sequence_number = blob.sequence_number;
+				statistics_blob.fields = blob.fields;
+				if (blob.properties) {
+					statistics_blob.properties.insert(blob.properties->begin(), blob.properties->end());
+				}
+				statistics_file.blobs.push_back(std::move(statistics_blob));
+			}
+			res.statistics.push_back(std::move(statistics_file));
+		}
+	}
+	if (table_metadata.partition_statistics) {
+		res.partition_statistics.reserve(table_metadata.partition_statistics->size());
+		for (auto &file : *table_metadata.partition_statistics) {
+			IcebergStatisticsFile statistics_file;
+			statistics_file.snapshot_id = file.snapshot_id;
+			statistics_file.path = file.statistics_path;
+			statistics_file.file_size_in_bytes = file.file_size_in_bytes;
+			res.partition_statistics.push_back(std::move(statistics_file));
 		}
 	}
 	// Validate default references before a scan or writer can consume the metadata.
