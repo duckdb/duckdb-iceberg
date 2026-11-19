@@ -84,9 +84,10 @@ ROLLBACK
 statement ok con3
 ROLLBACK
 
-# outside of a transaction the existing table is replaced
+# Outside of a transaction the existing table is replaced. Empty CTAS also
+# publishes the snapshot required by catalogs that cannot remove main (Nessie).
 statement ok con3
-create or replace table my_datalake.default.duid (a int);
+create or replace table my_datalake.default.duid as select 1 a where false;
 
 query I con3
 select count(*) from my_datalake.default.duid;

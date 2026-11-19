@@ -315,6 +315,17 @@ static SingleTableStagedCommit StageSingleTableCommit(DatabaseInstance &db, Iceb
 	auto current_snapshot = metadata.GetLatestSnapshot();
 	auto &transaction_data = *commit_state.table_info.transaction_data;
 	transaction_data.VerifyMergeDeletesComplete();
+	// Nessie ignores removal of main. Without a new snapshot, it would retain the old rows under the new schema.
+	if (transaction_data.replaces_table && transaction_data.initial_snapshot_id && transaction_data.alters.empty()) {
+		auto &properties = table_info.catalog.catalog_properties;
+		auto nessie = properties.find("nessie.is-nessie-catalog");
+		if (nessie != properties.end() && StringUtil::CIEquals(nessie->second, "true")) {
+			throw NotImplementedException(
+			    "Nessie cannot commit CREATE OR REPLACE TABLE without a new snapshot because it does not support "
+			    "removing the current snapshot. Use CREATE OR REPLACE TABLE AS SELECT (with WHERE false for an "
+			    "empty replacement) or insert into the replacement in the same transaction.");
+		}
+	}
 	info.retryable = transaction_data.SupportsAppendRetry();
 	info.retry_config = IcebergRetryConfig::FromTableMetadata(metadata);
 	if (!transaction_data.alters.empty()) {
