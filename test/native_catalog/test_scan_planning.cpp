@@ -1,6 +1,7 @@
 #define CATCH_CONFIG_RUNNER
 #include "catch.hpp"
 #include "duckdb.hpp"
+#include "duckdb/common/bswap.hpp"
 #include "duckdb/common/local_file_system.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/common/types/uuid.hpp"
@@ -11,6 +12,7 @@
 #include "duckdb/storage/table/row_group_order_options.hpp"
 #include "duckdb/transaction/meta_transaction.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "core/deletes/iceberg_deletion_vector.hpp"
 #include "core/expression/iceberg_value.hpp"
 #include "function/scan_planning/iceberg_row_filter.hpp"
 #include "planning/deletes/iceberg_delete_file_scanner.hpp"
@@ -549,6 +551,41 @@ TEST_CASE("Iceberg Puffin validation requires an explicit reference even with eq
 	IcebergDeleteScanEntry entry {IcebergDeleteFile(file), make_shared_ptr<IcebergDeleteFileLoadState>()};
 	REQUIRE_THROWS_WITH(IcebergDeleteFileScanner::ScanFiles(execution, {entry}),
 	                    Catch::Matchers::Contains("Puffin delete file is missing 'referenced_data_file'"));
+}
+
+TEST_CASE("Iceberg deletion vector blobs that are cut short or padded are refused", "[iceberg_planning]") {
+	unordered_map<int32_t, roaring::Roaring> bitmaps;
+	bitmaps.emplace(0, roaring::Roaring {1, 5, 9});
+	bitmaps.emplace(1, roaring::Roaring {7});
+	auto blob = IcebergDeletionVectorData::ToBlob(bitmaps);
+	IcebergFileIdentity file("data.parquet");
+	REQUIRE(IcebergDeletionVectorData::FromBlob(file, blob.data(), blob.size()));
+
+	//! Refused with a query error, not one that invalidates the database
+	auto refused = [&](vector<data_t> cut, bool fix_length) {
+		if (fix_length && cut.size() >= 2 * sizeof(uint32_t)) {
+			Store<uint32_t>(BSwap(static_cast<uint32_t>(cut.size() - 2 * sizeof(uint32_t))), cut.data());
+		}
+		try {
+			IcebergDeletionVectorData::FromBlob(file, cut.data(), cut.size());
+		} catch (InvalidInputException &) {
+			return true;
+		}
+		return false;
+	};
+	for (idx_t length = 0; length < blob.size(); length++) {
+		INFO("cut at " << length << " of " << blob.size() << " bytes");
+		vector<data_t> cut(blob.begin(), blob.begin() + NumericCast<int64_t>(length));
+		CHECK(refused(cut, false));
+		//! With a matching length field the parser reaches the bitmaps
+		CHECK(refused(cut, true));
+	}
+
+	//! Bytes between the bitmaps and the checksum
+	blob.insert(blob.end() - sizeof(uint32_t), 4, data_t(0));
+	Store<uint32_t>(BSwap(static_cast<uint32_t>(blob.size() - 2 * sizeof(uint32_t))), blob.data());
+	REQUIRE_THROWS_WITH(IcebergDeletionVectorData::FromBlob(file, blob.data(), blob.size()),
+	                    Catch::Matchers::Contains("4 bytes after its bitmaps"));
 }
 
 TEST_CASE("Iceberg delete candidate buckets preserve paths partitions and conservative fallbacks",
