@@ -623,26 +623,29 @@ void Catalog::Apply(Json &metadata, const Json &update, map<string, int64_t> &la
 			metadata.At("snapshot-log").Push(Json::Object({{"snapshot-id", identifier}, {"timestamp-ms", timestamp}}));
 			metadata["current-snapshot-id"] = identifier;
 		}
-	} else if (action == "set-statistics") {
-		auto &file = update.At("statistics");
-		if (!file.IsObject() || !file.Has("snapshot-id") || !file.Has("statistics-path") ||
-		    !file.Has("blob-metadata")) {
-			Invalid("set-statistics requires a statistics file with snapshot-id, statistics-path and blob-metadata");
+	} else if (action == "set-statistics" || action == "set-partition-statistics") {
+		// A table has at most one statistics file per snapshot; a new file replaces it.
+		const bool partition = action == "set-partition-statistics";
+		const char *list = partition ? "partition-statistics" : "statistics";
+		auto &file = update.At(list);
+		const char *content = partition ? "file-size-in-bytes" : "blob-metadata";
+		if (!file.IsObject() || !file.Has("snapshot-id") || !file.Has("statistics-path") || !file.Has(content)) {
+			Invalid(action + " requires a file with snapshot-id, statistics-path and " + content);
 		}
 		auto snapshot_id = file.At("snapshot-id").Integer();
-		if (!metadata.Has("statistics")) {
-			metadata["statistics"] = Json::Array();
+		if (!metadata.Has(list)) {
+			metadata[list] = Json::Array();
 		}
-		// A table has at most one statistics file per snapshot; a new file replaces it.
-		auto &files = metadata.At("statistics").Items();
+		auto &files = metadata.At(list).Items();
 		files.erase(std::remove_if(files.begin(), files.end(),
 		                           [&](const Json &entry) { return entry.At("snapshot-id").Integer() == snapshot_id; }),
 		            files.end());
 		files.push_back(file);
-	} else if (action == "remove-statistics") {
+	} else if (action == "remove-statistics" || action == "remove-partition-statistics") {
+		const char *list = action == "remove-partition-statistics" ? "partition-statistics" : "statistics";
 		auto snapshot_id = update.At("snapshot-id").Integer();
-		if (metadata.Has("statistics")) {
-			auto &files = metadata.At("statistics").Items();
+		if (metadata.Has(list)) {
+			auto &files = metadata.At(list).Items();
 			files.erase(
 			    std::remove_if(files.begin(), files.end(),
 			                   [&](const Json &entry) { return entry.At("snapshot-id").Integer() == snapshot_id; }),
