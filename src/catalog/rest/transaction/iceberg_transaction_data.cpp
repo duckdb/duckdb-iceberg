@@ -27,8 +27,8 @@ static bool HasTableUpdate(const vector<unique_ptr<IcebergTableUpdate>> &updates
 	return false;
 }
 
-static void VerifyNoSnapshotExpiration(const vector<unique_ptr<IcebergTableUpdate>> &updates, const char *operation) {
-	if (HasTableUpdate(updates, IcebergTableUpdateType::REMOVE_SNAPSHOTS)) {
+static void VerifyNoSnapshotExpiration(bool expires_snapshots, const char *operation) {
+	if (expires_snapshots) {
 		throw TransactionException("%s cannot be combined with snapshot expiration in the same transaction", operation);
 	}
 }
@@ -243,7 +243,7 @@ void IcebergTransactionData::AddSnapshot(IcebergSnapshotOperationType operation,
                                          IcebergManifestDeletes &&altered_manifests, bool merge_action) {
 	//! Serialize snapshot operations so transaction scans retain their insertion order.
 	lock_guard<mutex> guard(lock);
-	VerifyNoSnapshotExpiration(updates, "Data changes");
+	VerifyNoSnapshotExpiration(expires_snapshots, "Data changes");
 
 	auto &table_metadata = table_info.GetMetadata();
 	CacheExistingManifestList(guard, table_metadata);
@@ -287,7 +287,7 @@ void IcebergTransactionData::AddPendingDeleteManifests(IcebergAddSnapshot &add_s
 }
 
 void IcebergTransactionData::VerifyCanAddSnapshot() const {
-	VerifyNoSnapshotExpiration(updates, "Data changes");
+	VerifyNoSnapshotExpiration(expires_snapshots, "Data changes");
 	if (rolls_back) {
 		throw InvalidInputException("Cannot change table \"%s\" after rolling it back in the same transaction",
 		                            table_info.name);
@@ -333,7 +333,7 @@ void IcebergTransactionData::AddDeleteSnapshot(partitioned_manifest_entry_map_t 
                                                IcebergManifestDeletes &&altered_manifests, bool merge_action) {
 	//! Serialize snapshot operations so transaction scans retain their insertion order.
 	lock_guard<mutex> guard(lock);
-	VerifyNoSnapshotExpiration(updates, "Data changes");
+	VerifyNoSnapshotExpiration(expires_snapshots, "Data changes");
 
 	auto &table_metadata = table_info.GetMetadata();
 	CacheExistingManifestList(guard, table_metadata);
@@ -352,7 +352,7 @@ void IcebergTransactionData::AddUpdateSnapshot(partitioned_manifest_entry_map_t 
                                                IcebergManifestDeletes &&altered_manifests, bool merge_action) {
 	//! Serialize snapshot operations so transaction scans retain their insertion order.
 	lock_guard<mutex> guard(lock);
-	VerifyNoSnapshotExpiration(updates, "Data changes");
+	VerifyNoSnapshotExpiration(expires_snapshots, "Data changes");
 
 	auto &table_metadata = table_info.GetMetadata();
 
@@ -458,7 +458,7 @@ void IcebergTransactionData::TableReplaceContents(IcebergTableMetadata &metadata
 }
 
 void IcebergTransactionData::TableSetProperties(const case_insensitive_map_t<string> &properties) {
-	VerifyNoSnapshotExpiration(updates, "Table property changes");
+	VerifyNoSnapshotExpiration(expires_snapshots, "Table property changes");
 	if (properties.count("encryption.key-id")) {
 		throw NotImplementedException("Iceberg table encryption is not supported (encryption.key-id is set)");
 	}
@@ -466,8 +466,45 @@ void IcebergTransactionData::TableSetProperties(const case_insensitive_map_t<str
 }
 
 void IcebergTransactionData::TableRemoveProperties(const vector<string> &properties) {
-	VerifyNoSnapshotExpiration(updates, "Table property changes");
+	VerifyNoSnapshotExpiration(expires_snapshots, "Table property changes");
 	updates.push_back(make_uniq<RemoveProperties>(properties));
+}
+
+void IcebergTransactionData::RequireSnapshotRefsUnchanged() {
+	if (expires_snapshots) {
+		//! The first expiration in this transaction already pinned the refs it planned from.
+		return;
+	}
+	expires_snapshots = true;
+	//! The standard requirements detect changes to the refs the plan was made from, but cannot
+	//! detect a concurrently created ref or retention-only policy changes.
+	const auto &metadata = table_info.GetMetadata();
+	requirements.push_back(make_uniq<AssertRefSnapshotId>(metadata.current_snapshot_id));
+	if (!metadata.refs) {
+		return;
+	}
+	//! The refs map has no order; keep the commit body deterministic.
+	vector<string> ref_names;
+	for (auto &entry : metadata.refs->additional_properties) {
+		if (entry.first != "main") {
+			ref_names.push_back(entry.first);
+		}
+	}
+	std::sort(ref_names.begin(), ref_names.end());
+	for (auto &ref_name : ref_names) {
+		auto &ref = metadata.refs->additional_properties.at(ref_name);
+		requirements.push_back(make_uniq<AssertRefSnapshotId>(ref_name, ref.snapshot_id));
+	}
+}
+
+void IcebergTransactionData::TableRemoveSnapshotRefs(const vector<string> &ref_names) {
+	if (ref_names.empty()) {
+		return;
+	}
+	RequireSnapshotRefsUnchanged();
+	for (auto &ref_name : ref_names) {
+		updates.push_back(make_uniq<RemoveSnapshotRef>(ref_name));
+	}
 }
 
 void IcebergTransactionData::TableRemoveSnapshots(const vector<int64_t> &snapshot_ids) {
@@ -477,11 +514,8 @@ void IcebergTransactionData::TableRemoveSnapshots(const vector<int64_t> &snapsho
 			return;
 		}
 	}
+	RequireSnapshotRefsUnchanged();
 	updates.push_back(make_uniq<RemoveSnapshots>(snapshot_ids));
-	//! The standard requirement detects changes to main, but cannot detect a
-	//! concurrently created ref or retention-only policy changes.
-	const auto &metadata = table_info.GetMetadata();
-	requirements.push_back(make_uniq<AssertRefSnapshotId>(metadata.current_snapshot_id));
 }
 
 void IcebergTransactionData::TableSetLocation() {
@@ -508,7 +542,7 @@ static bool IsAncestorOfCurrentSnapshot(const IcebergTableMetadata &metadata, in
 }
 
 void IcebergTransactionData::TableRollbackToSnapshot(int64_t snapshot_id) {
-	VerifyNoSnapshotExpiration(updates, "Snapshot rollback");
+	VerifyNoSnapshotExpiration(expires_snapshots, "Snapshot rollback");
 	//! The commit points main at the last snapshot the transaction adds, which would undo the rollback
 	if (!alters.empty() || rolls_back) {
 		throw InvalidInputException("Cannot roll back table \"%s\": it was already changed in this transaction",

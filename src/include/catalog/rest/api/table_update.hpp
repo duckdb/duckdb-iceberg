@@ -60,9 +60,12 @@ struct AssertCurrentSchemaIdRequirement : public IcebergTableRequirement {
 struct AssertRefSnapshotId : public IcebergTableRequirement {
 	static constexpr const IcebergTableRequirementType TYPE = IcebergTableRequirementType::ASSERT_REF_SNAPSHOT_ID;
 
+	//! Requires main to point at snapshot_id; an absent snapshot_id requires that the ref does not exist
 	explicit AssertRefSnapshotId(optional<int64_t> snapshot_id);
+	AssertRefSnapshotId(string ref, optional<int64_t> snapshot_id);
 	void CreateRequirement(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state);
 
+	string ref;
 	optional<int64_t> snapshot_id;
 };
 
@@ -189,6 +192,16 @@ struct RemoveSnapshots : public IcebergTableUpdate {
 	vector<int64_t> snapshot_ids;
 };
 
+//! Remove a branch or tag through REST "remove-snapshot-ref".
+struct RemoveSnapshotRef : public IcebergTableUpdate {
+	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::REMOVE_SNAPSHOT_REF;
+
+	explicit RemoveSnapshotRef(string ref_name);
+	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
+
+	string ref_name;
+};
+
 struct SetLocation : public IcebergTableUpdate {
 	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::SET_LOCATION;
 
@@ -205,15 +218,6 @@ struct SetSnapshotRef : public IcebergTableUpdate {
 	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
 
 	int64_t snapshot_id;
-	string ref_name;
-};
-
-struct RemoveSnapshotRef : public IcebergTableUpdate {
-	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::REMOVE_SNAPSHOT_REF;
-
-	explicit RemoveSnapshotRef(string ref_name);
-	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
-
 	string ref_name;
 };
 
