@@ -87,6 +87,8 @@ jobs:
           build: python3 duckdb/scripts/ci/retry.py -- make relassert
           test: >-
             ./build/relassert/test/unittest_iceberg_native &&
+            ./build/relassert/test/unittest_iceberg_schema &&
+            ./build/relassert/test/unittest_iceberg_replacement &&
             ./build/relassert/test/unittest_iceberg_serialization &&
             ./build/relassert/test/unittest_iceberg_cache &&
             ./build/relassert/test/unittest_iceberg_planning

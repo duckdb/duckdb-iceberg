@@ -8,9 +8,12 @@
 #include "planning/pruning/iceberg_file_pruner.hpp"
 #include "planning/scan_plan/iceberg_scan_plan_provider.hpp"
 #include "planning/scan_plan/iceberg_scan_statistics.hpp"
+#include "duckdb/common/operator/numeric_cast.hpp"
+#include "duckdb/storage/statistics/base_statistics.hpp"
 #include "duckdb/storage/table/row_group_reorderer.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "iceberg_logging.hpp"
+#include "iceberg_options.hpp"
 
 namespace duckdb {
 
@@ -135,6 +138,17 @@ IcebergDeletePlanningContext IcebergScanPlanner::GetDeletePlanningContext(Iceber
 	        provider};
 }
 
+//! A manifest whose counts prove it holds only DELETED entries (e.g. the manifest a copy-on-write overwrite rewrites to
+//! tombstone the replaced file) can't contribute files to the scan, so it doesn't need to be read.
+//! Like Apache Iceberg's ManifestGroup::ignoreDeleted. Manifests with unknown counts are read.
+static bool ManifestMayMatch(const IcebergFilePruner &pruner, const IcebergManifestListEntry &manifest) {
+	auto &counts = manifest.GetManifest().counts;
+	if (counts && counts->HasNoLiveFiles()) {
+		return false;
+	}
+	return pruner.ManifestMatchesFilter(manifest);
+}
+
 void IcebergScanPlanner::InitializeView(annotated_lock_guard<annotated_mutex> &guard) const {
 	if (view_initialized) {
 		return;
@@ -144,7 +158,7 @@ void IcebergScanPlanner::InitializeView(annotated_lock_guard<annotated_mutex> &g
 	auto &committed_data = GetScanPlanProvider().DataManifests();
 	for (auto &manifest : committed_data) {
 		data_manifests.emplace_back(data_manifests.size(), manifest);
-		data_manifest_matches.push_back(pruner.ManifestMatchesFilter(manifest));
+		data_manifest_matches.push_back(ManifestMayMatch(pruner, manifest));
 	}
 	for (auto &manifest : GetScanPlanProvider().TransactionDataManifests()) {
 		auto &metadata = manifest.get().manifest_metadata;
@@ -152,19 +166,19 @@ void IcebergScanPlanner::InitializeView(annotated_lock_guard<annotated_mutex> &g
 		auto lineage_mode =
 		    metadata->format_version >= 3 ? IcebergRowLineageMode::STORED_ONLY : IcebergRowLineageMode::NONE;
 		data_manifests.emplace_back(data_manifests.size(), manifest, lineage_mode);
-		data_manifest_matches.push_back(pruner.ManifestMatchesFilter(manifest.get()));
+		data_manifest_matches.push_back(ManifestMayMatch(pruner, manifest.get()));
 	}
 	auto &committed_deletes = GetScanPlanProvider().DeleteManifests();
 	bool has_matching_deletes = false;
 	for (auto &manifest : committed_deletes) {
 		delete_manifests.emplace_back(delete_manifests.size(), manifest);
-		auto matches = pruner.ManifestMatchesFilter(manifest);
+		auto matches = ManifestMayMatch(pruner, manifest);
 		delete_manifest_matches.push_back(matches);
 		has_matching_deletes |= matches;
 	}
 	for (auto &manifest : GetScanPlanProvider().TransactionDeleteManifests()) {
 		delete_manifests.emplace_back(delete_manifests.size(), manifest);
-		auto matches = pruner.ManifestMatchesFilter(manifest.get());
+		auto matches = ManifestMayMatch(pruner, manifest.get());
 		delete_manifest_matches.push_back(matches);
 		has_matching_deletes |= matches;
 	}
@@ -221,10 +235,11 @@ IcebergScanPlanner::GetDataFile(idx_t file_id, annotated_lock_guard<annotated_mu
 				}
 			}
 			shared_state->data_file_partitions[data_file.file_path] = std::move(partition);
-			auto bound_entry = bound_manifest.BindEntry(manifest_entry);
 			if (manifest_entry.status == IcebergManifestEntryStatusType::DELETED) {
+				//! Deleted files don't use up inherited row ids, like Iceberg Java
 				continue;
 			}
+			auto bound_entry = bound_manifest.BindEntry(manifest_entry);
 			//! Replaced by an earlier statement of this transaction, e.g. a rewrite of the data files
 			if (transaction_data &&
 			    transaction_data->IsFileInvalidated({data_file.file_path, data_file.content_offset})) {
@@ -347,11 +362,14 @@ unique_ptr<NodeStatistics> IcebergScanPlanner::GetCardinality() const {
 	if (GetMetadata().iceberg_version != 1 && !HasInvalidatedFiles()) {
 		annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
 		InitializeView(guard);
-		auto cardinality =
-		    IcebergScanStatistics(data_manifests, data_manifest_matches, delete_manifests, delete_manifest_matches)
-		        .EstimateCardinality();
+		IcebergScanStatistics statistics(data_manifests, data_manifest_matches, delete_manifests,
+		                                 delete_manifest_matches);
+		auto cardinality = statistics.EstimateCardinality();
 		if (cardinality) {
-			return make_uniq<NodeStatistics>(*cardinality, *cardinality);
+			// Delete counts can overlap or include inapplicable rows. Only the data-row total is an upper bound.
+			auto maximum = statistics.CountDataRows();
+			D_ASSERT(maximum);
+			return make_uniq<NodeStatistics>(*cardinality, *maximum);
 		}
 	}
 	// Returning nullptr invokes Parquet's fallback, which can enumerate every file to inspect its cache.
@@ -378,6 +396,41 @@ unique_ptr<NodeStatistics> IcebergScanPlanner::GetCardinality() const {
 		}
 	}
 	return make_uniq<NodeStatistics>(1000);
+}
+
+static bool TableStatisticsEnabled(ClientContext &context) {
+	Value setting;
+	if (context.TryGetCurrentSetting(ENABLE_TABLE_STATISTICS_CONFIG_VARIABLE, setting) && !setting.IsNull()) {
+		return setting.GetValue<bool>();
+	}
+	return DEFAULT_ENABLE_TABLE_STATISTICS;
+}
+
+unique_ptr<BaseStatistics> IcebergScanPlanner::GetColumnStatistics(column_t column_index) const {
+	//! Changes made earlier in this transaction are not in any statistics file
+	if (!HasScanInfo() || HasTransactionData() || !TableStatisticsEnabled(context)) {
+		return nullptr;
+	}
+	auto snapshot = GetSnapshot().snapshot;
+	if (!snapshot) {
+		return nullptr;
+	}
+	auto statistics_file = GetMetadata().FindStatisticsFile(snapshot->snapshot_id);
+	if (!statistics_file) {
+		return nullptr;
+	}
+	auto &columns = GetSchema().columns;
+	if (column_index >= columns.size()) {
+		return nullptr;
+	}
+	auto &column = *columns[column_index];
+	auto distinct_count = statistics_file->GetDistinctCount(column.id);
+	if (!distinct_count || *distinct_count == 0) {
+		return nullptr;
+	}
+	auto result = BaseStatistics::CreateUnknown(column.type);
+	result.SetDistinctCount(NumericCast<idx_t>(*distinct_count));
+	return result.ToUnique();
 }
 
 void IcebergScanPlanner::GetStatistics(vector<PartitionStatistics> &result) const {

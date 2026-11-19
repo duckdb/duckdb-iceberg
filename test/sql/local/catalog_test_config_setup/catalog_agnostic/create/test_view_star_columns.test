@@ -175,5 +175,9 @@ drop table vs_right;
 statement ok
 drop table vs_renamed;
 
+# Leave the test namespace before dropping it, avoiding a reset to DuckDB's main schema.
+statement ok
+use my_datalake.default;
+
 statement ok
 drop schema my_datalake.view_star;

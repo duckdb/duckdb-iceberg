@@ -1,0 +1,53 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_delete_bytes_written.test
+# description: The bytes of the delete files a DELETE writes (Parquet in v2, Puffin in v3) count as the query's "Data Written"
+# group: [delete]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+require json
+
+loop v 2 4
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.test_delete_bytes_written;
+
+statement ok
+CREATE TABLE my_datalake.default.test_delete_bytes_written (id INT) WITH ('format-version' = '{v}');
+
+statement ok
+INSERT INTO my_datalake.default.test_delete_bytes_written SELECT i FROM range(10) t(i);
+
+statement ok
+PRAGMA enable_profiling = 'json';
+
+statement ok
+PRAGMA profiling_output = '{TEST_DIR}/test_delete_bytes_written_v{v}.json';
+
+statement ok
+SET tracked_metrics = ['io.total_bytes_written'];
+
+query I
+DELETE FROM my_datalake.default.test_delete_bytes_written WHERE id IN (1, 4, 7);
+----
+3
+
+statement ok
+PRAGMA disable_profiling;
+
+# v2 writes a positional delete file through the Parquet writer, v3 a deletion vector in a Puffin file
+query I
+SELECT io.total_bytes_written > 0 FROM read_json('{TEST_DIR}/test_delete_bytes_written_v{v}.json');
+----
+true
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.test_delete_bytes_written)
+WHERE content = 'POSITION_DELETES' AND file_format = (CASE WHEN {v} = 2 THEN 'parquet' ELSE 'puffin' END);
+----
+1
+
+endloop

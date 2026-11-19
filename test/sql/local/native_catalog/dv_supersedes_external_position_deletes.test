@@ -1,5 +1,5 @@
 # name: test/sql/local/native_catalog/dv_supersedes_external_position_deletes.test
-# description: Vectors supersede referenced position deletes but retain shared and bounds-only files, including with an existing vector
+# description: Vectors supersede referenced and bounds-scoped position deletes but retain shared files, including with an existing vector
 # group: [native_catalog]
 
 require-env CATALOG_TEST_CONFIG_SETUP mock
@@ -7,6 +7,9 @@ require-env CATALOG_TEST_CONFIG_SETUP mock
 include test/sql/init_requires
 
 require json
+
+# Shared position deletes stay live unless both non-NULL bounds prove a single data-file reference.
+foreach shared_bounds missing unequal lower_only upper_only
 
 statement ok
 CREATE TABLE my_datalake.default.dv_external_sources (id INTEGER) WITH ('format-version' = 2);
@@ -38,7 +41,7 @@ SET VARIABLE dv_data_list = (
 );
 
 statement ok
-CREATE TEMP TABLE dv_external_positions AS
+CREATE OR REPLACE TEMP TABLE dv_external_positions AS
 SELECT kind, CASE file WHEN 'a' THEN getvariable('dv_data_a') ELSE getvariable('dv_data_b') END AS file_path,
 	pos::BIGINT AS pos
 FROM (VALUES ('scoped', 'a', 1), ('bounds', 'a', 2), ('shared', 'a', 3), ('shared', 'b', 3)) t(kind, file, pos);
@@ -47,7 +50,7 @@ foreach kind scoped bounds shared
 
 statement ok
 COPY (SELECT file_path, pos FROM dv_external_positions WHERE kind = '{kind}' ORDER BY file_path, pos)
-TO '{TEST_DIR}/dv_{kind}.parquet' (
+TO '{TEST_DIR}/{shared_bounds}_dv_{kind}.parquet' (
 	FORMAT PARQUET, FIELD_IDS {file_path: 2147483546, pos: 2147483545}
 );
 
@@ -58,14 +61,20 @@ COPY (
 	SELECT 1::INTEGER AS status, 3::BIGINT AS snapshot_id,
 		3::BIGINT AS sequence_number, 3::BIGINT AS file_sequence_number,
 		{
-			content: 1::INTEGER, file_path: '{TEST_DIR}/dv_' || kind || '.parquet', file_format: 'PARQUET',
+			content: 1::INTEGER, file_path: '{TEST_DIR}/{shared_bounds}_dv_' || kind || '.parquet', file_format: 'PARQUET',
 			partition: {}, record_count: count(*)::BIGINT, file_size_in_bytes: 1000::BIGINT,
 			referenced_data_file: CASE WHEN kind = 'scoped' THEN getvariable('dv_data_a') END,
-			lower_bounds: CASE WHEN kind = 'bounds' THEN MAP {2147483546: encode(getvariable('dv_data_a'))} END,
-			upper_bounds: CASE WHEN kind = 'bounds' THEN MAP {2147483546: encode(getvariable('dv_data_a'))} END
+			lower_bounds: CASE
+				WHEN kind = 'bounds' THEN MAP {2147483546: encode(getvariable('dv_data_a'))}
+				WHEN kind = 'shared' AND '{shared_bounds}' IN ('unequal', 'lower_only')
+					THEN MAP {2147483546: encode(least(getvariable('dv_data_a'), getvariable('dv_data_b')))} END,
+			upper_bounds: CASE
+				WHEN kind = 'bounds' THEN MAP {2147483546: encode(getvariable('dv_data_a'))}
+				WHEN kind = 'shared' AND '{shared_bounds}' IN ('unequal', 'upper_only')
+					THEN MAP {2147483546: encode(greatest(getvariable('dv_data_a'), getvariable('dv_data_b')))} END
 		} AS data_file
 	FROM dv_external_positions GROUP BY kind
-) TO '{TEST_DIR}/dv_external_deletes.avro' (
+) TO '{TEST_DIR}/{shared_bounds}_dv_external_deletes.avro' (
 	FORMAT AVRO,
 	METADATA {'schema-id': '0', 'partition-spec-id': '0', 'format-version': '2', 'content': 'deletes'},
 	FIELD_IDS {
@@ -78,10 +87,10 @@ COPY (
 );
 
 statement ok
-CREATE TEMP TABLE dv_external_list AS
+CREATE OR REPLACE TEMP TABLE dv_external_list AS
 SELECT * FROM read_avro(getvariable('dv_data_list'))
 UNION ALL BY NAME
-SELECT '{TEST_DIR}/dv_external_deletes.avro' AS manifest_path,
+SELECT '{TEST_DIR}/{shared_bounds}_dv_external_deletes.avro' AS manifest_path,
 	1000::BIGINT AS manifest_length, 0::INTEGER AS partition_spec_id,
 	1::INTEGER AS content, 3::BIGINT AS sequence_number, 3::BIGINT AS min_sequence_number,
 	3::BIGINT AS added_snapshot_id, 3::INTEGER AS added_files_count,
@@ -89,7 +98,7 @@ SELECT '{TEST_DIR}/dv_external_deletes.avro' AS manifest_path,
 	4::BIGINT AS added_rows_count, 0::BIGINT AS existing_rows_count, 0::BIGINT AS deleted_rows_count;
 
 statement ok
-COPY dv_external_list TO '{TEST_DIR}/dv_external_list.avro' (
+COPY dv_external_list TO '{TEST_DIR}/{shared_bounds}_dv_external_list.avro' (
 	FORMAT AVRO,
 	FIELD_IDS {
 		manifest_path: 500, manifest_length: 501, partition_spec_id: 502,
@@ -109,7 +118,7 @@ SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/
 	json_object('requirements', json_array(), 'updates', json_array(
 		json_object('action', 'add-snapshot', 'snapshot', json_object(
 			'snapshot-id', 3, 'sequence-number', 3, 'schema-id', 0,
-			'timestamp-ms', epoch_ms(current_timestamp), 'manifest-list', '{TEST_DIR}/dv_external_list.avro',
+			'timestamp-ms', epoch_ms(current_timestamp), 'manifest-list', '{TEST_DIR}/{shared_bounds}_dv_external_list.avro',
 			'summary', json_object('operation', 'delete', 'total-data-files', '2', 'total-records', '21',
 				'total-delete-files', '3', 'total-position-deletes', '4', 'total-equality-deletes', '0'))),
 		json_object('action', 'set-snapshot-ref', 'ref-name', 'main', 'type', 'branch', 'snapshot-id', 3))));
@@ -129,14 +138,14 @@ DELETE FROM my_datalake.default.dv_external_sources WHERE id = 5;
 ----
 1
 
-# The vector absorbs all positions for A, but only the explicitly referenced file is invalidated.
-# In particular, equal filename bounds do not make a source eligible for invalidation.
+# The vector absorbs all positions for A, so the files scoped to A are invalidated:
+# the referenced one, and the one whose equal file_path bounds name A. The shared file stays.
 query TII rowsort
 SELECT CASE WHEN file_format = 'puffin' THEN 'vector' ELSE regexp_extract(file_path, 'dv_(\w+).parquet', 1) END,
 	status = 'DELETED', record_count
 FROM iceberg_metadata(my_datalake.default.dv_external_sources) WHERE content = 'POSITION_DELETES';
 ----
-bounds	false	1
+bounds	true	1
 scoped	true	1
 shared	false	2
 vector	false	4
@@ -172,7 +181,7 @@ COPY (
 	UNION ALL BY NAME
 	SELECT * FROM read_avro(getvariable('dv_current_list'))
 	WHERE content = 0 OR manifest_path = getvariable('dv_vector_manifest')
-) TO '{TEST_DIR}/dv_existing_list.avro' (
+) TO '{TEST_DIR}/{shared_bounds}_dv_existing_list.avro' (
 	FORMAT AVRO,
 	FIELD_IDS {
 		manifest_path: 500, manifest_length: 501, partition_spec_id: 502,
@@ -192,7 +201,7 @@ SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/
 	json_object('requirements', json_array(), 'updates', json_array(
 		json_object('action', 'add-snapshot', 'snapshot', json_object(
 			'snapshot-id', 5, 'sequence-number', 5, 'schema-id', 0,
-			'timestamp-ms', epoch_ms(current_timestamp), 'manifest-list', '{TEST_DIR}/dv_existing_list.avro',
+			'timestamp-ms', epoch_ms(current_timestamp), 'manifest-list', '{TEST_DIR}/{shared_bounds}_dv_existing_list.avro',
 			'first-row-id', getvariable('dv_next_row_id'), 'added-rows', 0,
 			'summary', json_object('operation', 'overwrite', 'total-data-files', '2', 'total-records', '21',
 				'total-delete-files', '4', 'total-position-deletes', '8', 'total-equality-deletes', '0'))),
@@ -210,13 +219,13 @@ DELETE FROM my_datalake.default.dv_external_sources WHERE id = 6;
 ----
 1
 
-# Both the old vector and the old referenced Parquet file must now be superseded.
+# The old vector and the old scoped Parquet files must now be superseded.
 query TII rowsort
 SELECT CASE WHEN file_format = 'puffin' THEN 'vector' ELSE regexp_extract(file_path, 'dv_(\w+).parquet', 1) END,
 	status = 'DELETED', record_count
 FROM iceberg_metadata(my_datalake.default.dv_external_sources) WHERE content = 'POSITION_DELETES';
 ----
-bounds	false	1
+bounds	true	1
 scoped	true	1
 shared	false	2
 vector	false	5
@@ -232,7 +241,7 @@ SELECT (snap->'summary'->>'removed-delete-files')::BIGINT,
 	(snap->'summary'->>'total-position-deletes')::BIGINT
 FROM snapshots WHERE (snap->>'sequence-number')::BIGINT = 6;
 ----
-2	5	8
+3	6	7
 
 query II
 SELECT count(*), count(*) FILTER (WHERE id IN (1, 2, 3, 5, 6, 13)) FROM my_datalake.default.dv_external_sources;
@@ -246,3 +255,5 @@ SELECT count(*) FROM my_datalake.default.dv_external_sources AT (VERSION => 5);
 
 statement ok
 DROP TABLE my_datalake.default.dv_external_sources;
+
+endloop

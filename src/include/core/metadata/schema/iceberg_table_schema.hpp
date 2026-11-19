@@ -20,6 +20,8 @@ public:
 	static const IcebergColumnDefinition &GetFromColumnIndex(const vector<unique_ptr<IcebergColumnDefinition>> &columns,
 	                                                         const ColumnIndex &column_index, idx_t depth);
 	const unordered_map<uint64_t, ColumnIndex> &GetSourceIdMap() const;
+	//! Invalidate cached lookups before mutating columns directly.
+	void InvalidateSourceIdMap();
 	optional<ColumnIndex> TryGetColumnIndexByFieldId(idx_t field_id) const;
 	optional_ptr<const IcebergColumnDefinition> TryGetColumnByFieldId(idx_t field_id) const;
 	const IcebergColumnDefinition &GetColumnByFieldId(idx_t field_id) const;
@@ -42,7 +44,6 @@ public:
 	Value GetFieldIds() const;
 
 private:
-	void InvalidateSourceIdMap();
 	static void PopulateSourceIdMap(unordered_map<uint64_t, ColumnIndex> &source_to_column_id,
 	                                const vector<unique_ptr<IcebergColumnDefinition>> &columns,
 	                                optional_ptr<ColumnIndex> parent);

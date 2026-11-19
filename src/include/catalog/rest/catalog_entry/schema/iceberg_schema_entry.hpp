@@ -64,4 +64,7 @@ public:
 	IcebergSchemaInformation schema_info;
 };
 
+void IntroduceNewSchema(ClientContext &context, IcebergTable &updated_table, IcebergTransactionData &transaction_data,
+                        shared_ptr<IcebergTableSchema> new_schema, bool update_schema_properties = true);
+
 } // namespace duckdb

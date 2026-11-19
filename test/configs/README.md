@@ -97,8 +97,8 @@ corresponding broader absence probes apply instead.
 
 Absence need not mean an error: metadata/history probes check missing history,
 and the staging probe checks that a table is already remotely visible before
-commit and survives rollback. Multi-table rejection also checks that rollback
-preserves both tables.
+commit and is dropped again on rollback. Multi-table rejection also checks
+that rollback preserves both tables.
 
 `ATOMIC_COMMIT_CONFLICT_SUPPORT` remains an explicit coverage gap. A catalog
 without atomic conflict detection can still serialize a particular run's writes;

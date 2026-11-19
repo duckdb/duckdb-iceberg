@@ -3,6 +3,7 @@
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
 #include "core/metadata/manifest/iceberg_avro_codec.hpp"
 
+#include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/common/vector/struct_vector.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
@@ -316,6 +317,35 @@ bool IcebergDataFile::HasFirstRowId() const {
 int64_t IcebergDataFile::GetFirstRowId() const {
 	D_ASSERT(HasFirstRowId());
 	return *first_row_id;
+}
+
+optional_ptr<const string> IcebergDataFile::SingleReferencedDataFile() const {
+	if (referenced_data_file) {
+		return &*referenced_data_file;
+	}
+	if (content != IcebergManifestEntryContentType::POSITION_DELETES) {
+		return nullptr;
+	}
+	//! SPEC: Lower bounds must be less than or equal to all non-null and non-NaN values and upper bounds must be
+	//! greater than or equal to all non-null and non-NaN values.
+	//! Equal 'file_path' bounds therefore mean that every row of this delete file refers to that one data file.
+	//! Writers may leave 'referenced_data_file' unset and record only these bounds (Spark does), and Iceberg Java
+	//! reads them the same way (ContentFileUtil.referencedDataFile). Missing or unequal bounds prove nothing.
+	//! This relies on the bounds being valid: if a writer truncates both to the same prefix, no data file path
+	//! equals it and the deletes in the file are not applied.
+	auto lower = lower_bounds.find(MultiFileReader::DELETE_FILE_PATH_FIELD_ID);
+	auto upper = upper_bounds.find(MultiFileReader::DELETE_FILE_PATH_FIELD_ID);
+	if (lower == lower_bounds.end() || upper == upper_bounds.end()) {
+		return nullptr;
+	}
+	if (lower->second.IsNull() || upper->second.IsNull()) {
+		return nullptr;
+	}
+	auto &path = StringValue::Get(lower->second);
+	if (path != StringValue::Get(upper->second)) {
+		return nullptr;
+	}
+	return &path;
 }
 
 bool IcebergDataFile::IsDeletionVector() const {
