@@ -100,10 +100,6 @@ public:
 public:
 	void AddTable(IcebergTable &table_info, ClientContext &context, const IcebergOptions &options) {
 		auto &metadata = table_info.GetMetadata();
-		if (table_names_to_skip.count(table_info.name)) {
-			//! FIXME: perhaps log that the table was skipped
-			return;
-		}
 		if (metadata.snapshots.empty()) {
 			//! The table has no snapshots, so we can't assign any ducklake snapshot as its creator
 			return;
@@ -332,7 +328,10 @@ public:
 		)";
 
 		const auto FILE_COLUMN_STATS_SQL = R"(
-			INSERT INTO {METADATA_CATALOG}.ducklake_file_column_stats VALUES(
+			INSERT INTO {METADATA_CATALOG}.ducklake_file_column_stats (
+				data_file_id, table_id, column_id, column_size_bytes, value_count, null_count,
+				min_value, max_value, contains_nan, extra_stats
+			) VALUES (
 				%d, -- data_file_id
 				%d, -- table_id
 				%d, -- column_id
@@ -365,7 +364,9 @@ public:
 		)";
 
 		const auto TABLE_COLUMN_STATS_SQL = R"(
-			INSERT INTO {METADATA_CATALOG}.ducklake_table_column_stats VALUES(
+			INSERT INTO {METADATA_CATALOG}.ducklake_table_column_stats (
+				table_id, column_id, contains_null, contains_nan, min_value, max_value, extra_stats
+			) VALUES (
 				%d, -- table_id
 				%d, -- column_id
 				%s, -- contains_null
@@ -379,7 +380,7 @@ public:
 		const auto SNAPSHOT_CHANGES_SQL = R"(
 			INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes VALUES(
 				%d, -- snapshot_id
-				'%s', -- changes_made
+				%s, -- changes_made
 				%s, -- author
 				%s, -- commit_message
 				%s -- commit_extra_info
@@ -507,10 +508,10 @@ public:
 					auto contains_nan = (!stats.has_nan || *stats.has_nan) ? "true" : "false";
 					auto min_value = !stats.lower_bound || stats.lower_bound->IsNull()
 					                     ? "NULL"
-					                     : "'" + stats.lower_bound->ToString() + "'";
+					                     : SQLString::ToString(stats.lower_bound->ToString());
 					auto max_value = !stats.upper_bound || stats.upper_bound->IsNull()
 					                     ? "NULL"
-					                     : "'" + stats.upper_bound->ToString() + "'";
+					                     : SQLString::ToString(stats.upper_bound->ToString());
 
 					auto insert_statement = StringUtil::Format(FILE_COLUMN_STATS_SQL,
 					                                           // data_file_id
@@ -565,7 +566,7 @@ public:
 					if (partition_it == field_id_to_info.end()) {
 						partition_value = "NULL";
 					} else {
-						partition_value = "'" + partition_it->second.get().value.ToString() + "'";
+						partition_value = SQLString::ToString(partition_it->second.get().value.ToString());
 					}
 					auto values = StringUtil::Format(FILE_PARTITION_VALUE_SQL,
 					                                 // data_file_id
@@ -627,8 +628,8 @@ public:
 
 				auto contains_null = stats.contains_null ? "true" : "false";
 				auto contains_nan = stats.contains_nan ? "true" : "false";
-				auto min_value = stats.min_value.IsNull() ? "NULL" : "'" + stats.min_value.ToString() + "'";
-				auto max_value = stats.max_value.IsNull() ? "NULL" : "'" + stats.max_value.ToString() + "'";
+				auto min_value = stats.min_value.IsNull() ? "NULL" : SQLString::ToString(stats.min_value.ToString());
+				auto max_value = stats.max_value.IsNull() ? "NULL" : SQLString::ToString(stats.max_value.ToString());
 				auto insert_statement = StringUtil::Format(TABLE_COLUMN_STATS_SQL,
 				                                           // table_id
 				                                           table_id,
@@ -678,7 +679,7 @@ public:
 
 			vector<string> changes;
 			for (auto &schema_name : snapshot.created_schema) {
-				auto escaped_name = SQLString::ToString(schema_name);
+				auto escaped_name = SQLQuotedIdentifier::ToString(schema_name);
 
 				changes.push_back(StringUtil::Format("created_schema:%s", escaped_name));
 			}
@@ -686,8 +687,8 @@ public:
 			for (auto &table_uuid : snapshot.created_table) {
 				auto &table = tables.at(table_uuid);
 
-				auto schema_name = SQLString::ToString(table.schema_name);
-				auto table_name = SQLString::ToString(table.table_name);
+				auto schema_name = SQLQuotedIdentifier::ToString(table.schema_name);
+				auto table_name = SQLQuotedIdentifier::ToString(table.table_name);
 
 				changes.push_back(StringUtil::Format("created_table:%s.%s", schema_name, table_name));
 			}
@@ -737,7 +738,7 @@ public:
 			                                           // snapshot_id
 			                                           snapshot_id,
 			                                           // changes_made
-			                                           StringUtil::Join(changes, ","),
+			                                           SQLString::ToString(StringUtil::Join(changes, ",")),
 			                                           // author
 			                                           "NULL",
 			                                           // commit_message
@@ -837,10 +838,22 @@ static unique_ptr<FunctionData> IcebergToDuckLakeBind(ClientContext &context, Ta
 	for (auto &schema_entry_ptr : schema_entries) {
 		auto &schema_entry = *schema_entry_ptr;
 		auto &tables = schema_entry.tables;
-		tables.ScanTables(context, [&](IcebergTable &table) {
-			tables.FillEntry(context, table);
-			ret->AddTable(table, context, options);
-		});
+		vector<string> table_names;
+		tables.ScanTables(context, [&](IcebergTable &table) { table_names.push_back(table.name); });
+		// Resolve each table in the current transaction after releasing the listing lock.
+		for (const auto &table_name : table_names) {
+			if (ret->table_names_to_skip.count(table_name)) {
+				continue;
+			}
+			EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, QualifiedName(Identifier(table_name)));
+			auto entry = tables.GetEntry(context, lookup);
+			if (!entry) {
+				throw CatalogException("Iceberg table '%s' could not be resolved for conversion", table_name);
+			}
+			auto &table = entry->Cast<IcebergTableSchemaVersion>();
+			table.PrepareIcebergScanFromEntry(context);
+			ret->AddTable(table.table_info, context, options);
+		}
 	}
 
 	ret->AssignSchemaBeginSnapshots();
@@ -890,9 +903,11 @@ public:
 			    "DuckLake version metadata is corrupt, the value can't be NULL and has to be of type VARCHAR");
 		}
 		auto version_string = value.GetValue<string>();
-		if (!StringUtil::StartsWith(version_string, "0.4")) {
+		// DuckLake 1.1 adds nullable columns to the 1.0 layout. The inserts name the shared columns.
+		if (!StringUtil::StartsWith(version_string, "0.4") && version_string != "1.0" && version_string != "1.1") {
 			throw InvalidInputException(
-			    "'iceberg_to_ducklake' only support version 0.4 currently, detected '%s' instead", version_string);
+			    "'iceberg_to_ducklake' supports DuckLake versions 0.4, 1.0, and 1.1, detected '%s' instead",
+			    version_string);
 		}
 	}
 
