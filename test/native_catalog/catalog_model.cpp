@@ -607,8 +607,25 @@ void Catalog::Apply(Json &metadata, const Json &update, map<string, int64_t> &la
 	} else if (action == "set-snapshot-ref") {
 		auto identifier = update.At("snapshot-id").Integer();
 		auto &snapshot = FindID(metadata.At("snapshots"), "snapshot-id", identifier);
-		if (update.At("ref-name").String() != "main" || update.At("type").String() != "branch") {
-			Unsupported("Only the main branch is implemented");
+		auto ref_name = update.At("ref-name").String();
+		auto ref_type = update.At("type").String();
+		if (ref_type != "branch" && ref_type != "tag") {
+			Invalid("Unknown snapshot ref type: " + ref_type);
+		}
+		if (ref_type == "tag" && (update.Has("min-snapshots-to-keep") || update.Has("max-snapshot-age-ms"))) {
+			// As Java's SnapshotRef.Builder: these retention fields only apply to branches
+			Invalid("Tags do not support min-snapshots-to-keep or max-snapshot-age-ms");
+		}
+		if (ref_name != "main") {
+			// Other refs only point at a snapshot; they never move current-snapshot-id or the snapshot-log
+			auto ref = update;
+			ref.Erase("action");
+			ref.Erase("ref-name");
+			metadata.At("refs")[ref_name] = std::move(ref);
+			return;
+		}
+		if (ref_type != "branch") {
+			Invalid("The main ref must be a branch");
 		}
 		auto ref = update;
 		ref.Erase("action");
