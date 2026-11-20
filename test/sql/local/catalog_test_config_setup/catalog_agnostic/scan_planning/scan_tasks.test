@@ -169,7 +169,7 @@ set variable scan_task_list_6 = (select list(task) from (select schema, 42 as ex
 
 # Extra/reordered task fields and filtered task lists are accepted.
 query I
-select count(*) from iceberg_scan_tasks(getvariable('scan_task_list_6'));
+select count(id) from iceberg_scan_tasks(getvariable('scan_task_list_6'));
 ----
 9000
 
@@ -177,7 +177,7 @@ statement ok
 set variable scan_task_list_7 = (select list(task) from (select * from saved_tasks union all select * from saved_tasks) task);
 
 query I
-select count(*) from iceberg_scan_tasks(getvariable('scan_task_list_7'));
+select count(id) from iceberg_scan_tasks(getvariable('scan_task_list_7'));
 ----
 18000
 
