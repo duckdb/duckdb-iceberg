@@ -75,6 +75,8 @@ struct IcebergListedEntry {
 //! The outcome categories of a backend operation. Protocol details (HTTP status codes, REST error types) only appear
 //! in the message of the error.
 enum class IcebergCatalogStatus : uint8_t {
+	//! The operation succeeded. An IcebergCatalogResult without an error has this status; an IcebergCatalogError never
+	//! does (the REST backend maps HTTP 200, 204 and 304 to it)
 	OK,
 	//! The namespace or entry doesn't exist
 	NOT_FOUND,
