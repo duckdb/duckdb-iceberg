@@ -132,7 +132,8 @@ void IcebergDataFileStats::PopulateFromReturnStats(ClientContext &context, Icebe
 		//! Map descendants include placeholders for empty maps in their leaf null counts.
 		//! The map's own container counts distinguish empty maps from null maps.
 		const bool is_map_leaf = stats.column_size_bytes && HasMapParent(column_names, ic_schema);
-		if (!is_map_leaf && column_info.required && stats.null_count && *stats.null_count > 0) {
+		if (!is_map_leaf && column_info.required && stats.null_count && *stats.null_count > 0 &&
+		    !column_info.IsSinkCheckedListElement()) {
 			auto normalized_col_name = StringUtil::Join(column_names, ".");
 			throw ConstraintException("NOT NULL constraint failed: %s.%s", table_name, normalized_col_name);
 		}
