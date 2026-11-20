@@ -117,13 +117,11 @@ class SnapshotRemovalTests(unittest.TestCase):
         self.assertEqual(result["next-row-id"], 3)
         self.assertEqual(result["snapshots"][:-1], removed["snapshots"])
 
-    def test_removing_other_refs_is_unsupported_and_does_not_remove_main(self):
+    def test_removing_another_ref_does_not_remove_main(self):
         before = copy.deepcopy(self.catalog.tables[self.key])
-        with self.assertRaises(CatalogError) as error:
-            self.commit([{"action": "remove-snapshot-ref", "ref-name": "branch"}])
-        self.assertEqual(error.exception.code, 501)
-        self.assertIn("Only the main branch", str(error.exception))
-        self.assertEqual(self.catalog.tables[self.key], before)
+        result = self.commit([{"action": "remove-snapshot-ref", "ref-name": "branch"}])["metadata"]
+        self.assertEqual(result["refs"], before["metadata"]["refs"])
+        self.assertEqual(result["current-snapshot-id"], before["metadata"]["current-snapshot-id"])
 
     def test_later_invalid_update_does_not_publish_removal(self):
         before = copy.deepcopy(self.catalog.tables[self.key])
@@ -132,6 +130,31 @@ class SnapshotRemovalTests(unittest.TestCase):
         self.assertEqual(error.exception.code, 400)
         self.assertIn("Unknown snapshot reference", str(error.exception))
         self.assertEqual(self.catalog.tables[self.key], before)
+
+    def test_tags_and_branches_are_set_and_removed_without_moving_main(self):
+        tag = {"action": "set-snapshot-ref", "ref-name": "v1", "type": "tag", "snapshot-id": 10, "max-ref-age-ms": 5}
+        branch = {
+            "action": "set-snapshot-ref",
+            "ref-name": "audit",
+            "type": "branch",
+            "snapshot-id": 20,
+            "min-snapshots-to-keep": 2,
+        }
+        result = self.commit([tag, branch])["metadata"]
+        self.assertEqual(result["refs"]["v1"], {"type": "tag", "snapshot-id": 10, "max-ref-age-ms": 5})
+        self.assertEqual(result["refs"]["audit"], {"type": "branch", "snapshot-id": 20, "min-snapshots-to-keep": 2})
+        self.assertEqual(result["current-snapshot-id"], 30)
+        self.assertEqual([s["snapshot-id"] for s in result["snapshot-log"]], [10, 20, 30])
+        with self.assertRaises(CatalogError) as error:
+            self.commit([{"action": "set-snapshot-ref", "ref-name": "main", "type": "tag", "snapshot-id": 30}])
+        self.assertEqual(error.exception.code, 400)
+        removal = {"action": "remove-snapshot-ref", "ref-name": "v1"}
+        result = self.commit([removal, {"action": "remove-snapshot-ref", "ref-name": "absent"}])["metadata"]
+        self.assertEqual(sorted(result["refs"]), ["audit", "main"])
+        self.assertEqual(result["current-snapshot-id"], 30)
+        result = self.commit([{"action": "remove-snapshot-ref", "ref-name": "main"}])["metadata"]
+        self.assertEqual(sorted(result["refs"]), ["audit"])
+        self.assertIsNone(result.get("current-snapshot-id"))
 
     def test_malformed_snapshot_ids_do_not_publish(self):
         before = copy.deepcopy(self.catalog.tables[self.key])
@@ -143,6 +166,29 @@ class SnapshotRemovalTests(unittest.TestCase):
                 self.assertIn("snapshot-ids", str(error.exception))
                 self.assertEqual(self.catalog.tables[self.key], before)
 
+
+    def test_invalid_branches_and_tags_are_refused(self):
+        # Worded as Iceberg Java's errors, except the unknown snapshot one the mock already had
+        before = copy.deepcopy(self.catalog.tables[self.key])
+        cases = [
+            ({"ref-name": "dev", "type": "bogus", "snapshot-id": 10}, "Invalid snapshot ref type: bogus"),
+            ({"ref-name": "main", "type": "tag", "snapshot-id": 10}, "Cannot set main to a tag, it must be a branch"),
+            (
+                {"ref-name": "v1", "type": "tag", "snapshot-id": 10, "min-snapshots-to-keep": 1},
+                "Tags do not support setting minSnapshotsToKeep",
+            ),
+            (
+                {"ref-name": "v1", "type": "tag", "snapshot-id": 10, "max-snapshot-age-ms": 1},
+                "Tags do not support setting maxSnapshotAgeMs",
+            ),
+            ({"ref-name": "dev", "type": "branch", "snapshot-id": 999}, "Unknown snapshot reference"),
+        ]
+        for ref, message in cases:
+            with self.assertRaises(CatalogError) as error:
+                self.commit([{"action": "set-snapshot-ref", **ref}])
+            self.assertEqual(error.exception.code, 400)
+            self.assertIn(message, str(error.exception))
+        self.assertEqual(self.catalog.tables[self.key], before)
 
 if __name__ == "__main__":
     unittest.main()

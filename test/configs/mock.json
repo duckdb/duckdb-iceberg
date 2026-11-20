@@ -23,6 +23,7 @@
 		{"env_name": "METADATA_FILE_READ_SUPPORT", "env_value": "true"},
 		{"env_name": "METADATA_LOG_SUPPORT", "env_value": "true"},
 		{"env_name": "TIMETRAVEL_SUPPORT", "env_value": "true"},
+		{"env_name": "BRANCH_TAG_SUPPORT", "env_value": "true"},
 		{"env_name": "MULTI_TABLE_COMMIT_SUPPORT", "env_value": "true"},
 		{"env_name": "ATOMIC_COMMIT_CONFLICT_SUPPORT", "env_value": "true"},
 		{"env_name": "SCAN_PLANNING_MODE", "env_value": "client"}

@@ -82,8 +82,12 @@ void AssertCurrentSchemaIdRequirement::CreateRequirement(DatabaseInstance &db, C
 	req.assert_current_schema_id->current_schema_id = current_schema_id;
 }
 
-AssertRefSnapshotId::AssertRefSnapshotId(optional<int64_t> snapshot_id)
-    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_REF_SNAPSHOT_ID), snapshot_id(snapshot_id) {
+AssertRefSnapshotId::AssertRefSnapshotId(optional<int64_t> snapshot_id) : AssertRefSnapshotId("main", snapshot_id) {
+}
+
+AssertRefSnapshotId::AssertRefSnapshotId(string ref_p, optional<int64_t> snapshot_id)
+    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_REF_SNAPSHOT_ID), ref(std::move(ref_p)),
+      snapshot_id(snapshot_id) {
 }
 
 void AssertRefSnapshotId::CreateRequirement(DatabaseInstance &db, ClientContext &context,
@@ -92,7 +96,7 @@ void AssertRefSnapshotId::CreateRequirement(DatabaseInstance &db, ClientContext 
 	auto &req = commit_state.table_change.requirements.back();
 	req.assert_ref_snapshot_id = rest_api_objects::AssertRefSnapshotId();
 	req.assert_ref_snapshot_id->type = "assert-ref-snapshot-id";
-	req.assert_ref_snapshot_id->ref = "main";
+	req.assert_ref_snapshot_id->ref = ref;
 	req.assert_ref_snapshot_id->snapshot_id = snapshot_id;
 }
 
@@ -298,6 +302,11 @@ SetSnapshotRef::SetSnapshotRef(int64_t snapshot_id_p, string ref_name_p)
       ref_name(std::move(ref_name_p)) {
 }
 
+SetSnapshotRef::SetSnapshotRef(string ref_name_p, const rest_api_objects::SnapshotReference &reference_p)
+    : IcebergTableUpdate(IcebergTableUpdateType::SET_SNAPSHOT_REF), snapshot_id(reference_p.snapshot_id),
+      ref_name(std::move(ref_name_p)), reference(make_uniq<rest_api_objects::SnapshotReference>(reference_p.Copy())) {
+}
+
 void SetSnapshotRef::CreateUpdate(DatabaseInstance &db, ClientContext &context,
                                   IcebergCommitState &commit_state) const {
 	(void)db;
@@ -308,6 +317,10 @@ void SetSnapshotRef::CreateUpdate(DatabaseInstance &db, ClientContext &context,
 	req.set_snapshot_ref_update->base_update.action = "set-snapshot-ref";
 	req.set_snapshot_ref_update->ref_name = ref_name;
 	auto &snapshot_reference = req.set_snapshot_ref_update->snapshot_reference;
+	if (reference) {
+		snapshot_reference = reference->Copy();
+		return;
+	}
 	snapshot_reference.type = "branch";
 	auto &refs = commit_state.GetTableMetadata().refs;
 	if (refs) {

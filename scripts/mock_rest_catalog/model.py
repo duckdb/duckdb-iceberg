@@ -456,10 +456,19 @@ class Catalog:
             identifier = update["snapshot-id"]
             if not any(s["snapshot-id"] == identifier for s in metadata["snapshots"]):
                 invalid("Unknown snapshot reference")
-            if update["ref-name"] != "main" or update["type"] != "branch":
-                unsupported("Only the main branch is implemented")
-            metadata["refs"]["main"] = {k: v for k, v in update.items() if k not in ("action", "ref-name")}
-            if metadata.get("current-snapshot-id") != identifier:
+            name = update["ref-name"]
+            ref_type = update["type"]
+            # Errors as Iceberg Java's SnapshotRefType, SnapshotRef.Builder and TableMetadata.Builder.setRef word them
+            if ref_type not in ("branch", "tag"):
+                invalid(f"Invalid snapshot ref type: {ref_type}")
+            if ref_type == "tag" and "min-snapshots-to-keep" in update:
+                invalid("Tags do not support setting minSnapshotsToKeep")
+            if ref_type == "tag" and "max-snapshot-age-ms" in update:
+                invalid("Tags do not support setting maxSnapshotAgeMs")
+            if name == "main" and ref_type != "branch":
+                invalid("Cannot set main to a tag, it must be a branch")
+            metadata["refs"][name] = {k: v for k, v in update.items() if k not in ("action", "ref-name")}
+            if name == "main" and metadata.get("current-snapshot-id") != identifier:
                 # New snapshots are addressable at their own timestamps. Moving main
                 # back to an existing snapshot is a new history event, not a rewrite
                 # of the snapshot's creation time.
@@ -469,9 +478,10 @@ class Catalog:
                 metadata["snapshot-log"].append({"snapshot-id": identifier, "timestamp-ms": timestamp})
                 metadata["current-snapshot-id"] = identifier
         elif action == "remove-snapshot-ref":
-            if update["ref-name"] != "main":
-                unsupported("Only the main branch is implemented")
-            metadata["refs"].pop("main", None)
-            metadata.pop("current-snapshot-id", None)
+            # Like Iceberg's metadata builder, removing an absent ref is a no-op.
+            name = update["ref-name"]
+            metadata["refs"].pop(name, None)
+            if name == "main":
+                metadata.pop("current-snapshot-id", None)
         else:
             invalid(f"Unknown update action: {action}")

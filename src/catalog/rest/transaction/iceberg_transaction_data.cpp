@@ -148,6 +148,9 @@ bool IcebergTransactionData::ContainsDelete() const {
 
 void IcebergTransactionData::VerifySnapshotExpirationAllowed() const {
 	//! These updates are not all materialized in the metadata used by the expiration planner.
+	if (!changed_refs.empty()) {
+		throw TransactionException("Snapshot expiration cannot follow branch or tag changes in the same transaction");
+	}
 	if (HasTableUpdate(updates, IcebergTableUpdateType::ADD_SNAPSHOT)) {
 		throw TransactionException("Snapshot expiration cannot follow data changes in the same transaction");
 	}
@@ -537,6 +540,56 @@ void IcebergTransactionData::TableRollbackToSnapshot(int64_t snapshot_id) {
 
 	// Iceberg intentionally does not roll current-schema-id back with the snapshot;
 	// schema evolution stays forward-only. See https://github.com/apache/iceberg/issues/5591
+}
+
+void IcebergTransactionData::VerifyCanChangeRefs() const {
+	VerifyNoSnapshotExpiration(updates, "Branch and tag changes");
+	//! Refs are read from the transaction's metadata, which doesn't include these earlier changes to main
+	if (!alters.empty() || rolls_back || replaces_table) {
+		throw InvalidInputException(
+		    "Cannot change branches or tags of table \"%s\": it was already changed in this transaction",
+		    table_info.name);
+	}
+}
+
+void IcebergTransactionData::RequireRefUnchanged(const IcebergTableMetadata &metadata, const string &ref_name) {
+	if (!changed_refs.insert(ref_name).second) {
+		return;
+	}
+	optional<int64_t> snapshot_id;
+	if (auto ref = metadata.FindRef(ref_name)) {
+		snapshot_id = ref->snapshot_id;
+	}
+	requirements.push_back(make_uniq<AssertRefSnapshotId>(ref_name, snapshot_id));
+}
+
+void IcebergTransactionData::TableCreateRef(IcebergTableMetadata &metadata, const string &ref_name,
+                                            const rest_api_objects::SnapshotReference &reference) {
+	VerifyCanChangeRefs();
+	RequireRefUnchanged(metadata, ref_name);
+	updates.push_back(make_uniq<SetSnapshotRef>(ref_name, reference));
+
+	if (!metadata.refs) {
+		//! Metadata without refs has an implicit main at the current snapshot
+		metadata.refs.emplace();
+		if (metadata.current_snapshot_id) {
+			rest_api_objects::SnapshotReference main_ref;
+			main_ref.type = "branch";
+			main_ref.snapshot_id = *metadata.current_snapshot_id;
+			metadata.refs->additional_properties.emplace("main", std::move(main_ref));
+		}
+	}
+	metadata.refs->additional_properties.erase(ref_name);
+	metadata.refs->additional_properties.emplace(ref_name, reference.Copy());
+}
+
+void IcebergTransactionData::TableDropRef(IcebergTableMetadata &metadata, const string &ref_name) {
+	VerifyCanChangeRefs();
+	RequireRefUnchanged(metadata, ref_name);
+	updates.push_back(make_uniq<RemoveSnapshotRef>(ref_name));
+	if (metadata.refs) {
+		metadata.refs->additional_properties.erase(ref_name);
+	}
 }
 
 } // namespace duckdb

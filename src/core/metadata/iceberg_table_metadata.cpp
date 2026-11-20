@@ -131,6 +131,17 @@ optional_ptr<const IcebergSortOrder> IcebergTableMetadata::FindSortOrderById(int
 	return it->second;
 }
 
+optional_ptr<const rest_api_objects::SnapshotReference> IcebergTableMetadata::FindRef(const string &ref_name) const {
+	if (!refs) {
+		return nullptr;
+	}
+	auto entry = refs->additional_properties.find(ref_name);
+	if (entry == refs->additional_properties.end()) {
+		return nullptr;
+	}
+	return &entry->second;
+}
+
 optional_ptr<const IcebergStatisticsFile> IcebergTableMetadata::FindStatisticsFile(int64_t snapshot_id) const {
 	for (auto &file : statistics) {
 		if (file.snapshot_id == snapshot_id) {
