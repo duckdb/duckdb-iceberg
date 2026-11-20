@@ -140,6 +140,9 @@ private:
 	void EvictCachedTables();
 	//! Commit outcome unknown (5xx / no HTTP status); CleanupFiles() then keeps the written files.
 	bool commit_state_unknown = false;
+	//! The table changes of the commit were accepted. A later request of the commit can still fail, and the files
+	//! and tables of the table changes have to stay then.
+	bool table_commits_landed = false;
 
 	struct CreatedTable {
 		string table_key;
