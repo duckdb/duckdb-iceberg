@@ -507,11 +507,19 @@ IcebergTable &IcebergTransaction::RenameTable(IcebergTable &table, const string 
 	return state->GetInfo();
 }
 
-void ApplyTableUpdate(IcebergTable &table_info, IcebergTransaction &iceberg_transaction,
-                      const std::function<void(IcebergTable &)> &callback) {
+void ApplyTableUpdate(unique_lock<mutex> &table_update_guard, IcebergTable &table_info,
+                      IcebergTransaction &iceberg_transaction, const std::function<void(IcebergTable &)> &callback) {
+	D_ASSERT(table_update_guard.owns_lock() && table_update_guard.mutex() == &iceberg_transaction.table_update_lock);
 	auto &alter = iceberg_transaction.GetOrCreateAlter();
 	auto &updated_table = alter.GetOrInitializeTable(table_info);
 	callback(updated_table);
+}
+
+void ApplyTableUpdate(IcebergTable &table_info, IcebergTransaction &iceberg_transaction,
+                      const std::function<void(IcebergTable &)> &callback) {
+	//! Several operators or table functions of one statement can change tables of this transaction concurrently
+	unique_lock<mutex> guard(iceberg_transaction.table_update_lock);
+	ApplyTableUpdate(guard, table_info, iceberg_transaction, callback);
 }
 
 } // namespace duckdb

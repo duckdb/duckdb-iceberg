@@ -563,8 +563,8 @@ static void UpdateNameMapping(ClientContext &context, IcebergTable &updated_tabl
 	updated_table.GetMetadataMutable().mappings = std::move(updated_mappings);
 }
 
-static void IntroduceNewSchema(ClientContext &context, IcebergTable &updated_table,
-                               IcebergTransactionData &transaction_data, shared_ptr<IcebergTableSchema> new_schema) {
+void IntroduceNewSchema(ClientContext &context, IcebergTable &updated_table, IcebergTransactionData &transaction_data,
+                        shared_ptr<IcebergTableSchema> new_schema, bool update_schema_properties) {
 	auto &old_schema = updated_table.GetMetadataMutable().GetLatestSchema();
 	auto &schemas = updated_table.GetMetadataMutable().GetSchemasMutable();
 	auto new_schema_id = static_cast<int32_t>(updated_table.GetMaxSchemaId() + 1);
@@ -578,9 +578,11 @@ static void IntroduceNewSchema(ClientContext &context, IcebergTable &updated_tab
 	}
 	updated_table.GetMetadataMutable().SetCurrentSchemaId(result_schema.schema_id);
 
-	//! Keep schema-dependent properties together for every schema change, including historical schema reuse.
-	UpdatePerColumnProperties(updated_table, transaction_data, old_schema, result_schema);
-	UpdateNameMapping(context, updated_table, transaction_data, old_schema, result_schema);
+	//! ALTER maintains schema-dependent properties, replacement preserves them unless explicitly supplied.
+	if (update_schema_properties) {
+		UpdatePerColumnProperties(updated_table, transaction_data, old_schema, result_schema);
+		UpdateNameMapping(context, updated_table, transaction_data, old_schema, result_schema);
+	}
 }
 
 //! DuckDB can't read or write geography values, so a change to a geography field, or to a column that holds one, is

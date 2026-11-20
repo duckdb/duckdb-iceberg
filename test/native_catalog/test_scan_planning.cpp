@@ -1,6 +1,7 @@
 #define CATCH_CONFIG_RUNNER
 #include "catch.hpp"
 #include "duckdb.hpp"
+#include "duckdb/common/bswap.hpp"
 #include "duckdb/common/local_file_system.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/common/types/uuid.hpp"
@@ -8,8 +9,10 @@
 #include "duckdb/main/database_manager.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/filter/table_filter_functions.hpp"
+#include "duckdb/storage/table/row_group_order_options.hpp"
 #include "duckdb/transaction/meta_transaction.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "core/deletes/iceberg_deletion_vector.hpp"
 #include "core/expression/iceberg_value.hpp"
 #include "function/scan_planning/iceberg_row_filter.hpp"
 #include "planning/deletes/iceberg_delete_file_scanner.hpp"
@@ -17,6 +20,8 @@
 #include "planning/metadata_io/avro/iceberg_manifest_cache.hpp"
 #include "planning/metadata_io/avro/avro_scan.hpp"
 #include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
+#include "planning/metadata_io/manifest_list/bound_iceberg_manifest_list_entry.hpp"
+#include "planning/scan_order/iceberg_scan_order.hpp"
 
 #include <future>
 #include <condition_variable>
@@ -151,6 +156,127 @@ struct PlanningTest {
 };
 
 } // namespace
+
+TEST_CASE("Iceberg scan order requires known zero NaN counts to prune floating-point files", "[iceberg_planning]") {
+	DuckDB database(nullptr);
+	Connection connection(database);
+	for (const auto &type : {LogicalType::FLOAT, LogicalType::DOUBLE}) {
+		CAPTURE(type);
+		IcebergTableSchema schema;
+		auto column = make_uniq<IcebergColumnDefinition>();
+		column->id = 17;
+		column->name = "a";
+		column->type = type;
+		column->required = false;
+		schema.columns.push_back(std::move(column));
+
+		IcebergManifestListEntry manifest(
+		    IcebergManifestFile("manifest.avro", 0, 1, IcebergManifest(0, IcebergManifestContentType::DATA, 1)));
+		BoundIcebergManifestListEntry binding(0, manifest, IcebergRowLineageMode::NONE);
+
+		// Missing NaN counts are distinct from an explicit zero. Bounds omit NaNs in either case.
+		for (int64_t nan_count : {-1, 0, 1}) {
+			CAPTURE(nan_count);
+			vector<IcebergManifestEntry> files(3);
+			vector<BoundIcebergManifestEntry> entries;
+			for (idx_t i = 0; i < files.size(); i++) {
+				auto &file = files[i].data_file;
+				files[i].status = IcebergManifestEntryStatusType::ADDED;
+				file.content = IcebergManifestEntryContentType::DATA;
+				file.record_count = 2;
+				auto value = Value::DOUBLE(static_cast<double>(i + 1)).DefaultCastAs(type);
+				auto bound = IcebergValue::SerializeValue(value, type, SerializeBound::LOWER_BOUND);
+				REQUIRE_FALSE(bound.HasError());
+				REQUIRE(bound.HasValue());
+				file.lower_bounds[17] = bound.GetValue();
+				file.upper_bounds[17] = bound.GetValue();
+				file.null_value_counts[17] = 0;
+				if (nan_count >= 0) {
+					file.nan_value_counts[17] = nan_count;
+				}
+				entries.push_back(binding.BindEntry(files[i]));
+			}
+
+			IcebergScanOrder order;
+			order.Set(make_uniq<RowGroupOrderOptions>(StorageIndex(0), OrderByStatistics::MAX, OrderType::DESCENDING,
+			                                          OrderByNullType::NULLS_LAST, OrderByColumnType::NUMERIC, 1));
+			order.Apply(*connection.context, schema, false, entries);
+			if (nan_count == 0) {
+				REQUIRE(entries.size() == 1);
+				REQUIRE(&entries[0].entry == &files[2]);
+			} else {
+				// Every file can contain a NaN tied for first place, with an unknown secondary sort key.
+				REQUIRE(entries.size() == files.size());
+				for (auto &file : files) {
+					bool retained = false;
+					for (auto &entry : entries) {
+						retained |= &entry.entry == &file;
+					}
+					REQUIRE(retained);
+				}
+			}
+		}
+	}
+}
+
+TEST_CASE("Iceberg scan order keeps a file with an unknown NaN count and skips distant finite files",
+          "[iceberg_planning]") {
+	DuckDB database(nullptr);
+	Connection connection(database);
+	for (const auto &type : {LogicalType::FLOAT, LogicalType::DOUBLE}) {
+		CAPTURE(type);
+		IcebergTableSchema schema;
+		auto column = make_uniq<IcebergColumnDefinition>();
+		column->id = 17;
+		column->name = "a";
+		column->type = type;
+		column->required = false;
+		schema.columns.push_back(std::move(column));
+
+		IcebergManifestListEntry manifest(
+		    IcebergManifestFile("manifest.avro", 0, 1, IcebergManifest(0, IcebergManifestContentType::DATA, 1)));
+		BoundIcebergManifestListEntry binding(0, manifest, IcebergRowLineageMode::NONE);
+
+		// Bounds [1, 1], [2, 2], [3, 3] and [4, 4]. Only file 1 has no NaN count, so it can hold NaN.
+		vector<IcebergManifestEntry> files(4);
+		auto apply = [&](OrderByStatistics order_by, OrderType order_type, idx_t limit) {
+			vector<BoundIcebergManifestEntry> entries;
+			for (idx_t i = 0; i < files.size(); i++) {
+				auto &file = files[i].data_file;
+				files[i].status = IcebergManifestEntryStatusType::ADDED;
+				file.content = IcebergManifestEntryContentType::DATA;
+				file.record_count = 2;
+				auto value = Value::DOUBLE(static_cast<double>(i + 1)).DefaultCastAs(type);
+				auto bound = IcebergValue::SerializeValue(value, type, SerializeBound::LOWER_BOUND);
+				REQUIRE_FALSE(bound.HasError());
+				REQUIRE(bound.HasValue());
+				file.lower_bounds[17] = bound.GetValue();
+				file.upper_bounds[17] = bound.GetValue();
+				file.null_value_counts[17] = 0;
+				if (i != 1) {
+					file.nan_value_counts[17] = 0;
+				}
+				entries.push_back(binding.BindEntry(files[i]));
+			}
+			IcebergScanOrder order;
+			order.Set(make_uniq<RowGroupOrderOptions>(StorageIndex(0), order_by, order_type,
+			                                          OrderByNullType::NULLS_LAST, OrderByColumnType::NUMERIC, limit));
+			order.Apply(*connection.context, schema, false, entries);
+			vector<bool> retained(files.size(), false);
+			for (auto &entry : entries) {
+				for (idx_t i = 0; i < files.size(); i++) {
+					retained[i] = retained[i] || &entry.entry == &files[i];
+				}
+			}
+			return retained;
+		};
+
+		// DESC: the file that can hold NaN comes first, the largest finite file follows, the other files are skipped
+		REQUIRE(apply(OrderByStatistics::MAX, OrderType::DESCENDING, 1) == vector<bool> {false, true, false, true});
+		// ASC: the rows of the file that can hold NaN are not counted before file 2, file 3 is skipped
+		REQUIRE(apply(OrderByStatistics::MIN, OrderType::ASCENDING, 3) == vector<bool> {true, true, true, false});
+	}
+}
 
 TEST_CASE("Iceberg partition filters borrow originals and own extracted paths", "[iceberg_planning]") {
 	DuckDB database(nullptr);
@@ -484,6 +610,41 @@ TEST_CASE("Iceberg Puffin validation requires an explicit reference even with eq
 	IcebergDeleteScanEntry entry {IcebergDeleteFile(file), make_shared_ptr<IcebergDeleteFileLoadState>()};
 	REQUIRE_THROWS_WITH(IcebergDeleteFileScanner::ScanFiles(execution, {entry}),
 	                    Catch::Matchers::Contains("Puffin delete file is missing 'referenced_data_file'"));
+}
+
+TEST_CASE("Iceberg deletion vector blobs that are cut short or padded are refused", "[iceberg_planning]") {
+	unordered_map<int32_t, roaring::Roaring> bitmaps;
+	bitmaps.emplace(0, roaring::Roaring {1, 5, 9});
+	bitmaps.emplace(1, roaring::Roaring {7});
+	auto blob = IcebergDeletionVectorData::ToBlob(bitmaps);
+	IcebergFileIdentity file("data.parquet");
+	REQUIRE(IcebergDeletionVectorData::FromBlob(file, blob.data(), blob.size()));
+
+	//! Refused with a query error, not one that invalidates the database
+	auto refused = [&](vector<data_t> cut, bool fix_length) {
+		if (fix_length && cut.size() >= 2 * sizeof(uint32_t)) {
+			Store<uint32_t>(BSwap(static_cast<uint32_t>(cut.size() - 2 * sizeof(uint32_t))), cut.data());
+		}
+		try {
+			IcebergDeletionVectorData::FromBlob(file, cut.data(), cut.size());
+		} catch (InvalidInputException &) {
+			return true;
+		}
+		return false;
+	};
+	for (idx_t length = 0; length < blob.size(); length++) {
+		INFO("cut at " << length << " of " << blob.size() << " bytes");
+		vector<data_t> cut(blob.begin(), blob.begin() + NumericCast<int64_t>(length));
+		CHECK(refused(cut, false));
+		//! With a matching length field the parser reaches the bitmaps
+		CHECK(refused(cut, true));
+	}
+
+	//! Bytes between the bitmaps and the checksum
+	blob.insert(blob.end() - sizeof(uint32_t), 4, data_t(0));
+	Store<uint32_t>(BSwap(static_cast<uint32_t>(blob.size() - 2 * sizeof(uint32_t))), blob.data());
+	REQUIRE_THROWS_WITH(IcebergDeletionVectorData::FromBlob(file, blob.data(), blob.size()),
+	                    Catch::Matchers::Contains("4 bytes after its bitmaps"));
 }
 
 TEST_CASE("Iceberg delete candidate buckets preserve paths partitions and conservative fallbacks",
