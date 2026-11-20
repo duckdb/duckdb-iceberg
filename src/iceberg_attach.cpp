@@ -77,28 +77,11 @@ void IcebergAttachInput::VerifyDefaultSchemaPolicy() const {
 	}
 }
 
-static string GetLowercaseOption(const unordered_map<string, Value> &options, const string &name) {
-	auto entry = options.find(name);
-	if (entry == options.end()) {
-		return string();
-	}
-	return StringUtil::Lower(entry->second.ToString());
-}
-
 unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,
                                           AttachedDatabase &db, const string &name, AttachInfo &info,
                                           AttachOptions &options) {
 	IcebergAttachInput input(context, db, name, info, options);
 	input.client_options = NormalizeIcebergAttachOptions(info.options);
-	input.catalog_type = GetLowercaseOption(input.client_options, "catalog_type");
-	if (input.catalog_type.empty()) {
-		input.catalog_type = "rest";
-	}
-
-	if (input.catalog_type != "rest") {
-		throw InvalidConfigurationException("Unrecognized 'catalog_type' (%s), accepted options are: rest",
-		                                    input.catalog_type);
-	}
 	auto backend = make_uniq<IcebergRestBackend>(Identifier(input.name));
 	backend->Attach(input);
 	auto catalog =

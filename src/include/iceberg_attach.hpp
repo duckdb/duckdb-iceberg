@@ -63,8 +63,6 @@ public:
 	AttachOptions &options;
 	//! The ATTACH options, normalized: lowercase names, aliases resolved
 	unordered_map<string, Value> client_options;
-	//! CATALOG_TYPE, lowercase ('rest' if not given)
-	string catalog_type;
 	//! The generic options, which the backend fills in (it may take some from its catalog's configuration)
 	IcebergAttachOptions attach_options;
 	optional<Identifier> default_schema;
@@ -79,7 +77,7 @@ void MergeIcebergOptions(unordered_map<string, Value> &target, const unordered_m
 bool IsIcebergAuthorizationOption(const string &name);
 void FilterIcebergAuthorizationOptions(unordered_map<string, Value> &options, IcebergAuthorizationType type);
 
-//! ATTACH ... (TYPE ICEBERG): creates the backend of the catalog type (CATALOG_TYPE, only 'rest'), and the
+//! ATTACH ... (TYPE ICEBERG): creates the REST backend, and the
 //! IcebergCatalog that owns it
 struct IcebergAttach {
 	static unique_ptr<Catalog> Attach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,

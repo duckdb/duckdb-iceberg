@@ -36,7 +36,7 @@ void IcebergRestBackend::ParseOptions(IcebergAttachInput &input, IcebergRestOpti
 			continue;
 		}
 
-		if (lower_name == "endpoint_type" || lower_name == "catalog_type") {
+		if (lower_name == "endpoint_type") {
 			continue;
 		} else if (lower_name == "authorization_type") {
 			authorization_type_string = StringUtil::Lower(argument.ToString());
