@@ -564,8 +564,10 @@ void IcebergTransaction::Commit() {
 				    DoTableUpdates(update, *temp_con_context);
 			    } else if constexpr (std::is_same_v<T, IcebergTransactionDeleteUpdate>) {
 				    DoTableDeletes(update, *temp_con_context);
+				    table_commits_landed = true;
 			    } else if constexpr (std::is_same_v<T, IcebergTransactionRenameUpdate>) {
 				    DoTableRename(update, *temp_con_context);
+				    table_commits_landed = true;
 			    }
 		    },
 		    transaction_update);
@@ -579,7 +581,10 @@ void IcebergTransaction::Commit() {
 		DropCreatedTables();
 		temp_con.Rollback();
 		EvictCachedTables();
-		error.Throw("Failed to commit Iceberg transaction: ");
+		//! The table changes are durable then: running the whole transaction again would apply them twice
+		error.Throw(table_commits_landed ? "Iceberg transaction not rolled back: its table changes are committed, "
+		                                   "a later request failed: "
+		                                 : "Failed to commit Iceberg transaction: ");
 	}
 
 	temp_con.Rollback();
@@ -594,6 +599,7 @@ void IcebergTransaction::DoTableUpdates(IcebergTransactionAlterUpdate &alter_upd
 	} else {
 		DoSingleTableCommitUpdates(alter_update, context);
 	}
+	table_commits_landed = true;
 
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	if (ic_catalog.attach_options.max_table_staleness_micros.IsValid()) {
@@ -918,8 +924,8 @@ void IcebergTransaction::CleanupFiles() {
 		// on the aws side will result in an error.
 		return;
 	}
-	if (commit_state_unknown) {
-		// Commit may have landed (CommitStateUnknownException); keep the files.
+	if (commit_state_unknown || table_commits_landed) {
+		// The commit may have landed (CommitStateUnknownException), or its table changes have; keep the files.
 		return;
 	}
 	ScopedTransaction temp_con(db);
@@ -1004,8 +1010,8 @@ void IcebergTransaction::DropCreatedTables() {
 	if (created_tables.empty()) {
 		return;
 	}
-	if (commit_state_unknown) {
-		// Commit may have landed (CommitStateUnknownException); keep the tables.
+	if (commit_state_unknown || table_commits_landed) {
+		// The commit may have landed (CommitStateUnknownException), or its table changes have; keep the tables.
 		return;
 	}
 	ScopedTransaction temp_con(db);

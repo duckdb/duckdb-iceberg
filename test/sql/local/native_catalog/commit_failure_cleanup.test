@@ -1,0 +1,93 @@
+# name: test/sql/local/native_catalog/commit_failure_cleanup.test
+# description: A failed commit removes what it wrote, unless the catalog had accepted its table changes
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+CREATE TABLE my_datalake.default.cleanup_check (a INTEGER);
+
+statement ok
+INSERT INTO my_datalake.default.cleanup_check VALUES (1);
+
+statement ok
+SET VARIABLE table_location = (
+	SELECT json_extract_string(body, '$.metadata.location')
+	FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/cleanup_check', NULL)
+);
+
+statement ok
+SET VARIABLE data_files = (SELECT count(*) FROM glob(getvariable('table_location') || '/**/*.parquet'));
+
+# The catalog rejects the table changes: the data file of the insert is removed
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	json_object('method', 'POST', 'path', '/v1/transactions/commit', 'status', 400,
+		'body', json_object('error',
+			json_object('message', 'scripted', 'type', 'ScriptedException', 'code', 400)))::VARCHAR);
+----
+204
+
+statement error
+INSERT INTO my_datalake.default.cleanup_check VALUES (2);
+----
+Failed to commit Iceberg transaction
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+query I
+SELECT count(*) - getvariable('data_files') FROM glob(getvariable('table_location') || '/**/*.parquet');
+----
+0
+
+# The catalog accepts the table changes and rejects the schema drop after them: the data file stays, and so
+# does a table that the transaction created without stage-create
+statement ok
+CREATE SCHEMA my_datalake.cleanup_check_ns;
+
+statement ok
+CREATE TABLE my_datalake.cleanup_check_ns.other (i INTEGER);
+
+statement ok
+ATTACH '' AS eager_catalog (TYPE ICEBERG, URI 'http://iceberg-mock.invalid', AUTHORIZATION_TYPE 'none',
+	ACCESS_DELEGATION_MODE 'none', STAGE_CREATE_TABLES false, SKIP_CREATE_TABLE_METADATA_UPDATES true);
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE TABLE eager_catalog.default.cleanup_check_created (a INTEGER);
+
+statement ok
+INSERT INTO eager_catalog.default.cleanup_check VALUES (3);
+
+statement ok
+DROP SCHEMA eager_catalog.cleanup_check_ns;
+
+statement error
+COMMIT;
+----
+<REGEX>:.*its table changes are committed, a later request failed.*Namespace is not empty.*
+
+query I
+SELECT count(*) - getvariable('data_files') FROM glob(getvariable('table_location') || '/**/*.parquet');
+----
+1
+
+query I
+SELECT a FROM my_datalake.default.cleanup_check ORDER BY a;
+----
+1
+3
+
+query I
+SELECT status FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/cleanup_check_created', NULL);
+----
+200
