@@ -43,7 +43,8 @@
 		{
 			"reason": "Iceberg V1 tables are not supported in the mock catalog",
 			"paths": [
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/test_v1_unsupported_writes.test"
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/test_v1_unsupported_writes.test",
+				"test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_manifests_v1.test"
 			]
 		},
 		{

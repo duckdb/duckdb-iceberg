@@ -1,0 +1,207 @@
+# name: test/sql/local/native_catalog/rewrite_manifests_tombstones.test
+# description: iceberg_rewrite_manifests drops tombstones when legacy writers leave DELETED entries in multiple data manifests, and counts a tombstone-only manifest as replaced
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.rewrite_manifests_tombstones;
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_manifests_tombstones (id INTEGER, category VARCHAR)
+PARTITIONED BY (category)
+WITH ('format-version' = 2, 'commit.manifest-merge.enabled' = false);
+
+loop i 0 2
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_manifests_tombstones VALUES ({i} * 2 + 1, 'a'), ({i} * 2 + 2, 'b');
+
+endloop
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE seed_list = (
+	SELECT manifest_list FROM iceberg_snapshots(my_datalake.default.rewrite_manifests_tombstones)
+	WHERE sequence_number = 2
+);
+
+statement ok
+CREATE TEMP TABLE seed_manifests AS SELECT * FROM read_avro(getvariable('seed_list'));
+
+statement ok
+SET VARIABLE seed_paths = (SELECT list(manifest_path ORDER BY manifest_path) FROM seed_manifests);
+
+statement ok
+CREATE TEMP TABLE seed_entries AS
+SELECT m.manifest_path,
+       e.status,
+       coalesce(e.snapshot_id, m.added_snapshot_id) AS snapshot_id,
+       coalesce(e.sequence_number, m.sequence_number) AS sequence_number,
+       coalesce(e.file_sequence_number, m.sequence_number) AS file_sequence_number,
+       e.data_file
+FROM read_avro(getvariable('seed_paths'), filename = true) e
+JOIN seed_manifests m ON e.filename = m.manifest_path;
+
+# Model two Spark-style data manifests: each still lists one removed file as DELETED.
+foreach idx 0 1
+
+statement ok
+COPY (
+	SELECT status::INTEGER AS status, snapshot_id, sequence_number, file_sequence_number,
+	       {content: data_file.content,
+	        file_path: data_file.file_path || CASE WHEN entry_kind = 'tombstone' THEN '.removed' ELSE '' END,
+	        file_format: data_file.file_format, partition: data_file.partition,
+	        record_count: data_file.record_count, file_size_in_bytes: data_file.file_size_in_bytes} AS data_file
+	FROM (
+		SELECT 1 AS status, snapshot_id, sequence_number, file_sequence_number, data_file, 'live' AS entry_kind
+		FROM seed_entries
+		WHERE manifest_path = list_element(getvariable('seed_paths'), {idx} + 1)
+		UNION ALL
+		SELECT 2 AS status, snapshot_id, sequence_number, file_sequence_number, data_file, 'tombstone' AS entry_kind
+		FROM seed_entries
+		WHERE manifest_path = list_element(getvariable('seed_paths'), {idx} + 1)
+		QUALIFY row_number() OVER (ORDER BY data_file.file_path) = 1
+	) u
+	ORDER BY status, data_file.file_path
+) TO '{TEST_DIR}/rewrite_manifests_tombstone_{idx}.avro' (
+	FORMAT AVRO,
+	METADATA {'schema-id': '0', 'partition-spec-id': '0', 'format-version': '2', 'content': 'data'},
+	FIELD_IDS {
+		status: 0, snapshot_id: 1, sequence_number: 3, file_sequence_number: 4,
+		data_file: {__duckdb_field_id: 2, content: 134, file_path: 100, file_format: 101,
+		            partition: {__duckdb_field_id: 102, category: 1000}, record_count: 103, file_size_in_bytes: 104}
+	}
+);
+
+endloop
+
+# A third data manifest, like one Spark leaves behind, holds only a tombstone.
+statement ok
+COPY (
+	SELECT 2 AS status, snapshot_id, sequence_number, file_sequence_number,
+	       {content: data_file.content, file_path: data_file.file_path || '.removed_only',
+	        file_format: data_file.file_format, partition: data_file.partition,
+	        record_count: data_file.record_count, file_size_in_bytes: data_file.file_size_in_bytes} AS data_file
+	FROM seed_entries
+	WHERE manifest_path = list_element(getvariable('seed_paths'), 1)
+	QUALIFY row_number() OVER (ORDER BY data_file.file_path) = 1
+) TO '{TEST_DIR}/rewrite_manifests_tombstone_2.avro' (
+	FORMAT AVRO,
+	METADATA {'schema-id': '0', 'partition-spec-id': '0', 'format-version': '2', 'content': 'data'},
+	FIELD_IDS {
+		status: 0, snapshot_id: 1, sequence_number: 3, file_sequence_number: 4,
+		data_file: {__duckdb_field_id: 2, content: 134, file_path: 100, file_format: 101,
+		            partition: {__duckdb_field_id: 102, category: 1000}, record_count: 103, file_size_in_bytes: 104}
+	}
+);
+
+statement ok
+COPY (
+	SELECT '{TEST_DIR}/rewrite_manifests_tombstone_' || idx::VARCHAR || '.avro' AS manifest_path,
+	       1000::BIGINT AS manifest_length, 0::INTEGER AS partition_spec_id,
+	       0::INTEGER AS content, (idx + 3)::BIGINT AS sequence_number,
+	       2::BIGINT AS min_sequence_number, (idx + 3)::BIGINT AS added_snapshot_id,
+	       (CASE WHEN idx < 2 THEN 2 ELSE 0 END)::INTEGER AS added_files_count, 0::INTEGER AS existing_files_count,
+	       1::INTEGER AS deleted_files_count,
+	       (CASE WHEN idx < 2 THEN 2 ELSE 0 END)::BIGINT AS added_rows_count, 0::BIGINT AS existing_rows_count,
+	       1::BIGINT AS deleted_rows_count
+	FROM range(3) t(idx)
+) TO '{TEST_DIR}/rewrite_manifests_tombstone_list.avro' (
+	FORMAT AVRO,
+	FIELD_IDS {
+		manifest_path: 500, manifest_length: 501, partition_spec_id: 502,
+		content: 517, sequence_number: 515, min_sequence_number: 516, added_snapshot_id: 503,
+		added_files_count: 504, existing_files_count: 505, deleted_files_count: 506,
+		added_rows_count: 512, existing_rows_count: 513, deleted_rows_count: 514
+	}
+);
+
+statement ok
+COMMIT;
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/rewrite_manifests_tombstones',
+	json_object('requirements', json_array(), 'updates', json_array(
+		json_object('action', 'add-snapshot', 'snapshot', json_object(
+			'snapshot-id', 3, 'sequence-number', 3, 'schema-id', 0,
+			'timestamp-ms', epoch_ms(current_timestamp), 'manifest-list', '{TEST_DIR}/rewrite_manifests_tombstone_list.avro',
+			'summary', json_object('operation', 'overwrite', 'total-data-files', '4', 'total-records', '4'))),
+		json_object('action', 'set-snapshot-ref', 'ref-name', 'main', 'type', 'branch', 'snapshot-id', 3))));
+----
+200
+
+# Reload table metadata from the catalog after the injected snapshot.
+query I
+SELECT count(*) FROM my_datalake.default.rewrite_manifests_tombstones;
+----
+4
+
+query I
+SELECT count(*) FROM iceberg_manifests(my_datalake.default.rewrite_manifests_tombstones) WHERE content = 0;
+----
+3
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.rewrite_manifests_tombstones) WHERE status = 'DELETED';
+----
+3
+
+query II
+SELECT id, category FROM my_datalake.default.rewrite_manifests_tombstones ORDER BY id;
+----
+1	a
+2	b
+3	a
+4	b
+
+query II
+CALL iceberg_rewrite_manifests('my_datalake.default.rewrite_manifests_tombstones');
+----
+3	1
+
+# The snapshot summary agrees with the returned count, including the tombstone-only manifest.
+query IIII
+SELECT
+    json_extract_string(snap, '$.summary."manifests-created"'),
+    json_extract_string(snap, '$.summary."manifests-replaced"'),
+    json_extract_string(snap, '$.summary."manifests-kept"'),
+    json_extract_string(snap, '$.summary."entries-processed"')
+FROM (
+    SELECT unnest(json_extract(metadata::JSON, '$.snapshots[*]')) AS snap
+    FROM iceberg_load_table_response(my_datalake.default.rewrite_manifests_tombstones)
+)
+ORDER BY json_extract_string(snap, '$."sequence-number"')::BIGINT DESC
+LIMIT 1;
+----
+1	3	0	4
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.rewrite_manifests_tombstones) WHERE status = 'DELETED';
+----
+0
+
+query III
+SELECT count(*) FILTER (WHERE content = 0),
+       sum(added_data_files_count) + sum(existing_data_files_count),
+       sum(deleted_data_files_count)
+FROM iceberg_manifests(my_datalake.default.rewrite_manifests_tombstones);
+----
+1	4	0
+
+query II
+SELECT id, category FROM my_datalake.default.rewrite_manifests_tombstones ORDER BY id;
+----
+1	a
+2	b
+3	a
+4	b
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_manifests_tombstones;
