@@ -7,18 +7,18 @@
 namespace duckdb {
 
 //! Schedules owned requests on one producer and drains them when this scope ends.
-//! The caller must keep the context and catalog alive; publication remains the caller's responsibility.
+//! The caller must keep the context and backend alive; publication remains the caller's responsibility.
 class IcebergRequestExecutor {
 public:
-	IcebergRequestExecutor(ClientContext &context, IcebergCatalog &catalog)
-	    : context(context), catalog(catalog), executor(context, TaskSchedulerType::ASYNC) {
+	IcebergRequestExecutor(ClientContext &context, IcebergCatalogBackend &backend)
+	    : context(context), backend(backend), executor(context, TaskSchedulerType::ASYNC) {
 	}
 
 	template <class REQUEST>
 	shared_ptr<IcebergRequestResult<typename REQUEST::Result>> Schedule(REQUEST request) {
 		auto result = make_shared_ptr<IcebergRequestResult<typename REQUEST::Result>>();
 		executor.ScheduleTask(
-		    make_uniq<IcebergRequestTask<REQUEST>>(executor, context, catalog, std::move(request), result));
+		    make_uniq<IcebergRequestTask<REQUEST>>(executor, context, backend, std::move(request), result));
 		return result;
 	}
 
@@ -70,7 +70,7 @@ public:
 
 private:
 	ClientContext &context;
-	IcebergCatalog &catalog;
+	IcebergCatalogBackend &backend;
 	TaskExecutor executor;
 };
 

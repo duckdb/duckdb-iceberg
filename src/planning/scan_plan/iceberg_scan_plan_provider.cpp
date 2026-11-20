@@ -1,6 +1,5 @@
 #include "planning/scan_plan/iceberg_scan_plan_provider.hpp"
 
-#include "catalog/rest/api/iceberg_expression.hpp"
 #include "catalog/rest/api/iceberg_type.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
@@ -65,43 +64,11 @@ unique_ptr<IcebergScanPlanProvider> IcebergScanPlanProvider::Create(IcebergScanP
 	unique_ptr<IcebergScanPlanProvider> provider;
 	if (server_side_planning_enabled) {
 		auto &table_info = table_entry->table_info;
-		if (table_info.catalog.supported_urls.count(IcebergServerSideScanPlanning::PLAN_ENDPOINT)) {
-			rest_api_objects::PlanTableScanRequest request;
-			request.snapshot_id = context.snapshot.snapshot->snapshot_id;
-			request.case_sensitive = true;
-			request.use_snapshot_schema =
-			    context.snapshot.snapshot->snapshot_id != context.metadata.current_snapshot_id;
-			unique_ptr<rest_api_objects::Predicate> server_side_filter;
-			for (auto &filter : table_filters) {
-				auto primary_index = filter.first.GetPrimaryIndex();
-				if (primary_index >= context.schema.columns.size()) {
-					continue;
-				}
-				auto converted = IcebergExpression::TryConvertFilter(*filter.second->expr,
-				                                                     context.schema.columns[primary_index]->name);
-				server_side_filter =
-				    IcebergExpression::AndExpression(std::move(server_side_filter), std::move(converted));
-			}
-			request.filter = std::move(server_side_filter);
-
-			auto scan_order_options = scan_order.GetOptions();
-			if (scan_order_options) {
-				if (scan_order_options->row_limit.IsValid()) {
-					request.min_rows_requested = NumericCast<int64_t>(scan_order_options->row_limit.GetIndex() +
-					                                                  scan_order_options->row_group_offset);
-				}
-				if (scan_order_options->column_idx.HasPrimaryIndex() &&
-				    scan_order_options->column_idx.GetPrimaryIndex() < context.schema.columns.size()) {
-					rest_api_objects::FieldName stats_field;
-					stats_field.value = context.schema.columns[scan_order_options->column_idx.GetPrimaryIndex()]->name;
-					request.stats_fields.emplace();
-					request.stats_fields->push_back(std::move(stats_field));
-				}
-			}
-
+		auto planning = table_info.catalog.GetServerScanPlanning();
+		if (planning && planning->PlansScans()) {
 			IcebergServerSideScanPlan plan;
 			try {
-				if (IcebergServerSideScanPlanning::Plan(context.context, table_info, std::move(request), plan)) {
+				if (planning->PlanScan(context, table_info, table_filters, scan_order, plan)) {
 					if (shared_state.Configuration().row_ids_required && context.metadata.iceberg_version >= 3) {
 						// Without inspecting Parquet we cannot know whether all row IDs are
 						// materialized. Fall back rather than silently replacing inherited IDs.

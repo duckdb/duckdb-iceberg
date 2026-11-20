@@ -5,8 +5,17 @@ add_subdirectory(transaction)
 
 add_library(
   iceberg_catalog_rest OBJECT
-  iceberg_catalog.cpp iceberg_schema_set.cpp iceberg_table_prefetch.cpp
-  iceberg_table_set.cpp iceberg_view_entry.cpp)
+  iceberg_catalog.cpp
+  iceberg_load_table_cache.cpp
+  iceberg_rest_attach.cpp
+  iceberg_rest_backend.cpp
+  iceberg_rest_commit.cpp
+  iceberg_rest_scan_planning.cpp
+  iceberg_schema_set.cpp
+  iceberg_table_prefetch.cpp
+  iceberg_table_metadata_cache.cpp
+  iceberg_table_set.cpp
+  iceberg_view_entry.cpp)
 set(ALL_OBJECT_FILES
     ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:iceberg_catalog_rest>
     PARENT_SCOPE)

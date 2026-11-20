@@ -3,7 +3,7 @@
 #include "duckdb/main/secret/secret.hpp"
 #include "duckdb/common/http_util.hpp"
 
-#include "iceberg_attach.hpp"
+#include "catalog/rest/iceberg_rest_options.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
 #include "catalog/rest/api/url_utils.hpp"
 

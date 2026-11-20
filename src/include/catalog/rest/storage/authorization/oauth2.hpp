@@ -62,7 +62,7 @@ public:
 
 public:
 	static unique_ptr<OAuth2Authorization>
-	FromAttachOptions(AttachedDatabase &db, ClientContext &context, IcebergAttachOptions &input,
+	FromAttachOptions(AttachedDatabase &db, ClientContext &context, IcebergRestOptions &input,
 	                  optional_ptr<unordered_map<string, Value>> client_options = nullptr);
 	unique_ptr<HTTPResponse> Request(RequestType request_type, ClientContext &context,
 	                                 const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,

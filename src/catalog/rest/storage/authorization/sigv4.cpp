@@ -32,7 +32,7 @@ SIGV4Authorization::SIGV4Authorization(AttachedDatabase &db, const string &secre
 }
 
 unique_ptr<IcebergAuthorization> SIGV4Authorization::FromAttachOptions(AttachedDatabase &db,
-                                                                       IcebergAttachOptions &input) {
+                                                                       IcebergRestOptions &input) {
 	auto result = make_uniq<SIGV4Authorization>(db);
 
 	unordered_map<string, Value> remaining_options;

@@ -7,6 +7,7 @@
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
 #include "rest_catalog/objects/plan_table_scan_request.hpp"
 #include "rest_catalog/objects/storage_credential.hpp"
+#include "catalog/iceberg_catalog_types.hpp"
 
 namespace duckdb {
 
@@ -19,7 +20,7 @@ struct IcebergServerSideScanPlan {
 	vector<IcebergManifestListEntry> delete_manifests;
 	//! data-file path -> file identities explicitly referenced by its FileScanTask.
 	unordered_map<string, unordered_set<IcebergFileIdentity, IcebergFileIdentityHash>> delete_files_by_data_file;
-	vector<rest_api_objects::StorageCredential> storage_credentials;
+	vector<IcebergStorageCredential> storage_credentials;
 	optional<string> plan_id;
 };
 
