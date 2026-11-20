@@ -1,0 +1,105 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_schema_drop_rejected_after_table_commit.test
+# description: The files of table changes that were committed stay when a later request of the same commit is rejected
+# group: [transactions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+drop table if exists my_datalake.default.landed_table_commit;
+
+statement ok
+drop table if exists my_datalake.default.landed_table_commit_created;
+
+statement ok
+drop table if exists my_datalake.landed_table_commit_ns.other;
+
+statement ok
+drop schema if exists my_datalake.landed_table_commit_ns;
+
+statement ok
+create schema my_datalake.landed_table_commit_ns;
+
+statement ok
+create table my_datalake.landed_table_commit_ns.other (i INTEGER);
+
+statement ok
+create table my_datalake.default.landed_table_commit (a INTEGER);
+
+statement ok
+insert into my_datalake.default.landed_table_commit values (1);
+
+statement ok
+begin;
+
+statement ok
+insert into my_datalake.default.landed_table_commit values (2);
+
+statement ok
+drop schema my_datalake.landed_table_commit_ns;
+
+# the insert is committed first, then the catalog rejects the drop of the schema, which holds a table
+statement error
+commit;
+----
+<REGEX>:.*its table changes are committed, a later request failed.*[N|n]amespace.*is not empty.*
+
+query I
+select a from my_datalake.default.landed_table_commit order by a;
+----
+1
+2
+
+# The same for a table that the transaction creates
+statement ok
+begin;
+
+statement ok
+create table my_datalake.default.landed_table_commit_created (a INTEGER);
+
+statement ok
+insert into my_datalake.default.landed_table_commit_created values (1), (2);
+
+statement ok
+drop schema my_datalake.landed_table_commit_ns;
+
+statement error
+commit;
+----
+<REGEX>:.*its table changes are committed, a later request failed.*[N|n]amespace.*is not empty.*
+
+query I
+select a from my_datalake.default.landed_table_commit_created order by a;
+----
+1
+2
+
+# A dropped table stays dropped
+statement ok
+begin;
+
+statement ok
+drop table my_datalake.default.landed_table_commit_created;
+
+statement ok
+drop schema my_datalake.landed_table_commit_ns;
+
+statement error
+commit;
+----
+<REGEX>:.*its table changes are committed, a later request failed.*[N|n]amespace.*is not empty.*
+
+statement error
+select a from my_datalake.default.landed_table_commit_created;
+----
+<REGEX>:.*landed_table_commit_created.*does not exist.*
+
+statement ok
+drop table my_datalake.default.landed_table_commit;
+
+statement ok
+drop table my_datalake.landed_table_commit_ns.other;
+
+statement ok
+drop schema my_datalake.landed_table_commit_ns;
