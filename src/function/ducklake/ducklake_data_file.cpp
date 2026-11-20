@@ -1,5 +1,6 @@
 #include "function/ducklake/ducklake_data_file.hpp"
 #include "function/ducklake/ducklake_utils.hpp"
+#include "duckdb/common/sql_identifier.hpp"
 
 namespace duckdb {
 
@@ -32,15 +33,19 @@ string DuckLakeDataFile::FinalizeEntry(int64_t table_id, const map<timestamp_t, 
 	int64_t partition_id = partition.partition_id.GetIndex();
 
 	const auto DATA_FILE_SQL = R"(
-		INSERT INTO {METADATA_CATALOG}.ducklake_data_file VALUES(
+		INSERT INTO {METADATA_CATALOG}.ducklake_data_file (
+			data_file_id, table_id, begin_snapshot, end_snapshot, file_order, path, path_is_relative,
+			file_format, record_count, file_size_bytes, footer_size, row_id_start, partition_id,
+			encryption_key, mapping_id, partial_max
+		) VALUES (
 			%d, -- data_file_id
 			%d, -- table_id
 			%d, -- begin_snapshot
 			%s, -- end_snapshot
 			%s, -- file_order
-			'%s', -- path
+			%s, -- path
 			%s, -- path_is_relative
-			'%s', -- file_format
+			'parquet', -- file_format
 			%d, -- record_count
 			%d, -- file_size_bytes
 			%s, -- footer_size
@@ -64,11 +69,9 @@ string DuckLakeDataFile::FinalizeEntry(int64_t table_id, const map<timestamp_t, 
 	                          // file_order
 	                          "NULL",
 	                          // path
-	                          path,
+	                          SQLString::ToString(path),
 	                          // path_is_relative
 	                          "False",
-	                          // file_format
-	                          "parquet",
 	                          // record_count
 	                          record_count,
 	                          // file_size_bytes

@@ -1,5 +1,6 @@
 #include "function/ducklake/ducklake_column.hpp"
 #include "function/ducklake/ducklake_utils.hpp"
+#include "duckdb/common/sql_identifier.hpp"
 #include "duckdb/common/string.hpp"
 
 namespace duckdb {
@@ -61,8 +62,9 @@ bool DuckLakeColumn::operator!=(const DuckLakeColumn &other) {
 string DuckLakeColumn::FinalizeEntry(int64_t table_id, const map<timestamp_t, DuckLakeSnapshot> &snapshots) {
 	auto snapshot_ids = DuckLakeUtils::GetSnapshots(start_snapshot, has_end, end_snapshot, snapshots);
 	string parent_column = this->parent_column.IsValid() ? to_string(this->parent_column.GetIndex()) : "NULL";
-	auto initial_default = this->initial_default.IsNull() ? "NULL" : "'" + this->initial_default.ToString() + "'";
-	auto default_value = this->default_value.IsNull() ? "NULL" : "'" + this->default_value.ToString() + "'";
+	auto initial_default =
+	    this->initial_default.IsNull() ? "NULL" : SQLString::ToString(this->initial_default.ToString());
+	auto default_value = this->default_value.IsNull() ? "NULL" : SQLString::ToString(this->default_value.ToString());
 	auto nulls_allowed = this->nulls_allowed ? "true" : "false";
 
 	const auto COLUMN_SQL = R"(
@@ -73,14 +75,14 @@ string DuckLakeColumn::FinalizeEntry(int64_t table_id, const map<timestamp_t, Du
 				%s, -- end_snapshot
 				%d, -- table_id
 				%d, -- column_order
-				'%s', -- column_name
-				'%s', -- column_type
+				%s, -- column_name
+				%s, -- column_type
 				%s, -- initial_default
 				%s, -- default_value
 				%s, -- nulls_allowed
 				%s, -- parent_column
-				'%s', -- default_value_type
-				'%s' -- default_value_dialect
+				'literal', -- default_value_type
+				'duckdb' -- default_value_dialect
 			);
 	)";
 
@@ -96,9 +98,9 @@ string DuckLakeColumn::FinalizeEntry(int64_t table_id, const map<timestamp_t, Du
 	                          //! column_order
 	                          column_order,
 	                          //! column_name
-	                          column_name,
+	                          SQLString::ToString(column_name),
 	                          //! column_type
-	                          column_type,
+	                          SQLString::ToString(column_type),
 	                          //! initial_default
 	                          initial_default,
 	                          //! default_value
@@ -106,11 +108,7 @@ string DuckLakeColumn::FinalizeEntry(int64_t table_id, const map<timestamp_t, Du
 	                          //! nulls_allowed
 	                          nulls_allowed,
 	                          //! parent_column
-	                          parent_column,
-	                          //! default_value_type
-	                          "literal",
-	                          //! default_value_dialect
-	                          "duckdb");
+	                          parent_column);
 }
 
 } // namespace ducklake
