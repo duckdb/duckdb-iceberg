@@ -325,6 +325,18 @@ bool IcebergColumnDefinition::IsIcebergPrimitiveType() const {
 	}
 }
 
+bool IcebergColumnDefinition::IsSinkCheckedListElement() const {
+	if (!required || !parent || parent->type.id() != LogicalTypeId::LIST || !IsIcebergPrimitiveType()) {
+		return false;
+	}
+	for (auto ancestor = parent->parent; ancestor; ancestor = ancestor->parent) {
+		if (ancestor->type.id() != LogicalTypeId::STRUCT) {
+			return false;
+		}
+	}
+	return true;
+}
+
 unique_ptr<IcebergColumnDefinition> IcebergColumnDefinition::Copy() const {
 	auto res = make_uniq<IcebergColumnDefinition>();
 	res->id = id;
