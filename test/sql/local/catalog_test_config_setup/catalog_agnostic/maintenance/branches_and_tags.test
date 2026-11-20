@@ -1,0 +1,326 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/branches_and_tags.test
+# description: Create and drop branches and tags
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env TIMETRAVEL_SUPPORT
+
+require-env BRANCH_TAG_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+drop table if exists my_datalake.default.branches_and_tags;
+
+statement ok
+create table my_datalake.default.branches_and_tags (id INTEGER);
+
+statement ok
+insert into my_datalake.default.branches_and_tags values (1), (2);
+
+statement ok
+set variable s1 = (
+	select snapshot_id from iceberg_snapshots('my_datalake.default.branches_and_tags')
+	order by sequence_number limit 1
+);
+
+statement ok
+insert into my_datalake.default.branches_and_tags values (3);
+
+statement ok
+set variable s2 = (
+	select snapshot_id from iceberg_snapshots('my_datalake.default.branches_and_tags')
+	order by sequence_number desc limit 1
+);
+
+# Create
+
+# Without a snapshot id, a ref starts at main's current snapshot
+query III
+select name, type, snapshot_id = getvariable('s2')
+from iceberg_create_branch('my_datalake.default.branches_and_tags', 'dev');
+----
+dev	BRANCH	true
+
+query III
+select name, type, snapshot_id = getvariable('s1')
+from iceberg_create_branch('my_datalake.default.branches_and_tags', 'audit', getvariable('s1'));
+----
+audit	BRANCH	true
+
+query III
+select name, type, snapshot_id = getvariable('s1')
+from iceberg_create_tag('my_datalake.default.branches_and_tags', 'v1', getvariable('s1'));
+----
+v1	TAG	true
+
+query III
+select name, type, snapshot_id = getvariable('s2')
+from iceberg_create_tag('my_datalake.default.branches_and_tags', 'v2');
+----
+v2	TAG	true
+
+query III
+select name, type, snapshot_id = if(name in ('audit', 'v1'), getvariable('s1'), getvariable('s2'))
+from iceberg_refs('my_datalake.default.branches_and_tags') order by name;
+----
+audit	BRANCH	true
+dev	BRANCH	true
+main	BRANCH	true
+v1	TAG	true
+v2	TAG	true
+
+statement error
+select * from iceberg_create_branch('my_datalake.default.branches_and_tags', 'dev');
+----
+Ref dev already exists
+
+statement error
+select * from iceberg_create_tag('my_datalake.default.branches_and_tags', 'audit');
+----
+Ref audit already exists
+
+statement error
+select * from iceberg_create_branch('my_datalake.default.branches_and_tags', 'main');
+----
+Ref main already exists
+
+statement error
+select * from iceberg_create_tag('my_datalake.default.branches_and_tags', 'main');
+----
+Ref main already exists
+
+statement error
+select * from iceberg_create_branch('my_datalake.default.branches_and_tags', 'missing_snapshot', 12345);
+----
+Cannot set missing_snapshot to unknown snapshot: 12345
+
+statement error
+select * from iceberg_create_branch('my_datalake.default.branches_and_tags', '');
+----
+Branch or tag name cannot be empty
+
+statement error
+select * from iceberg_create_branch('my_datalake.default.branches_and_tags', NULL);
+----
+cannot be NULL
+
+# Ref names are case-sensitive, as in Iceberg Java: 'Dev' is a different branch than 'dev'
+
+query II
+select name, type from iceberg_create_branch('my_datalake.default.branches_and_tags', 'Dev');
+----
+Dev	BRANCH
+
+query I
+select name from iceberg_refs('my_datalake.default.branches_and_tags') where lower(name) = 'dev' order by name;
+----
+Dev
+dev
+
+statement error
+select * from iceberg_drop_branch('my_datalake.default.branches_and_tags', 'DEV');
+----
+Branch does not exist: DEV
+
+query II
+select name, type from iceberg_drop_branch('my_datalake.default.branches_and_tags', 'Dev');
+----
+Dev	BRANCH
+
+# Drop
+
+query III
+select name, type, snapshot_id = getvariable('s1')
+from iceberg_drop_branch('my_datalake.default.branches_and_tags', 'audit');
+----
+audit	BRANCH	true
+
+query III
+select name, type, snapshot_id = getvariable('s1')
+from iceberg_drop_tag('my_datalake.default.branches_and_tags', 'v1');
+----
+v1	TAG	true
+
+statement error
+select * from iceberg_drop_branch('my_datalake.default.branches_and_tags', 'missing');
+----
+Branch does not exist: missing
+
+statement error
+select * from iceberg_drop_tag('my_datalake.default.branches_and_tags', 'missing');
+----
+Tag does not exist: missing
+
+statement error
+select * from iceberg_drop_tag('my_datalake.default.branches_and_tags', 'dev');
+----
+Ref dev is a branch not a tag
+
+statement error
+select * from iceberg_drop_branch('my_datalake.default.branches_and_tags', 'v2');
+----
+Ref v2 is a tag not a branch
+
+statement error
+select * from iceberg_drop_branch('my_datalake.default.branches_and_tags', 'main');
+----
+Cannot remove main branch
+
+statement error
+select * from iceberg_drop_tag('my_datalake.default.branches_and_tags', 'main');
+----
+Ref main is a branch not a tag
+
+query II
+select name, type from iceberg_refs('my_datalake.default.branches_and_tags') order by name;
+----
+dev	BRANCH
+main	BRANCH
+v2	TAG
+
+# Main and its rows never change
+query II
+select count(*), (select snapshot_id = getvariable('s2') from iceberg_refs('my_datalake.default.branches_and_tags') where name = 'main')
+from my_datalake.default.branches_and_tags;
+----
+3	true
+
+# Transactions
+
+# Changes in one transaction commit together, and later calls see the earlier ones
+statement ok
+begin;
+
+statement ok
+select * from iceberg_create_branch('my_datalake.default.branches_and_tags', 'tx_branch', getvariable('s1'));
+
+statement ok
+select * from iceberg_create_tag('my_datalake.default.branches_and_tags', 'tx_tag');
+
+query II
+select name, type from iceberg_refs('my_datalake.default.branches_and_tags') where name like 'tx%' order by name;
+----
+tx_branch	BRANCH
+tx_tag	TAG
+
+statement error
+select * from iceberg_create_branch('my_datalake.default.branches_and_tags', 'tx_tag');
+----
+Ref tx_tag already exists
+
+statement ok
+rollback;
+
+query I
+select count(*) from iceberg_refs('my_datalake.default.branches_and_tags') where name like 'tx%';
+----
+0
+
+statement ok
+begin;
+
+statement ok
+select * from iceberg_create_branch('my_datalake.default.branches_and_tags', 'tx_branch', getvariable('s1'));
+
+statement ok
+select * from iceberg_create_tag('my_datalake.default.branches_and_tags', 'tx_tag');
+
+statement ok
+commit;
+
+query III
+select name, type, snapshot_id = if(name = 'tx_branch', getvariable('s1'), getvariable('s2'))
+from iceberg_refs('my_datalake.default.branches_and_tags') where name like 'tx%' order by name;
+----
+tx_branch	BRANCH	true
+tx_tag	TAG	true
+
+# A ref created and dropped in one transaction leaves nothing behind
+statement ok
+begin;
+
+statement ok
+select * from iceberg_create_branch('my_datalake.default.branches_and_tags', 'short_lived');
+
+statement ok
+select * from iceberg_drop_branch('my_datalake.default.branches_and_tags', 'short_lived');
+
+statement ok
+commit;
+
+query I
+select count(*) from iceberg_refs('my_datalake.default.branches_and_tags') where name = 'short_lived';
+----
+0
+
+# A dropped name can be created again in the same transaction
+statement ok
+begin;
+
+statement ok
+select * from iceberg_drop_branch('my_datalake.default.branches_and_tags', 'tx_branch');
+
+statement ok
+select * from iceberg_create_tag('my_datalake.default.branches_and_tags', 'tx_branch', getvariable('s2'));
+
+statement ok
+commit;
+
+query II
+select type, snapshot_id = getvariable('s2') from iceberg_refs('my_datalake.default.branches_and_tags') where name = 'tx_branch';
+----
+TAG	true
+
+# Not after data changes in the same transaction
+statement ok
+begin;
+
+statement ok
+insert into my_datalake.default.branches_and_tags values (4);
+
+statement error
+select * from iceberg_create_branch('my_datalake.default.branches_and_tags', 'after_insert');
+----
+it was already changed in this transaction
+
+statement ok
+rollback;
+
+# Data changes after a ref change commit together, and only main moves
+statement ok
+begin;
+
+statement ok
+select * from iceberg_create_branch('my_datalake.default.branches_and_tags', 'before_insert');
+
+statement ok
+insert into my_datalake.default.branches_and_tags values (4);
+
+statement ok
+commit;
+
+query III
+select (select count(*) from my_datalake.default.branches_and_tags),
+	(select snapshot_id = getvariable('s2') from iceberg_refs('my_datalake.default.branches_and_tags') where name = 'before_insert'),
+	(select snapshot_id != getvariable('s2') from iceberg_refs('my_datalake.default.branches_and_tags') where name = 'main');
+----
+4	true	true
+
+# A table without snapshots has no main to start a ref from
+statement ok
+drop table if exists my_datalake.default.branches_and_tags_empty;
+
+statement ok
+create table my_datalake.default.branches_and_tags_empty (id INTEGER);
+
+statement error
+select * from iceberg_create_branch('my_datalake.default.branches_and_tags_empty', 'dev');
+----
+the table has no current snapshot
+
+statement error
+select * from iceberg_create_branch('my_datalake.default.not_a_table', 'dev');
+----
+does not exist

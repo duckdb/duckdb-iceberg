@@ -607,14 +607,26 @@ void Catalog::Apply(Json &metadata, const Json &update, map<string, int64_t> &la
 	} else if (action == "set-snapshot-ref") {
 		auto identifier = update.At("snapshot-id").Integer();
 		auto &snapshot = FindID(metadata.At("snapshots"), "snapshot-id", identifier);
-		if (update.At("ref-name").String() != "main" || update.At("type").String() != "branch") {
-			Unsupported("Only the main branch is implemented");
+		auto name = update.At("ref-name").String();
+		auto type = update.At("type").String();
+		// Errors as Iceberg Java's SnapshotRefType, SnapshotRef.Builder and TableMetadata.Builder.setRef word them
+		if (type != "branch" && type != "tag") {
+			Invalid("Invalid snapshot ref type: " + type);
+		}
+		if (type == "tag" && update.Has("min-snapshots-to-keep")) {
+			Invalid("Tags do not support setting minSnapshotsToKeep");
+		}
+		if (type == "tag" && update.Has("max-snapshot-age-ms")) {
+			Invalid("Tags do not support setting maxSnapshotAgeMs");
+		}
+		if (name == "main" && type != "branch") {
+			Invalid("Cannot set main to a tag, it must be a branch");
 		}
 		auto ref = update;
 		ref.Erase("action");
 		ref.Erase("ref-name");
-		metadata.At("refs")["main"] = std::move(ref);
-		if (metadata.Get("current-snapshot-id") != update.At("snapshot-id")) {
+		metadata.At("refs")[name] = std::move(ref);
+		if (name == "main" && metadata.Get("current-snapshot-id") != update.At("snapshot-id")) {
 			// Publication waits for this tick before exposing the candidate.
 			auto timestamp = MaxValue(NowMillis(), request_start_ms + 1);
 			if (std::find(added_snapshots.begin(), added_snapshots.end(), identifier) != added_snapshots.end()) {
@@ -649,11 +661,12 @@ void Catalog::Apply(Json &metadata, const Json &update, map<string, int64_t> &la
 			    files.end());
 		}
 	} else if (action == "remove-snapshot-ref") {
-		if (update.At("ref-name").String() != "main") {
-			Unsupported("Only the main branch is implemented");
+		// Like Iceberg's metadata builder, removing an absent ref is a no-op.
+		auto name = update.At("ref-name").String();
+		metadata.At("refs").Erase(name);
+		if (name == "main") {
+			metadata.Erase("current-snapshot-id");
 		}
-		metadata.At("refs").Erase("main");
-		metadata.Erase("current-snapshot-id");
 	} else {
 		Invalid("Unknown update action: " + action);
 	}

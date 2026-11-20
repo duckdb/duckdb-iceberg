@@ -56,6 +56,10 @@
 			"env_value": "true"
 		},
 		{
+			"env_name": "BRANCH_TAG_SUPPORT",
+			"env_value": "true"
+		},
+		{
 			"env_name": "SNAPSHOT_HISTORY_SUPPORT",
 			"env_value": "true"
 		},

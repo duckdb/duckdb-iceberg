@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb/common/optional.hpp"
+#include "duckdb/common/unordered_set.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/function/copy_function.hpp"
 
@@ -68,6 +69,9 @@ public:
 	void TableRollbackToSnapshot(int64_t snapshot_id);
 	//! Detach main without removing historical snapshots or enumerating their files.
 	void TableReplaceContents(IcebergTableMetadata &metadata);
+	void TableCreateRef(IcebergTableMetadata &metadata, const string &ref_name,
+	                    const rest_api_objects::SnapshotReference &reference);
+	void TableDropRef(IcebergTableMetadata &metadata, const string &ref_name);
 
 private:
 	void CacheExistingManifestList(lock_guard<mutex> &guard, const IcebergTableMetadata &metadata);
@@ -76,6 +80,9 @@ private:
 	//! Called with lock held, since MERGE action pipelines may finalize concurrently.
 	void AddSnapshotUpdate(unique_ptr<IcebergAddSnapshot> add_snapshot, IcebergManifestDeletes &&altered_manifests,
 	                       bool merge_action);
+	void VerifyCanChangeRefs() const;
+	//! Requires the ref to still be as this transaction first saw it, once per ref
+	void RequireRefUnchanged(const IcebergTableMetadata &metadata, const string &ref_name);
 
 	//! Query IDs distinguish MERGE executions within the same transaction.
 	optional<transaction_t> merge_query_id;
@@ -124,6 +131,8 @@ public:
 	bool has_maintenance_rewrite = false;
 	//! A MERGE chose its actions against the snapshot it read, so its commit can't be re-applied to a newer one.
 	bool contains_merge = false;
+	//! Branches and tags this transaction sets or removes
+	unordered_set<string> changed_refs;
 	mutable mutex lock;
 };
 
