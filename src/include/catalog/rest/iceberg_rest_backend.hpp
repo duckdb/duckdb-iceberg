@@ -26,7 +26,6 @@ class StorageCredential;
 
 class IcebergCatalog;
 struct IcebergAttachInput;
-struct IcebergBackendFactory;
 
 //! A catalog backend that speaks the Iceberg REST protocol. It owns everything about the server: the authorization,
 //! the base URL and prefix, the endpoints and properties the server advertised in /v1/config, and the LoadTable
@@ -42,8 +41,6 @@ public:
 	explicit IcebergRestBackend(const Identifier &catalog_name);
 	~IcebergRestBackend() override;
 
-	//! The factory of CATALOG_TYPE 'rest'
-	static IcebergBackendFactory Factory();
 	//! Sets the backend up for an ATTACH: parses the options, authorizes, and negotiates /v1/config
 	void Attach(IcebergAttachInput &input);
 
@@ -124,8 +121,6 @@ public:
 	static vector<IcebergStorageCredential>
 	ToStorageCredentials(const vector<rest_api_objects::StorageCredential> &credentials);
 
-	//! The SigV4 authorization of an AWS service, with the URI of the service's Iceberg endpoint if none is given
-	static void UseAWSSigV4(IcebergRestOptions &options, const string &service, const string &region);
 	//! Parses the ATTACH options of the REST backend, and the generic options into 'input'
 	static void ParseOptions(IcebergAttachInput &input, IcebergRestOptions &options,
 	                         const unordered_map<string, Value> &properties);
@@ -157,33 +152,13 @@ public:
 	unordered_set<string> supported_urls;
 	LoadTableResultCache table_request_cache;
 
-protected:
-	//===--------------------------------------------------------------------===//
-	// Extension points of vendor REST catalogs (the AWS Glue and S3 Tables endpoints)
-	//===--------------------------------------------------------------------===//
-	//! Applies ENDPOINT_TYPE (or what the URI implies) to the bootstrap: the URI, the authorization and its options,
-	//! and presets for options the user did not set. The plain REST backend accepts no ENDPOINT_TYPE
-	virtual void ConfigureEndpoint(IcebergAttachInput &input, IcebergRestOptions &options,
-	                               const case_insensitive_set_t &set_by_user);
-	//! Option values below the catalog's /v1/config defaults
-	virtual void AddFallbackOptions(unordered_map<string, Value> &fallback_options) {
-	}
-	//! The warehouse sent to /v1/config
-	virtual string GetConfigWarehouse(const IcebergRestOptions &options) const {
-		return options.warehouse;
-	}
-	//! The endpoints to assume when /v1/config lists none
-	virtual void AddDefaultEndpoints();
-	//! Adjusts the capabilities derived from the endpoints and options
-	virtual void AdjustCapabilities(IcebergBackendCapabilities &capabilities) const {
-	}
-
-	//! The option presets of the AWS catalogs
-	static void ApplyAWSPresets(IcebergAttachInput &input, IcebergRestOptions &options,
-	                            const case_insensitive_set_t &set_by_user);
-	static void AddAWSFallbackOptions(unordered_map<string, Value> &fallback_options);
+private:
+	void AddDefaultSupportedEndpoints();
+	void AddS3TablesEndpoints();
+	void AddGlueEndpoints();
 
 private:
+	IcebergEndpointType endpoint_type = IcebergEndpointType::INVALID;
 	//! warehouse
 	string warehouse;
 };

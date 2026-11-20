@@ -1,15 +1,18 @@
 #include "catalog/rest/iceberg_rest_backend.hpp"
 
+#include "duckdb/common/array.hpp"
 #include "duckdb/common/json_document.hpp"
 #include "duckdb/logging/logger.hpp"
+#include "duckdb/main/secret/secret.hpp"
 
-#include "catalog/iceberg_backend_registry.hpp"
 #include "catalog/rest/api/catalog_api.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/storage/authorization/none.hpp"
 #include "catalog/rest/storage/authorization/oauth2.hpp"
 #include "catalog/rest/storage/authorization/sigv4.hpp"
 #include "rest_catalog/objects/list.hpp"
+
+#include <regex>
 
 namespace duckdb {
 
@@ -170,29 +173,41 @@ static bool AuthorizationChanged(const unordered_map<string, Value> &before,
 // Attach
 //===--------------------------------------------------------------------===//
 
-IcebergBackendFactory IcebergRestBackend::Factory() {
-	IcebergBackendFactory factory;
-	factory.catalog_type = "rest";
-	factory.create = [](IcebergAttachInput &input) -> unique_ptr<IcebergCatalogBackend> {
-		auto backend = make_uniq<IcebergRestBackend>(Identifier(input.name));
-		backend->Attach(input);
-		return std::move(backend);
-	};
-	return factory;
-}
+namespace {
 
-void IcebergRestBackend::ConfigureEndpoint(IcebergAttachInput &input, IcebergRestOptions &options,
-                                           const case_insensitive_set_t &set_by_user) {
-	if (input.endpoint_type.empty()) {
-		return;
+static IcebergEndpointType EndpointTypeFromString(const string &input) {
+	D_ASSERT(StringUtil::Lower(input) == input);
+
+	static const case_insensitive_map_t<IcebergEndpointType> mapping {{"glue", IcebergEndpointType::AWS_GLUE},
+	                                                                  {"s3_tables", IcebergEndpointType::AWS_S3TABLES}};
+
+	for (auto &entry : mapping) {
+		if (entry.first == input) {
+			return entry.second;
+		}
 	}
-	// No vendor backend is registered for this ENDPOINT_TYPE
-	auto endpoint_types = IcebergBackendRegistry::Get(*input.context.db).GetEndpointTypes(input.catalog_type);
-	throw InvalidConfigurationException("Unrecognized 'endpoint_type' (%s), accepted options are: %s",
-	                                    input.endpoint_type, StringUtil::Join(endpoint_types, ", "));
+	set<string> options;
+	for (auto &entry : mapping) {
+		options.insert(entry.first);
+	}
+	throw InvalidConfigurationException("Unrecognized 'endpoint_type' (%s), accepted options are: %s", input,
+	                                    StringUtil::Join(options, ", "));
 }
 
-void IcebergRestBackend::UseAWSSigV4(IcebergRestOptions &input, const string &service, const string &region) {
+static string GlueRegionFromURI(const string &uri) {
+	auto host = StringUtil::Lower(StripScheme(uri));
+	host = host.substr(0, host.find_first_of("/?#"));
+	// Match the whole authority, not a Glue hostname appearing in a path or a
+	// subdomain of another service. Accept explicit ports and China endpoints.
+	static const std::regex pattern("^glue\\.([a-z0-9-]+)\\.amazonaws\\.com(\\.cn)?(:[0-9]+)?$");
+	std::smatch match;
+	if (!std::regex_match(host, match, pattern)) {
+		return string();
+	}
+	return match[1].str();
+}
+
+static void S3OrGlueAttachInternal(IcebergRestOptions &input, const string &service, const string &region) {
 	if (input.authorization_type != IcebergAuthorizationType::INVALID) {
 		throw InvalidConfigurationException("'endpoint_type' can not be combined with 'authorization_type'");
 	}
@@ -206,8 +221,120 @@ void IcebergRestBackend::UseAWSSigV4(IcebergRestOptions &input, const string &se
 	}
 }
 
-void IcebergRestBackend::ApplyAWSPresets(IcebergAttachInput &input, IcebergRestOptions &attach_options,
-                                         const case_insensitive_set_t &set_by_attach_options) {
+struct ParsedARN {
+public:
+	ParsedARN(const string &arn) {
+		idx_t section = 0;
+		idx_t start = 0;
+		//! NOTE: we can't use StringUtil::Split because it doesn't keep empty items
+		for (idx_t i = 0; i < arn.size() && section < 5; i++) {
+			if (arn[i] == ':') {
+				sections[section++] = arn.substr(start, i - start);
+				start = i + 1;
+			}
+		}
+		if (section < 5 || sections[0] != "arn") {
+			throw InvalidInputException("Expected an AWS ARN of the form "
+			                            "'arn:<partition>:<service>:<region>:<account-id>[:<resource>]', got '%s'",
+			                            arn);
+		}
+		sections[5] = arn.substr(start);
+		auto &partition = Partition();
+		if (partition.empty()) {
+			throw InvalidInputException("Invalid PARTITION Section of ARN: '%s'", partition);
+		}
+		auto &service = Service();
+		if (service.empty()) {
+			throw InvalidInputException("Invalid SERVICE Section of ARN: '%s'", service);
+		}
+		auto &resource = Resource();
+		if (resource.empty()) {
+			throw InvalidInputException("Invalid RESOURCE Section of ARN: '%s'", resource);
+		}
+	}
+
+public:
+	const string &Partition() {
+		return sections[1];
+	}
+	const string &Service() {
+		return sections[2];
+	}
+	const string &Region() {
+		return sections[3];
+	}
+	const string &AccountID() {
+		return sections[4];
+	}
+	const string &Resource() {
+		return sections[5];
+	}
+
+private:
+	array<string, 6> sections;
+};
+
+static void S3TablesAttach(IcebergRestOptions &input) {
+	ParsedARN arn(input.warehouse);
+
+	// Populate sigv4_region so it can be used as a fallback region when creating storage secrets
+	auto &region = arn.Region();
+	if (region.empty()) {
+		throw InvalidInputException("Can't ATTACH to S3Tables with an ARN(%s) that has an empty REGION section",
+		                            input.warehouse);
+	}
+	input.options.emplace("sigv4_region", Value(region));
+	S3OrGlueAttachInternal(input, "s3tables", region);
+}
+
+static bool SanityCheckGlueWarehouse(const string &warehouse) {
+	// See: https://docs.aws.amazon.com/glue/latest/dg/connect-glu-iceberg-rest.html#prefix-catalog-path-parameters
+
+	const std::regex patterns[] = {
+	    std::regex("^:$"),                  // Default catalog ":" in current account
+	    std::regex("^\\d{12}$"),            // Default catalog in a specific account
+	    std::regex("^\\d{12}:[^:/]+$"),     // Specific catalog in a specific account
+	    std::regex("^[^:]+/[^:]+$"),        // Nested catalog in the current account
+	    std::regex("^\\d{12}:[^/]+/[^:]+$") // Nested catalog in a specific account
+	};
+
+	for (const auto &pattern : patterns) {
+		if (std::regex_match(warehouse, pattern)) {
+			return true;
+		}
+	}
+
+	throw InvalidConfigurationException(
+	    "Invalid Glue Catalog Format: '%s'. Expected format: ':', '12-digit account ID', "
+	    "'catalog1/catalog2', or '12-digit accountId:catalog1/catalog2'.",
+	    warehouse);
+}
+
+static void GlueAttach(ClientContext &context, IcebergRestOptions &input) {
+	SanityCheckGlueWarehouse(input.warehouse);
+
+	string secret;
+	auto secret_it = input.options.find("secret");
+	if (secret_it != input.options.end()) {
+		secret = secret_it->second.ToString();
+	}
+
+	// look up any s3 secret
+
+	// if there is no secret, an error will be thrown
+	auto secret_entry = IcebergCatalog::GetStorageSecret(context, secret);
+	auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
+	auto region = kv_secret.TryGetValue("region");
+
+	if (region.IsNull()) {
+		throw InvalidConfigurationException("Assumed catalog secret '%s' for catalog '%s' does not have a region",
+		                                    secret_entry->secret->GetName().GetIdentifierName(), input.name);
+	}
+	S3OrGlueAttachInternal(input, "glue", region.ToString());
+}
+
+static void SetAWSCatalogOptions(IcebergAttachInput &input, IcebergRestOptions &attach_options,
+                                 case_insensitive_set_t &set_by_attach_options) {
 	if (set_by_attach_options.find("remove_files_on_delete") == set_by_attach_options.end()) {
 		attach_options.remove_files_on_delete = false;
 	}
@@ -223,11 +350,7 @@ void IcebergRestBackend::ApplyAWSPresets(IcebergAttachInput &input, IcebergRestO
 	}
 }
 
-void IcebergRestBackend::AddAWSFallbackOptions(unordered_map<string, Value> &fallback_options) {
-	fallback_options["stage_create_tables"] = Value::BOOLEAN(false);
-	fallback_options["remove_files_on_delete"] = Value::BOOLEAN(false);
-	fallback_options["purge_requested"] = Value::BOOLEAN(true);
-}
+} // namespace
 
 void IcebergRestBackend::Attach(IcebergAttachInput &input) {
 	auto &context = input.context;
@@ -251,13 +374,50 @@ void IcebergRestBackend::Attach(IcebergAttachInput &input) {
 			DUCKDB_LOG_WARNING(context, "The Iceberg attach option 'endpoint' is deprecated; use 'uri' instead");
 		}
 	}
+	string endpoint_type_string;
+	auto endpoint_it = client_options.find("endpoint_type");
+	if (endpoint_it != client_options.end()) {
+		endpoint_type_string = StringUtil::Lower(endpoint_it->second.ToString());
+	}
 	case_insensitive_set_t set_by_attach_options;
 	for (auto &entry : client_options) {
 		set_by_attach_options.insert(entry.first);
 	}
 	StringUtil::RTrim(attach_options.catalog_uri, "/");
+	endpoint_type = IcebergEndpointType::INVALID;
 	//! Explicit endpoint types also support custom endpoints.
-	ConfigureEndpoint(input, attach_options, set_by_attach_options);
+	if (!endpoint_type_string.empty()) {
+		endpoint_type = EndpointTypeFromString(endpoint_type_string);
+		switch (endpoint_type) {
+		case IcebergEndpointType::AWS_GLUE: {
+			GlueAttach(context, attach_options);
+			SetAWSCatalogOptions(input, attach_options, set_by_attach_options);
+			break;
+		}
+		case IcebergEndpointType::AWS_S3TABLES: {
+			S3TablesAttach(attach_options);
+			SetAWSCatalogOptions(input, attach_options, set_by_attach_options);
+			break;
+		}
+		default:
+			throw InternalException("Endpoint type (%s) not implemented", endpoint_type_string);
+		}
+	} else {
+		auto glue_region = GlueRegionFromURI(attach_options.catalog_uri);
+		if (!glue_region.empty()) {
+			endpoint_type = IcebergEndpointType::AWS_GLUE;
+			SetAWSCatalogOptions(input, attach_options, set_by_attach_options);
+			// URL-based attaches may already specify authorization and signing
+			// options. Only supply defaults, using the URL's region.
+			if (attach_options.authorization_type == IcebergAuthorizationType::INVALID) {
+				attach_options.authorization_type = IcebergAuthorizationType::SIGV4;
+			}
+			if (attach_options.authorization_type == IcebergAuthorizationType::SIGV4) {
+				attach_options.options.emplace("sigv4_service", Value("glue"));
+				attach_options.options.emplace("sigv4_region", Value(glue_region));
+			}
+		}
+	}
 
 	if (attach_options.authorization_type == IcebergAuthorizationType::INVALID) {
 		attach_options.authorization_type = IcebergAuthorizationType::OAUTH2;
@@ -268,7 +428,11 @@ void IcebergRestBackend::Attach(IcebergAttachInput &input) {
 	    attach_options.authorization_type == IcebergAuthorizationType::SIGV4
 	        ? "sigv4"
 	        : (attach_options.authorization_type == IcebergAuthorizationType::NONE ? "none" : "oauth2");
-	AddFallbackOptions(fallback_options);
+	if (endpoint_type != IcebergEndpointType::INVALID) {
+		fallback_options["stage_create_tables"] = Value::BOOLEAN(false);
+		fallback_options["remove_files_on_delete"] = Value::BOOLEAN(false);
+		fallback_options["purge_requested"] = Value::BOOLEAN(true);
+	}
 	auth_handler = CreateAuthorization(db, context, attach_options, &client_options);
 	// The bootstrap URI may have come from a secret or an endpoint preset.
 	client_options["uri"] = attach_options.catalog_uri;
@@ -278,7 +442,11 @@ void IcebergRestBackend::Attach(IcebergAttachInput &input) {
 
 	// /config is requested exactly once, using the bootstrap URI/warehouse/auth.
 	// A server prefix or URI override applies only to subsequent requests.
-	auto config = IRCAPI::GetCatalogConfig(context, *this, GetConfigWarehouse(attach_options));
+	auto config_warehouse = attach_options.warehouse;
+	if (endpoint_type == IcebergEndpointType::AWS_GLUE && config_warehouse == ":") {
+		config_warehouse.clear();
+	}
+	auto config = IRCAPI::GetCatalogConfig(context, *this, config_warehouse);
 	// OAuth2 SECRET was expanded into client properties by CreateAuthorization.
 	// Do not retain the now-consumed secret selector in the fallback layer.
 	if (attach_options.authorization_type == IcebergAuthorizationType::OAUTH2) {

@@ -2,7 +2,6 @@ add_subdirectory(api)
 add_subdirectory(catalog_entry)
 add_subdirectory(storage)
 add_subdirectory(transaction)
-add_subdirectory(vendor)
 
 add_library(
   iceberg_catalog_rest OBJECT

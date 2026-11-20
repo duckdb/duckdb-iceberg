@@ -3,8 +3,8 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/value.hpp"
 
-#include "catalog/iceberg_backend_registry.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
+#include "catalog/rest/iceberg_rest_backend.hpp"
 
 namespace duckdb {
 
@@ -94,10 +94,13 @@ unique_ptr<Catalog> IcebergAttach::Attach(optional_ptr<StorageExtensionInfo> sto
 	if (input.catalog_type.empty()) {
 		input.catalog_type = "rest";
 	}
-	input.endpoint_type = GetLowercaseOption(input.client_options, "endpoint_type");
 
-	auto factory = IcebergBackendRegistry::Get(*context.db).Resolve(input);
-	auto backend = factory.create(input);
+	if (input.catalog_type != "rest") {
+		throw InvalidConfigurationException("Unrecognized 'catalog_type' (%s), accepted options are: rest",
+		                                    input.catalog_type);
+	}
+	auto backend = make_uniq<IcebergRestBackend>(Identifier(input.name));
+	backend->Attach(input);
 	auto catalog =
 	    make_uniq<IcebergCatalog>(db, options.access_mode, input.attach_options, info.path, std::move(backend));
 	catalog->SetAttachOptions(options.options);

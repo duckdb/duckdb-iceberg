@@ -125,8 +125,8 @@ than per table.
 IcebergCatalog (concrete, final)              DuckDB Catalog: planning, entry sets, transactions, caches
  └── unique_ptr<IcebergCatalogBackend>
       ├── IcebergRestBackend                  Iceberg REST protocol
-      │    ├── IcebergGlueRestBackend         ENDPOINT_TYPE 'glue' / glue.<region>.amazonaws.com
-      │    └── IcebergS3TablesRestBackend     ENDPOINT_TYPE 's3_tables'
+      │    ├── IcebergGlueRestBackend         ENDPOINT_TYPE 'glue' / glue.<region>.amazonaws.com (later PR)
+      │    └── IcebergS3TablesRestBackend     ENDPOINT_TYPE 's3_tables' (later PR)
       └── IcebergMetastoreBackend (final)     client-side commits, pointer swaps
            └── unique_ptr<IcebergMetastore>
                 ├── IcebergSqlMetastore       CATALOG_TYPE 'sql' (DuckDB file / SQLite / Postgres)
@@ -551,6 +551,11 @@ whereas an Iceberg metastore keeps one pointer per table.
 
 ## 7. REST backend and vendor subclasses
 
+> **Future work.** This section is the target design. Phase 1 defers the vendor subclasses and the backend
+> registry (§7.2) to a later PR: it keeps the `ENDPOINT_TYPE` handling (`glue`, `s3_tables` and the Glue URI match)
+> inside `IcebergRestBackend`, as upstream's attach did, and the attach constructs `IcebergRestBackend` directly
+> for `CATALOG_TYPE 'rest'`.
+
 `IcebergRestBackend` is not final. Vendor catalogs subclass it, override behaviour through protected virtual
 extension points, and add their own functionality on top. Generic code only sees `IcebergCatalogBackend`.
 
@@ -728,7 +733,7 @@ Every PR keeps REST behaviour identical until PR 6. Each one runs:
 | 1 | **Read seam** (small, behaviour-neutral) | Neutral types (§4.2, read half). `IcebergCatalogBackend` with the read methods only. `IcebergRestBackend` implements them by calling the existing `IRCAPI`/`Iceberg*Request` code. Schema set, schema entry, table set, prefetch and `RefreshFromCatalog` call `GetBackend()`. `allow_forbidden` policy moves into the table set. No file moves; error messages unchanged. ~600–900 lines. | Standard suites; `test_load_table_cache.cpp` for cache generations. | — |
 | 2 | **Write seam** | `CreateTable` → `IcebergCreatedTable`. `IcebergCommitPlan` + shared staging + `IcebergCommitRetryLoop`. The REST sequence moves into `IcebergRestCommit`; `Abort`. Capability flags replace `supported_urls`/`endpoint_type` checks in the transaction and in `DropSchema`. HTTP → status mapping at one point. | Standard suites; the atomicity-message tests; commit retry/unknown-outcome tests in the native mock. | phase 1 `iceberg_commit_staging.*`, `iceberg_rest_commit.*` |
 | 3 | **REST-only capabilities** | `IcebergLoadedTable` with `version_token` (ETag). `IcebergCredentialVending` (secret provider refresh). `IcebergServerScanPlanning`. Typed access (`Cast<T>`) for `iceberg_load_table_response`/`iceberg_view_metadata`. | Native mock ETag, credential-refresh and scan-planning tests. | — |
-| 4 | **Registry, attach split, vendor subclasses** | `IcebergBackendRegistry`. `CATALOG_TYPE` (only `rest` registered). `IcebergAttachOptions` split into generic + `IcebergRestOptions`. `IcebergGlueRestBackend`, `IcebergS3TablesRestBackend` with the §7.1 extension points; no `ENDPOINT_TYPE` branch left in generic code. | Attach option tests; `test/configs/cloud_s3tables.json` and the Glue cloud tests run manually. | summary's "REST extension point" gap |
+| 4 | **Registry, attach split, vendor subclasses** | `CATALOG_TYPE` (only `rest`; the attach constructs `IcebergRestBackend` directly, and `IcebergBackendRegistry` follows in a later PR). `IcebergAttachOptions` split into generic + `IcebergRestOptions`. `ENDPOINT_TYPE` stays inside `IcebergRestBackend`; no `ENDPOINT_TYPE` branch left in generic code. The vendor subclasses (`IcebergGlueRestBackend`, `IcebergS3TablesRestBackend`, §7) follow in a later PR. | Attach option tests; `test/configs/cloud_s3tables.json` and the Glue cloud tests run manually. | summary's "REST extension point" gap |
 | 5 | **File moves** (rename-only) | §9, mechanical, no logic. Can be folded into 1–4 if preferred (Q7). | Build + standard suites. | phase 1 layout |
 | 6 | **Client-side commit** | `IcebergClientCommit` + `iceberg_verify_client_commit` shadow mode + the writer fixes. Independent of the seam after PR 2. | Shadow mode against the native mock and CI catalogs. | phase 2, nearly verbatim |
 | 7 | **Metastore backend + SQL (DuckDB file)** | `IcebergMetastore`, `IcebergMetastoreCommit`, `IcebergMetastoreBackend`, `IcebergSqlMetastore`; `CATALOG_TYPE 'sql'`; `test/configs/sql.json`. | `make test_sql_catalog_reldebug` (`catalog_specifc/sql/` + the catalog-agnostic suite without `.test_slow`); fault injection tests. | phase 3 (commit sequence, SQL code) |

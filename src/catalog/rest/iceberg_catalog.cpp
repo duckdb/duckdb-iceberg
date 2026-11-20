@@ -124,9 +124,8 @@ void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 		    "DROP SCHEMA <schema_name> CASCADE is not supported for Iceberg schemas currently");
 	}
 	if (!info.cascade && cascade_only) {
-		throw NotImplementedException("DROP SCHEMA without CASCADE is not supported for %s: deleting a namespace "
-		                              "also deletes its tables. Use DROP SCHEMA <schema_name> CASCADE",
-		                              backend->ProductName());
+		throw NotImplementedException("DROP SCHEMA without CASCADE is not supported for AWS Glue: deleting a namespace "
+		                              "also deletes its tables. Use DROP SCHEMA <schema_name> CASCADE");
 	}
 	info.SetQualifiedName(FoldName(info.GetQualifiedName()));
 

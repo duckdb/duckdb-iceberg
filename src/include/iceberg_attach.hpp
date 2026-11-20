@@ -1,13 +1,17 @@
 #pragma once
 
 #include "duckdb/common/string.hpp"
+#include "duckdb/common/identifier.hpp"
 #include "duckdb/common/optional.hpp"
+#include "duckdb/common/unordered_map.hpp"
 #include "duckdb/common/named_parameter_map.hpp"
 #include "duckdb/storage/storage_extension.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/client_context.hpp"
 
 namespace duckdb {
+
+enum class IcebergEndpointType : uint8_t { AWS_S3TABLES, AWS_GLUE, INVALID };
 
 enum class IcebergAuthorizationType : uint8_t { OAUTH2, SIGV4, NONE, INVALID };
 
@@ -37,6 +41,35 @@ struct IcebergAttachOptions {
 	IcebergIdentifierCase identifier_case = IcebergIdentifierCase::PRESERVE_CASE;
 };
 
+//! An ATTACH of an Iceberg catalog, as the catalog backends see it
+struct IcebergAttachInput {
+public:
+	IcebergAttachInput(ClientContext &context, AttachedDatabase &db, const string &name, AttachInfo &info,
+	                   AttachOptions &options);
+
+public:
+	//! Parses an option every catalog type accepts into 'attach_options' and 'default_schema'. Returns false for
+	//! any other option
+	bool ParseGenericOption(const string &option_name, const Value &value);
+	//! Checks that DEFAULT_SCHEMA_POLICY comes with a DEFAULT_SCHEMA it can apply to
+	void VerifyDefaultSchemaPolicy() const;
+
+public:
+	ClientContext &context;
+	AttachedDatabase &db;
+	//! The name the catalog is attached as
+	const string name;
+	AttachInfo &info;
+	AttachOptions &options;
+	//! The ATTACH options, normalized: lowercase names, aliases resolved
+	unordered_map<string, Value> client_options;
+	//! CATALOG_TYPE, lowercase ('rest' if not given)
+	string catalog_type;
+	//! The generic options, which the backend fills in (it may take some from its catalog's configuration)
+	IcebergAttachOptions attach_options;
+	optional<Identifier> default_schema;
+};
+
 unordered_map<string, Value> NormalizeIcebergAttachOptions(const unordered_map<string, Value> &options);
 //! Translate supported catalog properties to the same option names used by ATTACH.
 //! Unknown server properties are ignored; unknown ATTACH options are still rejected.
@@ -46,8 +79,8 @@ void MergeIcebergOptions(unordered_map<string, Value> &target, const unordered_m
 bool IsIcebergAuthorizationOption(const string &name);
 void FilterIcebergAuthorizationOptions(unordered_map<string, Value> &options, IcebergAuthorizationType type);
 
-//! ATTACH ... (TYPE ICEBERG): resolves the backend factory of the catalog type (CATALOG_TYPE, ENDPOINT_TYPE), lets it
-//! create the backend, and creates the IcebergCatalog that owns it
+//! ATTACH ... (TYPE ICEBERG): creates the backend of the catalog type (CATALOG_TYPE, only 'rest'), and the
+//! IcebergCatalog that owns it
 struct IcebergAttach {
 	static unique_ptr<Catalog> Attach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,
 	                                  AttachedDatabase &db, const string &name, AttachInfo &info,

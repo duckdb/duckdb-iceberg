@@ -111,10 +111,6 @@ public:
 public:
 	//! The catalog type in user-facing messages, e.g. "REST Catalog"
 	virtual string Name() const = 0;
-	//! The product behind the catalog in user-facing messages, e.g. "AWS Glue"
-	virtual string ProductName() const {
-		return Name();
-	}
 	const IcebergBackendCapabilities &Capabilities() const {
 		return capabilities;
 	}
