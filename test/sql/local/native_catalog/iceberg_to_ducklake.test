@@ -1,0 +1,87 @@
+# name: test/sql/local/native_catalog/iceberg_to_ducklake.test
+# description: Convert a partitioned Iceberg table with position deletes to DuckLake 1.x
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require ducklake
+
+statement ok
+CREATE SCHEMA my_datalake."publisher's shelves";
+
+statement ok
+CREATE TABLE my_datalake."publisher's shelves"."publisher's archive" (
+	id INTEGER, part INTEGER, "reader's edition" VARCHAR
+)
+PARTITIONED BY (part, "reader's edition") WITH (
+	'format-version' = 2,
+	'write.delete.mode' = 'merge-on-read',
+	'write.data.path' = '{TEST_DIR}/publisher''s data'
+);
+
+statement ok
+INSERT INTO my_datalake."publisher's shelves"."publisher's archive" VALUES
+	(1, 10, 'reader''s copy'), (2, 10, 'reader''s copy'), (3, 20, 'author''s draft');
+
+statement ok
+DELETE FROM my_datalake."publisher's shelves"."publisher's archive" WHERE id = 1;
+
+foreach ducklake_version 1.0 1.1
+
+statement ok
+SET ducklake_default_version = '{ducklake_version}';
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/conversion_{ducklake_version}.ducklake' AS lake
+    (DATA_PATH '{TEST_DIR}/conversion_{ducklake_version}');
+
+query I
+SELECT value = '{ducklake_version}' FROM __ducklake_metadata_lake.ducklake_metadata WHERE key = 'version';
+----
+true
+
+statement ok
+CALL iceberg_to_ducklake('my_datalake', 'lake');
+
+query IIT
+SELECT id, part, "reader's edition" FROM lake."publisher's shelves"."publisher's archive" ORDER BY id;
+----
+2	10	reader's copy
+3	20	author's draft
+
+query I
+SELECT id FROM lake."publisher's shelves"."publisher's archive"
+WHERE part = 10 AND "reader's edition" = 'reader''s copy';
+----
+2
+
+query IIT
+SELECT id, part, "reader's edition" FROM lake."publisher's shelves"."publisher's archive"
+AT (VERSION => 0) ORDER BY id;
+----
+1	10	reader's copy
+2	10	reader's copy
+3	20	author's draft
+
+query I
+SELECT bool_and(contains(path, 'publisher''s data')) FROM __ducklake_metadata_lake.ducklake_data_file;
+----
+true
+
+query II
+SELECT count(*), bool_and(contains(path, 'publisher''s data')) FROM __ducklake_metadata_lake.ducklake_delete_file;
+----
+1	true
+
+query I
+SELECT count(*) FROM ducklake_snapshots('lake')
+WHERE contains(changes['tables_created'][1], 'publisher''s archive');
+----
+1
+
+statement ok
+DETACH lake;
+
+endloop

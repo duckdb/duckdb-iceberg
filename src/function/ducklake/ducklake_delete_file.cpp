@@ -1,5 +1,6 @@
 #include "function/ducklake/ducklake_delete_file.hpp"
 #include "function/ducklake/ducklake_utils.hpp"
+#include "duckdb/common/sql_identifier.hpp"
 
 namespace duckdb {
 
@@ -36,7 +37,8 @@ DuckLakeDeleteFile::DuckLakeDeleteFile(const IcebergManifestEntry &manifest_entr
 			throw InvalidInputException("For a Position Delete File to be eligible for conversion to DuckLake, it can "
 			                            "only reference a single data file");
 		}
-		data_file_path = lower_bound.GetValue<string>();
+		// The filename bounds hold the raw path bytes.
+		data_file_path = StringValue::Get(lower_bound);
 	} else if (file_format == "puffin") {
 		if (!data_file.content_offset) {
 			throw InvalidConfigurationException("Puffin delete file is missing 'content_offset'");
@@ -77,15 +79,18 @@ string DuckLakeDeleteFile::FinalizeEntry(int64_t table_id, vector<DuckLakeDataFi
 	int64_t data_file_id = data_file.data_file_id.GetIndex();
 
 	const auto DELETE_FILE_SQL = R"(
-		INSERT INTO {METADATA_CATALOG}.ducklake_delete_file VALUES (
+		INSERT INTO {METADATA_CATALOG}.ducklake_delete_file (
+			delete_file_id, table_id, begin_snapshot, end_snapshot, data_file_id, path, path_is_relative,
+			format, delete_count, file_size_bytes, footer_size, encryption_key, partial_max
+		) VALUES (
 			%d, -- delete_file_id
 			%d, -- table_id
 			%d, -- begin_snapshot
 			%s, -- end_snapshot
 			%d, -- data_file_id
-			'%s', -- path
+			%s, -- path
 			%s, -- path_is_relative
-			'%s', -- format
+			%s, -- format
 			%d, -- delete_count
 			%d, -- file_size_bytes
 			%s, -- footer_size
@@ -106,11 +111,11 @@ string DuckLakeDeleteFile::FinalizeEntry(int64_t table_id, vector<DuckLakeDataFi
 	                          // data_file_id
 	                          data_file_id,
 	                          // path
-	                          path,
+	                          SQLString::ToString(path),
 	                          // path_is_relative
 	                          "false",
 	                          // format
-	                          file_format,
+	                          SQLString::ToString(file_format),
 	                          // delete_count
 	                          record_count,
 	                          // file_size_bytes
