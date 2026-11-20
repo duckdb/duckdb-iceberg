@@ -409,7 +409,9 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 		}
 	} else {
 		// Stage an INSERT statement or a MERGE insert action; the latter may join an overwrite snapshot.
-		if (!written_files.empty()) {
+		// A replacement CTAS publishes an append even for zero rows; later empty INSERTs remain no-ops.
+		if (!written_files.empty() ||
+		    (ctas_copy_op && table_info.transaction_data && table_info.transaction_data->replaces_table)) {
 			ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTable &tbl) {
 				auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
 				IcebergManifestDeletes empty_deletes;
@@ -1315,6 +1317,19 @@ static unique_ptr<IcebergTableMetadata> BuildPlaceholderMetadata(ClientContext &
 		metadata->iceberg_version = default_version.GetValue<uint64_t>();
 	}
 	auto &create_info = info.Base().Cast<CreateTableInfo>();
+	shared_ptr<const IcebergTableMetadata> replacement_metadata;
+	if (create_info.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT) {
+		auto &schema_entry = info.schema.Cast<IcebergSchemaEntry>();
+		auto &catalog = schema_entry.catalog.Cast<IcebergCatalog>();
+		auto transaction = catalog.GetCatalogTransaction(context);
+		auto name = catalog.FoldName(create_info.GetQualifiedName());
+		auto entry = schema_entry.GetEntry(transaction, CatalogType::TABLE_ENTRY, name.Name());
+		if (entry && entry->type == CatalogType::TABLE_ENTRY) {
+			replacement_metadata = entry->Cast<IcebergTableSchemaVersion>().table_info.GetMetadataOwner();
+			metadata->iceberg_version = replacement_metadata->iceberg_version;
+			metadata->table_properties = replacement_metadata->table_properties;
+		}
+	}
 	auto binder = Binder::CreateBinder(context);
 	TableFunctionBinder property_binder(*binder, context, "format-version");
 	for (auto &option : create_info.options) {
@@ -1324,7 +1339,7 @@ static unique_ptr<IcebergTableMetadata> BuildPlaceholderMetadata(ClientContext &
 			throw ParameterNotResolvedException();
 		}
 		auto val = ExpressionExecutor::EvaluateScalar(context, *bound_expr, true);
-		if (option.first == "format-version") {
+		if (StringUtil::CIEquals(option.first, "format-version")) {
 			auto version = val.DefaultCastAs(LogicalType::INTEGER).GetValue<int32_t>();
 			if (version < 1) {
 				throw InvalidInputException("The lowest supported iceberg version is 1!");
@@ -1343,6 +1358,9 @@ static unique_ptr<IcebergTableMetadata> BuildPlaceholderMetadata(ClientContext &
 	int32_t last_column_id;
 	auto schema = IcebergCreateTableRequest::CreateIcebergSchema(context, *metadata, create_info.columns,
 	                                                             &create_info.constraints, last_column_id);
+	if (replacement_metadata) {
+		last_column_id = IcebergCreateTableRequest::AssignReplacementFieldIds(*schema, *replacement_metadata);
+	}
 	metadata->last_column_id = last_column_id;
 	metadata->GetSchemasMutable().AddSchemaOrGetExisting(schema);
 

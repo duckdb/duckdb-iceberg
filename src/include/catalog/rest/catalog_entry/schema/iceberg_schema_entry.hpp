@@ -44,7 +44,7 @@ public:
 	void DropEntry(ClientContext &context, DropInfo &info, bool delete_entry = false);
 	optional_ptr<CatalogEntry> LookupEntry(CatalogTransaction transaction, const EntryLookupInfo &lookup_info) override;
 	bool HandleCreateConflict(CatalogTransaction &transaction, CatalogType catalog_type, const string &entry_name,
-	                          OnCreateConflict on_conflict);
+	                          OnCreateConflict on_conflict, optional_ptr<IcebergTable> &replacement_table);
 	bool DoesExist() const {
 		return exists;
 	}

@@ -1,0 +1,116 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_specifc/nessie/create/test_create_or_replace.test
+# description: Nessie replacement requires a new snapshot; rejected bare replacement preserves the table
+# group: [create]
+
+require-env CATALOG_TEST_CONFIG_SETUP nessie
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cor_nessie;
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_nessie AS SELECT 1 a;
+
+# The catalog ignores removal of main. Reject before sending the schema change.
+statement error
+CREATE OR REPLACE TABLE my_datalake.default.cor_nessie (b VARCHAR);
+----
+Nessie cannot commit CREATE OR REPLACE TABLE without a new snapshot
+
+query I
+SELECT a FROM my_datalake.default.cor_nessie;
+----
+1
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_nessie (b VARCHAR);
+
+query I
+SELECT count(*) FROM my_datalake.default.cor_nessie;
+----
+0
+
+statement error
+COMMIT;
+----
+Nessie cannot commit CREATE OR REPLACE TABLE without a new snapshot
+
+query I
+SELECT a FROM my_datalake.default.cor_nessie;
+----
+1
+
+# CTAS publishes a new snapshot, including when it has no rows.
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_nessie AS SELECT 'new' b WHERE false;
+
+query I
+SELECT count(*) FROM my_datalake.default.cor_nessie;
+----
+0
+
+statement ok
+INSERT INTO my_datalake.default.cor_nessie VALUES ('old');
+
+# A later INSERT in the same transaction makes bare replacement safe to commit.
+statement ok
+BEGIN;
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_nessie (c INTEGER);
+
+statement ok
+INSERT INTO my_datalake.default.cor_nessie VALUES (42);
+
+statement ok
+COMMIT;
+
+query I
+SELECT c FROM my_datalake.default.cor_nessie;
+----
+42
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_nessie AS
+SELECT c + 1 c FROM my_datalake.default.cor_nessie;
+
+query I
+SELECT c FROM my_datalake.default.cor_nessie;
+----
+43
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_nessie AS SELECT 99 c;
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT c FROM my_datalake.default.cor_nessie;
+----
+43
+
+statement ok
+DROP TABLE my_datalake.default.cor_nessie;
+
+# A snapshotless table has no data to detach, so bare replacement remains valid.
+statement ok
+CREATE TABLE my_datalake.default.cor_nessie (a INTEGER);
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_nessie (b VARCHAR);
+
+query I
+SELECT count(b) FROM my_datalake.default.cor_nessie;
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.cor_nessie;
