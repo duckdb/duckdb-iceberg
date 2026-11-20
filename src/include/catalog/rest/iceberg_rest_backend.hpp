@@ -34,7 +34,7 @@ class IcebergRestBackend : public IcebergCatalogBackend,
                            public IcebergCredentialVending,
                            public IcebergServerScanPlanning {
 public:
-	static constexpr IcebergBackendTypeId TYPE = "iceberg.rest";
+	static constexpr IcebergBackendType TYPE = IcebergBackendType::REST;
 	static constexpr const char *DESCRIPTION = "REST Catalog";
 
 public:
@@ -54,9 +54,6 @@ public:
 	string Name() const override {
 		return "REST Catalog";
 	}
-	bool IsInstanceOf(IcebergBackendTypeId id) const override {
-		return StringUtil::Equals(id, TYPE) || IcebergCatalogBackend::IsInstanceOf(id);
-	}
 
 	bool NamespaceExists(ClientContext &context, const IcebergNamespace &ns) override;
 	void CreateNamespace(ClientContext &context, const IcebergNamespace &ns) override;
@@ -68,8 +65,8 @@ public:
 	IcebergCatalogResult<vector<IcebergListedEntry>> ListEntries(ClientContext &context, const IcebergNamespace &ns,
 	                                                             IcebergEntryKind kind) override;
 	shared_ptr<const IcebergLoadedTable> GetCachedTable(ClientContext &context, const string &table_key) override;
-	unique_ptr<IcebergTableLoad> BeginLoadTable(ClientContext &context, IcebergEntryId id,
-	                                            const string &table_key) override;
+	unique_ptr<IcebergTableLoad> CreateTableLoad(ClientContext &context, IcebergEntryId id,
+	                                             const string &table_key) override;
 	void OnTableCreated(const string &table_key, shared_ptr<const IcebergLoadedTable> table) override;
 	void OnTableChanged(const string &table_key, optional_ptr<const IcebergLoadedTable> table, bool dropped) override;
 	IcebergCatalogResult<shared_ptr<const IcebergLoadedView>> LoadView(ClientContext &context,

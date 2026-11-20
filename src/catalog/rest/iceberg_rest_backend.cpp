@@ -18,7 +18,7 @@
 namespace duckdb {
 
 IcebergRestBackend::IcebergRestBackend(const Identifier &catalog_name)
-    : catalog_name(catalog_name), version("v1"), table_request_cache(options) {
+    : IcebergCatalogBackend(TYPE), catalog_name(catalog_name), version("v1"), table_request_cache(options) {
 }
 
 IcebergRestBackend::~IcebergRestBackend() {
@@ -367,8 +367,8 @@ private:
 
 } // namespace
 
-unique_ptr<IcebergTableLoad> IcebergRestBackend::BeginLoadTable(ClientContext &context, IcebergEntryId id,
-                                                                const string &table_key) {
+unique_ptr<IcebergTableLoad> IcebergRestBackend::CreateTableLoad(ClientContext &context, IcebergEntryId id,
+                                                                 const string &table_key) {
 	return make_uniq<IcebergRestTableLoad>(*this, std::move(id), table_request_cache.BeginLoad(table_key));
 }
 

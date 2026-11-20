@@ -92,9 +92,8 @@ struct IcebergBackendCapabilities {
 	bool delete_written_files = true;
 };
 
-//! Backend type ids are strings, so another extension can add a backend type, and Cast<T>() works across shared
-//! libraries without RTTI
-using IcebergBackendTypeId = const char *;
+//! The type of a catalog backend, for typed access to the functionality of one backend type (Cast<T>())
+enum class IcebergBackendType : uint8_t { REST };
 
 //! The part of an Iceberg catalog that differs per catalog type: the protocol to the catalog service and its state.
 //! An IcebergCatalog owns one backend for as long as it is attached. Backends must be thread-safe: they are called
@@ -102,10 +101,7 @@ using IcebergBackendTypeId = const char *;
 //! table sets or transactions; it takes ids and returns values.
 class IcebergCatalogBackend {
 public:
-	static constexpr IcebergBackendTypeId TYPE = "iceberg.backend";
-
-public:
-	IcebergCatalogBackend();
+	explicit IcebergCatalogBackend(IcebergBackendType type);
 	virtual ~IcebergCatalogBackend();
 
 public:
@@ -142,10 +138,10 @@ public:
 	ListEntries(ClientContext &context, const IcebergNamespace &ns, IcebergEntryKind kind) = 0;
 	//! A generation of the table that this transaction may use without loading it (e.g. within a staleness bound)
 	virtual shared_ptr<const IcebergLoadedTable> GetCachedTable(ClientContext &context, const string &table_key);
-	//! Begins a load of a table. Returns NOT_FOUND for a missing table and NOT_ICEBERG for a table that isn't an
-	//! Iceberg table when executed
-	virtual unique_ptr<IcebergTableLoad> BeginLoadTable(ClientContext &context, IcebergEntryId id,
-	                                                    const string &table_key) = 0;
+	//! Creates the load of a table; IcebergTableLoad::Execute runs it. Executing returns NOT_FOUND for a missing table
+	//! and NOT_ICEBERG for a table that isn't an Iceberg table
+	virtual unique_ptr<IcebergTableLoad> CreateTableLoad(ClientContext &context, IcebergEntryId id,
+	                                                     const string &table_key) = 0;
 	//! A table was created with this initial generation
 	virtual void OnTableCreated(const string &table_key, shared_ptr<const IcebergLoadedTable> table);
 	//! A table that was initialized from 'table' changed or was dropped, or may have
@@ -184,19 +180,19 @@ public:
 	//===--------------------------------------------------------------------===//
 	// Typed access, for the functionality of one backend type
 	//===--------------------------------------------------------------------===//
-	virtual bool IsInstanceOf(IcebergBackendTypeId id) const {
-		return StringUtil::Equals(id, TYPE);
+	IcebergBackendType GetBackendType() const {
+		return type;
 	}
 	template <class TARGET>
 	TARGET &Cast() {
-		if (!IsInstanceOf(TARGET::TYPE)) {
+		if (type != TARGET::TYPE) {
 			throw InvalidInputException("This Iceberg catalog is a %s, not a %s", Name(), TARGET::DESCRIPTION);
 		}
 		return static_cast<TARGET &>(*this);
 	}
 	template <class TARGET>
 	optional_ptr<TARGET> TryCast() {
-		if (!IsInstanceOf(TARGET::TYPE)) {
+		if (type != TARGET::TYPE) {
 			return nullptr;
 		}
 		return static_cast<TARGET *>(this);
@@ -204,6 +200,9 @@ public:
 
 protected:
 	IcebergBackendCapabilities capabilities;
+
+private:
+	const IcebergBackendType type;
 };
 
 //===--------------------------------------------------------------------===//

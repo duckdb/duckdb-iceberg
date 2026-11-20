@@ -34,6 +34,18 @@ public:
 	IcebergCatalogBackend &GetBackend() const {
 		return *backend;
 	}
+	//! Table properties the catalog applies to all of its tables
+	const case_insensitive_map_t<string> &GetCatalogProperties() const {
+		return GetBackend().GetCatalogProperties();
+	}
+	//! The backend's credential vending, if it vends storage credentials
+	optional_ptr<IcebergCredentialVending> GetCredentialVending() const {
+		return GetBackend().GetCredentialVending();
+	}
+	//! The backend's server-side scan planning, if it plans scans
+	optional_ptr<IcebergServerScanPlanning> GetServerScanPlanning() const {
+		return GetBackend().GetServerScanPlanning();
+	}
 	//! The key that identifies a table or view of this catalog in caches and transactions
 	string GetEntryKey(const vector<string> &namespace_items, const string &name) const;
 	//! Whether or not this catalog should search a specific type with the standard priority

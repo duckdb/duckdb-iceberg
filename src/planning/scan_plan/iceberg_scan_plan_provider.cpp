@@ -64,7 +64,7 @@ unique_ptr<IcebergScanPlanProvider> IcebergScanPlanProvider::Create(IcebergScanP
 	unique_ptr<IcebergScanPlanProvider> provider;
 	if (server_side_planning_enabled) {
 		auto &table_info = table_entry->table_info;
-		auto planning = table_info.catalog.GetBackend().GetServerScanPlanning();
+		auto planning = table_info.catalog.GetServerScanPlanning();
 		if (planning && planning->PlansScans()) {
 			IcebergServerSideScanPlan plan;
 			try {

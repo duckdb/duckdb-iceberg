@@ -10,7 +10,7 @@ IcebergCredentialVending::~IcebergCredentialVending() {
 IcebergServerScanPlanning::~IcebergServerScanPlanning() {
 }
 
-IcebergCatalogBackend::IcebergCatalogBackend() {
+IcebergCatalogBackend::IcebergCatalogBackend(IcebergBackendType type) : type(type) {
 }
 
 IcebergCatalogBackend::~IcebergCatalogBackend() {

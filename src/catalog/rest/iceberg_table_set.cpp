@@ -51,8 +51,8 @@ bool IcebergTableSet::FillEntry(ClientContext &context, IcebergTable &table) {
 			return ApplyLoadResult(context, table, std::move(prefetched), *prefetched_load);
 		}
 	}
-	auto load = backend.BeginLoadTable(context, IcebergEntryId(IcebergNamespace(schema.namespace_items), table.name),
-	                                   table.GetTableKey());
+	auto load = backend.CreateTableLoad(context, IcebergEntryId(IcebergNamespace(schema.namespace_items), table.name),
+	                                    table.GetTableKey());
 	auto result = load->Execute(context);
 	return ApplyLoadResult(context, table, std::move(result), *load);
 }
@@ -152,7 +152,7 @@ void IcebergTableSet::ScanEagerEntries(ClientContext &context, const std::functi
 			WarnTableLoadFailure(context, table, ErrorData(ex));
 		}
 		if (needs_load) {
-			load->load = backend.BeginLoadTable(
+			load->load = backend.CreateTableLoad(
 			    context, IcebergEntryId(IcebergNamespace(table.schema.namespace_items), table.name),
 			    table.GetTableKey());
 			load->result = executor.Schedule(IcebergLoadTableOp {load->load});

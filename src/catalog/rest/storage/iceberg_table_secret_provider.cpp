@@ -178,7 +178,7 @@ static CreateSecretInput ReVendVendedCredentials(ClientContext &context, CreateS
 	auto &table_entry = table_entry_p->Cast<IcebergTableSchemaVersion>();
 	auto &table_info = table_entry.table_info;
 
-	auto vending = ic_catalog.GetBackend().GetCredentialVending();
+	auto vending = ic_catalog.GetCredentialVending();
 	if (!vending) {
 		throw InvalidInputException("Iceberg %s '%s' does not vend credentials", ic_catalog.GetBackend().Name(),
 		                            catalog_name);

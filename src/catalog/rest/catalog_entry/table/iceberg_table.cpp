@@ -75,7 +75,7 @@ vector<string> IcebergTable::GetS3EncryptionTypes() const {
 	if (it != config.end()) {
 		sse_types.push_back(it->second);
 	} else {
-		auto &catalog_properties = catalog.GetBackend().GetCatalogProperties();
+		auto &catalog_properties = catalog.GetCatalogProperties();
 		auto catalog_it = catalog_properties.find(SSE_TYPE);
 		if (catalog_it != catalog_properties.end()) {
 			sse_types.push_back(catalog_it->second);
@@ -262,7 +262,7 @@ IcebergTable::GetVendedCredentials(ClientContext &context, const vector<IcebergS
 	IRCAPITableCredentials result;
 	auto secret_base_name = UUID::ToString(UUID::GenerateRandomUUID());
 	case_insensitive_map_t<Value> user_defaults;
-	auto vending = catalog.GetBackend().GetCredentialVending();
+	auto vending = catalog.GetCredentialVending();
 	if (vending) {
 		user_defaults = vending->GetSecretDefaults(context);
 	}
@@ -695,7 +695,7 @@ static void AddHTTPSecretsToOptions(SecretEntry &http_secret_entry, case_insensi
 
 void IcebergTable::LoadCredentials(ClientContext &context) const {
 	VerifyReadEncryptionSupported();
-	auto vending = catalog.GetBackend().GetCredentialVending();
+	auto vending = catalog.GetCredentialVending();
 	if (!vending || !vending->VendsCredentials()) {
 		// assume secret already exists
 		return;
@@ -724,7 +724,7 @@ static void StoreVendedSecret(ClientContext &context, CreateSecretInput &info) {
 
 void IcebergTable::LoadCredentials(ClientContext &context, IRCAPITableCredentials table_credentials) const {
 	auto &transaction = IcebergTransaction::Get(context, catalog);
-	auto vending = catalog.GetBackend().GetCredentialVending();
+	auto vending = catalog.GetCredentialVending();
 	if (!vending || !vending->VendsCredentials()) {
 		// assume secret already exists
 		return;
@@ -834,7 +834,7 @@ bool IcebergTable::HasTransactionUpdates() const {
 }
 
 void IcebergTable::RefreshFromCatalog(ClientContext &context) {
-	auto load = catalog.GetBackend().BeginLoadTable(
+	auto load = catalog.GetBackend().CreateTableLoad(
 	    context, IcebergEntryId(IcebergNamespace(schema.namespace_items), name), GetTableKey());
 	auto result = load->Execute(context);
 	ApplyRefreshResult(context, std::move(result), *load);

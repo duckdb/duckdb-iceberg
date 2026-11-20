@@ -93,7 +93,7 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 	}
 
 	// Verify schema existence on the server first
-	bool schema_exists = backend->NamespaceExists(*context, backend->ParseNamespace(schema_name));
+	bool schema_exists = GetBackend().NamespaceExists(*context, GetBackend().ParseNamespace(schema_name));
 
 	if (schema_exists) {
 		if (info.on_conflict == OnCreateConflict::IGNORE_ON_CONFLICT) {
@@ -118,7 +118,7 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 }
 
 void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
-	auto cascade_only = backend->Capabilities().drop_namespace == IcebergDropNamespaceMode::CASCADE_ONLY;
+	auto cascade_only = GetBackend().Capabilities().drop_namespace == IcebergDropNamespaceMode::CASCADE_ONLY;
 	if (info.cascade && !cascade_only) {
 		throw NotImplementedException(
 		    "DROP SCHEMA <schema_name> CASCADE is not supported for Iceberg schemas currently");
@@ -130,8 +130,8 @@ void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 	info.SetQualifiedName(FoldName(info.GetQualifiedName()));
 
 	// Verify schema existence on the server first
-	bool schema_exists =
-	    backend->NamespaceExists(context, backend->ParseNamespace(info.GetQualifiedName().Name().GetIdentifierName()));
+	bool schema_exists = GetBackend().NamespaceExists(
+	    context, GetBackend().ParseNamespace(info.GetQualifiedName().Name().GetIdentifierName()));
 
 	if (!schema_exists) {
 		if (info.if_not_found == OnEntryNotFound::RETURN_NULL) {
@@ -168,7 +168,7 @@ DatabaseSize IcebergCatalog::GetDatabaseSize(ClientContext &context) {
 }
 
 string IcebergCatalog::GetEntryKey(const vector<string> &namespace_items, const string &name) const {
-	return backend->GetEntryKey(IcebergNamespace(namespace_items), name);
+	return GetBackend().GetEntryKey(IcebergNamespace(namespace_items), name);
 }
 
 ErrorData IcebergCatalog::SupportsCreateTable(BoundCreateTableInfo &info) {
