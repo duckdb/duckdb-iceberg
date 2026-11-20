@@ -28,7 +28,8 @@ struct ManifestFileVirtualColumn {
 
 AvroScan::AvroScan(const string &path, ClientContext &context, shared_ptr<IcebergAvroScanInfo> avro_scan_info)
     : context(context), scan_info(avro_scan_info) {
-	if (scan_info->type == AvroScanInfoType::MANIFEST_FILE) {
+	if (scan_info->type == AvroScanInfoType::MANIFEST_FILE &&
+	    !scan_info->Cast<IcebergManifestFileScanInfo>().project_file_paths) {
 		FindCachedManifests();
 		if (scan_info->Cast<IcebergManifestFileScanInfo>().manifest_indexes.empty()) {
 			finished = true;

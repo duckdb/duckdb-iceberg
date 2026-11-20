@@ -13,10 +13,8 @@
 
 namespace duckdb {
 
-namespace {
-
-static IcebergSchemaEntry &LoadIcebergSchema(ClientContext &context, const QualifiedName &table_name,
-                                             const string &function_name) {
+IcebergSchemaEntry &LoadIcebergSchema(ClientContext &context, const QualifiedName &table_name,
+                                      const string &function_name) {
 	auto &iceberg_catalog = GetMaintenanceIcebergCatalog(context, table_name, function_name);
 
 	auto &schema_set = iceberg_catalog.GetSchemas();
@@ -29,8 +27,6 @@ static IcebergSchemaEntry &LoadIcebergSchema(ClientContext &context, const Quali
 	}
 	return schema_entry_opt->Cast<IcebergSchemaEntry>();
 }
-
-} // namespace
 
 IcebergCatalog &GetMaintenanceIcebergCatalog(ClientContext &context, const QualifiedName &table_name,
                                              const string &function_name) {
