@@ -145,6 +145,10 @@ public:
 			    table_filters.TryGetFilterByColumnIndex(column_index)) {
 				continue;
 			}
+			//! Every pushed filter is an expression filter; should one not be, it only prunes nothing.
+			if (entry.Filter().filter_type != TableFilterType::EXPRESSION_FILTER) {
+				continue;
+			}
 			auto &filter =
 			    ExpressionFilter::GetExpressionFilter(entry.Filter(), "IcebergTaskFileList::DynamicFilterPushdown");
 			table_filters.PushFilter(column_index, filter.Copy());
