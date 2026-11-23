@@ -56,6 +56,18 @@ EXECUTE sequence_numbers;
 5	2
 4	2
 
+# A plain LIMIT, without ORDER BY, freezes the configuration in the same way
+statement ok
+PREPARE first_rows AS
+SELECT _row_id, _last_updated_sequence_number FROM my_datalake.default.row_lineage_prepared LIMIT 3;
+
+query II rowsort
+EXECUTE first_rows;
+----
+0	1
+1	1
+2	1
+
 statement ok
 PREPARE row_id_filter AS
 SELECT id FROM my_datalake.default.row_lineage_prepared WHERE _row_id = 3 LIMIT 1;

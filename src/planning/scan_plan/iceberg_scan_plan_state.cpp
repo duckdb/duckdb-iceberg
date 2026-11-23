@@ -36,9 +36,10 @@ void IcebergScanPlanState::SetTable(IcebergTableSchemaVersion &table) {
 	configuration.table = table;
 }
 
-//! A prepared statement is planned again on every EXECUTE, with the bind data of the PREPARE. The planner hook then
-//! asks for the same restrictions a second time, after the first plan froze the configuration: a request that
-//! changes nothing is not a change.
+//! The two restrictions the planner hook asks for. A prepared statement is planned again on every EXECUTE, with the
+//! bind data of the PREPARE, so the hook asks a second time, after the first plan froze the configuration: a request
+//! that changes nothing is not a change.
+
 void IcebergScanPlanState::DisableServerSidePlanning() {
 	if (!configuration.server_side_planning_enabled) {
 		return;
