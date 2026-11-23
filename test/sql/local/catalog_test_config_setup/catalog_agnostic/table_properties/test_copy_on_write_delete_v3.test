@@ -109,16 +109,20 @@ FROM my_datalake.default.cow_delete_v3 AT (VERSION => getvariable('cow_delete_v3
 4	3	2
 5	4	2
 
-# a row updated with merge-on-read keeps the sequence number of that UPDATE, not the one of the rewrite;
-# the rows the UPDATE removed with a deletion vector stay removed
+# write.update.mode is not set, so it defaults to merge-on-read: the UPDATE writes deletion vectors for the
+# old rows and a new data file. A later copy-on-write DELETE keeps the sequence number of that UPDATE, not
+# the one of the rewrite, and the rows the deletion vectors removed stay removed
 
 statement ok
 UPDATE my_datalake.default.cow_delete_v3 SET v = upper(v) WHERE id IN (3, 4);
 
+# one deletion vector for each of the two files that held the updated rows
+
 query I
-SELECT count(*) > 0 FROM iceberg_metadata(my_datalake.default.cow_delete_v3) WHERE content = 'POSITION_DELETES';
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.cow_delete_v3)
+WHERE content = 'POSITION_DELETES' AND file_format = 'puffin' AND status != 'DELETED';
 ----
-true
+2
 
 query I
 DELETE FROM my_datalake.default.cow_delete_v3 WHERE id IN (4, 5);
@@ -130,6 +134,30 @@ SELECT id, v, _row_id, _last_updated_sequence_number FROM my_datalake.default.co
 ----
 1	a	0	1
 3	C	2	5
+6	f	7	4
+
+# the deletion vector of the removed file is removed with it
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.cow_delete_v3)
+WHERE content = 'POSITION_DELETES' AND file_format = 'puffin' AND status != 'DELETED';
+----
+1
+
+# the UPDATE's snapshot still lists both deletion vectors: time travel to it still sees only the updated versions
+# of rows 3 and 4, not the old ones the deletion vectors removed
+
+statement ok
+SET VARIABLE cow_delete_v3_update = (
+    SELECT snapshot_id FROM iceberg_snapshots(my_datalake.default.cow_delete_v3) WHERE sequence_number = 5);
+
+query IIII
+SELECT id, v, _row_id, _last_updated_sequence_number
+FROM my_datalake.default.cow_delete_v3 AT (VERSION => getvariable('cow_delete_v3_update')) ORDER BY id;
+----
+1	a	0	1
+3	C	2	5
+4	D	3	5
+5	e	4	2
 6	f	7	4
 
 # a DELETE that matches nothing commits nothing
@@ -190,6 +218,17 @@ SELECT id, _row_id, _last_updated_sequence_number FROM my_datalake.default.cow_d
 
 statement ok
 COMMIT;
+
+# after the commit: the committed row keeps its lineage, and the inserted row has a row ID and sequence number.
+# The last rewrite writes both rows into one file with first_row_id 8; row 5 is at position 0 or 1 of that file,
+# depending on the order the rewrite read the rows in, so its row ID is 8 or 9
+
+query III
+SELECT id, CASE WHEN id = 5 THEN (_row_id IN (8, 9))::VARCHAR ELSE _row_id::VARCHAR END, _last_updated_sequence_number
+FROM my_datalake.default.cow_delete_v3_transaction ORDER BY id;
+----
+3	2	1
+5	true	4
 
 query IIII
 SELECT count(*), count(DISTINCT _row_id), min(_row_id) FILTER (WHERE id = 3),
@@ -302,11 +341,11 @@ DELETE FROM my_datalake.default.cow_delete_v3_upgrade WHERE id = 2;
 ----
 1
 
-query I
-SELECT id FROM my_datalake.default.cow_delete_v3_upgrade ORDER BY id;
+query III
+SELECT id, _row_id, _last_updated_sequence_number FROM my_datalake.default.cow_delete_v3_upgrade ORDER BY id;
 ----
-1
-3
+1	NULL	NULL
+3	NULL	NULL
 
 statement ok
 COMMIT;

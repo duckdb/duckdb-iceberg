@@ -93,3 +93,9 @@ query I
 select count(*) from my_datalake.default.alter_table_set_options;
 ----
 4
+
+query I
+select count(*) from iceberg_metadata(my_datalake.default.alter_table_set_options)
+where content = 'POSITION_DELETES' and file_format = 'puffin' and status != 'DELETED';
+----
+1

@@ -19,7 +19,10 @@
 #include "duckdb/planner/table_filter_set.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "execution/operator/iceberg_delete.hpp"
 #include "execution/operator/iceberg_file_rewrite.hpp"
+#include "core/deletes/iceberg_delete_data.hpp"
+#include "planning/iceberg_multi_file_list.hpp"
 #include "planning/iceberg_multi_file_reader.hpp"
 
 namespace duckdb {
@@ -52,8 +55,21 @@ protected:
 		//! are rebuilt for each commit attempt, including those of files inserted in this transaction.
 		IcebergFileRewriteInput result(state.added_data_files ? IcebergSnapshotOperationType::OVERWRITE
 		                                                      : IcebergSnapshotOperationType::DELETE);
-		for (auto &entry : delete_filter.GetDeletes().rows_by_file) {
+		auto &rows_by_file = delete_filter.GetDeletes().rows_by_file;
+		if (!rows_by_file.empty() && !delete_filter.match_file_list) {
+			throw InternalException("Copy-on-write DELETE: matched rows without an Iceberg scan of the matching rows");
+		}
+		for (auto &entry : rows_by_file) {
 			result.replaced_files.emplace_back(entry.first);
+			//! SPEC: when removing a data file, writers must also remove any deletion vector that applies to it. Like
+			//! a merge-on-read DELETE replacing a vector, this also removes the file-scoped position delete files;
+			//! partition-scoped ones may still apply to other data files and stay.
+			auto existing_deletes = delete_filter.match_file_list->GetExistingPositionalDeleteData(entry.first);
+			if (existing_deletes) {
+				for (auto &delete_file : existing_deletes->source_files) {
+					result.replaced_files.push_back(delete_file);
+				}
+			}
 		}
 		return result;
 	}
@@ -167,6 +183,12 @@ PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanDelete(ClientContext &cont
 	for (idx_t i = 0; i < 2; i++) {
 		match_row_id_indexes.push_back(op.expressions[i]->Cast<BoundReferenceExpression>().Index());
 	}
+	//! A DELETE that cannot match any row may have no scan left after optimization
+	optional_ptr<IcebergMultiFileList> match_file_list;
+	auto match_scan = IcebergDelete::FindIcebergScan(match_plan);
+	if (match_scan) {
+		match_file_list = match_scan->bind_data->Cast<MultiFileBindData>().file_list->Cast<IcebergMultiFileList>();
+	}
 
 	//! Probe side: the whole table again, so the rows of each matched file that survive can be rewritten. It is
 	//! planned here, after optimization, like PhysicalPlanGenerator::Plan does for a full statement.
@@ -185,6 +207,7 @@ PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanDelete(ClientContext &cont
 	                                                         std::move(match_row_id_indexes))
 	                   .Cast<IcebergCopyOnWriteDeleteFilter>();
 	filter.keep_logical_plan = std::move(keep_logical_plan);
+	filter.match_file_list = match_file_list;
 
 	auto keep_scan = FindTableScan(keep_plan);
 	if (keep_scan) {
@@ -317,7 +340,8 @@ OperatorResultType IcebergCopyOnWriteDeleteFilter::Execute(ExecutionContext &con
 	auto &state = state_p.Cast<CopyOnWriteDeleteOperatorState>();
 	auto &rows_by_file = GetDeletes().rows_by_file;
 
-	//! The probe side emits the table's columns followed by filename and file_row_number
+	//! The probe side emits the columns this operator outputs (the table's columns, then on V3 _row_id and
+	//! _last_updated_sequence_number), followed by filename and file_row_number
 	auto column_count = types.size();
 	D_ASSERT(input.ColumnCount() == column_count + 2);
 
