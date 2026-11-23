@@ -164,6 +164,14 @@ unique_ptr<LogicalOperator> BindKeepScan(ClientContext &context, IcebergTableSch
 		projection.expressions.push_back(
 		    make_uniq<BoundColumnRefExpression>(entry->second.name, entry->second.type, binding));
 	}
+	if (with_row_lineage) {
+		//! This scan is bound after IcebergPlannerRoutine runs, so do what it does for a scan of the lineage columns:
+		//! server scan plans carry no data sequence numbers, so inherited ones need manifest-based planning.
+		auto &scan_planner =
+		    get.bind_data->Cast<MultiFileBindData>().file_list->Cast<IcebergMultiFileList>().GetScanPlanner();
+		scan_planner.RequireRowIds();
+		scan_planner.DisableServerSidePlanning();
+	}
 	return plan;
 }
 
