@@ -1,0 +1,303 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/move_column/move_column_transaction.test
+# description: iceberg_move_column takes part in the transaction: later statements see the new order, COMMIT publishes it, ROLLBACK restores the table
+# group: [move_column]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.move_txn;
+
+# a column added in the transaction is moved before it is committed
+statement ok
+CREATE TABLE my_datalake.default.move_txn (id BIGINT, data VARCHAR);
+
+statement ok
+INSERT INTO my_datalake.default.move_txn VALUES (1, 'a');
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.move_txn ADD COLUMN ts DATE;
+
+# each schema change of the transaction adds a schema: ADD COLUMN made schema 1, the move makes schema 2
+query II
+SELECT previous_schema_id, current_schema_id
+FROM iceberg_move_column('my_datalake.default.move_txn', 'ts', after => 'id');
+----
+1	2
+
+# the later statements of the transaction see the new order
+query II
+SELECT column_name, column_type FROM (DESCRIBE my_datalake.default.move_txn);
+----
+id	BIGINT
+ts	DATE
+data	VARCHAR
+
+query ITT
+SELECT * FROM my_datalake.default.move_txn;
+----
+1	NULL	a
+
+statement ok
+INSERT INTO my_datalake.default.move_txn VALUES (2, DATE '2026-01-02', 'b');
+
+query ITT
+SELECT * FROM my_datalake.default.move_txn ORDER BY id;
+----
+1	NULL	a
+2	2026-01-02	b
+
+statement ok
+COMMIT;
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE my_datalake.default.move_txn);
+----
+id	BIGINT
+ts	DATE
+data	VARCHAR
+
+query ITT
+SELECT * FROM my_datalake.default.move_txn ORDER BY id;
+----
+1	NULL	a
+2	2026-01-02	b
+
+query II
+SELECT metadata."current-schema-id"::INTEGER, len(metadata.schemas::VARIANT[])
+FROM iceberg_load_table_response('my_datalake.default.move_txn');
+----
+2	3
+
+# a rolled back move leaves the table as it was
+statement ok
+BEGIN;
+
+query II
+SELECT previous_schema_id, current_schema_id
+FROM iceberg_move_column('my_datalake.default.move_txn', 'data', first => true);
+----
+2	3
+
+query I
+SELECT column_name FROM (DESCRIBE my_datalake.default.move_txn);
+----
+data
+id
+ts
+
+statement ok
+ROLLBACK;
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE my_datalake.default.move_txn);
+----
+id	BIGINT
+ts	DATE
+data	VARCHAR
+
+query ITT
+SELECT * FROM my_datalake.default.move_txn ORDER BY id;
+----
+1	NULL	a
+2	2026-01-02	b
+
+query II
+SELECT metadata."current-schema-id"::INTEGER, len(metadata.schemas::VARIANT[])
+FROM iceberg_load_table_response('my_datalake.default.move_txn');
+----
+2	3
+
+statement ok
+DROP TABLE my_datalake.default.move_txn;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.move_txn_readd;
+
+# a column dropped and added again in the transaction is moved as the new column
+statement ok
+CREATE TABLE my_datalake.default.move_txn_readd (id BIGINT, data VARCHAR, data_1 VARCHAR);
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.move_txn_readd DROP COLUMN id;
+
+statement ok
+ALTER TABLE my_datalake.default.move_txn_readd ADD COLUMN id INTEGER;
+
+statement ok
+CALL iceberg_move_column('my_datalake.default.move_txn_readd', 'id', after => 'data');
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE my_datalake.default.move_txn_readd);
+----
+data	VARCHAR
+id	INTEGER
+data_1	VARCHAR
+
+statement ok
+COMMIT;
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE my_datalake.default.move_txn_readd);
+----
+data	VARCHAR
+id	INTEGER
+data_1	VARCHAR
+
+statement ok
+DROP TABLE my_datalake.default.move_txn_readd;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.move_noop;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.move_noop_other;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.move_noop_renamed;
+
+# A move that leaves the order as it is registers no change of the table: the transaction can still drop or rename
+statement ok
+CREATE TABLE my_datalake.default.move_noop (a INTEGER, b INTEGER);
+
+statement ok
+CREATE TABLE my_datalake.default.move_noop_other (x INTEGER);
+
+statement ok
+BEGIN;
+
+query II
+SELECT previous_schema_id, current_schema_id
+FROM iceberg_move_column('my_datalake.default.move_noop', 'a', first => true);
+----
+0	0
+
+statement ok
+DROP TABLE my_datalake.default.move_noop_other;
+
+statement ok
+COMMIT;
+
+statement error
+SELECT * FROM my_datalake.default.move_noop_other;
+----
+Catalog Error: Table with name move_noop_other does not exist!
+
+statement ok
+BEGIN;
+
+query II
+SELECT previous_schema_id, current_schema_id
+FROM iceberg_move_column('my_datalake.default.move_noop', 'b', after => 'a');
+----
+0	0
+
+statement ok
+ALTER TABLE my_datalake.default.move_noop RENAME TO move_noop_renamed;
+
+statement ok
+COMMIT;
+
+query I
+SELECT column_name FROM (DESCRIBE my_datalake.default.move_noop_renamed);
+----
+a
+b
+
+statement ok
+DROP TABLE my_datalake.default.move_noop_renamed;
+
+# and it has nothing to commit: it neither fails on what another writer committed meanwhile nor undoes it.
+# con1 is in a transaction; con2 commits its statement at once
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.move_noop_concurrent;
+
+statement ok
+CREATE TABLE my_datalake.default.move_noop_concurrent (a INTEGER, b INTEGER);
+
+statement ok con1
+BEGIN;
+
+query II con1
+SELECT previous_schema_id, current_schema_id
+FROM iceberg_move_column('my_datalake.default.move_noop_concurrent', 'a', first => true);
+----
+0	0
+
+statement ok con2
+ALTER TABLE my_datalake.default.move_noop_concurrent ADD COLUMN c INTEGER;
+
+statement ok con1
+COMMIT;
+
+query I
+SELECT column_name FROM (DESCRIBE my_datalake.default.move_noop_concurrent);
+----
+a
+b
+c
+
+statement ok
+DROP TABLE my_datalake.default.move_noop_concurrent;
+
+# A move that restores an earlier order only sets the current schema, so its commit has to assert the schema it
+# replaces: after another writer changed the schema the commit fails instead of undoing that change.
+# con1 is in a transaction; con2 commits each statement at once
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.move_concurrent;
+
+statement ok
+CREATE TABLE my_datalake.default.move_concurrent (a INTEGER, b INTEGER, c INTEGER);
+
+statement ok
+INSERT INTO my_datalake.default.move_concurrent VALUES (10, 20, 30);
+
+statement ok
+CALL iceberg_move_column('my_datalake.default.move_concurrent', 'c', first => true);
+
+statement ok con1
+BEGIN;
+
+# back to (a, b, c), the order of schema 0
+query II con1
+SELECT previous_schema_id, current_schema_id
+FROM iceberg_move_column('my_datalake.default.move_concurrent', 'c', after => 'b');
+----
+1	0
+
+statement ok con2
+ALTER TABLE my_datalake.default.move_concurrent ADD COLUMN e INTEGER;
+
+statement ok con2
+INSERT INTO my_datalake.default.move_concurrent VALUES (31, 11, 21, 51);
+
+statement error con1
+COMMIT;
+----
+<REGEX>:.*TransactionContext Error.*Conflict_409.*
+
+query I
+SELECT column_name FROM (DESCRIBE my_datalake.default.move_concurrent);
+----
+c
+a
+b
+e
+
+query IIII
+SELECT * FROM my_datalake.default.move_concurrent ORDER BY a;
+----
+30	10	20	NULL
+31	11	21	51
+
+statement ok
+DROP TABLE my_datalake.default.move_concurrent;

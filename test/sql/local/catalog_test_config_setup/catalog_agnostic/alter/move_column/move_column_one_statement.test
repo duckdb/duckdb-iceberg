@@ -1,0 +1,116 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/move_column/move_column_one_statement.test
+# description: iceberg_move_column calls in one statement run on different threads; every change is applied, also next to a function that changes the properties of the table
+# group: [move_column]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+SET threads=4;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.move_one_statement;
+
+statement ok
+CREATE TABLE my_datalake.default.move_one_statement (a INTEGER, b INTEGER, c INTEGER, d INTEGER);
+
+# Every statement is a transaction of its own, so each of them registers the table again.
+loop i 0 5
+
+# The two branches run at the same time only because count(*) is on top.
+query I
+SELECT count(*) FROM (
+	SELECT 1 FROM iceberg_move_column('my_datalake.default.move_one_statement', 'b', before => 'a')
+	UNION ALL
+	SELECT 1 FROM iceberg_move_column('my_datalake.default.move_one_statement', 'd', before => 'c')
+);
+----
+2
+
+query I
+SELECT column_name FROM (DESCRIBE my_datalake.default.move_one_statement);
+----
+b
+a
+d
+c
+
+# two scalar subqueries
+query II
+SELECT
+	(SELECT count(*) FROM iceberg_move_column('my_datalake.default.move_one_statement', 'a', before => 'b')),
+	(SELECT count(*) FROM iceberg_move_column('my_datalake.default.move_one_statement', 'c', before => 'd'));
+----
+1	1
+
+query I
+SELECT column_name FROM (DESCRIBE my_datalake.default.move_one_statement);
+----
+a
+b
+c
+d
+
+# a move next to a change of the table properties
+query I
+SELECT count(*) FROM (
+	SELECT 1 FROM iceberg_move_column('my_datalake.default.move_one_statement', 'd', first => true)
+	UNION ALL
+	SELECT 1 FROM set_iceberg_table_properties(my_datalake.default.move_one_statement, {'k{i}': 'v'})
+);
+----
+2
+
+query I
+SELECT column_name FROM (DESCRIBE my_datalake.default.move_one_statement);
+----
+d
+a
+b
+c
+
+query II
+SELECT
+	(SELECT count(*) FROM iceberg_move_column('my_datalake.default.move_one_statement', 'd', after => 'c')),
+	(SELECT count(*) FROM set_iceberg_table_properties(my_datalake.default.move_one_statement, {'m{i}': 'v'}));
+----
+1	1
+
+query I
+SELECT column_name FROM (DESCRIBE my_datalake.default.move_one_statement);
+----
+a
+b
+c
+d
+
+endloop
+
+# every property was set
+query II
+SELECT count(*) FILTER (key SIMILAR TO 'k[0-9]+'), count(*) FILTER (key SIMILAR TO 'm[0-9]+')
+FROM iceberg_table_properties(my_datalake.default.move_one_statement);
+----
+5	5
+
+# a statement in which one call is refused changes nothing
+statement error
+SELECT count(*) FROM (
+	SELECT 1 FROM iceberg_move_column('my_datalake.default.move_one_statement', 'd', first => true)
+	UNION ALL
+	SELECT 1 FROM iceberg_move_column('my_datalake.default.move_one_statement', 'nope', first => true)
+);
+----
+Invalid Input Error: Cannot move missing column: nope
+
+query I
+SELECT column_name FROM (DESCRIBE my_datalake.default.move_one_statement);
+----
+a
+b
+c
+d
+
+statement ok
+DROP TABLE my_datalake.default.move_one_statement;
