@@ -136,12 +136,16 @@ SELECT id, v, _row_id, _last_updated_sequence_number FROM my_datalake.default.co
 3	C	2	5
 6	f	7	4
 
-# the deletion vector of the removed file is removed with it
-query I
-SELECT count(*) FROM iceberg_metadata(my_datalake.default.cow_delete_v3)
-WHERE content = 'POSITION_DELETES' AND file_format = 'puffin' AND status != 'DELETED';
+# the deletion vector of the removed file is removed with it. The UPDATE wrote both deletion vectors as blobs of
+# one Puffin file: only the entry of the removed file's blob is marked DELETED, the other blob of that Puffin file
+# stays live, and the Puffin file itself is not rewritten
+
+query III
+SELECT count(DISTINCT file_path), count(*) FILTER (WHERE status = 'DELETED'), count(*) FILTER (WHERE status != 'DELETED')
+FROM iceberg_metadata(my_datalake.default.cow_delete_v3)
+WHERE content = 'POSITION_DELETES' AND file_format = 'puffin';
 ----
-1
+1	1	1
 
 # the UPDATE's snapshot still lists both deletion vectors: time travel to it still sees only the updated versions
 # of rows 3 and 4, not the old ones the deletion vectors removed
