@@ -1,0 +1,404 @@
+# name: test/sql/local/scan_tasks_partition_pruning.test
+# description: With trust_partition_values, a task whose identity partition values the filters reject is never opened
+# group: [local]
+
+include test/sql/init_requires
+
+require json
+
+# Caches off, so the FileSystem log shows every request a scan makes.
+statement ok
+set enable_external_file_cache=false;
+
+statement ok
+set parquet_metadata_cache=false;
+
+# One file per identity partition value. Each holds the partition column, as an Iceberg writer writes it.
+foreach part 1999 2000 2001 2002
+
+statement ok
+copy (select i::integer id, {part}::integer part from range(1000) t(i))
+to '{TEST_DIR}/prune_task_{part}.parquet' (format parquet, field_ids {id:1, part:3});
+
+endloop
+
+# A file without the partition column: its rows read the task's partition value.
+statement ok
+copy (select i::integer id from range(1000) t(i))
+to '{TEST_DIR}/prune_task_nopart.parquet' (format parquet, field_ids {id:1});
+
+# A file of the NULL partition.
+statement ok
+copy (select i::integer id, NULL::integer part from range(10) t(i))
+to '{TEST_DIR}/prune_task_null.parquet' (format parquet, field_ids {id:1, part:3});
+
+# A file under spec 1, whose field on part is a bucket transform: it has no identity partition value.
+statement ok
+copy (select i::integer id, 2000::integer part from range(5) t(i))
+to '{TEST_DIR}/prune_task_spec1.parquet' (format parquet, field_ids {id:1, part:3});
+
+# A file holding part=2000 under a descriptor that says 1999.
+statement ok
+copy (select 42::integer id, 2000::integer part)
+to '{TEST_DIR}/prune_task_liar.parquet' (format parquet, field_ids {id:1, part:3});
+
+statement ok
+create temp macro prune_descriptor(name, spec, p, rows) as
+ {'file_path':'{TEST_DIR}/prune_task_' || name || '.parquet', 'file_format':'PARQUET'::varchar,
+  'file_size_in_bytes':(select size::bigint from read_blob('{TEST_DIR}/prune_task_*.parquet')
+                        where filename = '{TEST_DIR}/prune_task_' || name || '.parquet'),
+  'record_count':rows::bigint, 'sequence_number':NULL::bigint, 'first_row_id':NULL::bigint,
+  'partition_spec_id':spec::integer, 'partition_constants':{'3':p::integer},
+  'delete_files':[]::struct(file_path varchar, file_format varchar, content integer, file_size_in_bytes bigint,
+                            record_count bigint, equality_ids integer[], referenced_data_file varchar,
+                            content_offset bigint, content_size_in_bytes bigint)[],
+  'snapshot_id':NULL::bigint, 'schema_id':0::integer,
+  'metadata':'{"format-version": 3, "table-uuid": "00000000-0000-0000-0000-000000000003", "location": "{TEST_DIR}", "last-updated-ms": 0, "last-column-id": 3, "last-sequence-number": 0, "current-schema-id": 0, "schemas": [{"schema-id": 0, "type": "struct", "fields": [{"id": 1, "name": "id", "required": false, "type": "int"}, {"id": 3, "name": "part", "required": false, "type": "int"}]}], "partition-specs": [{"spec-id": 0, "fields": [{"name": "part", "transform": "identity", "source-id": 3, "field-id": 1000}]}, {"spec-id": 1, "fields": [{"name": "part_bucket", "transform": "bucket[4]", "source-id": 3, "field-id": 1001}]}], "default-spec-id": 0, "sort-orders": [{"order-id": 0, "fields": []}], "default-sort-order-id": 0}'::json::variant,
+  'schema':NULL::struct(id integer, part integer)};
+
+statement ok
+set variable prune_list = [prune_descriptor('1999', 0, 1999, 1000), prune_descriptor('2000', 0, 2000, 1000),
+                           prune_descriptor('2001', 0, 2001, 1000), prune_descriptor('2002', 0, 2002, 1000)];
+
+# Every log line of a file: its opens, reads and closes.
+statement ok
+create temp macro file_ops(name) as
+ (select count(*) from duckdb_logs_parsed('FileSystem') where path = '{TEST_DIR}/prune_task_' || name || '.parquet');
+
+statement ok
+create temp macro skipped_tasks() as
+ (select count(*) from duckdb_logs() where type = 'Iceberg'
+  and message.contains('Iceberg scan tasks filter pushdown, skipped ''data_file'':'));
+
+# ---- off by default: every file is opened, and the rows are the same ---------------------------------------------
+
+statement ok
+call enable_logging(['Iceberg', 'FileSystem']);
+
+statement ok
+call truncate_duckdb_logs();
+
+query II
+select count(*), sum(id) from iceberg_scan_tasks(getvariable('prune_list')) where part=2000;
+----
+1000	499500
+
+query IIII
+select skipped_tasks(), file_ops('1999') > 0, file_ops('2001') > 0, file_ops('2002') > 0;
+----
+0	true	true	true
+
+statement ok
+call disable_logging();
+
+statement ok
+create temp table chosen_parts(part integer, chosen boolean);
+
+statement ok
+insert into chosen_parts values (1999, false), (2000, true);
+
+# Keep the task scan on the probe side, so the join's filter reaches it at execution time.
+statement ok
+set disabled_optimizers='join_order,build_side_probe_side';
+
+# ---- trusted: a rejected task is never opened, under a static filter and under a join's runtime filter ------------
+
+foreach multi_file true false
+
+statement ok
+set iceberg_enable_multi_file_scan_tasks={multi_file};
+
+foreach threads 1 4
+
+statement ok
+set threads={threads};
+
+statement ok
+call enable_logging(['Iceberg', 'FileSystem']);
+
+statement ok
+call truncate_duckdb_logs();
+
+query II
+select count(*), sum(id)
+from iceberg_scan_tasks(getvariable('prune_list'), trust_partition_values := true) where part=2000;
+----
+1000	499500
+
+query IIIII
+select skipped_tasks(), file_ops('1999'), file_ops('2000') > 0, file_ops('2001'), file_ops('2002');
+----
+3	0	true	0	0
+
+statement ok
+call truncate_duckdb_logs();
+
+query II
+select count(*), sum(s.id)
+from iceberg_scan_tasks(getvariable('prune_list'), trust_partition_values := true) s
+join chosen_parts d on s.part = d.part
+where d.chosen;
+----
+1000	499500
+
+query IIIII
+select skipped_tasks(), file_ops('1999'), file_ops('2000') > 0, file_ops('2001'), file_ops('2002');
+----
+3	0	true	0	0
+
+statement ok
+call disable_logging();
+
+endloop
+
+endloop
+
+statement ok
+set iceberg_enable_multi_file_scan_tasks=true;
+
+statement ok
+reset threads;
+
+# One pushdown over the whole list in the multi-file mode.
+statement ok
+call enable_logging('Iceberg');
+
+statement ok
+call truncate_duckdb_logs();
+
+query I
+select count(*)
+from iceberg_scan_tasks(getvariable('prune_list'), trust_partition_values := true) where part in (2000, 2002);
+----
+2000
+
+query II
+select skipped_tasks(),
+       count(*) filter (where message = 'Iceberg scan tasks filter pushdown kept 2 of 4 data files')
+from duckdb_logs() where type = 'Iceberg';
+----
+2	1
+
+# Nothing is skipped when no filter rejects a partition value, or when there is no filter.
+statement ok
+call truncate_duckdb_logs();
+
+query I
+select count(*) from iceberg_scan_tasks(getvariable('prune_list'), trust_partition_values := true) where part >= 1999;
+----
+4000
+
+query I
+select count(*) from iceberg_scan_tasks(getvariable('prune_list'), trust_partition_values := true) where id < 10;
+----
+40
+
+query I
+select skipped_tasks();
+----
+0
+
+# Every task rejected: no rows, and no file opened.
+statement ok
+call enable_logging(['Iceberg', 'FileSystem']);
+
+statement ok
+call truncate_duckdb_logs();
+
+query I
+select count(*) from iceberg_scan_tasks(getvariable('prune_list'), trust_partition_values := true) where part = 1500;
+----
+0
+
+query III
+select skipped_tasks(), file_ops('1999') + file_ops('2000') + file_ops('2001') + file_ops('2002'),
+       (select count(*) from duckdb_logs()
+        where type = 'Iceberg' and message = 'Iceberg scan tasks filter pushdown kept 0 of 4 data files');
+----
+4	0	1
+
+statement ok
+call disable_logging();
+
+# Negative control: without the join's runtime filter, the join opens every file.
+statement ok
+set disabled_optimizers='join_order,build_side_probe_side,join_filter_pushdown';
+
+statement ok
+call enable_logging(['Iceberg', 'FileSystem']);
+
+statement ok
+call truncate_duckdb_logs();
+
+query II
+select count(*), sum(s.id)
+from iceberg_scan_tasks(getvariable('prune_list'), trust_partition_values := true) s
+join chosen_parts d on s.part = d.part
+where d.chosen;
+----
+1000	499500
+
+query IIII
+select skipped_tasks(), file_ops('1999') > 0, file_ops('2001') > 0, file_ops('2002') > 0;
+----
+0	true	true	true
+
+statement ok
+call disable_logging();
+
+statement ok
+set disabled_optimizers='join_order,build_side_probe_side';
+
+# ---- the kept files keep their own tasks ---------------------------------------------------------------------------
+
+# The file without the partition column comes last, so the files skipped before it move it up the shortened list; it
+# must still read its own task's partition value.
+statement ok
+set variable mixed_list = [prune_descriptor('1999', 0, 1999, 1000), prune_descriptor('2000', 0, 2000, 1000),
+                           prune_descriptor('2001', 0, 2001, 1000), prune_descriptor('nopart', 0, 2001, 1000)];
+
+foreach multi_file true false
+
+statement ok
+set iceberg_enable_multi_file_scan_tasks={multi_file};
+
+query IIII
+select parse_filename(filename), count(*), min(part), max(part)
+from iceberg_scan_tasks(getvariable('mixed_list'), trust_partition_values := true) where part = 2001
+group by all order by all;
+----
+prune_task_2001.parquet	1000	2001	2001
+prune_task_nopart.parquet	1000	2001	2001
+
+# The same rows, file names and positions as the untrusted scan.
+query I
+select count(*) from (
+ (select id, part, filename, file_row_number from iceberg_scan_tasks(getvariable('mixed_list')) where part >= 2000
+  except all
+  select id, part, filename, file_row_number
+  from iceberg_scan_tasks(getvariable('mixed_list'), trust_partition_values := true) where part >= 2000)
+ union all
+ (select id, part, filename, file_row_number
+  from iceberg_scan_tasks(getvariable('mixed_list'), trust_partition_values := true) where part >= 2000
+  except all
+  select id, part, filename, file_row_number from iceberg_scan_tasks(getvariable('mixed_list')) where part >= 2000));
+----
+0
+
+# A partition value rejected by the filter skips a file without the column too: its rows would read that value.
+query I
+select count(*) from iceberg_scan_tasks(getvariable('mixed_list'), trust_partition_values := true) where part = 2000;
+----
+1000
+
+endloop
+
+statement ok
+set iceberg_enable_multi_file_scan_tasks=true;
+
+# ---- NULL partition values, and a file with no identity partition value ---------------------------------------------
+
+statement ok
+set variable null_list = [prune_descriptor('2000', 0, 2000, 1000), prune_descriptor('null', 0, NULL, 10),
+                          prune_descriptor('spec1', 1, NULL, 5), prune_descriptor('2001', 0, 2001, 1000)];
+
+# IS NULL stays above the scan (it is not pushed into iceberg_scan_tasks), so it skips nothing; the answer holds.
+query I
+select count(*) from iceberg_scan_tasks(getvariable('null_list'), trust_partition_values := true) where part is null;
+----
+10
+
+statement ok
+call enable_logging('Iceberg');
+
+statement ok
+call truncate_duckdb_logs();
+
+# An explicit NULL identity value is every row's value, so = rejects that file as the planner does; the spec 1 file
+# has no identity value, so it is opened and its rows answer.
+query II
+select count(*), count(*) filter (where parse_filename(filename) = 'prune_task_spec1.parquet')
+from iceberg_scan_tasks(getvariable('null_list'), trust_partition_values := true) where part = 2000;
+----
+1005	5
+
+query I
+select skipped_tasks();
+----
+2
+
+statement ok
+call disable_logging();
+
+# The same answers untrusted.
+query I
+select count(*) from iceberg_scan_tasks(getvariable('null_list')) where part is null;
+----
+10
+
+query I
+select count(*) from iceberg_scan_tasks(getvariable('null_list')) where part = 2000;
+----
+1005
+
+# ---- deletes run one task at a time; a kept task's deletes still apply ----------------------------------------------
+
+statement ok
+copy (select '{TEST_DIR}/prune_task_2000.parquet'::varchar file_path, 5::bigint pos)
+to '{TEST_DIR}/prune_task_2000_pos.parquet' (format parquet, field_ids {file_path:2147483546, pos:2147483545});
+
+statement ok
+set variable delete_list = (select list(struct_update(t, delete_files := [
+ {'file_path':'{TEST_DIR}/prune_task_2000_pos.parquet', 'file_format':'PARQUET'::varchar, 'content':1::integer,
+  'file_size_in_bytes':(select size::bigint from read_blob('{TEST_DIR}/prune_task_2000_pos.parquet')),
+  'record_count':1::bigint, 'equality_ids':[]::integer[], 'referenced_data_file':NULL::varchar,
+  'content_offset':NULL::bigint, 'content_size_in_bytes':NULL::bigint}])) from unnest(getvariable('prune_list')) u(t));
+
+statement ok
+call enable_logging(['Iceberg', 'FileSystem']);
+
+statement ok
+call truncate_duckdb_logs();
+
+query II
+select count(*), sum(id)
+from iceberg_scan_tasks(getvariable('delete_list'), trust_partition_values := true) where part=2000;
+----
+999	499495
+
+query IIII
+select skipped_tasks(), file_ops('1999'), file_ops('2001'), file_ops('2002');
+----
+3	0	0	0
+
+query I
+select count(*) from duckdb_logs()
+where type = 'Iceberg' and message.contains('Iceberg scan tasks executor mode=single_file');
+----
+4
+
+statement ok
+call disable_logging();
+
+# ---- the caller vouches for the values ----------------------------------------------------------------------------
+
+statement ok
+set variable liar_list = [prune_descriptor('liar', 0, 1999, 1), prune_descriptor('2000', 0, 2000, 1000)];
+
+# Untrusted, the file's physical value wins over its descriptor.
+query II
+select count(*), sum(id) from iceberg_scan_tasks(getvariable('liar_list')) where part=2000;
+----
+1001	499542
+
+# Trusted, the descriptor decides: a caller passes trust_partition_values only for values the manifests record.
+query II
+select count(*), sum(id)
+from iceberg_scan_tasks(getvariable('liar_list'), trust_partition_values := true) where part=2000;
+----
+1000	499500
+
+statement error
+select count(*) from iceberg_scan_tasks(getvariable('prune_list'), trust_partition_values := NULL);
+----
+trust_partition_values cannot be NULL

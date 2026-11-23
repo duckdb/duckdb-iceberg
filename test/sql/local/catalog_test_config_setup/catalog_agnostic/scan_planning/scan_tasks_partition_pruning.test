@@ -1,0 +1,109 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/scan_planning/scan_tasks_partition_pruning.test
+# description: Planned tasks run with trust_partition_values skip the partitions the scan's filters reject
+# group: [scan_planning]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+drop table if exists my_datalake.default.scan_tasks_pruning;
+
+statement ok
+create table my_datalake.default.scan_tasks_pruning(id integer, category integer, region varchar)
+partitioned by (category) with ('format-version'=2);
+
+statement ok
+insert into my_datalake.default.scan_tasks_pruning select i, i % 10, 'r' || (i % 3)::varchar from range(10000) t(i);
+
+statement ok
+set iceberg_use_server_side_scan_planning=false;
+
+# Keep the vended storage credentials alive from planning through task execution.
+statement ok
+begin;
+
+statement ok
+create temp table pruning_tasks as select * from iceberg_scan_plan('my_datalake.default.scan_tasks_pruning');
+
+statement ok
+set variable pruning_list = (select list(task) from (select * from pruning_tasks) task);
+
+statement ok
+create temp table pruning_keys(category integer);
+
+statement ok
+insert into pruning_keys values (3), (4);
+
+# Keep the task scan on the probe side, so the join's filter reaches it at execution time.
+statement ok
+set disabled_optimizers='join_order,build_side_probe_side';
+
+statement ok
+create temp macro skipped_tasks() as
+ (select count(*) from duckdb_logs() where type = 'Iceberg'
+  and message.contains('Iceberg scan tasks filter pushdown, skipped ''data_file'':'));
+
+foreach multi_file true false
+
+statement ok
+set iceberg_enable_multi_file_scan_tasks={multi_file};
+
+statement ok
+call enable_logging('Iceberg');
+
+statement ok
+call truncate_duckdb_logs();
+
+# A join's runtime filter skips every task outside the build side's partitions.
+query II
+select count(*), sum(t.id)
+from iceberg_scan_tasks(getvariable('pruning_list'), trust_partition_values := true) t
+join pruning_keys using (category);
+----
+2000	9997000
+
+query I
+select skipped_tasks() = (select count(*) from pruning_tasks where partition_constants."2" not in (3, 4))
+   and skipped_tasks() > 0;
+----
+true
+
+statement ok
+call truncate_duckdb_logs();
+
+# Untrusted, the same task list skips nothing.
+query II
+select count(*), sum(t.id) from iceberg_scan_tasks(getvariable('pruning_list')) t join pruning_keys using (category);
+----
+2000	9997000
+
+query I
+select skipped_tasks();
+----
+0
+
+statement ok
+call disable_logging();
+
+# A static filter: the rows, file names and positions of the table's own scan.
+query I
+select count(*) from (
+ (select id, category, region, filename, file_row_number
+  from iceberg_scan_tasks(getvariable('pruning_list'), trust_partition_values := true) where category = 7
+  except all
+  select id, category, region, filename, file_row_number from my_datalake.default.scan_tasks_pruning where category = 7)
+ union all
+ (select id, category, region, filename, file_row_number from my_datalake.default.scan_tasks_pruning where category = 7
+  except all
+  select id, category, region, filename, file_row_number
+  from iceberg_scan_tasks(getvariable('pruning_list'), trust_partition_values := true) where category = 7));
+----
+0
+
+endloop
+
+statement ok
+commit;

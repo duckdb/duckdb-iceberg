@@ -26,9 +26,12 @@ struct IcebergTaskExecutionContext {
 //! own a separate local scanner.
 class IcebergTaskExecutor {
 public:
+	//! With trust_partition_values, a task whose identity partition values the table filters reject is skipped
+	//! before its file is opened; the caller vouches that the values are those the table's manifests record.
 	IcebergTaskExecutor(ClientContext &context, shared_ptr<IcebergTaskExecutionContext> execution,
 	                    vector<IcebergFileScanTask> tasks, vector<ColumnIndex> column_indexes,
-	                    const TableFilterSet &table_filters, unique_ptr<Expression> row_filter);
+	                    const TableFilterSet &table_filters, unique_ptr<Expression> row_filter,
+	                    bool trust_partition_values);
 	~IcebergTaskExecutor();
 
 	//! Creates a private scanner that claims work from the shared Parquet scan.
