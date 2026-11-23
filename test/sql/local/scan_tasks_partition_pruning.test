@@ -402,3 +402,167 @@ statement error
 select count(*) from iceberg_scan_tasks(getvariable('prune_list'), trust_partition_values := NULL);
 ----
 trust_partition_values cannot be NULL
+
+# ---- a DOUBLE identity partition holding NaN ------------------------------------------------------------------------
+
+# A NaN partition value is every row's value, NaN included (IsNaNPartitionValue): the planner's NaN rules decide, so
+# NaN is kept for x > c, x = 'nan' and x >= 'nan', and skipped for x < c, as the untrusted scan answers.
+foreach name low high nan
+
+statement ok
+copy (select i::integer id, (case '{name}' when 'low' then 1.5::double when 'high' then 2.5::double else 'nan'::double end) x
+      from range(100) t(i))
+to '{TEST_DIR}/prune_nan_{name}.parquet' (format parquet, field_ids {id:1, x:3});
+
+endloop
+
+statement ok
+create temp macro nan_descriptor(name, x) as
+ {'file_path':'{TEST_DIR}/prune_nan_' || name || '.parquet', 'file_format':'PARQUET'::varchar,
+  'file_size_in_bytes':(select size::bigint from read_blob('{TEST_DIR}/prune_nan_*.parquet')
+                        where filename = '{TEST_DIR}/prune_nan_' || name || '.parquet'),
+  'record_count':100::bigint, 'sequence_number':NULL::bigint, 'first_row_id':NULL::bigint,
+  'partition_spec_id':0::integer, 'partition_constants':{'3':x::double},
+  'delete_files':[]::struct(file_path varchar, file_format varchar, content integer, file_size_in_bytes bigint,
+                            record_count bigint, equality_ids integer[], referenced_data_file varchar,
+                            content_offset bigint, content_size_in_bytes bigint)[],
+  'snapshot_id':NULL::bigint, 'schema_id':0::integer,
+  'metadata':'{"format-version": 2, "table-uuid": "00000000-0000-0000-0000-000000000004", "location": "{TEST_DIR}", "last-updated-ms": 0, "last-column-id": 3, "last-sequence-number": 0, "current-schema-id": 0, "schemas": [{"schema-id": 0, "type": "struct", "fields": [{"id": 1, "name": "id", "required": false, "type": "int"}, {"id": 3, "name": "x", "required": false, "type": "double"}]}], "partition-specs": [{"spec-id": 0, "fields": [{"name": "x", "transform": "identity", "source-id": 3, "field-id": 1000}]}], "default-spec-id": 0, "sort-orders": [{"order-id": 0, "fields": []}], "default-sort-order-id": 0}'::json::variant,
+  'schema':NULL::struct(id integer, x double)};
+
+statement ok
+set variable nan_list = [nan_descriptor('low', 1.5), nan_descriptor('high', 2.5), nan_descriptor('nan', 'nan'::double)];
+
+statement ok
+create temp macro nan_ops(name) as
+ (select count(*) from duckdb_logs_parsed('FileSystem') where path = '{TEST_DIR}/prune_nan_' || name || '.parquet');
+
+statement ok
+call enable_logging(['Iceberg', 'FileSystem']);
+
+statement ok
+call truncate_duckdb_logs();
+
+query II
+select count(*), count(*) filter (where isnan(x))
+from iceberg_scan_tasks(getvariable('nan_list'), trust_partition_values := true) where x > 2.0;
+----
+200	100
+
+query IIII
+select skipped_tasks(), nan_ops('low'), nan_ops('high') > 0, nan_ops('nan') > 0;
+----
+1	0	true	true
+
+statement ok
+call truncate_duckdb_logs();
+
+query II
+select count(*), count(*) filter (where isnan(x))
+from iceberg_scan_tasks(getvariable('nan_list'), trust_partition_values := true) where x = 'nan'::double;
+----
+100	100
+
+query IIII
+select skipped_tasks(), nan_ops('low'), nan_ops('high'), nan_ops('nan') > 0;
+----
+2	0	0	true
+
+statement ok
+call truncate_duckdb_logs();
+
+query II
+select count(*), count(*) filter (where isnan(x))
+from iceberg_scan_tasks(getvariable('nan_list'), trust_partition_values := true) where x < 2.0;
+----
+100	0
+
+query IIII
+select skipped_tasks(), nan_ops('low') > 0, nan_ops('high'), nan_ops('nan');
+----
+2	true	0	0
+
+statement ok
+call disable_logging();
+
+# The same rows as the untrusted scan, NaN included, for every predicate above and a few more.
+foreach pred x>2.0 x<2.0 x='nan'::double x>='nan'::double x<>'nan'::double x<=2.5
+
+query I
+select count(*) from (
+ (select id, x, filename from iceberg_scan_tasks(getvariable('nan_list')) where {pred}
+  except all
+  select id, x, filename from iceberg_scan_tasks(getvariable('nan_list'), trust_partition_values := true) where {pred})
+ union all
+ (select id, x, filename from iceberg_scan_tasks(getvariable('nan_list'), trust_partition_values := true) where {pred}
+  except all
+  select id, x, filename from iceberg_scan_tasks(getvariable('nan_list')) where {pred}));
+----
+0
+
+endloop
+
+# ---- an identity partition on a nested field ------------------------------------------------------------------------
+
+# The partition's source is s.k, a field of a struct column. A static filter on s.k skips by it; the rows are the
+# untrusted scan's.
+foreach part 1999 2000 2001
+
+statement ok
+copy (select i::integer id, {'k': {part}::integer} s from range(100) t(i))
+to '{TEST_DIR}/prune_nested_{part}.parquet' (format parquet, field_ids {id:1, s:{__duckdb_field_id:2, k:3}});
+
+endloop
+
+statement ok
+create temp macro nested_descriptor(part) as
+ {'file_path':'{TEST_DIR}/prune_nested_' || part || '.parquet', 'file_format':'PARQUET'::varchar,
+  'file_size_in_bytes':(select size::bigint from read_blob('{TEST_DIR}/prune_nested_*.parquet')
+                        where filename = '{TEST_DIR}/prune_nested_' || part || '.parquet'),
+  'record_count':100::bigint, 'sequence_number':NULL::bigint, 'first_row_id':NULL::bigint,
+  'partition_spec_id':0::integer, 'partition_constants':{'3':part::integer},
+  'delete_files':[]::struct(file_path varchar, file_format varchar, content integer, file_size_in_bytes bigint,
+                            record_count bigint, equality_ids integer[], referenced_data_file varchar,
+                            content_offset bigint, content_size_in_bytes bigint)[],
+  'snapshot_id':NULL::bigint, 'schema_id':0::integer,
+  'metadata':'{"format-version": 2, "table-uuid": "00000000-0000-0000-0000-000000000005", "location": "{TEST_DIR}", "last-updated-ms": 0, "last-column-id": 3, "last-sequence-number": 0, "current-schema-id": 0, "schemas": [{"schema-id": 0, "type": "struct", "fields": [{"id": 1, "name": "id", "required": false, "type": "int"}, {"id": 2, "name": "s", "required": false, "type": {"type": "struct", "fields": [{"id": 3, "name": "k", "required": false, "type": "int"}]}}]}], "partition-specs": [{"spec-id": 0, "fields": [{"name": "s_k", "transform": "identity", "source-id": 3, "field-id": 1000}]}], "default-spec-id": 0, "sort-orders": [{"order-id": 0, "fields": []}], "default-sort-order-id": 0}'::json::variant,
+  'schema':NULL::struct(id integer, s struct(k integer))};
+
+statement ok
+set variable nested_list = [nested_descriptor(1999), nested_descriptor(2000), nested_descriptor(2001)];
+
+statement ok
+call enable_logging('Iceberg');
+
+statement ok
+call truncate_duckdb_logs();
+
+query III
+select count(*), min(s.k), max(s.k)
+from iceberg_scan_tasks(getvariable('nested_list'), trust_partition_values := true) where s.k = 2000;
+----
+100	2000	2000
+
+query I
+select skipped_tasks();
+----
+2
+
+statement ok
+call disable_logging();
+
+foreach pred s.k=2000 s.k>2000 s.k<>2000 s.k<2001
+
+query I
+select count(*) from (
+ (select id, s, filename from iceberg_scan_tasks(getvariable('nested_list')) where {pred}
+  except all
+  select id, s, filename from iceberg_scan_tasks(getvariable('nested_list'), trust_partition_values := true) where {pred})
+ union all
+ (select id, s, filename from iceberg_scan_tasks(getvariable('nested_list'), trust_partition_values := true) where {pred}
+  except all
+  select id, s, filename from iceberg_scan_tasks(getvariable('nested_list')) where {pred}));
+----
+0
+
+endloop

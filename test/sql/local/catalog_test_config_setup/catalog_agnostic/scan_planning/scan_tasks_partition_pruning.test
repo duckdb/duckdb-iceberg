@@ -107,3 +107,103 @@ endloop
 
 statement ok
 commit;
+
+# ---- an evolved spec: identity on category, then on region ----------------------------------------------------------
+
+statement ok
+drop table if exists my_datalake.default.scan_tasks_evolved;
+
+statement ok
+create table my_datalake.default.scan_tasks_evolved(id integer, category integer, region varchar)
+partitioned by (category) with ('format-version'=2);
+
+statement ok
+insert into my_datalake.default.scan_tasks_evolved select i, i % 10, 'r' || (i % 3)::varchar from range(1000) t(i);
+
+statement ok
+alter table my_datalake.default.scan_tasks_evolved set partitioned by (region);
+
+statement ok
+insert into my_datalake.default.scan_tasks_evolved
+select i, i % 10, 'r' || (i % 3)::varchar from range(1000, 2000) t(i);
+
+statement ok
+begin;
+
+statement ok
+create temp table evolved_tasks as select * from iceberg_scan_plan('my_datalake.default.scan_tasks_evolved');
+
+statement ok
+set variable evolved_list = (select list(task) from (select * from evolved_tasks) task);
+
+# Files of both specs: 10 under the first (one per category), 3 under the second (one per region).
+query II
+select count(*) filter (where partition_spec_id = 0), count(*) filter (where partition_spec_id = 1) from evolved_tasks;
+----
+10	3
+
+foreach multi_file true false
+
+statement ok
+set iceberg_enable_multi_file_scan_tasks={multi_file};
+
+statement ok
+call enable_logging('Iceberg');
+
+statement ok
+call truncate_duckdb_logs();
+
+# A join on category skips only the first spec's files of other categories: the second spec has no identity value for
+# category, so its files are opened and their rows answer.
+query II
+select count(*), sum(t.id)
+from iceberg_scan_tasks(getvariable('evolved_list'), trust_partition_values := true) t
+join pruning_keys using (category);
+----
+400	399400
+
+query I
+select skipped_tasks();
+----
+8
+
+statement ok
+call truncate_duckdb_logs();
+
+# A static filter on region skips only the second spec's other regions.
+query I
+select count(*) from iceberg_scan_tasks(getvariable('evolved_list'), trust_partition_values := true) where region = 'r1';
+----
+667
+
+query I
+select skipped_tasks();
+----
+2
+
+statement ok
+call disable_logging();
+
+# The same rows, file names and positions as the table's own scan, for both filters.
+query I
+select count(*) from (
+ (select id, category, region, filename, file_row_number
+  from iceberg_scan_tasks(getvariable('evolved_list'), trust_partition_values := true) t
+  where category in (3, 4) or region = 'r1'
+  except all
+  select id, category, region, filename, file_row_number from my_datalake.default.scan_tasks_evolved
+  where category in (3, 4) or region = 'r1')
+ union all
+ (select id, category, region, filename, file_row_number from my_datalake.default.scan_tasks_evolved
+  where category in (3, 4) or region = 'r1'
+  except all
+  select id, category, region, filename, file_row_number
+  from iceberg_scan_tasks(getvariable('evolved_list'), trust_partition_values := true) t
+  where category in (3, 4) or region = 'r1'));
+----
+0
+
+endloop
+
+statement ok
+commit;
