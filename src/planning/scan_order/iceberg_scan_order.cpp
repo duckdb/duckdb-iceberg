@@ -91,8 +91,16 @@ void IcebergScanOrder::Apply(ClientContext &context, const IcebergTableSchema &s
 		if (null_it == data_file.null_value_counts.end() || null_it->second > 0) {
 			can_prune = false;
 		}
+		auto upper_bound = *stats.upper_bound;
+		if (order_column.type.id() == LogicalTypeId::FLOAT || order_column.type.id() == LogicalTypeId::DOUBLE) {
+			// Iceberg bounds exclude NaN, which sorts last: a file that may hold NaN is unbounded above
+			auto nan_it = data_file.nan_value_counts.find(field_id);
+			if (nan_it == data_file.nan_value_counts.end() || nan_it->second != 0) {
+				upper_bound = Value("nan").DefaultCastAs(order_column.type);
+			}
+		}
 		order_entries.push_back(
-		    {i, *stats.lower_bound, *stats.upper_bound, NumericCast<idx_t>(data_file.record_count)});
+		    {i, *stats.lower_bound, std::move(upper_bound), NumericCast<idx_t>(data_file.record_count)});
 	}
 
 	if (has_matching_delete_manifests) {
@@ -121,7 +129,8 @@ void IcebergScanOrder::Apply(ClientContext &context, const IcebergTableSchema &s
 			const auto &frontier = primary(order_entries[k]);
 			idx_t guaranteed = 0;
 			for (idx_t j = 0; j < k; j++) {
-				if (!ScanOrderCompare(opposite(order_entries[j]), frontier, stat_type)) {
+				// a file that ties with the frontier is not guaranteed: later ORDER BY keys can rank its rows
+				if (ScanOrderCompare(frontier, opposite(order_entries[j]), stat_type)) {
 					guaranteed += order_entries[j].count;
 				}
 				if (guaranteed >= row_limit) {

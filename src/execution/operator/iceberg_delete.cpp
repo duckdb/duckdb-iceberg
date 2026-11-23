@@ -370,7 +370,8 @@ public:
 		auto &context = event->GetClientContext();
 		context.InterruptCheck();
 		auto &fs = FileSystem::GetFileSystem(context);
-		IcebergPuffinWriter writer(fs, DeleteFilePath(fs, inputs[0].get().delete_file.data_file_path, "puffin"));
+		IcebergPuffinWriter writer(fs, DeleteFilePath(fs, inputs[0].get().delete_file.data_file_path, "puffin"),
+		                           context);
 		for (auto &entry : inputs) {
 			context.InterruptCheck();
 			auto &input = entry.get();

@@ -202,7 +202,10 @@ static void CreateTableRequirements(DatabaseInstance &db, ClientContext &context
 		auto uuid_requirement = AssertTableUUIDRequirement(transaction_data.initial_table_uuid);
 		uuid_requirement.CreateRequirement(db, context, commit_state);
 	}
-	if (current_snapshot && !transaction_data.alters.empty()) {
+	if (transaction_data.replaces_table) {
+		AssertRefSnapshotId requirement(transaction_data.initial_snapshot_id);
+		requirement.CreateRequirement(db, context, commit_state);
+	} else if (current_snapshot && !transaction_data.alters.empty()) {
 		commit_state.table_change.requirements.push_back(CreateAssertRefSnapshotIdRequirement(*current_snapshot));
 	} else if (!current_snapshot && !transaction_data.alters.empty() && !has_assert_create) {
 		commit_state.table_change.requirements.push_back(CreateAssertNoSnapshotRequirement());
@@ -210,10 +213,8 @@ static void CreateTableRequirements(DatabaseInstance &db, ClientContext &context
 }
 
 //! Safe to re-apply a DELETE on retry only if every commit in (base, tip] was a
-//! pure append; anything else may have removed/rewritten the target data. Ranges
-//! over sequence numbers (parent links aren't populated on read snapshots). A
-//! scan/tip snapshot the catalog doesn't expose (e.g. no history) can't be
-//! proven safe, so it counts as not reappliable.
+//! pure append and the tip descends from the scanned snapshot. Keep the sequence
+//! range validation, then verify ancestry to reject replacement lineage breaks.
 static bool DeleteCanReapply(const IcebergTableMetadata &metadata, int64_t base_snapshot_id, int64_t tip_snapshot_id) {
 	if (base_snapshot_id == tip_snapshot_id) {
 		return true;
@@ -238,6 +239,19 @@ static bool DeleteCanReapply(const IcebergTableMetadata &metadata, int64_t base_
 			continue;
 		}
 		if (snapshot.operation != IcebergSnapshotOperationType::APPEND) {
+			return false;
+		}
+	}
+	// Replacement can publish a newer append with no parent. Sequence order alone
+	// does not prove that the tip continues the history the DELETE scanned.
+	unordered_set<int64_t> visited;
+	auto ancestor = tip;
+	while (ancestor->snapshot_id != base_snapshot_id) {
+		if (!ancestor->parent_snapshot_id || !visited.insert(ancestor->snapshot_id).second) {
+			return false;
+		}
+		ancestor = metadata.FindSnapshotByIdInternal(*ancestor->parent_snapshot_id);
+		if (!ancestor) {
 			return false;
 		}
 	}
@@ -1146,11 +1160,19 @@ IcebergTable &IcebergTransaction::RenameTable(IcebergTable &table, const string 
 	return state->GetInfo();
 }
 
-void ApplyTableUpdate(IcebergTable &table_info, IcebergTransaction &iceberg_transaction,
-                      const std::function<void(IcebergTable &)> &callback) {
+void ApplyTableUpdate(unique_lock<mutex> &table_update_guard, IcebergTable &table_info,
+                      IcebergTransaction &iceberg_transaction, const std::function<void(IcebergTable &)> &callback) {
+	D_ASSERT(table_update_guard.owns_lock() && table_update_guard.mutex() == &iceberg_transaction.table_update_lock);
 	auto &alter = iceberg_transaction.GetOrCreateAlter();
 	auto &updated_table = alter.GetOrInitializeTable(table_info);
 	callback(updated_table);
+}
+
+void ApplyTableUpdate(IcebergTable &table_info, IcebergTransaction &iceberg_transaction,
+                      const std::function<void(IcebergTable &)> &callback) {
+	//! Several operators or table functions of one statement can change tables of this transaction concurrently
+	unique_lock<mutex> guard(iceberg_transaction.table_update_lock);
+	ApplyTableUpdate(guard, table_info, iceberg_transaction, callback);
 }
 
 } // namespace duckdb

@@ -95,6 +95,18 @@ public:
 	explicit CopyOnWriteDeleteOperatorState() : keep(STANDARD_VECTOR_SIZE) {
 	}
 
+	//! The positions removed from file_name, or nullptr when the file holds no matching row
+	optional_ptr<const unordered_set<int64_t>>
+	FindDeleted(const unordered_map<string, unordered_set<int64_t>> &rows_by_file, const string_t &file_name) {
+		if (!has_last_file || !(file_name == string_t(last_file))) {
+			has_last_file = true;
+			last_file = file_name.GetString();
+			auto entry = rows_by_file.find(last_file);
+			last_deleted = entry == rows_by_file.end() ? nullptr : &entry->second;
+		}
+		return last_deleted;
+	}
+
 	SelectionVector keep;
 	//! The probe side reads one file at a time, so the last lookup is usually the next one
 	bool has_last_file = false;
@@ -345,31 +357,41 @@ OperatorResultType IcebergCopyOnWriteDeleteFilter::Execute(ExecutionContext &con
 	auto column_count = types.size();
 	D_ASSERT(input.ColumnCount() == column_count + 2);
 
+	auto &file_name_vector = input.data[column_count];
 	UnifiedVectorFormat file_name_data;
-	input.data[column_count].ToUnifiedFormat(file_name_data);
+	file_name_vector.ToUnifiedFormat(file_name_data);
 	auto file_names = UnifiedVectorFormat::GetData<string_t>(file_name_data);
 	UnifiedVectorFormat row_number_data;
 	input.data[column_count + 1].ToUnifiedFormat(row_number_data);
 	auto row_numbers = UnifiedVectorFormat::GetData<int64_t>(row_number_data);
 
+	//! A file with no matching row stays as it is, so none of its rows are kept for the rewrite
 	idx_t kept = 0;
-	for (idx_t i = 0; i < input.size(); i++) {
-		auto file_name = file_names[file_name_data.sel->get_index(i)];
-		if (!state.has_last_file || !(file_name == string_t(state.last_file))) {
-			state.has_last_file = true;
-			state.last_file = file_name.GetString();
-			auto entry = rows_by_file.find(state.last_file);
-			state.last_deleted = entry == rows_by_file.end() ? nullptr : &entry->second;
+	if (file_name_vector.GetVectorType() == VectorType::CONSTANT_VECTOR) {
+		//! The scan emits one file per chunk as a constant: look it up once, not for every row
+		if (ConstantVector::IsNull(file_name_vector)) {
+			throw InternalException("Filename cannot be NULL!");
 		}
-		if (!state.last_deleted) {
-			//! The file has no matching row, so it stays as it is and none of its rows are rewritten
-			continue;
+		auto deleted = state.FindDeleted(rows_by_file, file_names[0]);
+		if (deleted) {
+			for (idx_t i = 0; i < input.size(); i++) {
+				if (!deleted->count(row_numbers[row_number_data.sel->get_index(i)])) {
+					state.keep.set_index(kept++, i);
+				}
+			}
 		}
-		auto row_number = row_numbers[row_number_data.sel->get_index(i)];
-		if (state.last_deleted->count(row_number)) {
-			continue;
+	} else {
+		for (idx_t i = 0; i < input.size(); i++) {
+			auto file_idx = file_name_data.sel->get_index(i);
+			if (!file_name_data.validity.RowIsValid(file_idx)) {
+				throw InternalException("Filename cannot be NULL!");
+			}
+			auto deleted = state.FindDeleted(rows_by_file, file_names[file_idx]);
+			if (!deleted || deleted->count(row_numbers[row_number_data.sel->get_index(i)])) {
+				continue;
+			}
+			state.keep.set_index(kept++, i);
 		}
-		state.keep.set_index(kept++, i);
 	}
 
 	for (idx_t col = 0; col < column_count; col++) {

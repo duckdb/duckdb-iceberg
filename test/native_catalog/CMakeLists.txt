@@ -46,6 +46,36 @@ duckdb_link_extensions(
   httpfs
   iceberg_mock)
 
+# Test schema construction without a catalog service or table replacement
+add_executable(unittest_iceberg_schema test_schema_field_ids.cpp)
+target_include_directories(
+  unittest_iceberg_schema PRIVATE ${CMAKE_SOURCE_DIR}/third_party/catch
+                                  ${CMAKE_CURRENT_LIST_DIR}/../../src/include)
+set_target_properties(
+  unittest_iceberg_schema PROPERTIES RUNTIME_OUTPUT_DIRECTORY
+                                     ${CMAKE_BINARY_DIR}/test)
+target_link_libraries(unittest_iceberg_schema duckdb_static)
+duckdb_link_extensions(unittest_iceberg_schema avro parquet json iceberg)
+
+# Exercise replacement transaction primitives before exposing them through SQL.
+add_executable(unittest_iceberg_replacement test_replacement_transactions.cpp)
+target_include_directories(
+  unittest_iceberg_replacement
+  PRIVATE ${CMAKE_SOURCE_DIR}/third_party/catch
+          ${CMAKE_CURRENT_LIST_DIR}/../../src/include)
+set_target_properties(
+  unittest_iceberg_replacement PROPERTIES RUNTIME_OUTPUT_DIRECTORY
+                                          ${CMAKE_BINARY_DIR}/test)
+target_link_libraries(unittest_iceberg_replacement duckdb_static)
+duckdb_link_extensions(
+  unittest_iceberg_replacement
+  avro
+  parquet
+  json
+  iceberg
+  httpfs
+  iceberg_mock)
+
 # Drive overlapping LoadTable requests in a fixed order, without timing races.
 add_executable(unittest_iceberg_cache test_load_table_cache.cpp
                                       test_metadata_reads.cpp)

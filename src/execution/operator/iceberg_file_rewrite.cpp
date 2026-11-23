@@ -113,14 +113,11 @@ SinkFinalizeType IcebergFileRewrite::Finalize(Pipeline &pipeline, Event &event, 
 
 	auto &transaction = IcebergTransaction::Get(context, state.table_info.catalog);
 	auto files = IcebergWrittenFiles::Collect(new_entries);
-	//! Multiple rewrite operators in one statement can initialize and update table state concurrently.
-	{
-		lock_guard<mutex> guard(transaction.rewrite_commit_lock);
-		ApplyTableUpdate(state.table_info, transaction, [&](IcebergTable &table) {
-			auto &transaction_data = table.GetOrCreateTransactionData(transaction);
-			StageRewrite(transaction_data, state, rewrite.operation, std::move(new_entries), std::move(replaced_files));
-		});
-	}
+	//! ApplyTableUpdate runs the rewrite operators of one statement one at a time
+	ApplyTableUpdate(state.table_info, transaction, [&](IcebergTable &table) {
+		auto &transaction_data = table.GetOrCreateTransactionData(transaction);
+		StageRewrite(transaction_data, state, rewrite.operation, std::move(new_entries), std::move(replaced_files));
+	});
 	state.staged = true;
 	IcebergWrittenFiles::Record(context, state.table_info, write_operation, files);
 	return SinkFinalizeType::READY;

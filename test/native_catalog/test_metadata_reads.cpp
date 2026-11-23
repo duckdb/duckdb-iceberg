@@ -2,6 +2,7 @@
 #include "duckdb.hpp"
 #include "common/iceberg_utils.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
+#include "core/metadata/manifest/iceberg_manifest_list.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
 #include "duckdb/common/open_file_info.hpp"
 #include "duckdb/main/client_context.hpp"
@@ -341,4 +342,20 @@ TEST_CASE("Version hints remain fresh across reads", "[iceberg_metadata]") {
 	}
 	CHECK(test.state->Count(RequestType::GET_REQUEST) == 2);
 	CHECK(test.state->Count(RequestType::HEAD_REQUEST) == 0);
+}
+
+TEST_CASE("A manifest with an unknown content value fails with a clear error", "[iceberg_metadata]") {
+	// A manifest can carry a 'content' value that is neither 'data' nor 'deletes'. The error must name that value,
+	// not fail in the formatter because the content enum was passed to a '%s' placeholder.
+	InsertionOrderPreservingMap<Value> metadata;
+	metadata.insert("format-version", Value("2"));
+	metadata.insert("schema-id", Value("0"));
+	metadata.insert("partition-spec-id", Value("0"));
+	metadata.insert("content", Value("bogus"));
+	IcebergTableMetadata table_metadata {IcebergTableMetadataSchemas()};
+
+	REQUIRE_THROWS_AS(IcebergManifestMetadata::FromAvroMetadata(metadata, "manifest-0.avro", table_metadata, 0),
+	                  InvalidConfigurationException);
+	REQUIRE_THROWS_WITH(IcebergManifestMetadata::FromAvroMetadata(metadata, "manifest-0.avro", table_metadata, 0),
+	                    Catch::Contains("bogus"));
 }

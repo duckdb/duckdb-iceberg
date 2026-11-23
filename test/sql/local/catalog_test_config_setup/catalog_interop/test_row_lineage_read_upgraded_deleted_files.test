@@ -1,0 +1,47 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_interop/test_row_lineage_read_upgraded_deleted_files.test
+# description: inherited _row_id from a V2 manifest with DELETED entries, after the upgrade to V3
+# group: [catalog_interop]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+foreach cache false true
+
+statement ok
+SET iceberg_enable_manifest_cache = {cache};
+
+# Repeat with caching enabled so both the cold and warm paths are exercised.
+loop i 0 2
+
+# Only the 5 live files of the V2 manifest inherit row ids, not its 5 DELETED files
+query III
+SELECT count(*), count(*) FILTER (WHERE t._row_id IS DISTINCT FROM e.row_id), count(DISTINCT t._row_id)
+FROM my_datalake.default.row_lineage_upgraded_deleted_files t
+JOIN my_datalake.default.row_lineage_upgraded_deleted_files_expected e USING (id);
+----
+600	0	600
+
+# Filtering out earlier live files must still advance the inherited row ID.
+# Deleted entries before and between them must not advance it.
+query III
+SELECT count(*), count(*) FILTER (WHERE t._row_id IS DISTINCT FROM e.row_id), count(DISTINCT t._row_id)
+FROM my_datalake.default.row_lineage_upgraded_deleted_files t
+JOIN my_datalake.default.row_lineage_upgraded_deleted_files_expected e USING (id)
+WHERE t.p = 9 AND t.id < 1000;
+----
+100	0	100
+
+# The streaming planner and the eager metadata reader must agree on file ranges.
+query II
+SELECT sum(p.record_count), count(*) FILTER (WHERE p.first_row_id IS DISTINCT FROM f.first_row_id)
+FROM iceberg_scan_plan('my_datalake.default.row_lineage_upgraded_deleted_files') p
+JOIN iceberg_files('my_datalake.default.row_lineage_upgraded_deleted_files') f USING (file_path);
+----
+600	0
+
+endloop
+
+endloop
