@@ -15,6 +15,8 @@ using TaskCodec = IcebergScanTaskCodec;
 struct IcebergScanTasksBindData : public TableFunctionData {
 	TaskCodec::InputLayout layout;
 	Value tasks;
+	//! The rows the tasks are expected to produce, before filters (EstimateTaskRows)
+	idx_t estimated_cardinality = 0;
 };
 
 enum class IcebergScanTasksExecutionMode : uint8_t { UNSELECTED, SINGLE_FILE, MULTI_FILE };
@@ -197,6 +199,49 @@ struct IcebergScanTasksLocalState : public LocalTableFunctionState {
 	unique_ptr<LocalTableFunctionState> scanner;
 };
 
+//! The rows a task is expected to produce: its data file's record count, less the deletes that name that file alone
+//! (deletion vectors and file-scoped position delete files). A position delete file shared by several data files
+//! and an equality delete file say nothing about how many of this file's rows they remove, so they are not counted.
+//! A task that is NULL or has no valid count is rejected when it is read; here it counts no rows.
+static idx_t EstimateTaskRows(const Value &task, const TaskCodec::InputLayout &layout) {
+	if (task.IsNull()) {
+		return 0;
+	}
+	auto &fields = StructValue::GetChildren(task);
+	auto &count = fields[layout.columns[TaskCodec::RECORD_COUNT]];
+	if (count.IsNull() || BigIntValue::Get(count) < 0) {
+		return 0;
+	}
+	auto rows = UnsafeNumericCast<idx_t>(BigIntValue::Get(count));
+	auto &path = fields[layout.columns[TaskCodec::FILE_PATH]];
+	auto &deletes = fields[layout.columns[TaskCodec::DELETE_FILES]];
+	if (path.IsNull() || deletes.IsNull()) {
+		return rows;
+	}
+	//! Fields of TaskCodec::DeleteFileType(), which BindInput requires the delete files to have exactly
+	constexpr idx_t CONTENT = 2;
+	constexpr idx_t RECORD_COUNT = 4;
+	constexpr idx_t REFERENCED_DATA_FILE = 6;
+	auto &file_path = StringValue::Get(path);
+	for (auto &delete_file : ListValue::GetChildren(deletes)) {
+		if (delete_file.IsNull()) {
+			continue;
+		}
+		auto &delete_fields = StructValue::GetChildren(delete_file);
+		auto &content = delete_fields[CONTENT];
+		auto &delete_count = delete_fields[RECORD_COUNT];
+		auto &referenced = delete_fields[REFERENCED_DATA_FILE];
+		if (content.IsNull() ||
+		    IntegerValue::Get(content) != static_cast<int32_t>(IcebergManifestEntryContentType::POSITION_DELETES) ||
+		    delete_count.IsNull() || BigIntValue::Get(delete_count) < 0 || referenced.IsNull() ||
+		    StringValue::Get(referenced) != file_path) {
+			continue;
+		}
+		rows -= MinValue(rows, UnsafeNumericCast<idx_t>(BigIntValue::Get(delete_count)));
+	}
+	return rows;
+}
+
 static unique_ptr<FunctionData> IcebergScanTasksBind(ClientContext &, TableFunctionBindInput &input,
                                                      vector<LogicalType> &types, vector<Identifier> &names) {
 	auto &tasks = input.inputs[0];
@@ -207,7 +252,27 @@ static unique_ptr<FunctionData> IcebergScanTasksBind(ClientContext &, TableFunct
 	auto result = make_uniq<IcebergScanTasksBindData>();
 	result->layout = TaskCodec::BindInput(ListType::GetChildType(tasks.type()), types, names);
 	result->tasks = tasks;
+	//! Without an estimate the optimizer takes the scan for one row, builds every hash join on it, and so never
+	//! sends it a join's runtime filters.
+	if (!tasks.IsNull()) {
+		//! Capped at the largest BIGINT: the optimizer takes estimates through doubles, and one of 2^64 does not
+		//! convert back.
+		constexpr idx_t MAX_ESTIMATE = idx_t(NumericLimits<int64_t>::Maximum());
+		for (auto &task : ListValue::GetChildren(tasks)) {
+			auto rows = EstimateTaskRows(task, result->layout);
+			result->estimated_cardinality = rows > MAX_ESTIMATE - result->estimated_cardinality
+			                                    ? MAX_ESTIMATE
+			                                    : result->estimated_cardinality + rows;
+		}
+	}
 	return std::move(result);
+}
+
+//! An estimate, not a maximum: a descriptor's record count is the caller's to state, and deletes, row filters and
+//! the scan's own filters only remove rows from it. iceberg_scan, whose counts are the manifests', gives both.
+static unique_ptr<NodeStatistics> IcebergScanTasksCardinality(ClientContext &, const FunctionData *bind_data) {
+	auto &bind = bind_data->Cast<IcebergScanTasksBindData>();
+	return make_uniq<NodeStatistics>(bind.estimated_cardinality);
 }
 
 static void IcebergScanTasksFunction(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
@@ -259,6 +324,7 @@ static virtual_column_map_t IcebergScanTasksVirtualColumns(ClientContext &, opti
 TableFunctionSet IcebergFunctions::GetIcebergScanTasksFunction() {
 	TableFunction function("iceberg_scan_tasks", {LogicalType::ANY}, IcebergScanTasksFunction, IcebergScanTasksBind);
 	function.get_virtual_columns = IcebergScanTasksVirtualColumns;
+	function.cardinality = IcebergScanTasksCardinality;
 	function.init_global = [](ClientContext &context,
 	                          TableFunctionInitInput &input) -> unique_ptr<GlobalTableFunctionState> {
 		Value setting;
