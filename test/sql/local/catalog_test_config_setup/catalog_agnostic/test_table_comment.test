@@ -1,0 +1,52 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/test_table_comment.test
+# description: Iceberg table comment is surfaced as a DuckDB table comment
+# group: [catalog_agnostic]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.table_comment_test;
+
+statement ok
+CREATE TABLE my_datalake.default.table_comment_test (id BIGINT)
+WITH ('comment' = 'Orders for the current year');
+
+# Resolve the table before inspecting its catalog entry: catalog listings may
+# initially contain only a lazy placeholder without the loaded metadata.
+statement ok
+DESCRIBE my_datalake.default.table_comment_test;
+
+query T
+SELECT comment FROM duckdb_tables()
+WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'table_comment_test';
+----
+Orders for the current year
+
+statement ok
+ALTER TABLE my_datalake.default.table_comment_test SET ('comment' = 'Updated table description');
+
+statement ok
+DESCRIBE my_datalake.default.table_comment_test;
+
+query T
+SELECT comment FROM duckdb_tables()
+WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'table_comment_test';
+----
+Updated table description
+
+statement ok
+ALTER TABLE my_datalake.default.table_comment_test RESET ('comment');
+
+statement ok
+DESCRIBE my_datalake.default.table_comment_test;
+
+query T
+SELECT comment FROM duckdb_tables()
+WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'table_comment_test';
+----
+NULL
+
+statement ok
+DROP TABLE my_datalake.default.table_comment_test;
