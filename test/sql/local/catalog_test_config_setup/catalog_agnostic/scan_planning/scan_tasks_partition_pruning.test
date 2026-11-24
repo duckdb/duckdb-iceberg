@@ -355,3 +355,85 @@ true	1	10	10
 true	2	6	6
 true	3	0	0
 true	4	9	9
+
+# ---- tasks sent with a schema newer than their plan's, after a type promotion that wrote no snapshot --------------
+
+# A distributed engine can pin its plan to the snapshot a query was bound at and send the tasks with the schema the
+# query was bound with. After a promotion that wrote no snapshot, that schema is newer than the snapshot's, so the
+# values in partition_values have the older type. They are widened exactly, and the tasks still skip by them.
+statement ok
+drop table if exists my_datalake.default.scan_tasks_promoted;
+
+statement ok
+create table my_datalake.default.scan_tasks_promoted(id integer, k integer, j integer)
+partitioned by (truncate(10, k), bucket(4, j)) with ('format-version'=2);
+
+statement ok
+insert into my_datalake.default.scan_tasks_promoted select i, i, i from range(40) t(i);
+
+statement ok
+set variable promoted_snapshot = (select max(snapshot_id) from iceberg_snapshots(my_datalake.default.scan_tasks_promoted));
+
+statement ok
+alter table my_datalake.default.scan_tasks_promoted alter k type bigint;
+
+statement ok
+alter table my_datalake.default.scan_tasks_promoted alter j type bigint;
+
+statement ok
+begin;
+
+statement ok
+set variable promoted_schema = (select schema_id from iceberg_scan_plan('my_datalake.default.scan_tasks_promoted') limit 1);
+
+statement ok
+create temp table promoted_tasks as select * from iceberg_scan_plan('my_datalake.default.scan_tasks_promoted',
+                                                                    snapshot_from_id => getvariable('promoted_snapshot'));
+
+# The plan's values have the snapshot's types, and its schema is older than the current one.
+query II
+select typeof(partition_values), schema_id < getvariable('promoted_schema') from promoted_tasks limit 1;
+----
+STRUCT("1000" INTEGER, "1001" INTEGER)	true
+
+statement ok
+set variable promoted_list = (select list(struct_update(t, schema_id := getvariable('promoted_schema'),
+                                                         "schema" := NULL::struct(id integer, k bigint, j bigint)))
+                              from (select * from promoted_tasks) t);
+
+statement ok
+call enable_logging('Iceberg');
+
+statement ok
+call truncate_duckdb_logs();
+
+query II
+select count(*), min(k) from iceberg_scan_tasks(getvariable('promoted_list')) where k = 5;
+----
+1	5
+
+query I
+select skipped_tasks() > 0;
+----
+true
+
+statement ok
+call disable_logging();
+
+# The rows of the table's own scan.
+foreach pred k=5 k>=25 j=7 (k<12)and(j>3)
+
+query I
+select count(*) from (
+ (select id, k, j from iceberg_scan_tasks(getvariable('promoted_list')) where {pred}
+  except all select id, k, j from my_datalake.default.scan_tasks_promoted where {pred})
+ union all
+ (select id, k, j from my_datalake.default.scan_tasks_promoted where {pred}
+  except all select id, k, j from iceberg_scan_tasks(getvariable('promoted_list')) where {pred}));
+----
+0
+
+endloop
+
+statement ok
+commit;

@@ -217,6 +217,29 @@ Value IcebergScanTaskCodec::ReadValue(const Value &input, const InputLayout &bin
 	return value;
 }
 
+//! A partition value as the type the task's schema gives its field. The value has another type when the list names a
+//! schema newer than the one it was planned with: a plan pinned to a snapshot types its values by the snapshot's
+//! schema, and a type promotion that wrote no snapshot leaves the current schema newer than that. The value is cast
+//! then, but only when the cast is exact (it casts back to the same value), as a promotion's always is. Otherwise it is
+//! not used: a partition value only ever skips its file, so leaving it out keeps the file.
+static optional<Value> ExactPartitionValue(const Value &value, const LogicalType &type) {
+	if (value.type() == type) {
+		return value;
+	}
+	if (value.IsNull()) {
+		return Value(type);
+	}
+	auto cast = value.DefaultTryCastAs(type, nullptr, true);
+	if (!cast) {
+		return nullopt;
+	}
+	auto back = cast->DefaultTryCastAs(value.type(), nullptr, true);
+	if (!back || !Value::NotDistinctFrom(*back, value)) {
+		return nullopt;
+	}
+	return cast;
+}
+
 IcebergFileScanTask IcebergScanTaskCodec::ReadTask(const Value &input, const InputLayout &bind,
                                                    const IcebergTableMetadata &metadata,
                                                    const IcebergTableSchema &schema) {
@@ -268,7 +291,6 @@ IcebergFileScanTask IcebergScanTaskCodec::ReadTask(const Value &input, const Inp
 	// without the column, or with it NULL, has no values, and its file is never skipped by them.
 	auto partition_values = ReadValue(input, bind, PARTITION_VALUES, true);
 	if (!partition_values.IsNull()) {
-		auto &value_types = StructType::GetChildTypes(partition_values.type());
 		auto &value_children = StructValue::GetChildren(partition_values);
 		for (auto &field : metadata.partition_specs.at(result.partition_spec_id).fields) {
 			auto index = bind.partition_value_indexes.find(static_cast<int32_t>(field.partition_field_id));
@@ -276,13 +298,14 @@ IcebergFileScanTask IcebergScanTaskCodec::ReadTask(const Value &input, const Inp
 				continue;
 			}
 			auto source_type = IcebergPartitionConstants::GetType(field.source_id, schema, metadata.GetSchemas());
-			if (!source_type || field.transform.GetBoundsType(*source_type) != value_types[index->second].second) {
-				throw InvalidInputException(
-				    "iceberg_scan_tasks partition value %d does not match the table's partition specs",
-				    field.partition_field_id);
+			if (!source_type) {
+				continue;
 			}
-			result.partition_values.push_back(
-			    IcebergPartitionInfo {field.partition_field_id, value_children[index->second]});
+			auto value =
+			    ExactPartitionValue(value_children[index->second], field.transform.GetBoundsType(*source_type));
+			if (value) {
+				result.partition_values.push_back(IcebergPartitionInfo {field.partition_field_id, std::move(*value)});
+			}
 		}
 	}
 	auto deletes = ReadValue(input, bind, DELETE_FILES);

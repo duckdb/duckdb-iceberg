@@ -595,3 +595,66 @@ select count(*) from (
 0
 
 endloop
+
+# ---- a partition value of another type: cast when the cast is exact, and otherwise not used -----------------------
+
+# A value whose type differs from the one the task's schema gives its field is cast when it casts back to the same
+# value, as a type promotion's does. Any other value is left out, so its file is opened and its rows answer.
+statement ok
+set iceberg_enable_multi_file_scan_tasks=true;
+
+statement ok
+set variable typed_bigint = [
+ struct_insert(prune_descriptor('1999', 0, 1999, 1000), partition_values := {'1000': 1999::bigint}),
+ struct_insert(prune_descriptor('2000', 0, 2000, 1000), partition_values := {'1000': 2000::bigint}),
+ struct_insert(prune_descriptor('2001', 0, 2001, 1000), partition_values := {'1000': 2001::bigint})];
+
+# 1999.5 casts to 2000, which does not cast back to 1999.5, so the 1999 file is not skipped by it.
+statement ok
+set variable typed_double = [
+ struct_insert(prune_descriptor('1999', 0, 1999, 1000), partition_values := {'1000': 1999.5::double}),
+ struct_insert(prune_descriptor('2000', 0, 2000, 1000), partition_values := {'1000': 2000::double}),
+ struct_insert(prune_descriptor('2001', 0, 2001, 1000), partition_values := {'1000': 2001::double})];
+
+statement ok
+set variable typed_varchar = [
+ struct_insert(prune_descriptor('1999', 0, 1999, 1000), partition_values := {'1000': 'abc'}),
+ struct_insert(prune_descriptor('2000', 0, 2000, 1000), partition_values := {'1000': '2000'}),
+ struct_insert(prune_descriptor('2001', 0, 2001, 1000), partition_values := {'1000': '2001'})];
+
+statement ok
+call enable_logging('Iceberg');
+
+foreach list typed_bigint typed_double typed_varchar
+
+statement ok
+call truncate_duckdb_logs();
+
+query II
+select count(*), sum(id) from iceberg_scan_tasks(getvariable('{list}')) where part = 1999;
+----
+1000	499500
+
+query I
+select skipped_tasks();
+----
+2
+
+endloop
+
+statement ok
+call truncate_duckdb_logs();
+
+# The exact values still skip: here the 1999 and 2001 files.
+query I
+select count(*) from iceberg_scan_tasks(getvariable('typed_bigint')) where part = 2000;
+----
+1000
+
+query I
+select skipped_tasks();
+----
+2
+
+statement ok
+call disable_logging();
