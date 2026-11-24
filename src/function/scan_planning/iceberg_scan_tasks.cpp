@@ -15,11 +15,6 @@ using TaskCodec = IcebergScanTaskCodec;
 struct IcebergScanTasksBindData : public TableFunctionData {
 	TaskCodec::InputLayout layout;
 	Value tasks;
-	//! trust_partition_values: the tasks' partition_constants are their data files' partition values as the
-	//! table's manifests record them (iceberg_scan_plan's rows are), so a task whose values the scan's filters
-	//! reject is skipped before its file is opened. Off by default: a file's physical values then win over a
-	//! descriptor that disagrees with them, and no file is skipped by its descriptor alone.
-	bool trust_partition_values = false;
 };
 
 enum class IcebergScanTasksExecutionMode : uint8_t { UNSELECTED, SINGLE_FILE, MULTI_FILE };
@@ -173,8 +168,7 @@ struct IcebergScanTasksGlobalState : public GlobalTableFunctionState {
 					}
 					next_task = tasks.size();
 					active = make_shared_ptr<IcebergTaskExecutor>(context, execution, std::move(decoded_tasks),
-					                                              column_indexes, *filters, std::move(filter),
-					                                              bind.trust_partition_values);
+					                                              column_indexes, *filters, std::move(filter));
 					return active;
 				}
 				execution_mode = IcebergScanTasksExecutionMode::SINGLE_FILE;
@@ -191,7 +185,7 @@ struct IcebergScanTasksGlobalState : public GlobalTableFunctionState {
 		vector<IcebergFileScanTask> single_task;
 		single_task.push_back(std::move(task));
 		active = make_shared_ptr<IcebergTaskExecutor>(context, execution, std::move(single_task), column_indexes,
-		                                              *filters, std::move(filter), bind.trust_partition_values);
+		                                              *filters, std::move(filter));
 		next_task++;
 		return active;
 	}
@@ -213,13 +207,6 @@ static unique_ptr<FunctionData> IcebergScanTasksBind(ClientContext &, TableFunct
 	auto result = make_uniq<IcebergScanTasksBindData>();
 	result->layout = TaskCodec::BindInput(ListType::GetChildType(tasks.type()), types, names);
 	result->tasks = tasks;
-	auto trust = input.named_parameters.find("trust_partition_values");
-	if (trust != input.named_parameters.end()) {
-		if (trust->second.IsNull()) {
-			throw InvalidInputException("iceberg_scan_tasks trust_partition_values cannot be NULL");
-		}
-		result->trust_partition_values = BooleanValue::Get(trust->second);
-	}
 	return std::move(result);
 }
 
@@ -271,8 +258,6 @@ static virtual_column_map_t IcebergScanTasksVirtualColumns(ClientContext &, opti
 
 TableFunctionSet IcebergFunctions::GetIcebergScanTasksFunction() {
 	TableFunction function("iceberg_scan_tasks", {LogicalType::ANY}, IcebergScanTasksFunction, IcebergScanTasksBind);
-	function.GetSignature().WithTypedKwargs(
-	    "options", [&](TypedKwargs &options) { options.Add("trust_partition_values", LogicalType::BOOLEAN); });
 	function.get_virtual_columns = IcebergScanTasksVirtualColumns;
 	function.init_global = [](ClientContext &context,
 	                          TableFunctionInitInput &input) -> unique_ptr<GlobalTableFunctionState> {

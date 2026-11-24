@@ -1,5 +1,5 @@
 # name: test/sql/local/scan_tasks_partition_pruning.test
-# description: With trust_partition_values, a task whose identity partition values the filters reject is never opened
+# description: A task whose partition_values the filters reject is never opened; one without them always is
 # group: [local]
 
 include test/sql/init_requires
@@ -56,9 +56,19 @@ create temp macro prune_descriptor(name, spec, p, rows) as
   'metadata':'{"format-version": 3, "table-uuid": "00000000-0000-0000-0000-000000000003", "location": "{TEST_DIR}", "last-updated-ms": 0, "last-column-id": 3, "last-sequence-number": 0, "current-schema-id": 0, "schemas": [{"schema-id": 0, "type": "struct", "fields": [{"id": 1, "name": "id", "required": false, "type": "int"}, {"id": 3, "name": "part", "required": false, "type": "int"}]}], "partition-specs": [{"spec-id": 0, "fields": [{"name": "part", "transform": "identity", "source-id": 3, "field-id": 1000}]}, {"spec-id": 1, "fields": [{"name": "part_bucket", "transform": "bucket[4]", "source-id": 3, "field-id": 1001}]}], "default-spec-id": 0, "sort-orders": [{"order-id": 0, "fields": []}], "default-sort-order-id": 0}'::json::variant,
   'schema':NULL::struct(id integer, part integer)};
 
+# The same descriptor with its partition tuple, as iceberg_scan_plan's rows carry it: spec 0's identity field 1000.
+# Spec 1 has only field 1001 (bucket), of which the tuple holds no value, so a spec 1 file is never skipped by it.
+statement ok
+create temp macro prune_task(name, spec, p, rows) as
+ struct_insert(prune_descriptor(name, spec, p, rows), partition_values := {'1000': p::integer});
+
 statement ok
 set variable prune_list = [prune_descriptor('1999', 0, 1999, 1000), prune_descriptor('2000', 0, 2000, 1000),
                            prune_descriptor('2001', 0, 2001, 1000), prune_descriptor('2002', 0, 2002, 1000)];
+
+statement ok
+set variable prune_tasks = [prune_task('1999', 0, 1999, 1000), prune_task('2000', 0, 2000, 1000),
+                            prune_task('2001', 0, 2001, 1000), prune_task('2002', 0, 2002, 1000)];
 
 # Every log line of a file: its opens, reads and closes.
 statement ok
@@ -68,9 +78,9 @@ create temp macro file_ops(name) as
 statement ok
 create temp macro skipped_tasks() as
  (select count(*) from duckdb_logs() where type = 'Iceberg'
-  and message.contains('Iceberg scan tasks filter pushdown, skipped ''data_file'':'));
+  and message.contains('Iceberg Filter Pushdown, skipped ''data_file'':'));
 
-# ---- off by default: every file is opened, and the rows are the same ---------------------------------------------
+# ---- without partition_values: every file is opened, and the rows are the same ------------------------------------
 
 statement ok
 call enable_logging(['Iceberg', 'FileSystem']);
@@ -101,7 +111,7 @@ insert into chosen_parts values (1999, false), (2000, true);
 statement ok
 set disabled_optimizers='join_order,build_side_probe_side';
 
-# ---- trusted: a rejected task is never opened, under a static filter and under a join's runtime filter ------------
+# ---- with partition_values: a rejected task is never opened, under a static filter and a join's runtime filter ----
 
 foreach multi_file true false
 
@@ -121,7 +131,7 @@ call truncate_duckdb_logs();
 
 query II
 select count(*), sum(id)
-from iceberg_scan_tasks(getvariable('prune_list'), trust_partition_values := true) where part=2000;
+from iceberg_scan_tasks(getvariable('prune_tasks')) where part=2000;
 ----
 1000	499500
 
@@ -135,7 +145,7 @@ call truncate_duckdb_logs();
 
 query II
 select count(*), sum(s.id)
-from iceberg_scan_tasks(getvariable('prune_list'), trust_partition_values := true) s
+from iceberg_scan_tasks(getvariable('prune_tasks')) s
 join chosen_parts d on s.part = d.part
 where d.chosen;
 ----
@@ -168,7 +178,7 @@ call truncate_duckdb_logs();
 
 query I
 select count(*)
-from iceberg_scan_tasks(getvariable('prune_list'), trust_partition_values := true) where part in (2000, 2002);
+from iceberg_scan_tasks(getvariable('prune_tasks')) where part in (2000, 2002);
 ----
 2000
 
@@ -184,12 +194,12 @@ statement ok
 call truncate_duckdb_logs();
 
 query I
-select count(*) from iceberg_scan_tasks(getvariable('prune_list'), trust_partition_values := true) where part >= 1999;
+select count(*) from iceberg_scan_tasks(getvariable('prune_tasks')) where part >= 1999;
 ----
 4000
 
 query I
-select count(*) from iceberg_scan_tasks(getvariable('prune_list'), trust_partition_values := true) where id < 10;
+select count(*) from iceberg_scan_tasks(getvariable('prune_tasks')) where id < 10;
 ----
 40
 
@@ -206,7 +216,7 @@ statement ok
 call truncate_duckdb_logs();
 
 query I
-select count(*) from iceberg_scan_tasks(getvariable('prune_list'), trust_partition_values := true) where part = 1500;
+select count(*) from iceberg_scan_tasks(getvariable('prune_tasks')) where part = 1500;
 ----
 0
 
@@ -232,7 +242,7 @@ call truncate_duckdb_logs();
 
 query II
 select count(*), sum(s.id)
-from iceberg_scan_tasks(getvariable('prune_list'), trust_partition_values := true) s
+from iceberg_scan_tasks(getvariable('prune_tasks')) s
 join chosen_parts d on s.part = d.part
 where d.chosen;
 ----
@@ -257,6 +267,10 @@ statement ok
 set variable mixed_list = [prune_descriptor('1999', 0, 1999, 1000), prune_descriptor('2000', 0, 2000, 1000),
                            prune_descriptor('2001', 0, 2001, 1000), prune_descriptor('nopart', 0, 2001, 1000)];
 
+statement ok
+set variable mixed_tasks = [prune_task('1999', 0, 1999, 1000), prune_task('2000', 0, 2000, 1000),
+                            prune_task('2001', 0, 2001, 1000), prune_task('nopart', 0, 2001, 1000)];
+
 foreach multi_file true false
 
 statement ok
@@ -264,22 +278,22 @@ set iceberg_enable_multi_file_scan_tasks={multi_file};
 
 query IIII
 select parse_filename(filename), count(*), min(part), max(part)
-from iceberg_scan_tasks(getvariable('mixed_list'), trust_partition_values := true) where part = 2001
+from iceberg_scan_tasks(getvariable('mixed_tasks')) where part = 2001
 group by all order by all;
 ----
 prune_task_2001.parquet	1000	2001	2001
 prune_task_nopart.parquet	1000	2001	2001
 
-# The same rows, file names and positions as the untrusted scan.
+# The same rows, file names and positions as the scan without partition_values.
 query I
 select count(*) from (
  (select id, part, filename, file_row_number from iceberg_scan_tasks(getvariable('mixed_list')) where part >= 2000
   except all
   select id, part, filename, file_row_number
-  from iceberg_scan_tasks(getvariable('mixed_list'), trust_partition_values := true) where part >= 2000)
+  from iceberg_scan_tasks(getvariable('mixed_tasks')) where part >= 2000)
  union all
  (select id, part, filename, file_row_number
-  from iceberg_scan_tasks(getvariable('mixed_list'), trust_partition_values := true) where part >= 2000
+  from iceberg_scan_tasks(getvariable('mixed_tasks')) where part >= 2000
   except all
   select id, part, filename, file_row_number from iceberg_scan_tasks(getvariable('mixed_list')) where part >= 2000));
 ----
@@ -287,7 +301,7 @@ select count(*) from (
 
 # A partition value rejected by the filter skips a file without the column too: its rows would read that value.
 query I
-select count(*) from iceberg_scan_tasks(getvariable('mixed_list'), trust_partition_values := true) where part = 2000;
+select count(*) from iceberg_scan_tasks(getvariable('mixed_tasks')) where part = 2000;
 ----
 1000
 
@@ -302,9 +316,13 @@ statement ok
 set variable null_list = [prune_descriptor('2000', 0, 2000, 1000), prune_descriptor('null', 0, NULL, 10),
                           prune_descriptor('spec1', 1, NULL, 5), prune_descriptor('2001', 0, 2001, 1000)];
 
+statement ok
+set variable null_tasks = [prune_task('2000', 0, 2000, 1000), prune_task('null', 0, NULL, 10),
+                           prune_task('spec1', 1, NULL, 5), prune_task('2001', 0, 2001, 1000)];
+
 # IS NULL stays above the scan (it is not pushed into iceberg_scan_tasks), so it skips nothing; the answer holds.
 query I
-select count(*) from iceberg_scan_tasks(getvariable('null_list'), trust_partition_values := true) where part is null;
+select count(*) from iceberg_scan_tasks(getvariable('null_tasks')) where part is null;
 ----
 10
 
@@ -315,10 +333,10 @@ statement ok
 call truncate_duckdb_logs();
 
 # An explicit NULL identity value is every row's value, so = rejects that file as the planner does; the spec 1 file
-# has no identity value, so it is opened and its rows answer.
+# has no value of its own spec's field, so it is opened and its rows answer.
 query II
 select count(*), count(*) filter (where parse_filename(filename) = 'prune_task_spec1.parquet')
-from iceberg_scan_tasks(getvariable('null_list'), trust_partition_values := true) where part = 2000;
+from iceberg_scan_tasks(getvariable('null_tasks')) where part = 2000;
 ----
 1005	5
 
@@ -330,7 +348,7 @@ select skipped_tasks();
 statement ok
 call disable_logging();
 
-# The same answers untrusted.
+# The same answers without partition_values.
 query I
 select count(*) from iceberg_scan_tasks(getvariable('null_list')) where part is null;
 ----
@@ -355,6 +373,10 @@ set variable delete_list = (select list(struct_update(t, delete_files := [
   'content_offset':NULL::bigint, 'content_size_in_bytes':NULL::bigint}])) from unnest(getvariable('prune_list')) u(t));
 
 statement ok
+set variable delete_tasks = (select list(struct_insert(t, partition_values := {'1000': t.partition_constants."3"}))
+                             from unnest(getvariable('delete_list')) u(t));
+
+statement ok
 call enable_logging(['Iceberg', 'FileSystem']);
 
 statement ok
@@ -362,7 +384,7 @@ call truncate_duckdb_logs();
 
 query II
 select count(*), sum(id)
-from iceberg_scan_tasks(getvariable('delete_list'), trust_partition_values := true) where part=2000;
+from iceberg_scan_tasks(getvariable('delete_tasks')) where part=2000;
 ----
 999	499495
 
@@ -380,33 +402,32 @@ where type = 'Iceberg' and message.contains('Iceberg scan tasks executor mode=si
 statement ok
 call disable_logging();
 
-# ---- the caller vouches for the values ----------------------------------------------------------------------------
+# ---- partition_values decide which files are read, as the manifests do for iceberg_scan --------------------------
 
 statement ok
 set variable liar_list = [prune_descriptor('liar', 0, 1999, 1), prune_descriptor('2000', 0, 2000, 1000)];
 
-# Untrusted, the file's physical value wins over its descriptor.
+statement ok
+set variable liar_tasks = [prune_task('liar', 0, 1999, 1), prune_task('2000', 0, 2000, 1000)];
+
+# Without partition_values, the file's physical value wins over its descriptor's constant.
 query II
 select count(*), sum(id) from iceberg_scan_tasks(getvariable('liar_list')) where part=2000;
 ----
 1001	499542
 
-# Trusted, the descriptor decides: a caller passes trust_partition_values only for values the manifests record.
+# With them, the tuple decides whether the file is read, as iceberg_scan's planner decides by the manifest's value.
 query II
 select count(*), sum(id)
-from iceberg_scan_tasks(getvariable('liar_list'), trust_partition_values := true) where part=2000;
+from iceberg_scan_tasks(getvariable('liar_tasks')) where part=2000;
 ----
 1000	499500
 
-statement error
-select count(*) from iceberg_scan_tasks(getvariable('prune_list'), trust_partition_values := NULL);
-----
-trust_partition_values cannot be NULL
 
 # ---- a DOUBLE identity partition holding NaN ------------------------------------------------------------------------
 
-# A NaN partition value is every row's value, NaN included (IsNaNPartitionValue): the planner's NaN rules decide, so
-# NaN is kept for x > c, x = 'nan' and x >= 'nan', and skipped for x < c, as the untrusted scan answers.
+# A NaN partition value is every row's value, NaN included: the planner's NaN rules decide, so
+# NaN is kept for x > c, x = 'nan' and x >= 'nan', and skipped for x < c, as the scan without partition_values answers.
 foreach name low high nan
 
 statement ok
@@ -434,6 +455,10 @@ statement ok
 set variable nan_list = [nan_descriptor('low', 1.5), nan_descriptor('high', 2.5), nan_descriptor('nan', 'nan'::double)];
 
 statement ok
+set variable nan_tasks = (select list(struct_insert(t, partition_values := {'1000': t.partition_constants."3"}))
+                          from unnest(getvariable('nan_list')) u(t));
+
+statement ok
 create temp macro nan_ops(name) as
  (select count(*) from duckdb_logs_parsed('FileSystem') where path = '{TEST_DIR}/prune_nan_' || name || '.parquet');
 
@@ -445,7 +470,7 @@ call truncate_duckdb_logs();
 
 query II
 select count(*), count(*) filter (where isnan(x))
-from iceberg_scan_tasks(getvariable('nan_list'), trust_partition_values := true) where x > 2.0;
+from iceberg_scan_tasks(getvariable('nan_tasks')) where x > 2.0;
 ----
 200	100
 
@@ -459,7 +484,7 @@ call truncate_duckdb_logs();
 
 query II
 select count(*), count(*) filter (where isnan(x))
-from iceberg_scan_tasks(getvariable('nan_list'), trust_partition_values := true) where x = 'nan'::double;
+from iceberg_scan_tasks(getvariable('nan_tasks')) where x = 'nan'::double;
 ----
 100	100
 
@@ -473,7 +498,7 @@ call truncate_duckdb_logs();
 
 query II
 select count(*), count(*) filter (where isnan(x))
-from iceberg_scan_tasks(getvariable('nan_list'), trust_partition_values := true) where x < 2.0;
+from iceberg_scan_tasks(getvariable('nan_tasks')) where x < 2.0;
 ----
 100	0
 
@@ -485,16 +510,16 @@ select skipped_tasks(), nan_ops('low') > 0, nan_ops('high'), nan_ops('nan');
 statement ok
 call disable_logging();
 
-# The same rows as the untrusted scan, NaN included, for every predicate above and a few more.
+# The same rows as the scan without partition_values, NaN included, for every predicate above and a few more.
 foreach pred x>2.0 x<2.0 x='nan'::double x>='nan'::double x<>'nan'::double x<=2.5
 
 query I
 select count(*) from (
  (select id, x, filename from iceberg_scan_tasks(getvariable('nan_list')) where {pred}
   except all
-  select id, x, filename from iceberg_scan_tasks(getvariable('nan_list'), trust_partition_values := true) where {pred})
+  select id, x, filename from iceberg_scan_tasks(getvariable('nan_tasks')) where {pred})
  union all
- (select id, x, filename from iceberg_scan_tasks(getvariable('nan_list'), trust_partition_values := true) where {pred}
+ (select id, x, filename from iceberg_scan_tasks(getvariable('nan_tasks')) where {pred}
   except all
   select id, x, filename from iceberg_scan_tasks(getvariable('nan_list')) where {pred}));
 ----
@@ -504,8 +529,8 @@ endloop
 
 # ---- an identity partition on a nested field ------------------------------------------------------------------------
 
-# The partition's source is s.k, a field of a struct column. A static filter on s.k skips by it; the rows are the
-# untrusted scan's.
+# The partition's source is s.k, a field of a struct column. A static filter on s.k skips by it; the rows are those of
+# the scan without partition_values.
 foreach part 1999 2000 2001
 
 statement ok
@@ -532,6 +557,10 @@ statement ok
 set variable nested_list = [nested_descriptor(1999), nested_descriptor(2000), nested_descriptor(2001)];
 
 statement ok
+set variable nested_tasks = (select list(struct_insert(t, partition_values := {'1000': t.partition_constants."3"}))
+                             from unnest(getvariable('nested_list')) u(t));
+
+statement ok
 call enable_logging('Iceberg');
 
 statement ok
@@ -539,7 +568,7 @@ call truncate_duckdb_logs();
 
 query III
 select count(*), min(s.k), max(s.k)
-from iceberg_scan_tasks(getvariable('nested_list'), trust_partition_values := true) where s.k = 2000;
+from iceberg_scan_tasks(getvariable('nested_tasks')) where s.k = 2000;
 ----
 100	2000	2000
 
@@ -557,9 +586,9 @@ query I
 select count(*) from (
  (select id, s, filename from iceberg_scan_tasks(getvariable('nested_list')) where {pred}
   except all
-  select id, s, filename from iceberg_scan_tasks(getvariable('nested_list'), trust_partition_values := true) where {pred})
+  select id, s, filename from iceberg_scan_tasks(getvariable('nested_tasks')) where {pred})
  union all
- (select id, s, filename from iceberg_scan_tasks(getvariable('nested_list'), trust_partition_values := true) where {pred}
+ (select id, s, filename from iceberg_scan_tasks(getvariable('nested_tasks')) where {pred}
   except all
   select id, s, filename from iceberg_scan_tasks(getvariable('nested_list')) where {pred}));
 ----

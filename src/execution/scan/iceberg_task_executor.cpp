@@ -6,10 +6,8 @@
 #include "duckdb/logging/logger.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
-#include "core/expression/iceberg_predicate_stats.hpp"
-#include "core/expression/iceberg_transform.hpp"
 #include "planning/iceberg_multi_file_reader.hpp"
-#include "planning/pruning/iceberg_predicate.hpp"
+#include "planning/pruning/iceberg_file_pruner.hpp"
 #include "planning/pruning/iceberg_table_filter.hpp"
 #include "function/scan_planning/iceberg_row_filter.hpp"
 #include "iceberg_logging.hpp"
@@ -39,75 +37,19 @@ struct IcebergTaskLocalState : public LocalTableFunctionState {
 struct IcebergTaskScanInfo : public TableFunctionInfo {
 	shared_ptr<IcebergTaskExecutionContext> execution;
 	vector<IcebergFileScanTask> tasks;
-	//! iceberg_scan_tasks' trust_partition_values: the caller vouches that every task's partition_constants are its
-	//! data file's partition values as the table's manifests record them, so a file can be skipped by them before it
-	//! is opened (IcebergTaskFileList::DynamicFilterPushdown). Off, a file's physical values win over its task's.
-	bool trust_partition_values = false;
+	//! Whether any task carries its data file's partition tuple (partition_values), by which the scan's filters may
+	//! skip the file before it is opened (IcebergTaskFileList::DynamicFilterPushdown).
+	bool has_partition_values = false;
 };
-
-bool IsNaNPartitionValue(const Value &value) {
-	switch (value.type().id()) {
-	case LogicalTypeId::FLOAT:
-		return Value::IsNan(value.GetValue<float>());
-	case LogicalTypeId::DOUBLE:
-		return Value::IsNan(value.GetValue<double>());
-	default:
-		return false;
-	}
-}
-
-//! Whether any row of the file `task` describes can pass `filters`, judged by its identity partition values alone.
-//! A manifest's identity partition value is the value of its source column in every row of the file, so a filter
-//! that rejects the value rejects the whole file. The test is IcebergFilePruner::FilePartitionMatchesFilter's, which
-//! plans every iceberg_scan: the same statistics from one partition value, the same IcebergPredicate::MatchBounds. A
-//! task carries only the identity values of its own partition spec (TaskCodec::ReadTask), so a value is never another
-//! spec's NULL placeholder, and a field under any other transform is never tested here.
-bool PartitionValuesCanMatch(ClientContext &context, const IcebergFileScanTask &task, const IcebergTableSchema &schema,
-                             const IcebergTableFilters &filters) {
-	auto &source_to_column = schema.GetSourceIdMap();
-	for (auto &entry : task.partition_constants) {
-		if (entry.first < 0) {
-			continue;
-		}
-		auto column = source_to_column.find(static_cast<uint64_t>(entry.first));
-		if (column == source_to_column.end()) {
-			// A partition source the scan's schema does not have: nothing can filter on it.
-			continue;
-		}
-		auto filter = filters.GetFilterForColumnIndex(column->second);
-		if (!filter) {
-			continue;
-		}
-		auto &value = entry.second;
-		IcebergPredicateStats stats;
-		stats.lower_bound = value;
-		stats.upper_bound = value;
-		if (value.IsNull()) {
-			stats.has_null = true;
-		} else {
-			stats.has_null = false;
-			stats.has_not_null = true;
-			//! An identity partition is exact, NaN included.
-			stats.has_nan = IsNaNPartitionValue(value);
-		}
-		if (IcebergPredicate::MatchBounds(context, *filter, stats, IcebergTransform::Identity()) ==
-		    IcebergMetricsMatch::ROWS_CANNOT_MATCH) {
-			auto &source_column = IcebergTableSchema::GetFromColumnIndex(schema.columns, column->second, 0);
-			DUCKDB_LOG(context, IcebergLogType,
-			           "Iceberg scan tasks filter pushdown, skipped 'data_file': '%s', partition column '%s' has value "
-			           "%s, which does not match filter: %s",
-			           task.file_path, source_column.name, value.ToString(), filter->ToString(source_column.name));
-			return false;
-		}
-	}
-	return true;
-}
 
 //! The data files of a list of scan tasks, each with the index of its task in IcebergTaskScanInfo::tasks. The scan's
 //! filters, static ones and the runtime filters of joins alike, reach the list before any file is opened
-//! (MultiFileFunction::MultiFileInitGlobal). With trust_partition_values, a file whose identity partition values they
-//! reject is dropped from the list then, and is never opened. The kept files keep their tasks, so the reader still
-//! finds each file's task when the list is shorter than the task list (IcebergTaskReader::InitializeReader).
+//! (MultiFileFunction::MultiFileInitGlobal). A file whose task carries its partition tuple is dropped from the list
+//! then if the filters reject the tuple, by the test iceberg_scan's planner applies to the same values from the
+//! manifests (IcebergFilePruner::PartitionMatchesFilter), and is never opened. A task without the tuple is always
+//! kept: its partition_constants are only defaults for columns its file lacks. The kept files keep their tasks, so
+//! the reader still finds each file's task when the list is shorter than the task list
+//! (IcebergTaskReader::InitializeReader).
 class IcebergTaskFileList : public SimpleMultiFileList {
 public:
 	IcebergTaskFileList(shared_ptr<TableFunctionInfo> info_p, vector<OpenFileInfo> files, vector<idx_t> task_indexes_p)
@@ -129,7 +71,7 @@ public:
 	unique_ptr<MultiFileList> DynamicFilterPushdown(MultiFileDynamicPushdownInfo &pushdown_info) const override {
 		auto &filters = pushdown_info.filters;
 		auto &scan_info = info->Cast<IcebergTaskScanInfo>();
-		if (!scan_info.trust_partition_values || !filters.HasFilters() || paths.empty()) {
+		if (!scan_info.has_partition_values || !filters.HasFilters() || paths.empty()) {
 			return nullptr;
 		}
 		auto &schema = scan_info.execution->schema;
@@ -157,10 +99,13 @@ public:
 			return nullptr;
 		}
 		auto &context = pushdown_info.context;
+		IcebergFilePruner pruner(context, scan_info.execution->metadata, schema, table_filters);
 		vector<OpenFileInfo> kept_files;
 		vector<idx_t> kept_tasks;
 		for (idx_t i = 0; i < paths.size(); i++) {
-			if (!PartitionValuesCanMatch(context, GetTask(i), schema, table_filters)) {
+			auto &task = GetTask(i);
+			if (!task.partition_values.empty() &&
+			    !pruner.PartitionMatchesFilter(task.partition_spec_id, task.partition_values, task.file_path)) {
 				continue;
 			}
 			kept_files.push_back(paths[i]);
@@ -242,8 +187,8 @@ struct IcebergTaskReader : public IcebergMultiFileReader {
 		//! InitializeTaskReader resolves physical fields and fallback partition constants before
 		//! CreateMapping evaluates these filters. A rejected constant skips the data read safely;
 		//! testing task.partition_constants before resolving the file schema could discard real values.
-		//! Only a caller that vouches for them (trust_partition_values) has files skipped by them before
-		//! they are opened, in IcebergTaskFileList::DynamicFilterPushdown.
+		//! Only a task's partition tuple (partition_values), the manifests' own values, skips its file before
+		//! it is opened, in IcebergTaskFileList::DynamicFilterPushdown.
 		return InitializeTaskReader(reader_data, bind, columns, column_ids, filters, context, gstate,
 		                            execution.metadata.GetSchemas(), execution.metadata.mappings, std::move(deletes),
 		                            task.partition_constants);
@@ -254,8 +199,7 @@ struct IcebergTaskReader : public IcebergMultiFileReader {
 
 IcebergTaskExecutor::IcebergTaskExecutor(ClientContext &context, shared_ptr<IcebergTaskExecutionContext> execution,
                                          vector<IcebergFileScanTask> tasks, vector<ColumnIndex> column_indexes_p,
-                                         const TableFilterSet &table_filters, unique_ptr<Expression> row_filter_p,
-                                         bool trust_partition_values)
+                                         const TableFilterSet &table_filters, unique_ptr<Expression> row_filter_p)
     : column_indexes(std::move(column_indexes_p)), row_filter(std::move(row_filter_p)), filters(table_filters.Copy()) {
 	if (tasks.empty()) {
 		throw InternalException("IcebergTaskExecutor requires at least one file task");
@@ -265,11 +209,11 @@ IcebergTaskExecutor::IcebergTaskExecutor(ClientContext &context, shared_ptr<Iceb
 
 	auto info = make_shared_ptr<IcebergTaskScanInfo>();
 	info->execution = std::move(execution);
-	info->trust_partition_values = trust_partition_values;
 	vector<Value> paths;
 	paths.reserve(tasks.size());
 	for (auto &task : tasks) {
 		paths.emplace_back(task.file_path);
+		info->has_partition_values = info->has_partition_values || !task.partition_values.empty();
 	}
 	info->tasks = std::move(tasks);
 	auto path_list = Value::LIST(LogicalType::VARCHAR, std::move(paths));

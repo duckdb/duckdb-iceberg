@@ -41,6 +41,8 @@ struct IcebergScanTaskCodec {
 	struct InputLayout {
 		vector<idx_t> columns;
 		vector<int32_t> partition_ids;
+		//! The partition_values field of each partition field id, when the input has the column
+		unordered_map<int32_t, idx_t> partition_value_indexes;
 		LogicalType schema_type;
 	};
 	static InputLayout BindInput(const LogicalType &task_type, vector<LogicalType> &types, vector<Identifier> &names);

@@ -1,5 +1,5 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/scan_planning/scan_tasks_partition_pruning.test
-# description: Planned tasks run with trust_partition_values skip the partitions the scan's filters reject
+# description: Planned tasks skip the partitions the scan's filters reject, by their partition_values
 # group: [scan_planning]
 
 require-env CATALOG_TEST_CONFIG_SETUP
@@ -32,6 +32,9 @@ statement ok
 set variable pruning_list = (select list(task) from (select * from pruning_tasks) task);
 
 statement ok
+set variable pruning_list_without = (select list(task) from (select * exclude (partition_values) from pruning_tasks) task);
+
+statement ok
 create temp table pruning_keys(category integer);
 
 statement ok
@@ -41,10 +44,12 @@ insert into pruning_keys values (3), (4);
 statement ok
 set disabled_optimizers='join_order,build_side_probe_side';
 
+# Files skipped by their partition values. iceberg_scan's planner also skips files by their column bounds, which a
+# task does not carry; those lines name no partition column.
 statement ok
 create temp macro skipped_tasks() as
  (select count(*) from duckdb_logs() where type = 'Iceberg'
-  and message.contains('Iceberg scan tasks filter pushdown, skipped ''data_file'':'));
+  and message.contains('Iceberg Filter Pushdown, skipped ''data_file'':') and message.contains('partition column'));
 
 foreach multi_file true false
 
@@ -60,7 +65,7 @@ call truncate_duckdb_logs();
 # A join's runtime filter skips every task outside the build side's partitions.
 query II
 select count(*), sum(t.id)
-from iceberg_scan_tasks(getvariable('pruning_list'), trust_partition_values := true) t
+from iceberg_scan_tasks(getvariable('pruning_list')) t
 join pruning_keys using (category);
 ----
 2000	9997000
@@ -74,9 +79,9 @@ true
 statement ok
 call truncate_duckdb_logs();
 
-# Untrusted, the same task list skips nothing.
+# Without partition_values, the same tasks skip nothing.
 query II
-select count(*), sum(t.id) from iceberg_scan_tasks(getvariable('pruning_list')) t join pruning_keys using (category);
+select count(*), sum(t.id) from iceberg_scan_tasks(getvariable('pruning_list_without')) t join pruning_keys using (category);
 ----
 2000	9997000
 
@@ -92,14 +97,14 @@ call disable_logging();
 query I
 select count(*) from (
  (select id, category, region, filename, file_row_number
-  from iceberg_scan_tasks(getvariable('pruning_list'), trust_partition_values := true) where category = 7
+  from iceberg_scan_tasks(getvariable('pruning_list')) where category = 7
   except all
   select id, category, region, filename, file_row_number from my_datalake.default.scan_tasks_pruning where category = 7)
  union all
  (select id, category, region, filename, file_row_number from my_datalake.default.scan_tasks_pruning where category = 7
   except all
   select id, category, region, filename, file_row_number
-  from iceberg_scan_tasks(getvariable('pruning_list'), trust_partition_values := true) where category = 7));
+  from iceberg_scan_tasks(getvariable('pruning_list')) where category = 7));
 ----
 0
 
@@ -157,7 +162,7 @@ call truncate_duckdb_logs();
 # category, so its files are opened and their rows answer.
 query II
 select count(*), sum(t.id)
-from iceberg_scan_tasks(getvariable('evolved_list'), trust_partition_values := true) t
+from iceberg_scan_tasks(getvariable('evolved_list')) t
 join pruning_keys using (category);
 ----
 400	399400
@@ -172,7 +177,7 @@ call truncate_duckdb_logs();
 
 # A static filter on region skips only the second spec's other regions.
 query I
-select count(*) from iceberg_scan_tasks(getvariable('evolved_list'), trust_partition_values := true) where region = 'r1';
+select count(*) from iceberg_scan_tasks(getvariable('evolved_list')) where region = 'r1';
 ----
 667
 
@@ -188,7 +193,7 @@ call disable_logging();
 query I
 select count(*) from (
  (select id, category, region, filename, file_row_number
-  from iceberg_scan_tasks(getvariable('evolved_list'), trust_partition_values := true) t
+  from iceberg_scan_tasks(getvariable('evolved_list')) t
   where category in (3, 4) or region = 'r1'
   except all
   select id, category, region, filename, file_row_number from my_datalake.default.scan_tasks_evolved
@@ -198,7 +203,7 @@ select count(*) from (
   where category in (3, 4) or region = 'r1'
   except all
   select id, category, region, filename, file_row_number
-  from iceberg_scan_tasks(getvariable('evolved_list'), trust_partition_values := true) t
+  from iceberg_scan_tasks(getvariable('evolved_list')) t
   where category in (3, 4) or region = 'r1'));
 ----
 0
@@ -207,3 +212,146 @@ endloop
 
 statement ok
 commit;
+
+# ---- transforms: a file is skipped by its day, month, bucket or truncate value, as iceberg_scan skips it -----------
+
+statement ok
+drop table if exists my_datalake.default.scan_tasks_transforms;
+
+statement ok
+create table my_datalake.default.scan_tasks_transforms(id integer, g integer, ts timestamp, d date, k bigint, s varchar)
+partitioned by (day(ts), month(d), bucket(4, k), truncate(2, s)) with ('format-version'=2);
+
+# Twelve groups, one file each: group g holds day 2024-01-(1+g), month 2024-(1+g), k = g and s = 'v' || g.
+statement ok
+insert into my_datalake.default.scan_tasks_transforms
+select i, i % 12, timestamp '2024-01-01' + to_days(i % 12) + to_hours(i % 7),
+       (date '2024-01-15' + to_months(i % 12))::date, i % 12, 'v' || (i % 12)
+from range(1200) t(i);
+
+statement ok
+begin;
+
+statement ok
+create temp table transform_tasks as select * from iceberg_scan_plan('my_datalake.default.scan_tasks_transforms');
+
+statement ok
+set variable transform_list = (select list(task) from (select * from transform_tasks) task);
+
+query I
+select count(*) from transform_tasks;
+----
+12
+
+statement ok
+create temp table transform_keys(ts timestamp);
+
+statement ok
+insert into transform_keys values ('2024-01-05 03:00:00'), ('2024-01-06 02:00:00');
+
+statement ok
+create temp table transform_skips(mode boolean, n integer, table_skips bigint, task_skips bigint);
+
+foreach multi_file true false
+
+statement ok
+set iceberg_enable_multi_file_scan_tasks={multi_file};
+
+# For each filter: the tasks skip the files iceberg_scan's planner skips by partition value, and return its rows.
+foreach pred (ts>='2024-01-05')and(ts<'2024-01-07') (d>='2024-04-01')and(d<'2024-05-01') k=7 (k=3)or(k=7) s='v1'
+
+statement ok
+call enable_logging('Iceberg');
+
+statement ok
+call truncate_duckdb_logs();
+
+statement ok
+create or replace temp table transform_table_rows as
+select id, g, ts, d, k, s from my_datalake.default.scan_tasks_transforms where {pred};
+
+statement ok
+create or replace temp table transform_table_skips as select skipped_tasks() n;
+
+statement ok
+call truncate_duckdb_logs();
+
+statement ok
+create or replace temp table transform_task_rows as
+select id, g, ts, d, k, s from iceberg_scan_tasks(getvariable('transform_list')) where {pred};
+
+statement ok
+insert into transform_skips select {multi_file}, (select count(*) from transform_skips where mode = {multi_file}),
+ (select n from transform_table_skips), skipped_tasks();
+
+statement ok
+call disable_logging();
+
+query I
+select count(*) from ((select * from transform_task_rows except all select * from transform_table_rows)
+ union all (select * from transform_table_rows except all select * from transform_task_rows));
+----
+0
+
+endloop
+
+# A join's runtime filter on ts: the same skips and rows as iceberg_scan under the same join.
+statement ok
+call enable_logging('Iceberg');
+
+statement ok
+call truncate_duckdb_logs();
+
+statement ok
+create or replace temp table transform_table_rows as
+select id, g, ts from my_datalake.default.scan_tasks_transforms t join transform_keys using (ts);
+
+statement ok
+create or replace temp table transform_table_skips as select skipped_tasks() n;
+
+statement ok
+call truncate_duckdb_logs();
+
+statement ok
+create or replace temp table transform_task_rows as
+select id, g, ts from iceberg_scan_tasks(getvariable('transform_list')) t join transform_keys using (ts);
+
+query II
+select skipped_tasks() = (select n from transform_table_skips), skipped_tasks() > 0;
+----
+true	true
+
+statement ok
+call disable_logging();
+
+query II
+select count(*), count(distinct g) from transform_task_rows;
+----
+28	2
+
+query I
+select count(*) from ((select * from transform_task_rows except all select * from transform_table_rows)
+ union all (select * from transform_table_rows except all select * from transform_task_rows));
+----
+0
+
+endloop
+
+statement ok
+commit;
+
+# The skips of each filter, in loop order, in both modes: the tasks skip what iceberg_scan's planner skips by partition
+# value. Neither skips by a bucket under OR.
+query TIII
+select mode, n, table_skips, task_skips from transform_skips order by mode, n;
+----
+false	0	9	9
+false	1	10	10
+false	2	6	6
+false	3	0	0
+false	4	9	9
+true	0	9	9
+true	1	10	10
+true	2	6	6
+true	3	0	0
+true	4	9	9

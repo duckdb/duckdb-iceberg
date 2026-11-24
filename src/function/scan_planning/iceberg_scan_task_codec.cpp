@@ -187,10 +187,11 @@ IcebergScanTaskCodec::BindInput(const LogicalType &task_type, vector<LogicalType
 	}
 	if (result.columns[PARTITION_VALUES] != DConstants::INVALID_INDEX) {
 		auto &values_type = fields[result.columns[PARTITION_VALUES]].second;
-		unordered_set<int32_t> value_ids;
-		for (auto &field : StructType::GetChildTypes(values_type)) {
-			auto id = Value(field.first).DefaultTryCastAs(LogicalType::INTEGER);
-			if (!id || IntegerValue::Get(*id) <= 0 || !value_ids.insert(IntegerValue::Get(*id)).second) {
+		auto &value_fields = StructType::GetChildTypes(values_type);
+		for (idx_t i = 0; i < value_fields.size(); i++) {
+			auto id = Value(value_fields[i].first).DefaultTryCastAs(LogicalType::INTEGER);
+			if (!id || IntegerValue::Get(*id) <= 0 ||
+			    !result.partition_value_indexes.emplace(IntegerValue::Get(*id), i).second) {
 				throw BinderException(
 				    "iceberg_scan_tasks partition value names must be distinct positive partition field IDs");
 			}
@@ -202,6 +203,9 @@ IcebergScanTaskCodec::BindInput(const LogicalType &task_type, vector<LogicalType
 Value IcebergScanTaskCodec::ReadValue(const Value &input, const InputLayout &bind, Column column, bool nullable) {
 	if (column == ROW_FILTER && bind.columns[column] == DConstants::INVALID_INDEX) {
 		return Value(LogicalType::VARCHAR);
+	}
+	if (column == PARTITION_VALUES && bind.columns[column] == DConstants::INVALID_INDEX) {
+		return Value();
 	}
 	auto value = StructValue::GetChildren(input)[bind.columns[column]];
 	if (!nullable && value.IsNull()) {
@@ -257,6 +261,28 @@ IcebergFileScanTask IcebergScanTaskCodec::ReadTask(const Value &input, const Inp
 		// specs are not partition values and must not replace this file's schema defaults.
 		if (identity_sources.count(bind.partition_ids[i])) {
 			result.partition_constants.emplace(bind.partition_ids[i], values[i]);
+		}
+	}
+	// The fields of the file's own spec in its partition tuple, which the scan's filters may skip the file by. The
+	// plan's type has every spec's fields; another spec's are NULL placeholders and are not read. A descriptor
+	// without the column, or with it NULL, has no values, and its file is never skipped by them.
+	auto partition_values = ReadValue(input, bind, PARTITION_VALUES, true);
+	if (!partition_values.IsNull()) {
+		auto &value_types = StructType::GetChildTypes(partition_values.type());
+		auto &value_children = StructValue::GetChildren(partition_values);
+		for (auto &field : metadata.partition_specs.at(result.partition_spec_id).fields) {
+			auto index = bind.partition_value_indexes.find(static_cast<int32_t>(field.partition_field_id));
+			if (index == bind.partition_value_indexes.end()) {
+				continue;
+			}
+			auto source_type = IcebergPartitionConstants::GetType(field.source_id, schema, metadata.GetSchemas());
+			if (!source_type || field.transform.GetBoundsType(*source_type) != value_types[index->second].second) {
+				throw InvalidInputException(
+				    "iceberg_scan_tasks partition value %d does not match the table's partition specs",
+				    field.partition_field_id);
+			}
+			result.partition_values.push_back(
+			    IcebergPartitionInfo {field.partition_field_id, value_children[index->second]});
 		}
 	}
 	auto deletes = ReadValue(input, bind, DELETE_FILES);
