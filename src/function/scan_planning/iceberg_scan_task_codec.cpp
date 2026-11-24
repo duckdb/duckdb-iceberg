@@ -58,6 +58,14 @@ LogicalType IcebergScanTaskCodec::PartitionValuesType(const IcebergTableMetadata
 	return LogicalType::STRUCT(std::move(children));
 }
 
+vector<uint64_t> IcebergScanTaskCodec::PartitionValueIds(const LogicalType &partition_values_type) {
+	vector<uint64_t> ids;
+	for (auto &field : StructType::GetChildTypes(partition_values_type)) {
+		ids.push_back(UBigIntValue::Get(Value(field.first).DefaultCastAs(LogicalType::UBIGINT)));
+	}
+	return ids;
+}
+
 child_list_t<LogicalType> IcebergScanTaskCodec::Columns(const LogicalType &partition_type,
                                                         const LogicalType &schema_type,
                                                         const LogicalType &partition_values_type) {
@@ -372,7 +380,8 @@ Value IcebergScanTaskCodec::WriteDeleteFile(const IcebergDeleteFile &file) {
 	     file.content_size_in_bytes ? Value::BIGINT(*file.content_size_in_bytes) : Value(LogicalType::BIGINT)});
 }
 
-void IcebergScanTaskCodec::WriteTask(const IcebergFileScanTask &task, DataChunk &output, idx_t row) {
+void IcebergScanTaskCodec::WriteTask(const IcebergFileScanTask &task, const vector<uint64_t> &partition_value_ids,
+                                     DataChunk &output, idx_t row) {
 	output.data[FILE_PATH].SetValue(row, Value(task.file_path));
 	output.data[FILE_FORMAT].SetValue(row, Value(task.file_format));
 	output.data[FILE_SIZE].SetValue(row, Value::BIGINT(task.file_size_in_bytes));
@@ -393,9 +402,12 @@ void IcebergScanTaskCodec::WriteTask(const IcebergFileScanTask &task, DataChunk 
 	//! A field of another spec is NULL. A committed file's values already have these types, except across a type
 	//! promotion; a file written in the planning transaction has textual values, cast as its manifest will be.
 	auto &values_type = output.data[PARTITION_VALUES].GetType();
+	auto &value_fields = StructType::GetChildTypes(values_type);
+	D_ASSERT(partition_value_ids.size() == value_fields.size());
 	vector<Value> values;
-	for (auto &field : StructType::GetChildTypes(values_type)) {
-		auto id = UBigIntValue::Get(Value(field.first).DefaultCastAs(LogicalType::UBIGINT));
+	for (idx_t field_idx = 0; field_idx < value_fields.size(); field_idx++) {
+		auto &field = value_fields[field_idx];
+		auto id = partition_value_ids[field_idx];
 		Value value(field.second);
 		for (auto &info : task.partition_values) {
 			if (info.field_id != id || info.value.IsNull()) {

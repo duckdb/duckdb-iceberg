@@ -26,6 +26,8 @@ struct IcebergScanPlanBindData : public TableFunctionData {
 	IcebergOptions options;
 	bool produce_sequence_number = false;
 	LogicalType partition_type;
+	//! The partition field id of each field of the partition_values column (IcebergScanTaskCodec::PartitionValueIds)
+	vector<uint64_t> partition_value_ids;
 	Value row_filter = Value(LogicalType::VARCHAR);
 	unique_ptr<Expression> filter_expression;
 };
@@ -168,6 +170,7 @@ static unique_ptr<FunctionData> IcebergScanPlanBind(ClientContext &context, Tabl
 	}
 	ret->partition_type = LogicalType::STRUCT(std::move(constants));
 	auto partition_values_type = IcebergScanTaskCodec::PartitionValuesType(metadata, schema);
+	ret->partition_value_ids = IcebergScanTaskCodec::PartitionValueIds(partition_values_type);
 
 	for (auto &column : IcebergScanTaskCodec::Columns(ret->partition_type, IcebergScanTaskCodec::SchemaType(schema),
 	                                                  partition_values_type)) {
@@ -195,7 +198,7 @@ static void IcebergScanPlanFunction(ClientContext &context, TableFunctionInput &
 		if (!bind.produce_sequence_number) {
 			task->sequence_number = nullopt;
 		}
-		IcebergScanTaskCodec::WriteTask(*task, output, count);
+		IcebergScanTaskCodec::WriteTask(*task, bind.partition_value_ids, output, count);
 	}
 	output.data[IcebergScanTaskCodec::ROW_FILTER].Reference(bind.row_filter, count_t(count));
 	auto snapshot = bind.scan_info->snapshot_info.snapshot;
