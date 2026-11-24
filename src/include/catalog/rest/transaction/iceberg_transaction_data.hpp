@@ -45,6 +45,12 @@ public:
 	                       bool merge_action = false);
 	void AddUpdateSnapshot(partitioned_manifest_entry_map_t &&delete_files, vector<IcebergManifestEntry> &&data_files,
 	                       IcebergManifestDeletes &&altered_manifests, bool merge_action = false);
+	//! INSERT OVERWRITE: one snapshot that removes 'replaced_files' and adds 'data_files', a DELETE without data
+	//! files. 'replace_partitions' marks the snapshot of a dynamic overwrite. 'manifest_list' is the manifest list of
+	//! the table's snapshot, which the caller read to find the replaced files: it is not read again.
+	void AddOverwriteSnapshot(vector<IcebergManifestEntry> &&data_files, IcebergManifestDeletes &&replaced_files,
+	                          bool replace_partitions,
+	                          optional_ptr<const vector<IcebergManifestListEntry>> manifest_list);
 	// add a schema update for a table
 	void TableAddSchema(int32_t schema_id);
 	void TableSetCurrentSchema(int32_t schema_id);
@@ -70,7 +76,9 @@ public:
 	void TableReplaceContents(IcebergTableMetadata &metadata);
 
 private:
-	void CacheExistingManifestList(lock_guard<mutex> &guard, const IcebergTableMetadata &metadata);
+	//! 'manifest_list': the manifest list of the table's snapshot, when the caller has read it
+	void CacheExistingManifestList(lock_guard<mutex> &guard, const IcebergTableMetadata &metadata,
+	                               optional_ptr<const vector<IcebergManifestListEntry>> manifest_list = nullptr);
 	//! Retains one pending delete manifest per partition spec present in 'delete_files'.
 	void AddPendingDeleteManifests(IcebergAddSnapshot &add_snapshot, partitioned_manifest_entry_map_t &&delete_files);
 	//! Called with lock held, since MERGE action pipelines may finalize concurrently.
@@ -124,6 +132,8 @@ public:
 	bool has_maintenance_rewrite = false;
 	//! A MERGE chose its actions against the snapshot it read, so its commit can't be re-applied to a newer one.
 	bool contains_merge = false;
+	//! An INSERT OVERWRITE chose the files it replaces against the snapshot it read: its commit can't be re-applied.
+	bool contains_overwrite = false;
 	mutable mutex lock;
 };
 

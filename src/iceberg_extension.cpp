@@ -1,4 +1,5 @@
 #include "iceberg_extension.hpp"
+#include "execution/operator/iceberg_insert_overwrite.hpp"
 #include "execution/operator/iceberg_written_files.hpp"
 
 #include "duckdb/main/secret/secret_manager.hpp"
@@ -32,6 +33,7 @@
 #include "function/copy/iceberg_copy_function.hpp"
 #include "duckdb/planner/planner_extension.hpp"
 #include "planning/iceberg_planner.hpp"
+#include "grammar/iceberg_insert_overwrite_grammar.hpp"
 
 namespace duckdb {
 
@@ -44,6 +46,14 @@ static void SetDefaultFormatVersion(ClientContext &context, SetScope scope, Valu
 		throw InvalidConfigurationException("'%s' must be 2 or 3, got %llu", DEFAULT_FORMAT_VERSION_CONFIG_VARIABLE,
 		                                    version);
 	}
+}
+
+static void SetPartitionOverwriteMode(ClientContext &context, SetScope scope, Value &parameter) {
+	if (parameter.IsNull()) {
+		throw InvalidConfigurationException("'%s' must be 'static' or 'dynamic', got NULL",
+		                                    PARTITION_OVERWRITE_MODE_CONFIG_VARIABLE);
+	}
+	IcebergInsertOverwrite::ParseMode(parameter.GetValue<string>());
 }
 
 static void SetMetadataLogClockSkew(ClientContext &context, SetScope scope, Value &parameter) {
@@ -150,6 +160,12 @@ static void LoadInternal(ExtensionLoader &loader) {
 	    "Add the data files each Iceberg write stages to the temporary table "
 	    "iceberg_written_files, with their operation and written_at time, in the write's transaction",
 	    LogicalType::BOOLEAN, Value::BOOLEAN(false));
+	config.AddExtensionOption(
+	    PARTITION_OVERWRITE_MODE_CONFIG_VARIABLE,
+	    "Which rows INSERT OVERWRITE replaces in an Iceberg table: 'static' replaces the rows that match the static "
+	    "values of its PARTITION clause, every row when there are none; 'dynamic' replaces the partitions that "
+	    "receive rows",
+	    LogicalType::VARCHAR, Value("static"), SetPartitionOverwriteMode);
 	config.AddExtensionOption(ENABLE_MANIFEST_CACHE_CONFIG_VARIABLE,
 	                          "Cache immutable parsed Iceberg manifests and delete candidate indexes",
 	                          LogicalType::BOOLEAN, Value::BOOLEAN(true));
@@ -225,6 +241,7 @@ static void LoadInternal(ExtensionLoader &loader) {
 	log_manager.RegisterLogType(make_uniq<IcebergDataFileWrittenLogType>());
 	StorageExtension::Register(config, "iceberg", make_shared_ptr<IRCStorageExtension>());
 	PlannerExtension::Register(config, IcebergPlanner::Create());
+	RegisterIcebergInsertOverwrite(instance);
 }
 
 void IcebergExtension::Load(ExtensionLoader &loader) {

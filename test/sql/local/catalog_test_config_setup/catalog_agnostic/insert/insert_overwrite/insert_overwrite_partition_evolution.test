@@ -1,0 +1,299 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/insert_overwrite/insert_overwrite_partition_evolution.test
+# description: INSERT OVERWRITE on a table whose data files were written under several partition specs
+# group: [insert_overwrite]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+SET active_grammar_extensions = ['iceberg_insert_overwrite'];
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_evolution;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_evolution2;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_evolution3;
+
+# three files partitioned by p, then the table is partitioned by q
+statement ok
+CREATE TABLE my_datalake.default.overwrite_evolution (id INTEGER, p INTEGER, q INTEGER, v VARCHAR) PARTITIONED BY (p);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_evolution VALUES (1, 1, 1, 'a'), (2, 1, 2, 'b');
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_evolution VALUES (3, 2, 1, 'c');
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_evolution VALUES (4, 3, 2, 'd');
+
+statement ok
+ALTER TABLE my_datalake.default.overwrite_evolution SET PARTITIONED BY (q);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_evolution VALUES (5, 9, 1, 'e');
+
+# p is no longer a partition column
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_evolution PARTITION (p = 1) VALUES (10, 7, 'x');
+----
+<REGEX>:.*PARTITION clause names "p", which is not an identity partition column of table "overwrite_evolution".*
+
+# q = 2: the file of p = 1 holds a row with q = 1 and a row with q = 2, so it can neither be removed nor kept
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_evolution PARTITION (q = 2) VALUES (10, 7, 'x');
+----
+<REGEX>:.*Cannot replace the rows that match the PARTITION values: some, but not all, rows of data file ".*" may match.*
+
+query IIIT
+SELECT id, p, q, v FROM my_datalake.default.overwrite_evolution ORDER BY id;
+----
+1	1	1	a
+2	1	2	b
+3	2	1	c
+4	3	2	d
+5	9	1	e
+
+# the statement fails before its query runs
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_evolution PARTITION (q = 2) SELECT 10, 7, error('the query ran');
+----
+<REGEX>:.*Cannot replace the rows that match the PARTITION values: some, but not all, rows of data file ".*" may match.*
+
+# q = 3: the bounds of every older file rule it out, so nothing is removed
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_evolution PARTITION (q = 3) VALUES (11, 7, 'q3');
+
+query IIIT
+SELECT id, p, q, v FROM my_datalake.default.overwrite_evolution ORDER BY id;
+----
+1	1	1	a
+2	1	2	b
+3	2	1	c
+4	3	2	d
+5	9	1	e
+11	7	3	q3
+
+# a table whose older files each hold one value of q: their bounds decide
+statement ok
+CREATE TABLE my_datalake.default.overwrite_evolution2 (id INTEGER, p INTEGER, q INTEGER, v VARCHAR) PARTITIONED BY (p);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_evolution2 VALUES (3, 2, 1, 'c'), (6, 2, 1, 'f');
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_evolution2 VALUES (4, 3, 2, 'd');
+
+statement ok
+ALTER TABLE my_datalake.default.overwrite_evolution2 SET PARTITIONED BY (q);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_evolution2 VALUES (5, 9, 1, 'e');
+
+# q = 1 removes the older file whose rows all have q = 1 and the file of partition q = 1, and keeps the file with q = 2
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_evolution2 PARTITION (q = 1) VALUES (10, 7, 'x');
+
+query IIIT
+SELECT id, p, q, v FROM my_datalake.default.overwrite_evolution2 ORDER BY id;
+----
+4	3	2	d
+10	7	1	x
+
+# without static values the files of every spec are replaced
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_evolution2 VALUES (20, 1, 5, 'all');
+
+query IIIT
+SELECT id, p, q, v FROM my_datalake.default.overwrite_evolution2 ORDER BY id;
+----
+20	1	5	all
+
+# an older file without column metrics: nothing shows which rows it holds, so no value of q can be replaced
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_evolution4;
+
+statement ok
+CREATE TABLE my_datalake.default.overwrite_evolution4 (id INTEGER, p INTEGER, q INTEGER, v VARCHAR) PARTITIONED BY (p) WITH ('write.metadata.metrics.default' = 'none');
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_evolution4 VALUES (3, 2, 1, 'c');
+
+statement ok
+ALTER TABLE my_datalake.default.overwrite_evolution4 SET PARTITIONED BY (q);
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_evolution4 PARTITION (q = 9) VALUES (10, 7, 'x');
+----
+<REGEX>:.*Cannot replace the rows that match the PARTITION values: some, but not all, rows of data file ".*" may match.*
+
+query IIIT
+SELECT id, p, q, v FROM my_datalake.default.overwrite_evolution4;
+----
+3	2	1	c
+
+# without static values the file is replaced like any other
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_evolution4 VALUES (11, 7, 9, 'all');
+
+query IIIT
+SELECT id, p, q, v FROM my_datalake.default.overwrite_evolution4;
+----
+11	7	9	all
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_evolution4;
+
+# an older file with a row where q = 1 and a row where q is NULL: neither of the two can be replaced
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_evolution5;
+
+statement ok
+CREATE TABLE my_datalake.default.overwrite_evolution5 (id INTEGER, p INTEGER, q INTEGER) PARTITIONED BY (p);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_evolution5 VALUES (1, 1, 1), (2, 1, NULL);
+
+statement ok
+ALTER TABLE my_datalake.default.overwrite_evolution5 SET PARTITIONED BY (q);
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_evolution5 PARTITION (q = 1) VALUES (10, 9);
+----
+<REGEX>:.*Cannot replace the rows that match the PARTITION values: some, but not all, rows of data file ".*" may match.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_evolution5 PARTITION (q = NULL) VALUES (10, 9);
+----
+<REGEX>:.*Cannot replace the rows that match the PARTITION values: some, but not all, rows of data file ".*" may match.*
+
+query III
+SELECT id, p, q FROM my_datalake.default.overwrite_evolution5 ORDER BY id;
+----
+1	1	1
+2	1	NULL
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_evolution5;
+
+# an older file whose rows are all NULL is replaced by q = NULL, the one without a NULL stays
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_evolution6;
+
+statement ok
+CREATE TABLE my_datalake.default.overwrite_evolution6 (id INTEGER, p INTEGER, q INTEGER) PARTITIONED BY (p);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_evolution6 VALUES (3, 2, NULL), (4, 2, NULL);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_evolution6 VALUES (5, 3, 7), (6, 3, 7);
+
+statement ok
+ALTER TABLE my_datalake.default.overwrite_evolution6 SET PARTITIONED BY (q);
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_evolution6 PARTITION (q = NULL) VALUES (11, 9);
+
+query III
+SELECT id, p, q FROM my_datalake.default.overwrite_evolution6 ORDER BY id;
+----
+5	3	7
+6	3	7
+11	9	NULL
+
+# and q = 7 replaces the older file whose rows all have it, not the rows where q is NULL
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_evolution6 PARTITION (q = 7) VALUES (12, 9);
+
+query III
+SELECT id, p, q FROM my_datalake.default.overwrite_evolution6 ORDER BY id;
+----
+11	9	NULL
+12	9	7
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_evolution6;
+
+# a NaN beside the value in an older file: the file cannot be replaced
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_evolution7;
+
+statement ok
+CREATE TABLE my_datalake.default.overwrite_evolution7 (id INTEGER, p INTEGER, x DOUBLE) PARTITIONED BY (p);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_evolution7 VALUES (1, 1, 1.5), (2, 1, 'NaN'::DOUBLE);
+
+statement ok
+ALTER TABLE my_datalake.default.overwrite_evolution7 SET PARTITIONED BY (x);
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_evolution7 PARTITION (x = 1.5) VALUES (10, 9);
+----
+<REGEX>:.*Cannot replace the rows that match the PARTITION values: some, but not all, rows of data file ".*" may match.*
+
+query IIR
+SELECT id, p, x FROM my_datalake.default.overwrite_evolution7 ORDER BY id;
+----
+1	1	1.5
+2	1	nan
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_evolution7;
+
+# dynamic mode replaces files of the current spec only
+statement ok
+SET iceberg_partition_overwrite_mode = 'dynamic';
+
+statement ok
+CREATE TABLE my_datalake.default.overwrite_evolution3 (id INTEGER, p INTEGER, q INTEGER, v VARCHAR) PARTITIONED BY (p);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_evolution3 VALUES (3, 2, 1, 'c');
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_evolution3 VALUES (4, 3, 2, 'd');
+
+statement ok
+ALTER TABLE my_datalake.default.overwrite_evolution3 SET PARTITIONED BY (q);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_evolution3 VALUES (5, 9, 1, 'e'), (6, 9, 2, 'f');
+
+# the row with q = 1 of the older spec stays, the file of partition q = 1 is replaced
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_evolution3 VALUES (20, 2, 1, 'dyn');
+
+query IIIT
+SELECT id, p, q, v FROM my_datalake.default.overwrite_evolution3 ORDER BY id;
+----
+3	2	1	c
+4	3	2	d
+6	9	2	f
+20	2	1	dyn
+
+# once the table is unpartitioned, every file is replaced, those of older specs included
+statement ok
+ALTER TABLE my_datalake.default.overwrite_evolution3 RESET PARTITIONED BY;
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_evolution3 VALUES (30, 1, 1, 'unpartitioned');
+
+query IIIT
+SELECT id, p, q, v FROM my_datalake.default.overwrite_evolution3 ORDER BY id;
+----
+30	1	1	unpartitioned
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_evolution;
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_evolution2;
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_evolution3;

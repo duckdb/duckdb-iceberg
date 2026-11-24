@@ -1,0 +1,261 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/insert_overwrite/insert_overwrite_transaction.test
+# description: INSERT OVERWRITE inside a transaction: visibility, files written earlier in the transaction, COMMIT and ROLLBACK
+# group: [insert_overwrite]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+SET active_grammar_extensions = ['iceberg_insert_overwrite'];
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_txn;
+
+statement ok
+CREATE TABLE my_datalake.default.overwrite_txn (p INTEGER, v VARCHAR) PARTITIONED BY (p);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_txn VALUES (1, 'old 1'), (2, 'old 2');
+
+# the result is visible to the transaction and gone after ROLLBACK
+statement ok
+BEGIN;
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_txn VALUES (3, 'in txn');
+
+query IT
+SELECT p, v FROM my_datalake.default.overwrite_txn ORDER BY p;
+----
+3	in txn
+
+statement ok
+ROLLBACK;
+
+query IT
+SELECT p, v FROM my_datalake.default.overwrite_txn ORDER BY p;
+----
+1	old 1
+2	old 2
+
+# rows inserted earlier in the same transaction are replaced with the committed ones
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_txn VALUES (4, 'same txn');
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_txn VALUES (5, 'overwrites');
+
+query IT
+SELECT p, v FROM my_datalake.default.overwrite_txn ORDER BY p;
+----
+5	overwrites
+
+# another connection sees nothing of it before COMMIT
+query IT con2
+SELECT p, v FROM my_datalake.default.overwrite_txn ORDER BY p;
+----
+1	old 1
+2	old 2
+
+statement ok
+COMMIT;
+
+query IT
+SELECT p, v FROM my_datalake.default.overwrite_txn ORDER BY p;
+----
+5	overwrites
+
+query IT con2
+SELECT p, v FROM my_datalake.default.overwrite_txn ORDER BY p;
+----
+5	overwrites
+
+# two overwrites in one transaction: the second replaces the rows of the first
+statement ok
+BEGIN;
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_txn VALUES (6, 'first'), (7, 'first');
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_txn VALUES (7, 'second');
+
+query IT
+SELECT p, v FROM my_datalake.default.overwrite_txn ORDER BY p;
+----
+7	second
+
+statement ok
+COMMIT;
+
+query IT
+SELECT p, v FROM my_datalake.default.overwrite_txn ORDER BY p;
+----
+7	second
+
+# rows inserted after the overwrite stay
+statement ok
+BEGIN;
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_txn VALUES (8, 'base');
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_txn VALUES (9, 'added');
+
+statement ok
+COMMIT;
+
+query IT
+SELECT p, v FROM my_datalake.default.overwrite_txn ORDER BY p;
+----
+8	base
+9	added
+
+# an overwrite without rows after an insert in the same transaction leaves the table empty
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_txn VALUES (10, 'same txn');
+
+query I
+INSERT OVERWRITE my_datalake.default.overwrite_txn SELECT 1, 'none' WHERE false;
+----
+0
+
+query I
+SELECT count(*) FROM my_datalake.default.overwrite_txn;
+----
+0
+
+statement ok
+COMMIT;
+
+query I
+SELECT count(*) FROM my_datalake.default.overwrite_txn;
+----
+0
+
+# an overwrite, a delete and an insert in one transaction
+statement ok
+BEGIN;
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_txn VALUES (11, 'keep'), (12, 'drop');
+
+statement ok
+DELETE FROM my_datalake.default.overwrite_txn WHERE p = 12;
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_txn VALUES (13, 'late');
+
+statement ok
+COMMIT;
+
+query IT
+SELECT p, v FROM my_datalake.default.overwrite_txn ORDER BY p;
+----
+11	keep
+13	late
+
+# static PARTITION values select among the rows written earlier in the transaction as among the committed ones
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_txn VALUES (11, 'same txn 11'), (20, 'same txn 20'), (NULL, 'same txn null');
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_txn PARTITION (p = 11) VALUES ('replaces both rows of 11');
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_txn PARTITION (p = NULL) VALUES ('replaces the null row');
+
+query IT
+SELECT p, v FROM my_datalake.default.overwrite_txn ORDER BY p NULLS LAST, v;
+----
+11	replaces both rows of 11
+13	late
+20	same txn 20
+NULL	replaces the null row
+
+statement ok
+COMMIT;
+
+query IT
+SELECT p, v FROM my_datalake.default.overwrite_txn ORDER BY p NULLS LAST, v;
+----
+11	replaces both rows of 11
+13	late
+20	same txn 20
+NULL	replaces the null row
+
+# a table created in the transaction
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_txn_created;
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE TABLE my_datalake.default.overwrite_txn_created (id INTEGER, p INTEGER) PARTITIONED BY (p);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_txn_created VALUES (1, 1), (2, 2);
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_txn_created PARTITION (p = 1) VALUES (10);
+
+statement ok
+COMMIT;
+
+query II
+SELECT id, p FROM my_datalake.default.overwrite_txn_created ORDER BY id;
+----
+2	2
+10	1
+
+# the partition spec changed earlier in the transaction: the PARTITION clause is checked against the new one
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.overwrite_txn_created SET PARTITIONED BY (id);
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_txn_created PARTITION (p = 1) VALUES (11);
+----
+<REGEX>:.*PARTITION clause names "p", which is not an identity partition column of table "overwrite_txn_created".*
+
+statement ok
+ROLLBACK;
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.overwrite_txn_created SET PARTITIONED BY (id);
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_txn_created PARTITION (id = 12) VALUES (3);
+
+statement ok
+COMMIT;
+
+query II
+SELECT id, p FROM my_datalake.default.overwrite_txn_created ORDER BY id;
+----
+2	2
+10	1
+12	3
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_txn_created;
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_txn;

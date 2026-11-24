@@ -177,6 +177,10 @@ void IcebergCommitState::AddWrittenSnapshot(IcebergWrittenSnapshot written) {
 		throw InvalidConfigurationException("first-row-id required for V3 tables!");
 	}
 	update.snapshot = written.snapshot.ToRESTObject();
+	//! Summary properties besides the operation and the metrics, such as 'replace-partitions'
+	for (auto &property : written.snapshot.summary) {
+		update.snapshot.summary.additional_properties.emplace(property.first, property.second);
+	}
 	table_change.updates.push_back(std::move(table_update));
 
 	manifests = std::move(written.manifests);

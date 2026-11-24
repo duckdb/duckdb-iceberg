@@ -1,0 +1,348 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/insert_overwrite/insert_overwrite_partition_values.test
+# description: A static PARTITION value has to be a value of its column: written as a number, a string or a parameter
+# group: [insert_overwrite]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+SET active_grammar_extensions = ['iceberg_insert_overwrite'];
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_values;
+
+statement ok
+CREATE TABLE my_datalake.default.overwrite_values (id INTEGER, i INTEGER, b BIGINT, d DECIMAL(10,2), w DECIMAL(38,2), y DECIMAL(36,2), x DOUBLE)
+PARTITIONED BY (i, b, d, w, y, x);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_values VALUES (1, 5, 5, 1.50, 1.50, 1.50, 0.5);
+
+# every statement below names the one partition of the table in another way: it is taken when the value is that
+# value, and then replaces the row
+
+# INTEGER
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i = 5, b, d, w, y, x) VALUES (2, 5, 1.50, 1.50, 1.50, 0.5);
+
+query I
+SELECT id FROM my_datalake.default.overwrite_values;
+----
+2
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i = '5', b, d, w, y, x) VALUES (3, 5, 1.50, 1.50, 1.50, 0.5);
+
+query I
+SELECT id FROM my_datalake.default.overwrite_values;
+----
+3
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i = '05', b, d, w, y, x) VALUES (4, 5, 1.50, 1.50, 1.50, 0.5);
+
+query I
+SELECT id FROM my_datalake.default.overwrite_values;
+----
+4
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i = ' 5 ', b, d, w, y, x) VALUES (5, 5, 1.50, 1.50, 1.50, 0.5);
+
+query I
+SELECT id FROM my_datalake.default.overwrite_values;
+----
+5
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i = '+5', b, d, w, y, x) VALUES (6, 5, 1.50, 1.50, 1.50, 0.5);
+
+query I
+SELECT id FROM my_datalake.default.overwrite_values;
+----
+6
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i = 5.0, b, d, w, y, x) VALUES (7, 5, 1.50, 1.50, 1.50, 0.5);
+
+query I
+SELECT id FROM my_datalake.default.overwrite_values;
+----
+7
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i = '5.0', b, d, w, y, x) VALUES (8, 5, 1.50, 1.50, 1.50, 0.5);
+
+query I
+SELECT id FROM my_datalake.default.overwrite_values;
+----
+8
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i = 5::BIGINT, b, d, w, y, x) VALUES (9, 5, 1.50, 1.50, 1.50, 0.5);
+
+query I
+SELECT id FROM my_datalake.default.overwrite_values;
+----
+9
+
+# BIGINT
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i, b = 5, d, w, y, x) VALUES (10, 5, 1.50, 1.50, 1.50, 0.5);
+
+query I
+SELECT id FROM my_datalake.default.overwrite_values;
+----
+10
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i, b = '5', d, w, y, x) VALUES (11, 5, 1.50, 1.50, 1.50, 0.5);
+
+query I
+SELECT id FROM my_datalake.default.overwrite_values;
+----
+11
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i, b = '5.00', d, w, y, x) VALUES (12, 5, 1.50, 1.50, 1.50, 0.5);
+
+query I
+SELECT id FROM my_datalake.default.overwrite_values;
+----
+12
+
+# DECIMAL(10,2)
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i, b, d = 1.5, w, y, x) VALUES (13, 5, 5, 1.50, 1.50, 0.5);
+
+query I
+SELECT id FROM my_datalake.default.overwrite_values;
+----
+13
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i, b, d = '1.5', w, y, x) VALUES (14, 5, 5, 1.50, 1.50, 0.5);
+
+query I
+SELECT id FROM my_datalake.default.overwrite_values;
+----
+14
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i, b, d = '1.50', w, y, x) VALUES (15, 5, 5, 1.50, 1.50, 0.5);
+
+query I
+SELECT id FROM my_datalake.default.overwrite_values;
+----
+15
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i, b, d = '01.500', w, y, x) VALUES (16, 5, 5, 1.50, 1.50, 0.5);
+
+query I
+SELECT id FROM my_datalake.default.overwrite_values;
+----
+16
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i, b, d = 1.5::DOUBLE, w, y, x) VALUES (17, 5, 5, 1.50, 1.50, 0.5);
+
+query I
+SELECT id FROM my_datalake.default.overwrite_values;
+----
+17
+
+# DECIMAL(38,2)
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i, b, d, w = 1.50, y, x) VALUES (18, 5, 5, 1.50, 1.50, 0.5);
+
+query I
+SELECT id FROM my_datalake.default.overwrite_values;
+----
+18
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i, b, d, w = '1.5', y, x) VALUES (19, 5, 5, 1.50, 1.50, 0.5);
+
+query I
+SELECT id FROM my_datalake.default.overwrite_values;
+----
+19
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i, b, d, w = '1.500000', y, x) VALUES (20, 5, 5, 1.50, 1.50, 0.5);
+
+query I
+SELECT id FROM my_datalake.default.overwrite_values;
+----
+20
+
+# DECIMAL(36,2)
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i, b, d, w, y = '1.5', x) VALUES (21, 5, 5, 1.50, 1.50, 0.5);
+
+query I
+SELECT id FROM my_datalake.default.overwrite_values;
+----
+21
+
+# DOUBLE
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i, b, d, w, y, x = 0.5) VALUES (22, 5, 5, 1.50, 1.50, 1.50);
+
+query I
+SELECT id FROM my_datalake.default.overwrite_values;
+----
+22
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i, b, d, w, y, x = '0.5') VALUES (23, 5, 5, 1.50, 1.50, 1.50);
+
+query I
+SELECT id FROM my_datalake.default.overwrite_values;
+----
+23
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i, b, d, w, y, x = '5e-1') VALUES (24, 5, 5, 1.50, 1.50, 1.50);
+
+query I
+SELECT id FROM my_datalake.default.overwrite_values;
+----
+24
+
+# refused: the cast to the column's type would round or truncate the value, or the text is no plain number
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i = 1.5, b, d, w, y, x) VALUES (99, 5, 1.50, 1.50, 1.50, 0.5);
+----
+<REGEX>:.*PARTITION value 1.5 cannot be used for column "i" of type INTEGER: the value does not fit the type exactly.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i = '1.5', b, d, w, y, x) VALUES (99, 5, 1.50, 1.50, 1.50, 0.5);
+----
+<REGEX>:.*PARTITION value '1.5' cannot be used for column "i" of type INTEGER: the value does not fit the type exactly.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i = '5.5', b, d, w, y, x) VALUES (99, 5, 1.50, 1.50, 1.50, 0.5);
+----
+<REGEX>:.*PARTITION value '5.5' cannot be used for column "i" of type INTEGER: the value does not fit the type exactly.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i = 5.5::DOUBLE, b, d, w, y, x) VALUES (99, 5, 1.50, 1.50, 1.50, 0.5);
+----
+<REGEX>:.*PARTITION value 5.5 cannot be used for column "i" of type INTEGER: the value does not fit the type exactly.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i = '1e1', b, d, w, y, x) VALUES (99, 5, 1.50, 1.50, 1.50, 0.5);
+----
+<REGEX>:.*PARTITION value '1e1' cannot be used for column "i" of type INTEGER: a number for this column is written as digits with an optional fraction.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i = '0x5', b, d, w, y, x) VALUES (99, 5, 1.50, 1.50, 1.50, 0.5);
+----
+<REGEX>:.*PARTITION value '0x5' cannot be used for column "i" of type INTEGER: a number for this column is written as digits with an optional fraction.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i = '5x', b, d, w, y, x) VALUES (99, 5, 1.50, 1.50, 1.50, 0.5);
+----
+<REGEX>:.*PARTITION value '5x' cannot be used for column "i" of type INTEGER: Could not convert string '5x' to INT32.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i = 3000000000, b, d, w, y, x) VALUES (99, 5, 1.50, 1.50, 1.50, 0.5);
+----
+<REGEX>:.*PARTITION value 3000000000 cannot be used for column "i" of type INTEGER: Type INT64 with value 3000000000 can't be cast because the value is out of range for the destination type INT32.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i = '3000000000', b, d, w, y, x) VALUES (99, 5, 1.50, 1.50, 1.50, 0.5);
+----
+<REGEX>:.*PARTITION value '3000000000' cannot be used for column "i" of type INTEGER: Could not convert string '3000000000' to INT32.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i, b = 1.5, d, w, y, x) VALUES (99, 5, 1.50, 1.50, 1.50, 0.5);
+----
+<REGEX>:.*PARTITION value 1.5 cannot be used for column "b" of type BIGINT: the value does not fit the type exactly.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i, b = '1.5', d, w, y, x) VALUES (99, 5, 1.50, 1.50, 1.50, 0.5);
+----
+<REGEX>:.*PARTITION value '1.5' cannot be used for column "b" of type BIGINT: the value does not fit the type exactly.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i, b, d = 1.555, w, y, x) VALUES (99, 5, 5, 1.50, 1.50, 0.5);
+----
+<REGEX>:.*PARTITION value 1.555 cannot be used for column "d" of type DECIMAL\(10,2\): the value does not fit the type exactly.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i, b, d = '1.555', w, y, x) VALUES (99, 5, 5, 1.50, 1.50, 0.5);
+----
+<REGEX>:.*PARTITION value '1.555' cannot be used for column "d" of type DECIMAL\(10,2\): the value does not fit the type exactly.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i, b, d = '1.5e0', w, y, x) VALUES (99, 5, 5, 1.50, 1.50, 0.5);
+----
+<REGEX>:.*PARTITION value '1.5e0' cannot be used for column "d" of type DECIMAL\(10,2\): a number for this column is written as digits with an optional fraction.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i, b, d, w = 1.555, y, x) VALUES (99, 5, 5, 1.50, 1.50, 0.5);
+----
+<REGEX>:.*PARTITION value 1.555 cannot be used for column "w" of type DECIMAL\(38,2\): the value does not fit the type exactly.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i, b, d, w = '1.555', y, x) VALUES (99, 5, 5, 1.50, 1.50, 0.5);
+----
+<REGEX>:.*PARTITION value '1.555' cannot be used for column "w" of type DECIMAL\(38,2\): the value does not fit the type exactly.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i, b, d, w = '1.5000000000000000000000000000000000000001', y, x) VALUES (99, 5, 5, 1.50, 1.50, 0.5);
+----
+<REGEX>:.*PARTITION value '1.5000000000000000000000000000000000000001' cannot be used for column "w" of type DECIMAL\(38,2\): the value does not fit the type exactly.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i, b, d, w, y = '1.55999', x) VALUES (99, 5, 5, 1.50, 1.50, 0.5);
+----
+<REGEX>:.*PARTITION value '1.55999' cannot be used for column "y" of type DECIMAL\(36,2\): the value does not fit the type exactly.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i, b, d, w, y = 1.55999, x) VALUES (99, 5, 5, 1.50, 1.50, 0.5);
+----
+<REGEX>:.*PARTITION value 1.55999 cannot be used for column "y" of type DECIMAL\(36,2\): the value does not fit the type exactly.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i, b, d, w, y, x = 'abc') VALUES (99, 5, 5, 1.50, 1.50, 1.50);
+----
+<REGEX>:.*PARTITION value 'abc' cannot be used for column "x" of type DOUBLE: Could not convert string 'abc' to DOUBLE.*
+
+# a parameter is checked like the value it is given
+statement ok
+PREPARE overwrite_values AS INSERT OVERWRITE my_datalake.default.overwrite_values PARTITION (i = $1, b, d = $2, w, y, x) VALUES ($3, 5, 1.50, 1.50, 0.5);
+
+statement error
+EXECUTE overwrite_values('5.5', 1.5, 99);
+----
+<REGEX>:.*PARTITION value '5.5' cannot be used for column "i" of type INTEGER: the value does not fit the type exactly.*
+
+statement error
+EXECUTE overwrite_values(5, '1.555', 99);
+----
+<REGEX>:.*PARTITION value '1.555' cannot be used for column "d" of type DECIMAL\(10,2\): the value does not fit the type exactly.*
+
+statement error
+EXECUTE overwrite_values(5.5, 1.5, 99);
+----
+<REGEX>:.*PARTITION value 5.5 cannot be used for column "i" of type INTEGER: the value does not fit the type exactly.*
+
+statement ok
+EXECUTE overwrite_values('05', '1.50', 25);
+
+# nothing but the statements that were taken changed the table
+query IIITTTT
+SELECT id, i, b, d, w, y, x FROM my_datalake.default.overwrite_values;
+----
+25	5	5	1.50	1.50	1.50	0.5
+
+statement ok
+DEALLOCATE overwrite_values;
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_values;

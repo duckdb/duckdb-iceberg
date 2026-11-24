@@ -1,0 +1,185 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/insert_overwrite/insert_overwrite_conflict.test
+# description: A commit of another writer fails the COMMIT of an INSERT OVERWRITE; it is not applied again
+# group: [insert_overwrite]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env ATOMIC_COMMIT_CONFLICT_SUPPORT true
+
+include test/sql/init_requires
+
+statement ok overwriter
+SET active_grammar_extensions = ['iceberg_insert_overwrite'];
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_conflict;
+
+# deletes of this table may be applied again after a concurrent append; an overwrite is not
+statement ok
+CREATE TABLE my_datalake.default.overwrite_conflict (p INTEGER, v VARCHAR) PARTITIONED BY (p) WITH (
+    'write.delete.isolation-level' = 'snapshot'
+);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_conflict VALUES (1, 'a'), (2, 'b');
+
+# an overwrite that writes rows
+statement ok overwriter
+BEGIN;
+
+statement ok overwriter
+INSERT OVERWRITE my_datalake.default.overwrite_conflict VALUES (9, 'overwrite');
+
+statement ok writer
+INSERT INTO my_datalake.default.overwrite_conflict VALUES (3, 'c');
+
+statement error overwriter
+COMMIT;
+----
+TransactionContext Error
+
+query IT
+SELECT p, v FROM my_datalake.default.overwrite_conflict ORDER BY p;
+----
+1	a
+2	b
+3	c
+
+# an overwrite that writes no rows only removes files
+statement ok overwriter
+BEGIN;
+
+query I overwriter
+INSERT OVERWRITE my_datalake.default.overwrite_conflict SELECT 1, 'none' WHERE false;
+----
+0
+
+statement ok writer
+INSERT INTO my_datalake.default.overwrite_conflict VALUES (4, 'd');
+
+statement error overwriter
+COMMIT;
+----
+TransactionContext Error
+
+query IT
+SELECT p, v FROM my_datalake.default.overwrite_conflict ORDER BY p;
+----
+1	a
+2	b
+3	c
+4	d
+
+# dynamic mode
+statement ok overwriter
+SET iceberg_partition_overwrite_mode = 'dynamic';
+
+statement ok overwriter
+BEGIN;
+
+statement ok overwriter
+INSERT OVERWRITE my_datalake.default.overwrite_conflict VALUES (1, 'dynamic');
+
+statement ok writer
+INSERT INTO my_datalake.default.overwrite_conflict VALUES (5, 'e');
+
+statement error overwriter
+COMMIT;
+----
+TransactionContext Error
+
+statement ok overwriter
+SET iceberg_partition_overwrite_mode = 'static';
+
+query IT
+SELECT p, v FROM my_datalake.default.overwrite_conflict ORDER BY p;
+----
+1	a
+2	b
+3	c
+4	d
+5	e
+
+# an overwrite that found nothing to replace and wrote nothing: the transaction's other changes are not
+# applied to a newer table either
+statement ok overwriter
+BEGIN;
+
+statement ok overwriter
+INSERT INTO my_datalake.default.overwrite_conflict VALUES (5, 'same txn');
+
+statement ok overwriter
+INSERT OVERWRITE my_datalake.default.overwrite_conflict PARTITION (p = 77) SELECT 'none' WHERE false;
+
+statement ok writer
+INSERT INTO my_datalake.default.overwrite_conflict VALUES (77, 'concurrent');
+
+statement error overwriter
+COMMIT;
+----
+TransactionContext Error
+
+query IT
+SELECT p, v FROM my_datalake.default.overwrite_conflict ORDER BY p;
+----
+1	a
+2	b
+3	c
+4	d
+5	e
+77	concurrent
+
+# a dynamic overwrite without rows reads nothing and replaces nothing: the insert of its transaction is applied
+# again on top of a concurrent append, as it is without the overwrite
+statement ok overwriter
+SET iceberg_partition_overwrite_mode = 'dynamic';
+
+statement ok overwriter
+BEGIN;
+
+statement ok overwriter
+INSERT INTO my_datalake.default.overwrite_conflict VALUES (6, 'same txn');
+
+query I overwriter
+INSERT OVERWRITE my_datalake.default.overwrite_conflict SELECT 1, 'none' WHERE false;
+----
+0
+
+statement ok writer
+INSERT INTO my_datalake.default.overwrite_conflict VALUES (7, 'concurrent');
+
+statement ok overwriter
+COMMIT;
+
+statement ok overwriter
+SET iceberg_partition_overwrite_mode = 'static';
+
+query IT
+SELECT p, v FROM my_datalake.default.overwrite_conflict ORDER BY p;
+----
+1	a
+2	b
+3	c
+4	d
+5	e
+6	same txn
+7	concurrent
+77	concurrent
+
+# without a commit in between the same statements go through
+statement ok overwriter
+BEGIN;
+
+statement ok overwriter
+INSERT OVERWRITE my_datalake.default.overwrite_conflict SELECT 1, 'none' WHERE false;
+
+statement ok overwriter
+COMMIT;
+
+query I
+SELECT count(*) FROM my_datalake.default.overwrite_conflict;
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_conflict;

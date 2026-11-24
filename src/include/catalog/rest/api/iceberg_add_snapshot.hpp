@@ -5,6 +5,7 @@
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/common/optional.hpp"
+#include "duckdb/common/case_insensitive_map.hpp"
 
 #include "catalog/rest/api/iceberg_table_update.hpp"
 #include "core/metadata/manifest/iceberg_manifest.hpp"
@@ -32,6 +33,8 @@ public:
 	//! Moves another MERGE action's manifests here; the caller merges its file invalidations separately.
 	void Merge(IcebergAddSnapshot &other);
 	void SetManifestDeletes(VersionedIcebergManifestDeletes manifest_deletes);
+	//! A property of the snapshot's summary besides the operation and the metrics
+	void SetSummaryProperty(const string &key, const string &value);
 	IcebergSnapshotOperationType GetOperation() const {
 		return operation;
 	}
@@ -39,6 +42,7 @@ public:
 private:
 	vector<IcebergPendingManifest> pending_manifests;
 	optional<VersionedIcebergManifestDeletes> manifest_deletes;
+	case_insensitive_map_t<string> summary_properties;
 	int32_t schema_id;
 	IcebergSnapshotOperationType operation;
 };

@@ -1,0 +1,512 @@
+# name: test/sql/local/native_catalog/insert_overwrite_native.test
+# description: INSERT OVERWRITE at the catalog: nothing is committed when nothing changes, the summary sent for a dynamic overwrite, a read-only catalog
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+SET active_grammar_extensions = ['iceberg_insert_overwrite'];
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_native;
+
+statement ok
+CREATE TABLE my_datalake.default.overwrite_native (id INTEGER, p INTEGER) PARTITIONED BY (p);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_native VALUES (1, 1), (2, 2);
+
+statement ok
+SET VARIABLE metadata_location = (
+	SELECT json_extract_string(body, '$."metadata-location"')
+	FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/overwrite_native', NULL)
+);
+
+# static mode, no rows and no file that matches: no commit reaches the catalog
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_native PARTITION (p = 77) SELECT 1 WHERE false;
+
+query I
+SELECT json_extract_string(body, '$."metadata-location"') = getvariable('metadata_location')
+FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/overwrite_native', NULL);
+----
+true
+
+# dynamic mode, no rows: no commit either
+statement ok
+SET iceberg_partition_overwrite_mode = 'dynamic';
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_native SELECT 1, 1 WHERE false;
+
+query I
+SELECT json_extract_string(body, '$."metadata-location"') = getvariable('metadata_location')
+FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/overwrite_native', NULL);
+----
+true
+
+query II
+SELECT id, p FROM my_datalake.default.overwrite_native ORDER BY id;
+----
+1	1
+2	2
+
+# the snapshot of a dynamic overwrite is committed with replace-partitions = true
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_native VALUES (10, 1);
+
+query TTTT
+SELECT snapshot->'summary'->>'operation', snapshot->'summary'->>'replace-partitions',
+       snapshot->'summary'->>'added-data-files', snapshot->'summary'->>'deleted-data-files'
+FROM (
+	SELECT json_extract(body, '$.metadata.snapshots[-1]') AS snapshot
+	FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/overwrite_native', NULL)
+);
+----
+overwrite	true	1	1
+
+# the snapshot of a static overwrite has no such property
+statement ok
+SET iceberg_partition_overwrite_mode = 'static';
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_native PARTITION (p = 2) VALUES (20);
+
+query TTTT
+SELECT snapshot->'summary'->>'operation', snapshot->'summary'->>'replace-partitions',
+       snapshot->'summary'->>'added-data-files', snapshot->'summary'->>'deleted-data-files'
+FROM (
+	SELECT json_extract(body, '$.metadata.snapshots[-1]') AS snapshot
+	FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/overwrite_native', NULL)
+);
+----
+overwrite	NULL	1	1
+
+query II
+SELECT id, p FROM my_datalake.default.overwrite_native ORDER BY id;
+----
+10	1
+20	2
+
+# a static overwrite that cannot decide a file fails before it writes anything: no data file is left behind
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_native_files;
+
+statement ok
+CREATE TABLE my_datalake.default.overwrite_native_files (id INTEGER, p INTEGER, q INTEGER) PARTITIONED BY (p);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_native_files VALUES (1, 1, 1), (2, 1, 2);
+
+statement ok
+ALTER TABLE my_datalake.default.overwrite_native_files SET PARTITIONED BY (q);
+
+statement ok
+SET VARIABLE data_directory = (
+	SELECT parse_dirpath(parse_dirpath(file_path))
+	FROM iceberg_metadata(my_datalake.default.overwrite_native_files) LIMIT 1
+);
+
+query I
+SELECT count(*) FROM glob(getvariable('data_directory') || '/*/*.parquet');
+----
+1
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_native_files PARTITION (q = 2) VALUES (10, 7);
+----
+<REGEX>:.*Cannot replace the rows that match the PARTITION values: some, but not all, rows of data file ".*" may match.*
+
+query I
+SELECT count(*) FROM glob(getvariable('data_directory') || '/*/*.parquet');
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_native_files;
+
+# static values: only the manifests that can hold a replaced file are read to find the files. Without a row, a dynamic
+# overwrite reads none
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_native_manifests;
+
+statement ok
+CREATE TABLE my_datalake.default.overwrite_native_manifests (id INTEGER, p INTEGER)
+PARTITIONED BY (p) WITH ('commit.manifest-merge.enabled'='false');
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_native_manifests VALUES (1, 1);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_native_manifests VALUES (2, 2);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_native_manifests VALUES (3, 3);
+
+statement ok
+SET iceberg_enable_manifest_cache = false;
+
+statement ok
+CALL enable_logging('Iceberg', storage = 'memory');
+
+statement ok
+CREATE MACRO manifest_parses() AS (
+	SELECT coalesce(sum(try_cast(regexp_extract(message, 'manifest_parses=(\d+)', 1) AS BIGINT)), 0)
+	FROM duckdb_logs() WHERE type = 'Iceberg' AND message LIKE 'Iceberg metadata phase=manifest_parse%'
+);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+EXPLAIN INSERT OVERWRITE my_datalake.default.overwrite_native_manifests PARTITION (p = 2) VALUES (20);
+
+query I
+SELECT manifest_parses();
+----
+1
+
+# the manifest an overwrite leaves with nothing but removed files is not read again
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_native_manifests PARTITION (p = 2) VALUES (20);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+EXPLAIN INSERT OVERWRITE my_datalake.default.overwrite_native_manifests PARTITION (p = 2) VALUES (21);
+
+query I
+SELECT manifest_parses();
+----
+1
+
+statement ok
+SET iceberg_partition_overwrite_mode = 'dynamic';
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_native_manifests SELECT 1, 1 WHERE false;
+
+query I
+SELECT manifest_parses();
+----
+0
+
+statement ok
+SET iceberg_partition_overwrite_mode = 'static';
+
+statement ok
+CALL disable_logging();
+
+statement ok
+RESET iceberg_enable_manifest_cache;
+
+# the manifest list of the table's snapshot is read once per statement, and not again by a later statement of the
+# transaction
+statement ok
+CALL enable_logging('FileSystem', storage = 'memory');
+
+# FileSystem logs contain raw paths; normalize Windows separators before the struct parser unescapes them.
+statement ok
+CREATE MACRO file_system_log() AS TABLE (
+	SELECT unnest(parse_duckdb_log_message('FileSystem', replace(message, '\', '/')))
+	FROM duckdb_logs() WHERE type = 'FileSystem'
+);
+
+statement ok
+CREATE MACRO manifest_list_reads() AS (
+	SELECT count(*) FROM file_system_log()
+	WHERE op = 'OPEN' AND parse_filename(path) LIKE 'snap-%'
+		AND path IN (SELECT path FROM file_system_log() WHERE op = 'READ')
+);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_native_manifests PARTITION (p = 2) VALUES (22);
+
+query I
+SELECT manifest_list_reads();
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_native_manifests VALUES (1, 1), (2, 2), (3, 3);
+
+query I
+SELECT manifest_list_reads();
+----
+1
+
+statement ok
+SET iceberg_partition_overwrite_mode = 'dynamic';
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_native_manifests VALUES (30, 3);
+
+query I
+SELECT manifest_list_reads();
+----
+1
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_native_manifests VALUES (4, 4);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_native_manifests VALUES (10, 1);
+
+statement ok
+SET iceberg_partition_overwrite_mode = 'static';
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_native_manifests PARTITION (p = 2) VALUES (20);
+
+query I
+SELECT manifest_list_reads();
+----
+0
+
+statement ok
+COMMIT;
+
+statement ok
+CALL disable_logging();
+
+query II
+SELECT id, p FROM my_datalake.default.overwrite_native_manifests ORDER BY id;
+----
+4	4
+10	1
+20	2
+30	3
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_native_manifests;
+
+# a statement that fails after its files were written removes them: the transaction does not know them yet
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_native_cleanup;
+
+statement ok
+CREATE TABLE my_datalake.default.overwrite_native_cleanup (id INTEGER, p INTEGER) PARTITIONED BY (p);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_native_cleanup VALUES (1, 1);
+
+statement ok
+SET VARIABLE first_snapshot = (
+	SELECT snapshot_id FROM iceberg_snapshots(my_datalake.default.overwrite_native_cleanup)
+	ORDER BY sequence_number LIMIT 1
+);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_native_cleanup VALUES (2, 2);
+
+statement ok
+SET VARIABLE data_directory = (
+	SELECT parse_dirpath(parse_dirpath(file_path))
+	FROM iceberg_metadata(my_datalake.default.overwrite_native_cleanup) LIMIT 1
+);
+
+foreach mode static dynamic
+
+statement ok
+SET iceberg_partition_overwrite_mode = '{mode}';
+
+statement ok
+BEGIN;
+
+statement ok
+SELECT * FROM iceberg_rollback_to_snapshot('my_datalake.default.overwrite_native_cleanup', getvariable('first_snapshot'));
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_native_cleanup VALUES (4, 4);
+----
+<REGEX>:.*after rolling it back in the same transaction.*
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT count(*) FROM glob(getvariable('data_directory') || '/*/*.parquet');
+----
+2
+
+endloop
+
+statement ok
+SET iceberg_partition_overwrite_mode = 'static';
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_native_cleanup;
+
+# so does a statement that fails while it takes the written files in
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_native_not_null;
+
+statement ok
+CREATE TABLE my_datalake.default.overwrite_native_not_null (id INTEGER NOT NULL, p INTEGER) PARTITIONED BY (p);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_native_not_null VALUES (1, 1);
+
+statement ok
+SET VARIABLE data_directory = (
+	SELECT parse_dirpath(parse_dirpath(file_path))
+	FROM iceberg_metadata(my_datalake.default.overwrite_native_not_null) LIMIT 1
+);
+
+foreach mode static dynamic
+
+statement ok
+SET iceberg_partition_overwrite_mode = '{mode}';
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_native_not_null VALUES (NULL, 2);
+----
+Constraint Error: NOT NULL constraint failed: overwrite_native_not_null.id
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_native_not_null PARTITION (p = 3) VALUES (NULL);
+----
+Constraint Error: NOT NULL constraint failed: overwrite_native_not_null.id
+
+statement ok
+PREPARE overwrite_not_null AS INSERT OVERWRITE my_datalake.default.overwrite_native_not_null VALUES (?, 4);
+
+statement error
+EXECUTE overwrite_not_null(NULL);
+----
+Constraint Error: NOT NULL constraint failed: overwrite_native_not_null.id
+
+query I
+SELECT count(*) FROM glob(getvariable('data_directory') || '/*/*.parquet');
+----
+1
+
+statement ok
+DEALLOCATE overwrite_not_null;
+
+endloop
+
+statement ok
+SET iceberg_partition_overwrite_mode = 'static';
+
+query II
+SELECT id, p FROM my_datalake.default.overwrite_native_not_null;
+----
+1	1
+
+# a catalog attached with remove_files_on_delete = false keeps the files
+statement ok
+ATTACH '' AS overwrite_keep_files (TYPE ICEBERG, URI 'http://iceberg-mock.invalid', AUTHORIZATION_TYPE 'none',
+	ACCESS_DELEGATION_MODE 'none', REMOVE_FILES_ON_DELETE false);
+
+statement error
+INSERT OVERWRITE overwrite_keep_files.default.overwrite_native_not_null VALUES (NULL, 2);
+----
+Constraint Error: NOT NULL constraint failed: overwrite_native_not_null.id
+
+query I
+SELECT count(*) FROM glob(getvariable('data_directory') || '/*/*.parquet');
+----
+2
+
+statement ok
+DETACH overwrite_keep_files;
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_native_not_null;
+
+# a partition spec with a void field next to a real one. A written file lists no value for the void field, a
+# committed one lists NULL; the two are the same partition. Rewriting a manifest of such a spec is not supported yet
+# (DELETE fails in the same way), so the overwrite fails: it must not keep the old rows next to the new ones
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_native_void;
+
+statement ok
+CREATE TABLE my_datalake.default.overwrite_native_void (id INTEGER, p INTEGER, v VARCHAR);
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/overwrite_native_void',
+	'{"requirements":[],"updates":[
+		{"action":"add-spec","spec":{"spec-id":1,"fields":[
+			{"source-id":3,"field-id":1000,"name":"v_void","transform":"void"},
+			{"source-id":2,"field-id":1001,"name":"p","transform":"identity"}]}},
+		{"action":"set-default-spec","spec-id":1}]}');
+----
+200
+
+statement ok
+ATTACH OR REPLACE '' AS my_datalake (TYPE ICEBERG, URI 'http://iceberg-mock.invalid', AUTHORIZATION_TYPE 'none',
+	ACCESS_DELEGATION_MODE 'none', STAGE_CREATE_TABLES true);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_native_void VALUES (1, 1, 'a'), (2, 2, 'b');
+
+statement ok
+SET iceberg_partition_overwrite_mode = 'dynamic';
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_native_void VALUES (10, 1, 'new');
+----
+<REGEX>:.*Cannot use this transform type.*
+
+statement ok
+SET iceberg_partition_overwrite_mode = 'static';
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_native_void ORDER BY id;
+----
+1	1	a
+2	2	b
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_native_void;
+
+# a catalog attached read-only takes no INSERT OVERWRITE
+statement ok
+ATTACH '' AS overwrite_read_only (TYPE ICEBERG, URI 'http://iceberg-mock.invalid', AUTHORIZATION_TYPE 'none',
+	ACCESS_DELEGATION_MODE 'none', READ_ONLY);
+
+statement error
+INSERT OVERWRITE overwrite_read_only.default.overwrite_native VALUES (30, 3);
+----
+<REGEX>:.*Cannot execute statement of type "INSERT" on database "overwrite_read_only" which is attached in read-only mode!.*
+
+statement error
+INSERT OVERWRITE overwrite_read_only.default.overwrite_native PARTITION (p = 1) VALUES (30);
+----
+<REGEX>:.*Cannot execute statement of type "INSERT" on database "overwrite_read_only" which is attached in read-only mode!.*
+
+statement ok
+DETACH overwrite_read_only;
+
+query II
+SELECT id, p FROM my_datalake.default.overwrite_native ORDER BY id;
+----
+10	1
+20	2
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_native;

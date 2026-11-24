@@ -25,7 +25,11 @@ void IcebergAddSnapshot::CreateUpdate(DatabaseInstance &db, ClientContext &conte
 	for (const auto &manifest : pending_manifests) {
 		writer.WriteManifest(manifest);
 	}
-	commit_state.AddWrittenSnapshot(IcebergWrittenSnapshot::Create(std::move(writer)));
+	auto written = IcebergWrittenSnapshot::Create(std::move(writer));
+	for (auto &property : summary_properties) {
+		written.snapshot.summary[property.first] = property.second;
+	}
+	commit_state.AddWrittenSnapshot(std::move(written));
 }
 
 void IcebergAddSnapshot::AddPendingManifest(IcebergPendingManifest manifest) {
@@ -56,6 +60,10 @@ void IcebergAddSnapshot::Merge(IcebergAddSnapshot &other) {
 
 void IcebergAddSnapshot::SetManifestDeletes(VersionedIcebergManifestDeletes manifest_deletes_p) {
 	manifest_deletes.emplace(std::move(manifest_deletes_p));
+}
+
+void IcebergAddSnapshot::SetSummaryProperty(const string &key, const string &value) {
+	summary_properties[key] = value;
 }
 
 const vector<IcebergPendingManifest> &IcebergAddSnapshot::GetPendingManifests() const {

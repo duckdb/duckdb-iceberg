@@ -58,7 +58,8 @@ static void LoadMissingManifestCounts(ClientContext &context, const IcebergTable
 }
 
 static optional<int64_t> LoadExistingManifestList(ClientContext &context, const IcebergTableMetadata &metadata,
-                                                  vector<IcebergManifestListEntry> &existing_manifest_list) {
+                                                  vector<IcebergManifestListEntry> &existing_manifest_list,
+                                                  optional_ptr<const vector<IcebergManifestListEntry>> manifest_list) {
 	existing_manifest_list.clear();
 
 	auto current_snapshot = metadata.GetLatestSnapshot();
@@ -71,7 +72,11 @@ static optional<int64_t> LoadExistingManifestList(ClientContext &context, const 
 	snapshot_info.snapshot = current_snapshot;
 	snapshot_info.schema_id = metadata.GetCurrentSchemaId();
 
-	IcebergManifestList::LoadManifestFiles(snapshot_info, metadata, context, existing_manifest_list);
+	if (manifest_list) {
+		existing_manifest_list = *manifest_list;
+	} else {
+		IcebergManifestList::LoadManifestFiles(snapshot_info, metadata, context, existing_manifest_list);
+	}
 	for (auto &manifest_list_entry : existing_manifest_list) {
 		LoadMissingManifestCounts(context, metadata, snapshot_info, manifest_list_entry);
 	}
@@ -199,6 +204,10 @@ bool IcebergTransactionData::SupportsAppendRetry() const {
 	if (contains_merge) {
 		return false;
 	}
+	//! Likewise the files an INSERT OVERWRITE replaced, also when it only removes them (a DELETE snapshot).
+	if (contains_overwrite) {
+		return false;
+	}
 	if (updates.empty()) {
 		return false;
 	}
@@ -230,11 +239,13 @@ bool IcebergTransactionData::RetryStateMatches(const IcebergTable &table) const 
 	return true;
 }
 
-void IcebergTransactionData::CacheExistingManifestList(lock_guard<mutex> &guard, const IcebergTableMetadata &metadata) {
+void IcebergTransactionData::CacheExistingManifestList(
+    lock_guard<mutex> &guard, const IcebergTableMetadata &metadata,
+    optional_ptr<const vector<IcebergManifestListEntry>> manifest_list) {
 	if (!alters.empty()) {
 		return;
 	}
-	base_snapshot_id = LoadExistingManifestList(context, metadata, existing_manifest_list);
+	base_snapshot_id = LoadExistingManifestList(context, metadata, existing_manifest_list, manifest_list);
 	scan_sequence_number = IcebergSnapshot::NextSequenceNumber(metadata.last_sequence_number);
 }
 
@@ -345,6 +356,37 @@ void IcebergTransactionData::AddDeleteSnapshot(partitioned_manifest_entry_map_t 
 		TableAddAssertCurrentSchemaId();
 	}
 	AddSnapshotUpdate(std::move(add_snapshot), std::move(altered_manifests), merge_action);
+}
+
+void IcebergTransactionData::AddOverwriteSnapshot(vector<IcebergManifestEntry> &&data_files,
+                                                  IcebergManifestDeletes &&replaced_files, bool replace_partitions,
+                                                  optional_ptr<const vector<IcebergManifestListEntry>> manifest_list) {
+	//! Serialize snapshot operations so transaction scans retain their insertion order.
+	lock_guard<mutex> guard(lock);
+	VerifyNoSnapshotExpiration(updates, "Data changes");
+
+	auto &table_metadata = table_info.GetMetadata();
+	CacheExistingManifestList(guard, table_metadata, manifest_list);
+
+	//! Without written rows the snapshot only removes files, which is a DELETE.
+	auto operation =
+	    data_files.empty() ? IcebergSnapshotOperationType::DELETE : IcebergSnapshotOperationType::OVERWRITE;
+	auto add_snapshot = make_uniq<IcebergAddSnapshot>(table_info, operation);
+	if (!data_files.empty()) {
+		auto manifest_metadata =
+		    IcebergManifestMetadata::FromTableMetadata(table_metadata, IcebergManifestContentType::DATA);
+		add_snapshot->AddPendingManifest(IcebergPendingManifest(manifest_metadata, std::move(data_files)));
+	}
+	// make sure we are still inserting into the current schema
+	if (table_metadata.current_snapshot_id) {
+		TableAddAssertCurrentSchemaId();
+	}
+	if (replace_partitions) {
+		//! The summary property with which Iceberg marks the snapshot of a ReplacePartitions operation
+		add_snapshot->SetSummaryProperty("replace-partitions", "true");
+	}
+	contains_overwrite = true;
+	AddSnapshotUpdate(std::move(add_snapshot), std::move(replaced_files), false);
 }
 
 void IcebergTransactionData::AddUpdateSnapshot(partitioned_manifest_entry_map_t &&delete_files,
