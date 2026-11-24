@@ -28,8 +28,39 @@ LogicalType IcebergScanTaskCodec::SchemaType(const IcebergTableSchema &schema) {
 	return LogicalType::STRUCT(std::move(children));
 }
 
+LogicalType IcebergScanTaskCodec::PartitionValuesType(const IcebergTableMetadata &metadata,
+                                                      const IcebergTableSchema &schema) {
+	struct FieldType {
+		LogicalType type;
+		bool is_void;
+	};
+	//! Partition field ids are unique across a table's specs, and a spec that keeps a field keeps its id. A field a v1
+	//! table dropped is void in later specs; it keeps the type it had before, as its earlier files have values.
+	map<uint64_t, FieldType> fields;
+	for (auto &spec : metadata.partition_specs) {
+		for (auto &field : spec.second.fields) {
+			//! The types the manifest reader reads a partition tuple with (IcebergDataFile::GetFieldIdToTypeMapping)
+			auto source_type = IcebergPartitionConstants::GetType(field.source_id, schema, metadata.GetSchemas());
+			if (!source_type) {
+				continue;
+			}
+			bool is_void = field.transform.Type() == IcebergTransformType::VOID_TRANSFORM;
+			auto existing = fields.find(field.partition_field_id);
+			if (existing == fields.end() || (existing->second.is_void && !is_void)) {
+				fields[field.partition_field_id] = FieldType {field.transform.GetBoundsType(*source_type), is_void};
+			}
+		}
+	}
+	child_list_t<LogicalType> children;
+	for (auto &field : fields) {
+		children.emplace_back(std::to_string(field.first), field.second.type);
+	}
+	return LogicalType::STRUCT(std::move(children));
+}
+
 child_list_t<LogicalType> IcebergScanTaskCodec::Columns(const LogicalType &partition_type,
-                                                        const LogicalType &schema_type) {
+                                                        const LogicalType &schema_type,
+                                                        const LogicalType &partition_values_type) {
 	return {{"file_path", LogicalType::VARCHAR},
 	        {"file_format", LogicalType::VARCHAR},
 	        {"file_size_in_bytes", LogicalType::BIGINT},
@@ -43,7 +74,8 @@ child_list_t<LogicalType> IcebergScanTaskCodec::Columns(const LogicalType &parti
 	        {"schema_id", LogicalType::INTEGER},
 	        {"metadata", LogicalType::VARIANT()},
 	        {"schema", schema_type},
-	        {"row_filter", LogicalType::VARCHAR}};
+	        {"row_filter", LogicalType::VARCHAR},
+	        {"partition_values", partition_values_type}};
 }
 
 IcebergDeleteFile IcebergScanTaskCodec::ReadDeleteFile(const Value &descriptor) {
@@ -113,11 +145,12 @@ IcebergScanTaskCodec::BindInput(const LogicalType &task_type, vector<LogicalType
 			throw BinderException("iceberg_scan_tasks input contains duplicate column %s", fields[i].first);
 		}
 	}
-	auto expected = Columns(LogicalType::STRUCT({}), LogicalType::STRUCT({}));
+	auto expected = Columns(LogicalType::STRUCT({}), LogicalType::STRUCT({}), LogicalType::STRUCT({}));
 	for (idx_t i = 0; i < expected.size(); i++) {
 		auto entry = indexes.find(expected[i].first.GetIdentifierName());
 		if (entry == indexes.end()) {
-			if (i == ROW_FILTER) {
+			//! Optional: a descriptor built by hand, or before these columns existed, can leave them out
+			if (i == ROW_FILTER || i == PARTITION_VALUES) {
 				result.columns.push_back(DConstants::INVALID_INDEX);
 				continue;
 			}
@@ -125,8 +158,9 @@ IcebergScanTaskCodec::BindInput(const LogicalType &task_type, vector<LogicalType
 			                      expected[i].first.GetIdentifierName());
 		}
 		auto &type = fields[entry->second].second;
-		bool valid =
-		    i == PARTITION_CONSTANTS || i == SCHEMA ? type.id() == LogicalTypeId::STRUCT : type == expected[i].second;
+		bool valid = i == PARTITION_CONSTANTS || i == SCHEMA || i == PARTITION_VALUES
+		                 ? type.id() == LogicalTypeId::STRUCT
+		                 : type == expected[i].second;
 		if (!valid) {
 			throw BinderException("iceberg_scan_tasks input column '%s' has unexpected type %s (expected %s)",
 			                      expected[i].first.GetIdentifierName(), type.ToString(),
@@ -151,6 +185,17 @@ IcebergScanTaskCodec::BindInput(const LogicalType &task_type, vector<LogicalType
 		}
 		result.partition_ids.push_back(IntegerValue::Get(*id));
 	}
+	if (result.columns[PARTITION_VALUES] != DConstants::INVALID_INDEX) {
+		auto &values_type = fields[result.columns[PARTITION_VALUES]].second;
+		unordered_set<int32_t> value_ids;
+		for (auto &field : StructType::GetChildTypes(values_type)) {
+			auto id = Value(field.first).DefaultTryCastAs(LogicalType::INTEGER);
+			if (!id || IntegerValue::Get(*id) <= 0 || !value_ids.insert(IntegerValue::Get(*id)).second) {
+				throw BinderException(
+				    "iceberg_scan_tasks partition value names must be distinct positive partition field IDs");
+			}
+		}
+	}
 	return result;
 }
 
@@ -162,7 +207,8 @@ Value IcebergScanTaskCodec::ReadValue(const Value &input, const InputLayout &bin
 	if (!nullable && value.IsNull()) {
 		throw InvalidInputException(
 		    "iceberg_scan_tasks input column '%s' cannot be NULL",
-		    Columns(LogicalType::STRUCT({}), LogicalType::STRUCT({}))[column].first.GetIdentifierName());
+		    Columns(LogicalType::STRUCT({}), LogicalType::STRUCT({}), LogicalType::STRUCT({}))[column]
+		        .first.GetIdentifierName());
 	}
 	return value;
 }
@@ -295,6 +341,34 @@ void IcebergScanTaskCodec::WriteTask(const IcebergFileScanTask &task, DataChunk 
 		constants.push_back(value == task.partition_constants.end() ? Value(field.second) : value->second);
 	}
 	output.data[PARTITION_CONSTANTS].SetValue(row, Value::STRUCT(partition_type, std::move(constants)));
+	//! A field of another spec is NULL. A committed file's values already have these types, except across a type
+	//! promotion; a file written in the planning transaction has textual values, cast as its manifest will be.
+	auto &values_type = output.data[PARTITION_VALUES].GetType();
+	vector<Value> values;
+	for (auto &field : StructType::GetChildTypes(values_type)) {
+		auto id = UBigIntValue::Get(Value(field.first).DefaultCastAs(LogicalType::UBIGINT));
+		Value value(field.second);
+		for (auto &info : task.partition_values) {
+			if (info.field_id != id || info.value.IsNull()) {
+				continue;
+			}
+			if (info.value.type() == field.second) {
+				value = info.value;
+				break;
+			}
+			string error;
+			auto cast = info.value.DefaultTryCastAs(field.second, &error, true);
+			if (!cast) {
+				throw InvalidConfigurationException("Partition value %s of data file '%s' cannot be read as %s: %s",
+				                                    info.value.ToString(), task.file_path, field.second.ToString(),
+				                                    error);
+			}
+			value = *cast;
+			break;
+		}
+		values.push_back(std::move(value));
+	}
+	output.data[PARTITION_VALUES].SetValue(row, Value::STRUCT(values_type, std::move(values)));
 	vector<Value> deletes;
 	for (auto &file : task.delete_files) {
 		deletes.push_back(WriteDeleteFile(file));

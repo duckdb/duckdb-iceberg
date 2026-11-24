@@ -167,8 +167,10 @@ static unique_ptr<FunctionData> IcebergScanPlanBind(ClientContext &context, Tabl
 		constants.emplace_back(std::to_string(source.first), source.second);
 	}
 	ret->partition_type = LogicalType::STRUCT(std::move(constants));
+	auto partition_values_type = IcebergScanTaskCodec::PartitionValuesType(metadata, schema);
 
-	for (auto &column : IcebergScanTaskCodec::Columns(ret->partition_type, IcebergScanTaskCodec::SchemaType(schema))) {
+	for (auto &column : IcebergScanTaskCodec::Columns(ret->partition_type, IcebergScanTaskCodec::SchemaType(schema),
+	                                                  partition_values_type)) {
 		names.emplace_back(column.first);
 		return_types.push_back(column.second);
 	}

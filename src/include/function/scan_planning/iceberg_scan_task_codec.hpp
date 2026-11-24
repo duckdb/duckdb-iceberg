@@ -23,12 +23,17 @@ struct IcebergScanTaskCodec {
 		METADATA,
 		SCHEMA,
 		ROW_FILTER,
+		PARTITION_VALUES,
 		COLUMN_COUNT
 	};
 
 	static LogicalType DeleteFileType();
 	static LogicalType SchemaType(const IcebergTableSchema &schema);
-	static child_list_t<LogicalType> Columns(const LogicalType &partition_type, const LogicalType &schema_type);
+	//! The type of the partition_values column: one field per partition field of any of the table's specs, named by
+	//! its partition field id and typed as the table's manifests store it under its transform.
+	static LogicalType PartitionValuesType(const IcebergTableMetadata &metadata, const IcebergTableSchema &schema);
+	static child_list_t<LogicalType> Columns(const LogicalType &partition_type, const LogicalType &schema_type,
+	                                         const LogicalType &partition_values_type);
 	static IcebergDeleteFile ReadDeleteFile(const Value &descriptor);
 	static Value WriteDeleteFile(const IcebergDeleteFile &file);
 
