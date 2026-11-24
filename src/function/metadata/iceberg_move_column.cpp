@@ -64,9 +64,12 @@ static unique_ptr<FunctionData> IcebergMoveColumnBind(ClientContext &context, Ta
 		} else if (entry.first == "before") {
 			ret->move = IcebergColumnMove::BEFORE;
 			ret->reference_path = ParseColumnPath(entry.second, "'before'");
-		} else {
+		} else if (entry.first == "after") {
 			ret->move = IcebergColumnMove::AFTER;
 			ret->reference_path = ParseColumnPath(entry.second, "'after'");
+		} else {
+			throw InternalException("iceberg_move_column: unhandled named parameter '%s'",
+			                        entry.first.GetIdentifierName());
 		}
 	}
 	if (input.named_parameters.size() != 1) {
