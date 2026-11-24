@@ -25,7 +25,7 @@
 #include "catalog/rest/storage/iceberg_table_secret_provider.hpp"
 #include "common/iceberg_utils.hpp"
 #include "iceberg_logging.hpp"
-#include "iceberg_profile_metrics.hpp"
+#include "metrics/iceberg_profile_metrics.hpp"
 #include "iceberg_attach.hpp"
 #include "iceberg_options.hpp"
 #include "common/iceberg_default.hpp"

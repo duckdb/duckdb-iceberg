@@ -1,5 +1,5 @@
 #include "catalog/rest/storage/aws.hpp"
-#include "iceberg_profile_metrics.hpp"
+#include "metrics/iceberg_profile_metrics.hpp"
 #include "duckdb/main/profiler/profiling_utils.hpp"
 
 #include "duckdb/common/http_util.hpp"

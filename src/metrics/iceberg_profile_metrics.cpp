@@ -1,4 +1,4 @@
-#include "iceberg_profile_metrics.hpp"
+#include "metrics/iceberg_profile_metrics.hpp"
 
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
