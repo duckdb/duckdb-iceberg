@@ -12,6 +12,8 @@ include test/sql/init_requires
 
 require json
 
+require icu
+
 statement ok
 drop table if exists my_datalake.default.scan_partition_constants_types;
 
