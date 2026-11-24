@@ -1,0 +1,62 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/move_column/move_column_time_travel.test
+# description: A snapshot taken before iceberg_move_column reads with the column order it was written under
+# group: [move_column]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env TIMETRAVEL_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.move_time_travel;
+
+statement ok
+CREATE TABLE my_datalake.default.move_time_travel (id INTEGER, category VARCHAR, amount DOUBLE);
+
+statement ok
+INSERT INTO my_datalake.default.move_time_travel VALUES (1, 'a', 1.5), (2, 'b', 2.5);
+
+statement ok
+SET VARIABLE first_snapshot = (
+	SELECT snapshot_id FROM iceberg_snapshots('my_datalake.default.move_time_travel') ORDER BY sequence_number LIMIT 1
+);
+
+statement ok
+CALL iceberg_move_column('my_datalake.default.move_time_travel', 'amount', first => true);
+
+statement ok
+INSERT INTO my_datalake.default.move_time_travel VALUES (3.5, 3, 'a');
+
+query I
+SELECT column_name FROM (DESCRIBE my_datalake.default.move_time_travel);
+----
+amount
+id
+category
+
+query RIT
+SELECT * FROM my_datalake.default.move_time_travel ORDER BY id;
+----
+1.5	1	a
+2.5	2	b
+3.5	3	a
+
+# the snapshot taken before the move
+query I
+SELECT column_name FROM (
+	DESCRIBE SELECT * FROM my_datalake.default.move_time_travel AT (VERSION => getvariable('first_snapshot'))
+);
+----
+id
+category
+amount
+
+query ITR
+SELECT * FROM my_datalake.default.move_time_travel AT (VERSION => getvariable('first_snapshot')) ORDER BY id;
+----
+1	a	1.5
+2	b	2.5
+
+statement ok
+DROP TABLE my_datalake.default.move_time_travel;

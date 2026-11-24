@@ -1,0 +1,280 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/move_column/move_column_errors.test
+# description: iceberg_move_column refuses invalid arguments when it is bound and invalid moves when it runs, and changes nothing
+# group: [move_column]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.move_errors;
+
+statement ok
+CREATE TABLE my_datalake.default.move_errors (
+	id BIGINT,
+	data VARCHAR,
+	s STRUCT(a INTEGER, b INTEGER),
+	other STRUCT(x INTEGER, y INTEGER),
+	l INTEGER[],
+	m MAP(VARCHAR, INTEGER)
+);
+
+# NULL arguments
+statement error
+CALL iceberg_move_column(NULL, 'data', first => true);
+----
+Invalid Input Error: iceberg_move_column: table_name cannot be NULL
+
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', NULL, first => true);
+----
+Invalid Input Error: iceberg_move_column: column_name cannot be NULL
+
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', 'data', first => NULL);
+----
+Invalid Input Error: iceberg_move_column: 'first' cannot be NULL
+
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', 'data', after => NULL);
+----
+Invalid Input Error: iceberg_move_column: 'after' cannot be NULL
+
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', 'data', before => NULL);
+----
+Invalid Input Error: iceberg_move_column: 'before' cannot be NULL
+
+# exactly one of first, after, before
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', 'data');
+----
+Invalid Input Error: iceberg_move_column: exactly one of 'first', 'after' and 'before' must be given
+
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', 'data', first => true, after => 'id');
+----
+Invalid Input Error: iceberg_move_column: exactly one of 'first', 'after' and 'before' must be given
+
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', 'data', after => 'id', before => 'id');
+----
+Invalid Input Error: iceberg_move_column: exactly one of 'first', 'after' and 'before' must be given
+
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', 'data', first => false);
+----
+Invalid Input Error: iceberg_move_column: 'first' cannot be false
+
+# empty names
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', '', first => true);
+----
+Invalid Input Error: iceberg_move_column: column_name '' is not a column name
+
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', 's..a', first => true);
+----
+Invalid Input Error: iceberg_move_column: column_name 's..a' is not a column name
+
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', 'data', after => '');
+----
+Invalid Input Error: iceberg_move_column: 'after' '' is not a column name
+
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', 's.', first => true);
+----
+Invalid Input Error: iceberg_move_column: column_name 's.' is not a column name
+
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', 'data', after => 's.');
+----
+Invalid Input Error: iceberg_move_column: 'after' 's.' is not a column name
+
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', '""', first => true);
+----
+Invalid Input Error: iceberg_move_column: column_name '""' is not a column name
+
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', 'data', before => '""');
+----
+Invalid Input Error: iceberg_move_column: 'before' '""' is not a column name
+
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', '"data', first => true);
+----
+Invalid Input Error: iceberg_move_column: column_name '"data' is not a column name
+
+# these are refused when the statement is bound: preparing it is enough
+statement error
+PREPARE move_errors_prepared AS
+SELECT * FROM iceberg_move_column('my_datalake.default.move_errors', 'data', first => false);
+----
+Invalid Input Error: iceberg_move_column: 'first' cannot be false
+
+statement error
+PREPARE move_errors_prepared AS
+SELECT * FROM iceberg_move_column('my_datalake.default.move_errors', 'data');
+----
+Invalid Input Error: iceberg_move_column: exactly one of 'first', 'after' and 'before' must be given
+
+statement error
+PREPARE move_errors_prepared AS
+SELECT * FROM iceberg_move_column('my_datalake.default.move_errors', 's.', first => true);
+----
+Invalid Input Error: iceberg_move_column: column_name 's.' is not a column name
+
+# the table has to be a table of an Iceberg catalog
+statement ok
+CREATE TABLE memory.main.move_errors_local (a INTEGER, b INTEGER);
+
+statement error
+CALL iceberg_move_column('memory.main.move_errors_local', 'b', first => true);
+----
+Invalid Input Error: Cannot call iceberg_move_column on non-iceberg table
+
+statement ok
+DROP TABLE memory.main.move_errors_local;
+
+# a table that does not exist, or a path, fails in the table lookup
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors_missing', 'b', first => true);
+----
+Catalog Error: Table with name move_errors_missing does not exist!
+
+statement error
+CALL iceberg_move_column('s3://bucket/warehouse/move_errors', 'b', first => true);
+----
+Catalog Error: Table with name s3://bucket/warehouse/move_errors does not exist!
+
+# a table name that is not catalog.schema.table, schema.table or table fails when the name is parsed
+statement error
+CALL iceberg_move_column('', 'data', first => true);
+----
+Invalid Input Error: Table name is empty
+
+statement error
+CALL iceberg_move_column('a.b.c.d', 'data', first => true);
+----
+Invalid Input Error: Too many identifiers in table name a.b.c.d
+
+statement error
+CALL iceberg_move_column('.default.move_errors', 'data', first => true);
+----
+Invalid Input Error: Table name .default.move_errors has an empty component
+
+statement error
+CALL iceberg_move_column('my_datalake..move_errors', 'data', first => true);
+----
+Invalid Input Error: Table name my_datalake..move_errors has an empty component
+
+statement error
+CALL iceberg_move_column('move_errors_missing_catalog.default.move_errors', 'data', first => true);
+----
+Binder Error: Catalog "move_errors_missing_catalog" does not exist!
+
+# a column that does not exist
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', 'items', first => true);
+----
+Invalid Input Error: Cannot move missing column: items
+
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', 'items', before => 'id');
+----
+Invalid Input Error: Cannot move missing column: items
+
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', 'items', after => 'data');
+----
+Invalid Input Error: Cannot move missing column: items
+
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', 's.items', first => true);
+----
+Invalid Input Error: Cannot move missing column: s.items
+
+# a reference that does not exist
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', 'id', before => 'items');
+----
+Invalid Input Error: Cannot move id before missing column: items
+
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', 'data', after => 'items');
+----
+Invalid Input Error: Cannot move data after missing column: items
+
+# a column moved relative to itself
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', 'id', before => 'id');
+----
+Invalid Input Error: Cannot move id before itself
+
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', 'id', after => 'id');
+----
+Invalid Input Error: Cannot move id after itself
+
+# names are identifiers: the same column under another case is still the column itself
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', 'ID', after => 'id');
+----
+Invalid Input Error: Cannot move ID after itself
+
+# a reference in another struct
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', 'id', before => 's.a');
+----
+Invalid Input Error: Cannot move id to a different struct
+
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', 's.a', after => 'other.x');
+----
+Invalid Input Error: Cannot move s.a to a different struct
+
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', 's.a', after => 'id');
+----
+Invalid Input Error: Cannot move s.a to a different struct
+
+# the reference is a full path: a sibling is not found by its bare name
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', 's.a', after => 'b');
+----
+Invalid Input Error: Cannot move s.a after missing column: b
+
+# the value of a map and the element of a list are not struct fields
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', 'm.value', first => true);
+----
+Invalid Input Error: Cannot move m.value: its parent is not a struct (type: MAP(VARCHAR, INTEGER))
+
+statement error
+CALL iceberg_move_column('my_datalake.default.move_errors', 'l.element', first => true);
+----
+Invalid Input Error: Cannot move l.element: its parent is not a struct (type: INTEGER[])
+
+# none of the refused calls changed the table
+query II
+SELECT column_name, column_type FROM (DESCRIBE my_datalake.default.move_errors);
+----
+id	BIGINT
+data	VARCHAR
+s	STRUCT(a INTEGER, b INTEGER)
+other	STRUCT(x INTEGER, y INTEGER)
+l	INTEGER[]
+m	MAP(VARCHAR, INTEGER)
+
+query II
+SELECT metadata."current-schema-id"::INTEGER, len(metadata.schemas::VARIANT[])
+FROM iceberg_load_table_response('my_datalake.default.move_errors');
+----
+0	1
+
+statement ok
+DROP TABLE my_datalake.default.move_errors;

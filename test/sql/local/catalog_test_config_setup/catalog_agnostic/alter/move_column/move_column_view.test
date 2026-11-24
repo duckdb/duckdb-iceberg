@@ -1,0 +1,67 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/move_column/move_column_view.test
+# description: iceberg_move_column refuses a view of an Iceberg catalog
+# group: [move_column]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env VIEW_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP VIEW IF EXISTS my_datalake.default.move_view;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.move_view_base;
+
+statement ok
+CREATE TABLE my_datalake.default.move_view_base (a INTEGER, b INTEGER);
+
+statement ok
+INSERT INTO my_datalake.default.move_view_base VALUES (1, 2);
+
+statement ok
+CREATE VIEW my_datalake.default.move_view AS SELECT a, b FROM my_datalake.default.move_view_base;
+
+statement error
+CALL iceberg_move_column('my_datalake.default.move_view', 'b', first => true);
+----
+Invalid Input Error: Cannot call iceberg_move_column on non-iceberg table
+
+statement error
+PREPARE move_view_prepared AS
+SELECT * FROM iceberg_move_column('my_datalake.default.move_view', 'b', after => 'a');
+----
+Invalid Input Error: Cannot call iceberg_move_column on non-iceberg table
+
+# the view and its table are as they were
+query II
+SELECT * FROM my_datalake.default.move_view;
+----
+1	2
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE my_datalake.default.move_view_base);
+----
+a	INTEGER
+b	INTEGER
+
+# the table behind the view moves, and the view keeps selecting its columns by name
+statement ok
+CALL iceberg_move_column('my_datalake.default.move_view_base', 'b', first => true);
+
+query II
+SELECT * FROM my_datalake.default.move_view_base;
+----
+2	1
+
+query II
+SELECT * FROM my_datalake.default.move_view;
+----
+1	2
+
+statement ok
+DROP VIEW my_datalake.default.move_view;
+
+statement ok
+DROP TABLE my_datalake.default.move_view_base;

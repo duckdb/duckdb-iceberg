@@ -11,6 +11,9 @@
 
 namespace duckdb {
 
+//! Where a moved column or struct field goes among its siblings
+enum class IcebergColumnMove : uint8_t { FIRST, BEFORE, AFTER };
+
 class IcebergTableSchema {
 public:
 	static shared_ptr<IcebergTableSchema> ParseSchema(const rest_api_objects::Schema &schema);
@@ -36,6 +39,9 @@ public:
 
 	shared_ptr<IcebergTableSchema> Copy() const;
 	shared_ptr<IcebergTableSchema> RemoveColumn(const string &name, optional_idx &column_id) const;
+	//! Move the column or struct field at 'path' among its siblings: first, or directly before / after the sibling
+	//! at 'reference_path'. Field ids, names and types stay as they are
+	void MoveColumn(const vector<Identifier> &path, IcebergColumnMove move, const vector<Identifier> &reference_path);
 	const LogicalType &GetColumnTypeFromFieldId(idx_t field_id) const;
 
 	bool Equals(const IcebergTableSchema &other) const;
