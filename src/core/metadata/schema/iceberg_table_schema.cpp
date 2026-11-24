@@ -242,6 +242,66 @@ shared_ptr<IcebergTableSchema> IcebergTableSchema::RemoveColumn(const string &na
 	return res;
 }
 
+//! The position of 'field' in 'fields'
+static optional_idx FieldIndex(const vector<unique_ptr<IcebergColumnDefinition>> &fields,
+                               const IcebergColumnDefinition &field) {
+	for (idx_t i = 0; i < fields.size(); i++) {
+		if (fields[i].get() == &field) {
+			return i;
+		}
+	}
+	return optional_idx();
+}
+
+void IcebergTableSchema::MoveColumn(const vector<Identifier> &path, IcebergColumnMove move,
+                                    const vector<Identifier> &reference_path) {
+	auto path_name = StringUtil::Join(IdentifiersToStrings(path), ".");
+	auto column = GetFromPath(path, nullptr);
+	if (!column) {
+		throw InvalidInputException("Cannot move missing column: %s", path_name);
+	}
+	optional_ptr<const IcebergColumnDefinition> reference;
+	if (move != IcebergColumnMove::FIRST) {
+		auto direction = move == IcebergColumnMove::BEFORE ? "before" : "after";
+		reference = GetFromPath(reference_path, nullptr);
+		if (!reference) {
+			throw InvalidInputException("Cannot move %s %s missing column: %s", path_name, direction,
+			                            StringUtil::Join(IdentifiersToStrings(reference_path), "."));
+		}
+		if (reference.get() == column.get()) {
+			throw InvalidInputException("Cannot move %s %s itself", path_name, direction);
+		}
+	}
+
+	//! The siblings of the column: the fields of the struct that holds it, or the columns of the table
+	optional_ptr<IcebergColumnDefinition> parent;
+	if (path.size() > 1) {
+		parent = GetMutableFromPath(vector<Identifier>(path.begin(), path.end() - 1), nullptr);
+		if (parent->type.id() != LogicalTypeId::STRUCT) {
+			throw InvalidInputException("Cannot move %s: its parent is not a struct (type: %s)", path_name,
+			                            parent->type.ToString());
+		}
+	}
+	auto &siblings = parent ? parent->GetChildren() : columns;
+	auto from = FieldIndex(siblings, *column).GetIndex();
+	idx_t to = 0;
+	if (reference) {
+		auto reference_index = FieldIndex(siblings, *reference);
+		if (!reference_index.IsValid()) {
+			throw InvalidInputException("Cannot move %s to a different struct", path_name);
+		}
+		//! Where the reference stands once the column is taken out
+		auto position = reference_index.GetIndex() > from ? reference_index.GetIndex() - 1 : reference_index.GetIndex();
+		to = move == IcebergColumnMove::BEFORE ? position : position + 1;
+	}
+	if (parent) {
+		parent->MoveChild(from, to);
+	} else {
+		IcebergColumnDefinition::MoveField(columns, from, to);
+	}
+	InvalidateSourceIdMap();
+}
+
 const LogicalType &IcebergTableSchema::GetColumnTypeFromFieldId(idx_t field_id) const {
 	return GetColumnByFieldId(field_id).type;
 }
