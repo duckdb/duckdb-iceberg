@@ -1,5 +1,6 @@
 #include "function/scan_planning/iceberg_scan_task_codec.hpp"
 #include "core/metadata/partition/iceberg_partition_constants.hpp"
+#include "duckdb/common/vector/struct_vector.hpp"
 
 namespace duckdb {
 
@@ -401,10 +402,10 @@ void IcebergScanTaskCodec::WriteTask(const IcebergFileScanTask &task, const vect
 	output.data[PARTITION_CONSTANTS].SetValue(row, Value::STRUCT(partition_type, std::move(constants)));
 	//! A field of another spec is NULL. A committed file's values already have these types, except across a type
 	//! promotion; a file written in the planning transaction has textual values, cast as its manifest will be.
-	auto &values_type = output.data[PARTITION_VALUES].GetType();
-	auto &value_fields = StructType::GetChildTypes(values_type);
+	//! Each field is written into its child vector, without building a STRUCT value per row.
+	auto &value_fields = StructType::GetChildTypes(output.data[PARTITION_VALUES].GetType());
+	auto &value_children = StructVector::GetEntries(output.data[PARTITION_VALUES]);
 	D_ASSERT(partition_value_ids.size() == value_fields.size());
-	vector<Value> values;
 	for (idx_t field_idx = 0; field_idx < value_fields.size(); field_idx++) {
 		auto &field = value_fields[field_idx];
 		auto id = partition_value_ids[field_idx];
@@ -427,9 +428,8 @@ void IcebergScanTaskCodec::WriteTask(const IcebergFileScanTask &task, const vect
 			value = *cast;
 			break;
 		}
-		values.push_back(std::move(value));
+		value_children[field_idx].SetValue(row, value);
 	}
-	output.data[PARTITION_VALUES].SetValue(row, Value::STRUCT(values_type, std::move(values)));
 	vector<Value> deletes;
 	for (auto &file : task.delete_files) {
 		deletes.push_back(WriteDeleteFile(file));
