@@ -49,6 +49,15 @@ Value IcebergValue::TransformPartitionValue(const Value &value, const LogicalTyp
 		}
 		return value.DefaultCastAs(type);
 	}
+	// UUID partition values are already DuckDB UUIDs too: the manifest's partition struct is read with the UUID
+	// type, and server-side planning parses them as UUIDs. Their internal hugeint is not Iceberg's big-endian
+	// 16 bytes either, so the blob round-trip below would scramble them.
+	if (value.type().id() == LogicalTypeId::UUID) {
+		if (value.type() == type) {
+			return value;
+		}
+		return value.DefaultCastAs(type);
+	}
 	switch (value.type().InternalType()) {
 	case PhysicalType::BOOL:
 		return TransformPartitionValueTemplated<bool>(value, type);

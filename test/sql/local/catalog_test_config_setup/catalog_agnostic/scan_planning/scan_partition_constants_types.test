@@ -1,0 +1,130 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/scan_planning/scan_partition_constants_types.test
+# description: iceberg_scan_plan's identity partition constants equal the values in their files' rows, for every primitive type
+# group: [scan_planning]
+
+# A task's partition constant stands in for its column in a file that does not hold the column, so it must be the
+# value the file's rows have. Checked for files pending in the planning transaction (textual partition values) and
+# for committed files (values decoded from the manifests), with server-side planning requested and not.
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+drop table if exists my_datalake.default.scan_partition_constants_types;
+
+statement ok
+create table my_datalake.default.scan_partition_constants_types(id integer, i integer, b bigint, f float, d double,
+  dec decimal(9,2), dec38 decimal(38,4), dt date, ts timestamp, tstz timestamptz, t time, u uuid, s varchar,
+  bo boolean, bl blob)
+partitioned by (i, b, f, d, dec, dec38, dt, ts, tstz, t, u, s, bo, bl) with ('format-version'=2);
+
+# One row per file: no two rows share a partition tuple.
+statement ok
+create temp macro constants_rows() as table
+ select * from (values
+ (1, 1, 10000000000, 1.1::float, 1.1::double, 1.10, 12345678901234567890123.4567, '2024-01-01'::date,
+  '2024-01-01 01:02:03.000004'::timestamp, '2024-01-01 01:02:03.000004+00'::timestamptz, '01:02:03.000004'::time,
+  '00000000-0000-0000-0000-000000000001'::uuid, 'abcdefghijklmnop', true, '\xAA\xBB'::blob),
+ (2, 2, -10000000000, -2.5::float, 'nan'::double, -2.25, -1.0001, '1969-12-31'::date,
+  '1969-12-31 23:59:59.999999'::timestamp, '1969-12-31 23:59:59.999999+00'::timestamptz, '23:59:59.999999'::time,
+  'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid, 'a/b=c%20d é', false, '\x00\x2F'::blob),
+ (3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+ (4, 4, 4, 3.4e38::float, 1e-300::double, 0.01, 0, '2000-02-29'::date, '2000-02-29 00:00:00'::timestamp,
+  '2000-02-29 23:30:00+00'::timestamptz, '00:00:00'::time, '123e4567-e89b-12d3-a456-426614174000'::uuid, '', true,
+  ''::blob)) t(id, i, b, f, d, dec, dec38, dt, ts, tstz, t, u, s, bo, bl);
+
+# Per file, the columns whose plan constant differs from the file's row.
+statement ok
+create temp macro constants_mismatches(plan) as table
+ select r.id, list_filter([
+   if(pc."2" is distinct from r.i, 'i', NULL), if(pc."3" is distinct from r.b, 'b', NULL),
+   if(pc."4" is distinct from r.f, 'f', NULL), if(pc."5" is distinct from r.d, 'd', NULL),
+   if(pc."6" is distinct from r.dec, 'dec', NULL), if(pc."7" is distinct from r.dec38, 'dec38', NULL),
+   if(pc."8" is distinct from r.dt, 'dt', NULL), if(pc."9" is distinct from r.ts, 'ts', NULL),
+   if(pc."10" is distinct from r.tstz, 'tstz', NULL), if(pc."11" is distinct from r.t, 't', NULL),
+   if(pc."12" is distinct from r.u, 'u', NULL), if(pc."13" is distinct from r.s, 's', NULL),
+   if(pc."14" is distinct from r.bo, 'bo', NULL), if(pc."15" is distinct from r.bl, 'bl', NULL)], lambda x: x IS NOT NULL) bad
+ from (select file_path, partition_constants pc from query_table(plan)) p
+ join (select *, filename from constants_rows() rr
+       join (select id, filename from my_datalake.default.scan_partition_constants_types) f using (id)) r
+ on r.filename = p.file_path
+ order by r.id;
+
+# The time zone must not matter.
+statement ok
+set TimeZone='America/Los_Angeles';
+
+# ---- files pending in the planning transaction ----
+
+statement ok
+begin;
+
+statement ok
+insert into my_datalake.default.scan_partition_constants_types select * from constants_rows();
+
+statement ok
+set iceberg_use_server_side_scan_planning=false;
+
+statement ok
+create temp table constants_plan_pending as
+select * from iceberg_scan_plan('my_datalake.default.scan_partition_constants_types');
+
+query IT
+select * from constants_mismatches('constants_plan_pending');
+----
+1	[]
+2	[]
+3	[]
+4	[]
+
+statement ok
+commit;
+
+# ---- committed files, server-side planning requested ----
+
+statement ok
+set iceberg_use_server_side_scan_planning=true;
+
+statement ok
+begin;
+
+statement ok
+create temp table constants_plan_server as
+select * from iceberg_scan_plan('my_datalake.default.scan_partition_constants_types');
+
+query IT
+select * from constants_mismatches('constants_plan_server');
+----
+1	[]
+2	[]
+3	[]
+4	[]
+
+statement ok
+commit;
+
+# ---- committed files, client-side planning ----
+
+statement ok
+set iceberg_use_server_side_scan_planning=false;
+
+statement ok
+begin;
+
+statement ok
+create temp table constants_plan_client as
+select * from iceberg_scan_plan('my_datalake.default.scan_partition_constants_types');
+
+query IT
+select * from constants_mismatches('constants_plan_client');
+----
+1	[]
+2	[]
+3	[]
+4	[]
+
+statement ok
+commit;
