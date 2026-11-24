@@ -66,9 +66,10 @@ unique_ptr<IcebergScanPlanProvider> IcebergScanPlanProvider::Create(IcebergScanP
 		auto &table_info = table_entry->table_info;
 		auto planning = table_info.catalog.GetServerScanPlanning();
 		if (planning && planning->PlansScans()) {
+			auto request = planning->CreateScanRequest(context, table_filters, scan_order);
 			IcebergServerSideScanPlan plan;
 			try {
-				if (planning->PlanScan(context, table_info, table_filters, scan_order, plan)) {
+				if (planning->PlanScan(context, table_info, *request, plan)) {
 					if (shared_state.Configuration().row_ids_required && context.metadata.iceberg_version >= 3) {
 						// Without inspecting Parquet we cannot know whether all row IDs are
 						// materialized. Fall back rather than silently replacing inherited IDs.

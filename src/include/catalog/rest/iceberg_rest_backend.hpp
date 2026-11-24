@@ -102,8 +102,11 @@ public:
 	//===--------------------------------------------------------------------===//
 	//! Whether the server advertises the plan endpoint
 	bool PlansScans() const override;
-	bool PlanScan(IcebergScanPlanContext &context, IcebergTable &table, const IcebergTableFilters &filters,
-	              const IcebergScanOrder &scan_order, IcebergServerSideScanPlan &result) override;
+	unique_ptr<IcebergServerScanRequest> CreateScanRequest(IcebergScanPlanContext &context,
+	                                                       const IcebergTableFilters &filters,
+	                                                       const IcebergScanOrder &scan_order) override;
+	bool PlanScan(IcebergScanPlanContext &context, IcebergTable &table, IcebergServerScanRequest &request,
+	              IcebergServerSideScanPlan &result) override;
 
 public:
 	//===--------------------------------------------------------------------===//

@@ -290,27 +290,40 @@ static optional_ptr<IcebergTable> GetSingleUpdatedTable(IcebergTransactionAlterU
 IcebergCommitPlan::IcebergCommitPlan(IcebergTransaction &transaction) : transaction(transaction) {
 	auto &backend = transaction.GetCatalog().GetBackend();
 	for (auto &created_schema : transaction.created_schemas) {
-		created_namespace_names.push_back(created_schema.first);
-		created_namespaces.push_back(backend.ParseNamespace(created_schema.first));
+		created_namespaces.push_back({created_schema.first, backend.ParseNamespace(created_schema.first)});
 	}
 	for (auto &schema_name : transaction.deleted_schemas) {
-		dropped_namespace_names.push_back(schema_name);
-		dropped_namespaces.push_back(backend.ParseNamespace(schema_name));
+		dropped_namespaces.push_back({schema_name, backend.ParseNamespace(schema_name)});
 	}
 }
 
+vector<IcebergNamespace> IcebergCommitPlan::Namespaces(const vector<PlannedNamespace> &planned) {
+	vector<IcebergNamespace> result;
+	result.reserve(planned.size());
+	for (auto &entry : planned) {
+		result.push_back(entry.ns);
+	}
+	return result;
+}
+
+vector<IcebergNamespace> IcebergCommitPlan::CreatedNamespaces() const {
+	return Namespaces(created_namespaces);
+}
+
+vector<IcebergNamespace> IcebergCommitPlan::DroppedNamespaces() const {
+	return Namespaces(dropped_namespaces);
+}
+
 void IcebergCommitPlan::OnNamespaceCreated(idx_t index, bool already_existed) {
-	auto &schema_name = created_namespace_names[index];
+	auto &schema_name = created_namespaces[index].schema_name;
 	if (already_existed) {
 		transaction.created_schemas.OnNamespaceExists(schema_name);
 	}
-	for (auto &created_schema : transaction.created_schemas) {
-		if (created_schema.first == schema_name) {
-			transaction.GetCatalog().GetSchemas().AddEntry(schema_name, created_schema.second.entry);
-			return;
-		}
+	auto entry = transaction.created_schemas.GetSharedEntry(schema_name);
+	if (!entry) {
+		throw InternalException("Created namespace '%s' is not part of the transaction", schema_name);
 	}
-	throw InternalException("Created namespace '%s' is not part of the transaction", schema_name);
+	transaction.GetCatalog().GetSchemas().AddEntry(schema_name, std::move(entry));
 }
 
 vector<IcebergNamespacePropertyUpdate> IcebergCommitPlan::NamespacePropertyUpdates() const {
@@ -332,7 +345,7 @@ vector<IcebergNamespacePropertyUpdate> IcebergCommitPlan::NamespacePropertyUpdat
 }
 
 void IcebergCommitPlan::OnNamespaceDropped(idx_t index) {
-	transaction.GetCatalog().GetSchemas().RemoveEntry(dropped_namespace_names[index]);
+	transaction.GetCatalog().GetSchemas().RemoveEntry(dropped_namespaces[index].schema_name);
 }
 
 void IcebergCommitPlan::OnNamespacesDropped() {

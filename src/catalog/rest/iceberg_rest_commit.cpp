@@ -39,7 +39,7 @@ void IcebergRestCommit::Run() {
 //===--------------------------------------------------------------------===//
 
 void IcebergRestCommit::CreateNamespaces() {
-	auto &namespaces = plan.CreatedNamespaces();
+	auto namespaces = plan.CreatedNamespaces();
 	for (idx_t i = 0; i < namespaces.size(); i++) {
 		auto &ns = namespaces[i];
 		rest_api_objects::CreateNamespaceRequest request;
@@ -64,7 +64,7 @@ void IcebergRestCommit::UpdateNamespaceProperties() {
 }
 
 void IcebergRestCommit::DropNamespaces() {
-	auto &namespaces = plan.DroppedNamespaces();
+	auto namespaces = plan.DroppedNamespaces();
 	for (idx_t i = 0; i < namespaces.size(); i++) {
 		IRCAPI::CommitNamespaceDrop(context, backend, namespaces[i].levels);
 		plan.OnNamespaceDropped(i);

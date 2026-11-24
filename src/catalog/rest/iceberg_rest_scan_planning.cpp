@@ -15,10 +15,19 @@ bool IcebergRestBackend::PlansScans() const {
 	return supported_urls.count(IcebergServerSideScanPlanning::PLAN_ENDPOINT);
 }
 
-bool IcebergRestBackend::PlanScan(IcebergScanPlanContext &context, IcebergTable &table,
-                                  const IcebergTableFilters &table_filters, const IcebergScanOrder &scan_order,
-                                  IcebergServerSideScanPlan &result) {
+namespace {
+
+struct IcebergRestScanRequest : public IcebergServerScanRequest {
 	rest_api_objects::PlanTableScanRequest request;
+};
+
+} // namespace
+
+unique_ptr<IcebergServerScanRequest> IcebergRestBackend::CreateScanRequest(IcebergScanPlanContext &context,
+                                                                           const IcebergTableFilters &table_filters,
+                                                                           const IcebergScanOrder &scan_order) {
+	auto rest_request = make_uniq<IcebergRestScanRequest>();
+	auto &request = rest_request->request;
 	request.snapshot_id = context.snapshot.snapshot->snapshot_id;
 	request.case_sensitive = true;
 	request.use_snapshot_schema = context.snapshot.snapshot->snapshot_id != context.metadata.current_snapshot_id;
@@ -48,7 +57,13 @@ bool IcebergRestBackend::PlanScan(IcebergScanPlanContext &context, IcebergTable 
 			request.stats_fields->push_back(std::move(stats_field));
 		}
 	}
-	return IcebergServerSideScanPlanning::Plan(context.context, table, std::move(request), result);
+	return std::move(rest_request);
+}
+
+bool IcebergRestBackend::PlanScan(IcebergScanPlanContext &context, IcebergTable &table,
+                                  IcebergServerScanRequest &request, IcebergServerSideScanPlan &result) {
+	auto &rest_request = static_cast<IcebergRestScanRequest &>(request);
+	return IcebergServerSideScanPlanning::Plan(context.context, table, std::move(rest_request.request), result);
 }
 
 } // namespace duckdb

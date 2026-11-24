@@ -50,15 +50,11 @@ public:
 	//===--------------------------------------------------------------------===//
 	// Namespaces
 	//===--------------------------------------------------------------------===//
-	const vector<IcebergNamespace> &CreatedNamespaces() const {
-		return created_namespaces;
-	}
+	vector<IcebergNamespace> CreatedNamespaces() const;
 	//! The namespace at 'index' of CreatedNamespaces was created, or existed already
 	void OnNamespaceCreated(idx_t index, bool already_existed);
 	vector<IcebergNamespacePropertyUpdate> NamespacePropertyUpdates() const;
-	const vector<IcebergNamespace> &DroppedNamespaces() const {
-		return dropped_namespaces;
-	}
+	vector<IcebergNamespace> DroppedNamespaces() const;
 	void OnNamespaceDropped(idx_t index);
 	void OnNamespacesDropped();
 
@@ -104,11 +100,17 @@ public:
 	void MarkOutcomeUnknown();
 
 private:
+	//! A schema the transaction creates or drops, and the namespace it is in the catalog
+	struct PlannedNamespace {
+		string schema_name;
+		IcebergNamespace ns;
+	};
+	static vector<IcebergNamespace> Namespaces(const vector<PlannedNamespace> &planned);
+
+private:
 	IcebergTransaction &transaction;
-	vector<string> created_namespace_names;
-	vector<IcebergNamespace> created_namespaces;
-	vector<string> dropped_namespace_names;
-	vector<IcebergNamespace> dropped_namespaces;
+	vector<PlannedNamespace> created_namespaces;
+	vector<PlannedNamespace> dropped_namespaces;
 	//! The one updated table of a single-table commit, resolved on the first attempt
 	optional_ptr<IcebergTable> single_table;
 	bool single_table_resolved = false;

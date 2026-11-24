@@ -78,15 +78,15 @@ static unique_ptr<FunctionData> IcebergLoadTableResponseBind(ClientContext &cont
 		throw InvalidInputException("'%s' is not a table", input_string);
 	}
 	auto &table = catalog_entry->Cast<TableCatalogEntry>();
-	if (table.catalog.GetCatalogType() != "iceberg") {
+	auto rest = table.catalog.GetCatalogType() == "iceberg"
+	                ? table.catalog.Cast<IcebergCatalog>().GetBackend().TryCast<IcebergRestBackend>()
+	                : nullptr;
+	if (!rest) {
 		throw InvalidInputException("Table '%s' is not an Iceberg REST catalog table", input_string);
 	}
 
 	auto &table_entry = catalog_entry->Cast<IcebergTableSchemaVersion>();
 	auto &ic_catalog = table_entry.catalog.Cast<IcebergCatalog>();
-	if (!ic_catalog.GetBackend().TryCast<IcebergRestBackend>()) {
-		throw InvalidInputException("Table '%s' is not an Iceberg REST catalog table", input_string);
-	}
 	auto &ic_schema = table_entry.schema.Cast<IcebergSchemaEntry>();
 
 	auto ret = make_uniq<IcebergLoadTableResponseBindData>(table_entry, ic_catalog, ic_schema);

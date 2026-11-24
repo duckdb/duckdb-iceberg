@@ -53,6 +53,12 @@ public:
 };
 
 //! Optional backend functionality: the catalog plans table scans on the server.
+//! A scan-planning request, built by the backend before planning starts
+class IcebergServerScanRequest {
+public:
+	virtual ~IcebergServerScanRequest();
+};
+
 class IcebergServerScanPlanning {
 public:
 	virtual ~IcebergServerScanPlanning();
@@ -60,10 +66,15 @@ public:
 public:
 	//! Whether the catalog plans scans at all
 	virtual bool PlansScans() const = 0;
-	//! Plans the scan of 'table' at the snapshot of 'context'. Returns false if the server declines to plan it;
-	//! throws if planning fails
-	virtual bool PlanScan(IcebergScanPlanContext &context, IcebergTable &table, const IcebergTableFilters &filters,
-	                      const IcebergScanOrder &scan_order, IcebergServerSideScanPlan &result) = 0;
+	//! Builds the request to plan the scan at the snapshot of 'context'. An error here is a bug, not a planning
+	//! failure, so the caller doesn't fall back on it
+	virtual unique_ptr<IcebergServerScanRequest> CreateScanRequest(IcebergScanPlanContext &context,
+	                                                               const IcebergTableFilters &filters,
+	                                                               const IcebergScanOrder &scan_order) = 0;
+	//! Plans the scan of 'table' with 'request'. Returns false if the server declines to plan it; throws if planning
+	//! fails
+	virtual bool PlanScan(IcebergScanPlanContext &context, IcebergTable &table, IcebergServerScanRequest &request,
+	                      IcebergServerSideScanPlan &result) = 0;
 };
 
 //! How DROP SCHEMA behaves
@@ -130,8 +141,9 @@ public:
 	//===--------------------------------------------------------------------===//
 	// Tables and views
 	//===--------------------------------------------------------------------===//
-	//! The key that identifies a table or view of this catalog in caches and transactions
-	virtual string GetEntryKey(const IcebergNamespace &ns, const string &name) const;
+	//! The key that identifies a table or view of this catalog in caches and transactions. It must be unique per
+	//! entry; each backend picks its own encoding
+	virtual string GetEntryKey(const IcebergNamespace &ns, const string &name) const = 0;
 	//! Lists the tables or views of a namespace. A missing namespace has no entries; a refused listing returns
 	//! FORBIDDEN, and the caller decides whether that is an error
 	virtual IcebergCatalogResult<vector<IcebergListedEntry>>

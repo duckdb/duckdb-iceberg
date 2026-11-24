@@ -1,10 +1,11 @@
 #include "catalog/iceberg_catalog_backend.hpp"
 
-#include "catalog/rest/api/url_utils.hpp"
-
 namespace duckdb {
 
 IcebergCredentialVending::~IcebergCredentialVending() {
+}
+
+IcebergServerScanRequest::~IcebergServerScanRequest() {
 }
 
 IcebergServerScanPlanning::~IcebergServerScanPlanning() {
@@ -18,13 +19,6 @@ IcebergCatalogBackend::~IcebergCatalogBackend() {
 
 IcebergNamespace IcebergCatalogBackend::ParseNamespace(const string &schema_name) const {
 	return IcebergNamespace::Parse(schema_name);
-}
-
-string IcebergCatalogBackend::GetEntryKey(const IcebergNamespace &ns, const string &name) const {
-	if (ns.levels.empty()) {
-		return name;
-	}
-	return IRCPathComponent::NamespaceComponent(ns.levels, "\x1f").encoded + "." + name;
 }
 
 shared_ptr<const IcebergLoadedTable> IcebergCatalogBackend::GetCachedTable(ClientContext &context,

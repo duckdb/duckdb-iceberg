@@ -75,14 +75,14 @@ static unique_ptr<FunctionData> IcebergViewMetadataBind(ClientContext &context, 
 	}
 	auto &view_entry = catalog_entry->Cast<ViewCatalogEntry>();
 	auto &view_catalog = view_entry.ParentCatalog();
-	if (view_catalog.GetCatalogType() != "iceberg") {
+	auto rest = view_catalog.GetCatalogType() == "iceberg"
+	                ? view_catalog.Cast<IcebergCatalog>().GetBackend().TryCast<IcebergRestBackend>()
+	                : nullptr;
+	if (!rest) {
 		throw InvalidInputException("View '%s' is not in an Iceberg REST catalog", input_string);
 	}
 
 	auto &ic_catalog = view_catalog.Cast<IcebergCatalog>();
-	if (!ic_catalog.GetBackend().TryCast<IcebergRestBackend>()) {
-		throw InvalidInputException("View '%s' is not in an Iceberg REST catalog", input_string);
-	}
 	auto &ic_schema = view_entry.schema.Cast<IcebergSchemaEntry>();
 
 	auto ret = make_uniq<IcebergViewMetadataBindData>(ic_catalog, ic_schema, view_entry.name.GetIdentifierName());

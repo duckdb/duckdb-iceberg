@@ -36,6 +36,14 @@ public:
 	}
 
 	//! Returns the pending entry, or nullptr if there is none; throws if it is a conflict for `on_conflict`
+	//! The entry of a pending create, shared; nullptr if 'name' isn't created by the transaction
+	shared_ptr<IcebergSchemaEntry> GetSharedEntry(const string &name) const {
+		auto entry = schemas.find(name);
+		if (entry == schemas.end()) {
+			return nullptr;
+		}
+		return entry->second.entry;
+	}
 	optional_ptr<IcebergSchemaEntry> CheckPending(const string &name, OnCreateConflict on_conflict) const {
 		auto entry = GetEntry(name);
 		if (entry && on_conflict != OnCreateConflict::IGNORE_ON_CONFLICT) {

@@ -27,7 +27,6 @@ IcebergCatalogError::IcebergCatalogError(IcebergCatalogStatus status, ErrorData 
 
 void IcebergCatalogError::Throw() const {
 	error.Throw();
-	throw InternalException("IcebergCatalogError::Throw did not throw");
 }
 
 IcebergLoadedTable::IcebergLoadedTable(IcebergTableAccess access_p) : access(std::move(access_p)) {
