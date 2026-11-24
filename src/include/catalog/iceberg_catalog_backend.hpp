@@ -19,7 +19,7 @@ namespace duckdb {
 class IcebergCommitPlan;
 class IcebergScanOrder;
 struct IcebergTableFilters;
-class SecretEntry;
+struct SecretEntry;
 struct CreateSecretInput;
 struct IcebergScanPlanContext;
 struct IcebergServerSideScanPlan;

@@ -32,7 +32,7 @@
 namespace duckdb {
 
 class ClientContext;
-class IcebergTableMetadata;
+struct IcebergTableMetadata;
 struct IcebergTable;
 
 enum class IcebergEntryKind : uint8_t { TABLE, VIEW };
