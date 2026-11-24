@@ -204,6 +204,16 @@ WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
 statement ok
 ALTER TABLE my_datalake.default.cow_delete_position_deletes SET ('write.delete.mode' = 'copy-on-write');
 
+# Only a scan planned by DuckDB knows that a V2 position delete file belongs to one data file (its file_path
+# bounds): a server-side scan plan carries no bounds or referenced data file for it, so the copy-on-write DELETE
+# keeps the delete file, which is valid. Plan these DELETEs client-side on every catalog.
+
+statement ok
+SET VARIABLE cow_delete_server_side_planning = current_setting('iceberg_use_server_side_scan_planning');
+
+statement ok
+SET iceberg_use_server_side_scan_planning = false;
+
 query I
 DELETE FROM my_datalake.default.cow_delete_position_deletes WHERE id = 2;
 ----
@@ -225,6 +235,9 @@ SELECT count(*) FROM iceberg_metadata(my_datalake.default.cow_delete_position_de
 WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
 ----
 0
+
+statement ok
+SET iceberg_use_server_side_scan_planning = getvariable('cow_delete_server_side_planning');
 
 query II
 SELECT id, v FROM my_datalake.default.cow_delete_position_deletes ORDER BY id;
