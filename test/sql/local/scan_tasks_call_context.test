@@ -1,0 +1,530 @@
+# name: test/sql/local/scan_tasks_call_context.test
+# description: The tasks' shared context given once for the call: metadata and schema_id, and optionally snapshot_id and schema
+# group: [local]
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+copy (select i::integer id, case when i=0 then NULL else i::integer*10 end value,
+             {'key': case when i=1 then NULL else i::integer end} nested, i::integer dropped
+      from range(4) t(i)) to '{TEST_DIR}/ctx_data.parquet'
+(format parquet, field_ids {id:1, value:2, nested:{__duckdb_field_id:3, key:4}, dropped:5});
+
+statement ok
+copy (select i::integer id, i::integer*10 value, {'key':i::integer} nested, i::integer dropped
+      from range(10, 12) t(i)) to '{TEST_DIR}/ctx_second.parquet'
+(format parquet, field_ids {id:1, value:2, nested:{__duckdb_field_id:3, key:4}, dropped:5});
+
+# The rows as iceberg_scan_plan() emits them: each carries the context.
+statement ok
+create temp table tasks as select
+    '{TEST_DIR}/ctx_data.parquet'::varchar file_path,
+    'PARQUET'::varchar file_format,
+    (select size from read_blob('{TEST_DIR}/ctx_data.parquet'))::bigint file_size_in_bytes,
+    4::bigint record_count, NULL::bigint sequence_number, NULL::bigint first_row_id,
+    0::integer partition_spec_id, {'6':'P'::varchar} partition_constants,
+    []::struct(file_path varchar, file_format varchar, content integer, file_size_in_bytes bigint,
+              record_count bigint, equality_ids integer[], referenced_data_file varchar,
+              content_offset bigint, content_size_in_bytes bigint)[] delete_files,
+    NULL::bigint snapshot_id, 1::integer schema_id,
+    '{"format-version": 3, "table-uuid": "00000000-0000-0000-0000-000000000001", "location": "{TEST_DIR}", "last-updated-ms": 0, "last-column-id": 7, "last-sequence-number": 0, "current-schema-id": 1, "schemas": [{"schema-id": 0, "type": "struct", "fields": [{"id": 1, "name": "id", "required": false, "type": "int"}, {"id": 2, "name": "value", "required": false, "type": "int"}, {"id": 3, "name": "nested", "required": false, "type": {"type": "struct", "fields": [{"id": 4, "name": "key", "required": false, "type": "int"}]}}, {"id": 6, "name": "part", "required": false, "type": "string", "initial-default": "fallback"}, {"id": 7, "name": "added", "required": false, "type": "int", "initial-default": 99}, {"id": 5, "name": "dropped", "required": false, "type": "int"}]}, {"schema-id": 1, "type": "struct", "fields": [{"id": 1, "name": "id", "required": false, "type": "int"}, {"id": 2, "name": "value", "required": false, "type": "int"}, {"id": 3, "name": "nested", "required": false, "type": {"type": "struct", "fields": [{"id": 4, "name": "key", "required": false, "type": "int"}]}}, {"id": 6, "name": "part", "required": false, "type": "string", "initial-default": "fallback"}, {"id": 7, "name": "added", "required": false, "type": "int", "initial-default": 99}]}], "partition-specs": [{"spec-id": 0, "fields": [{"name": "part", "transform": "identity", "source-id": 6, "field-id": 1000}]}], "default-spec-id": 0, "sort-orders": [{"order-id": 0, "fields": []}], "default-sort-order-id": 0, "properties": {"schema.name-mapping.default": "[{\"field-id\": 1, \"names\": [\"id\", \"old_id\"]}, {\"field-id\": 2, \"names\": [\"value\"]}, {\"field-id\": 3, \"names\": [\"nested\"], \"fields\": [{\"field-id\": 4, \"names\": [\"key\"]}]}, {\"field-id\": 5, \"names\": [\"dropped\"]}, {\"field-id\": 6, \"names\": [\"part\"]}, {\"field-id\": 7, \"names\": [\"added\"]}]"}}'::json::variant metadata,
+    NULL::struct(id integer, value integer, nested struct(key integer), part varchar, added integer) schema;
+
+statement ok
+create temp table two_tasks as
+select * from tasks
+union all
+select * replace(
+ '{TEST_DIR}/ctx_second.parquet' as file_path,
+ (select size from read_blob('{TEST_DIR}/ctx_second.parquet'))::bigint as file_size_in_bytes,
+ 2::bigint as record_count) from tasks;
+
+# The same rows without the context, and the context once.
+statement ok
+create temp table files as select * exclude (snapshot_id, schema_id, metadata, schema) from tasks;
+
+statement ok
+create temp table two_files as select * exclude (snapshot_id, schema_id, metadata, schema) from two_tasks;
+
+statement ok
+set variable ctx_metadata = (select any_value(metadata::json) from tasks);
+
+statement ok
+set variable ctx_schema = (select any_value(schema) from tasks);
+
+statement ok
+set variable file_list = (select list(t) from files t);
+
+query IIIII
+select id, value, nested.key, part, added from iceberg_scan_tasks(getvariable('file_list'),
+ snapshot_id := NULL, schema_id := 1, metadata := getvariable('ctx_metadata'),
+ "schema" := NULL::struct(id integer, value integer, nested struct(key integer), part varchar, added integer))
+order by id;
+----
+0	NULL	0	P	99
+1	10	NULL	P	99
+2	20	2	P	99
+3	30	3	P	99
+
+# metadata and schema_id are enough: the scan's columns are the schema schema_id selects, and snapshot_id is NULL.
+query IIIII
+select id, value, nested.key, part, added from iceberg_scan_tasks(getvariable('file_list'), schema_id := 1,
+ metadata := getvariable('ctx_metadata'))
+order by id;
+----
+0	NULL	0	P	99
+1	10	NULL	P	99
+2	20	2	P	99
+3	30	3	P	99
+
+query I
+select count(*) from iceberg_scan_tasks(getvariable('file_list'), snapshot_id := NULL, schema_id := 1,
+ metadata := getvariable('ctx_metadata'));
+----
+4
+
+query I
+select count(*) from iceberg_scan_tasks(getvariable('file_list'), schema_id := 1, metadata := getvariable('ctx_metadata'),
+ schema := getvariable('ctx_schema'));
+----
+4
+
+# Argument names are case-insensitive.
+query I
+select count(*) from iceberg_scan_tasks(getvariable('file_list'), SCHEMA_ID := 1, Metadata := getvariable('ctx_metadata'));
+----
+4
+
+# The schema argument, when given, is a value of the scan's STRUCT type: a variable holding a typed NULL serves, as
+# does an unquoted name.
+query IIIII
+select id, value, nested.key, part, added from iceberg_scan_tasks(getvariable('file_list'),
+ snapshot_id := NULL, schema_id := 1, metadata := getvariable('ctx_metadata'), schema := getvariable('ctx_schema'))
+order by id;
+----
+0	NULL	0	P	99
+1	10	NULL	P	99
+2	20	2	P	99
+3	30	3	P	99
+
+# The metadata as JSON, VARIANT or text.
+query III
+select
+ (select count(*) from iceberg_scan_tasks(getvariable('file_list'), snapshot_id := NULL, schema_id := 1,
+   metadata := getvariable('ctx_metadata')::variant, schema := getvariable('ctx_schema'))),
+ (select count(*) from iceberg_scan_tasks(getvariable('file_list'), snapshot_id := NULL, schema_id := 1,
+   metadata := getvariable('ctx_metadata')::varchar, schema := getvariable('ctx_schema'))),
+ (select count(*) from iceberg_scan_tasks(getvariable('file_list'), snapshot_id := NULL, schema_id := 1,
+   metadata := getvariable('ctx_metadata'), schema := getvariable('ctx_schema')));
+----
+4	4	4
+
+# The reader's file virtual columns.
+query III
+select id, filename like '%ctx_data.parquet', file_row_number from iceberg_scan_tasks(getvariable('file_list'),
+ schema_id := 1, metadata := getvariable('ctx_metadata'))
+order by id;
+----
+0	true	0
+1	true	1
+2	true	2
+3	true	3
+
+# schema_id selects the schema the scan reads, here the historical one that still has 'dropped'.
+query II
+select id, dropped from iceberg_scan_tasks(getvariable('file_list'), snapshot_id := NULL, schema_id := 0,
+ metadata := getvariable('ctx_metadata'),
+ schema := NULL::struct(id integer, value integer, nested struct(key integer), part varchar, added integer,
+                        dropped integer))
+order by id;
+----
+0	0
+1	1
+2	2
+3	3
+
+# Both forms give the same rows, with every column and the virtual ones, in either executor.
+statement ok
+set variable two_task_list = (select list(t order by file_path) from two_tasks t);
+
+statement ok
+set variable two_file_list = (select list(t order by file_path) from two_files t);
+
+statement ok
+prepare both_forms as
+select count(*) from (
+ (select *, filename, file_row_number from iceberg_scan_tasks(getvariable('two_task_list'))
+  except all
+  select *, filename, file_row_number from iceberg_scan_tasks(getvariable('two_file_list'), snapshot_id := NULL,
+   schema_id := 1, metadata := getvariable('ctx_metadata'), schema := getvariable('ctx_schema')))
+ union all
+ (select *, filename, file_row_number from iceberg_scan_tasks(getvariable('two_file_list'), snapshot_id := NULL,
+   schema_id := 1, metadata := getvariable('ctx_metadata'), schema := getvariable('ctx_schema'))
+  except all
+  select *, filename, file_row_number from iceberg_scan_tasks(getvariable('two_task_list'))));
+
+query I
+execute both_forms;
+----
+0
+
+statement ok
+set iceberg_enable_multi_file_scan_tasks=false;
+
+query I
+execute both_forms;
+----
+0
+
+statement ok
+set iceberg_enable_multi_file_scan_tasks=true;
+
+# Two files without deletes share one multi-file executor, as with the context in the rows. Each execution of a
+# prepared statement builds its own execution context.
+statement ok
+prepare two_files_scan as
+select id, file_row_number from iceberg_scan_tasks(getvariable('two_file_list'), snapshot_id := NULL, schema_id := 1,
+ metadata := getvariable('ctx_metadata'), schema := getvariable('ctx_schema'))
+order by id;
+
+statement ok
+call enable_logging('Iceberg');
+
+loop i 0 2
+
+statement ok
+call truncate_duckdb_logs();
+
+query II
+execute two_files_scan;
+----
+0	0
+1	1
+2	2
+3	3
+10	0
+11	1
+
+query II
+select count(*) filter (where message='Iceberg scan tasks executor mode=multi_file task_count=2'),
+       count(*) filter (where message.contains('Iceberg scan tasks executor mode=single_file'))
+from duckdb_logs() where type='Iceberg';
+----
+1	0
+
+endloop
+
+# A residual filter common to every row keeps the multi-file executor; distinct ones run one task at a time.
+statement ok
+call truncate_duckdb_logs();
+
+statement ok
+set variable common_filter_list = (select list(t order by file_path) from (
+ select *, 'id >= 1'::varchar row_filter from two_files) t);
+
+query I
+select id from iceberg_scan_tasks(getvariable('common_filter_list'), schema_id := 1,
+ metadata := getvariable('ctx_metadata'))
+order by id;
+----
+1
+2
+3
+10
+11
+
+statement ok
+set variable distinct_filter_list = (select list(t order by file_path) from (
+ select *, case when file_path like '%ctx_data.parquet' then 'id = 0' else 'id = 11' end::varchar row_filter
+ from two_files) t);
+
+query I
+select id from iceberg_scan_tasks(getvariable('distinct_filter_list'), schema_id := 1,
+ metadata := getvariable('ctx_metadata'))
+order by id;
+----
+0
+11
+
+query II
+select count(*) filter (where message='Iceberg scan tasks executor mode=multi_file task_count=2'),
+       count(*) filter (where message='Iceberg scan tasks executor mode=single_file task_count=1')
+from duckdb_logs() where type='Iceberg';
+----
+1	2
+
+statement ok
+call disable_logging();
+
+# A file without field IDs reads its columns by the metadata's name mapping.
+statement ok
+copy (select 5::integer old_id) to '{TEST_DIR}/ctx_names.parquet' (format parquet);
+
+statement ok
+set variable names_list = (select list(t) from (select * replace('{TEST_DIR}/ctx_names.parquet' as file_path,
+ (select size from read_blob('{TEST_DIR}/ctx_names.parquet'))::bigint as file_size_in_bytes,
+ 1::bigint as record_count) from files) t);
+
+query II
+select id, added from iceberg_scan_tasks(getvariable('names_list'), schema_id := 1,
+ metadata := getvariable('ctx_metadata'));
+----
+5	99
+
+# Deletes: position and equality deletes, on the one-task-at-a-time path, with several threads sharing the delete
+# loads of one execution context.
+statement ok
+create macro delete_descriptor(path, kind, ids, rows) as
+ {'file_path':path::varchar, 'file_format':'PARQUET'::varchar, 'content':kind::integer,
+  'file_size_in_bytes':(select size::bigint from read_blob(path)), 'record_count':rows::bigint,
+  'equality_ids':ids::integer[], 'referenced_data_file':NULL::varchar,
+  'content_offset':NULL::bigint, 'content_size_in_bytes':NULL::bigint};
+
+statement ok
+copy (select '{TEST_DIR}/ctx_data.parquet'::varchar file_path, 0::bigint pos)
+to '{TEST_DIR}/ctx_pos.parquet' (format parquet, field_ids {file_path:2147483546, pos:2147483545});
+
+statement ok
+copy (select 2::integer key) to '{TEST_DIR}/ctx_eq.parquet' (format parquet, field_ids {key:4});
+
+statement ok
+create temp table delete_files as
+select * replace([delete_descriptor('{TEST_DIR}/ctx_pos.parquet', 1, [], 1)] as delete_files) from files
+union all
+select * replace([delete_descriptor('{TEST_DIR}/ctx_eq.parquet', 2, [4], 1)] as delete_files) from files
+union all
+select * from files;
+
+statement ok
+set variable delete_list = (select list(t) from (select f.* from range(300), delete_files f) t);
+
+statement ok
+call enable_logging('Iceberg');
+
+statement ok
+call truncate_duckdb_logs();
+
+loop threads 1 5
+
+statement ok
+set threads={threads};
+
+# Per copy of the three tasks: ids 1, 2, 3 survive the position delete, 0, 1, 3 the equality delete, all four the
+# third task.
+query II
+select count(*), sum(id) from iceberg_scan_tasks(getvariable('delete_list'), snapshot_id := NULL, schema_id := 1,
+ metadata := getvariable('ctx_metadata'), schema := getvariable('ctx_schema'));
+----
+3000	4800
+
+endloop
+
+query I
+select count(*) filter (where message.contains('Iceberg scan tasks executor mode=multi_file'))
+from duckdb_logs() where type='Iceberg';
+----
+0
+
+statement ok
+call disable_logging();
+
+statement ok
+reset threads;
+
+# Every argument may be a prepared statement's parameter.
+statement ok
+prepare by_parameters as select count(*), sum(id) from iceberg_scan_tasks($1, snapshot_id := $2, schema_id := $3,
+ metadata := $4, schema := $5);
+
+query II
+execute by_parameters(getvariable('file_list'), NULL::bigint, 1, getvariable('ctx_metadata'), getvariable('ctx_schema'));
+----
+4	6
+
+# A scan that stops early releases its tasks.
+query I
+select count(*) from (select id from iceberg_scan_tasks(getvariable('two_file_list'), schema_id := 1,
+ metadata := getvariable('ctx_metadata')) limit 1);
+----
+1
+
+# The columns are spelled as the document spells them: a schema argument that passes the check in another case
+# does not rename them.
+query II
+select column_name, column_type from (describe select * from iceberg_scan_tasks(getvariable('file_list'),
+ schema_id := 1, metadata := getvariable('ctx_metadata'),
+ schema := NULL::struct("ID" integer, "VALUE" integer, nested struct("KEY" integer), part varchar, added integer)));
+----
+id	INTEGER
+value	INTEGER
+nested	STRUCT("key" INTEGER)
+part	VARCHAR
+added	INTEGER
+
+# A table whose column names differ only in case: the scan's columns are DuckDB's names for them, which a caller
+# that leaves out the schema argument need not spell.
+statement ok
+copy (select 1::integer x, 2::integer y) to '{TEST_DIR}/ctx_case.parquet' (format parquet, field_ids {x:1, y:2});
+
+statement ok
+set variable case_metadata = '{"format-version": 2, "table-uuid": "00000000-0000-0000-0000-000000000002", "location": "{TEST_DIR}", "last-updated-ms": 0, "last-column-id": 2, "last-sequence-number": 0, "current-schema-id": 0, "schemas": [{"schema-id": 0, "type": "struct", "fields": [{"id": 1, "name": "a", "required": false, "type": "int"}, {"id": 2, "name": "A", "required": false, "type": "int"}]}], "partition-specs": [{"spec-id": 0, "fields": []}], "default-spec-id": 0, "sort-orders": [{"order-id": 0, "fields": []}], "default-sort-order-id": 0}'::json;
+
+statement ok
+set variable case_list = (select list(t) from (select * replace('{TEST_DIR}/ctx_case.parquet' as file_path,
+ (select size from read_blob('{TEST_DIR}/ctx_case.parquet'))::bigint as file_size_in_bytes, 1::bigint as record_count,
+ {} as partition_constants) from files) t);
+
+query II
+select column_name, column_type from (describe select * from iceberg_scan_tasks(getvariable('case_list'),
+ schema_id := 0, metadata := getvariable('case_metadata')));
+----
+a	INTEGER
+A_1	INTEGER
+
+query II
+select * from iceberg_scan_tasks(getvariable('case_list'), schema_id := 0, metadata := getvariable('case_metadata'));
+----
+1	2
+
+# An empty list keeps the scan's columns and gives no rows.
+query I
+select count(*) from iceberg_scan_tasks(list_slice(getvariable('file_list'), 1, 0), snapshot_id := NULL,
+ schema_id := 1, metadata := getvariable('ctx_metadata'), schema := getvariable('ctx_schema'));
+----
+0
+
+query II
+select column_name, column_type from (describe select * from iceberg_scan_tasks(list_slice(getvariable('file_list'), 1, 0),
+ snapshot_id := NULL, schema_id := 1, metadata := getvariable('ctx_metadata'), schema := getvariable('ctx_schema')));
+----
+id	INTEGER
+value	INTEGER
+nested	STRUCT("key" INTEGER)
+part	VARCHAR
+added	INTEGER
+
+# A caller can tell whether the function takes the context once, before it spells a call.
+query I
+select list_contains(parameters, 'metadata') from duckdb_functions() where function_name = 'iceberg_scan_tasks';
+----
+true
+
+# metadata and schema_id come together, and snapshot_id and schema only with them.
+statement error
+select * from iceberg_scan_tasks(getvariable('file_list'), schema_id := 1);
+----
+takes metadata and schema_id together, and snapshot_id and schema only with them
+
+statement error
+select * from iceberg_scan_tasks(getvariable('file_list'), metadata := getvariable('ctx_metadata'));
+----
+takes metadata and schema_id together, and snapshot_id and schema only with them
+
+statement error
+select * from iceberg_scan_tasks(getvariable('file_list'), snapshot_id := NULL);
+----
+takes metadata and schema_id together, and snapshot_id and schema only with them
+
+statement error
+select * from iceberg_scan_tasks(getvariable('file_list'), schema := getvariable('ctx_schema'));
+----
+takes metadata and schema_id together, and snapshot_id and schema only with them
+
+# The context comes in the rows or in the call, not both.
+statement ok
+set variable task_list = (select list(t) from tasks t);
+
+statement error
+select * from iceberg_scan_tasks(getvariable('task_list'), schema_id := 1, metadata := getvariable('ctx_metadata'));
+----
+input column 'snapshot_id' is part of the context the call gives as arguments
+
+# Even one context field in the rows, in another case.
+statement ok
+set variable one_field = (select list(t) from (select f.*, 1::integer "SCHEMA_ID" from files f) t);
+
+statement error
+select * from iceberg_scan_tasks(getvariable('one_field'), schema_id := 1, metadata := getvariable('ctx_metadata'));
+----
+input column 'schema_id' is part of the context the call gives as arguments
+
+# Without the arguments, the rows must carry it.
+statement error
+select * from iceberg_scan_tasks(getvariable('file_list'));
+----
+missing required input column 'snapshot_id' (or leave the context out of the rows and pass metadata and schema_id as arguments)
+
+statement ok
+set variable null_task = (select [case when true then NULL else t end] from files t);
+
+statement error
+select * from iceberg_scan_tasks(getvariable('null_task'), schema_id := 1, metadata := getvariable('ctx_metadata'));
+----
+non-NULL task structs
+
+statement error
+select * from iceberg_scan_tasks(getvariable('file_list'), snapshot_id := NULL, schema_id := 1, metadata := NULL,
+ schema := getvariable('ctx_schema'));
+----
+metadata and schema_id cannot be NULL
+
+statement error
+select * from iceberg_scan_tasks(getvariable('file_list'), snapshot_id := NULL, schema_id := NULL,
+ metadata := getvariable('ctx_metadata'), schema := getvariable('ctx_schema'));
+----
+metadata and schema_id cannot be NULL
+
+statement error
+select * from iceberg_scan_tasks(getvariable('file_list'), snapshot_id := NULL, schema_id := 1,
+ metadata := getvariable('ctx_metadata'), schema := 42);
+----
+argument 'schema' has unexpected type INTEGER
+
+statement error
+select * from iceberg_scan_tasks(getvariable('file_list'), snapshot_id := NULL, schema_id := 1,
+ metadata := getvariable('ctx_metadata'), schema := NULL::struct(wrong integer));
+----
+schema argument does not match the selected metadata schema
+
+statement error
+select * from iceberg_scan_tasks(getvariable('file_list'), schema_id := 1,
+ metadata := json_transform(getvariable('ctx_metadata'), json_structure(getvariable('ctx_metadata'))));
+----
+argument 'metadata' has unexpected type STRUCT
+
+statement error
+select * from iceberg_scan_tasks(getvariable('file_list'), snapshot_id := 42, schema_id := 1,
+ metadata := getvariable('ctx_metadata'));
+----
+snapshot_id 42 is absent from the metadata
+
+statement error
+select * from iceberg_scan_tasks(getvariable('file_list'), snapshot_id := NULL, schema_id := 1,
+ metadata := '{not json', schema := getvariable('ctx_schema'));
+----
+Malformed JSON
+
+statement error
+select * from iceberg_scan_tasks(getvariable('file_list'), snapshot_id := NULL, schema_id := 1, metadata := '{}',
+ schema := getvariable('ctx_schema'));
+----
+required property 'format-version' is missing
+
+# The context is checked at bind, so even an empty list refuses a schema_id the metadata does not have.
+statement error
+select * from iceberg_scan_tasks(list_slice(getvariable('file_list'), 1, 0), snapshot_id := NULL, schema_id := 7,
+ metadata := getvariable('ctx_metadata'), schema := getvariable('ctx_schema'));
+----
+schema_id is absent from the metadata
+
+# The rows' own fields are still checked.
+statement ok
+set variable bad_file_list = (select list(t) from (select * exclude (file_path) from files) t);
+
+statement error
+select * from iceberg_scan_tasks(getvariable('bad_file_list'), snapshot_id := NULL, schema_id := 1,
+ metadata := getvariable('ctx_metadata'), schema := getvariable('ctx_schema'));
+----
+missing required input column 'file_path'

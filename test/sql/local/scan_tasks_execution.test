@@ -704,6 +704,15 @@ select * from iceberg_scan_tasks(getvariable('scan_task_list_25'));
 ----
 partition constant 999 does not match
 
+# A snapshot_id the metadata lacks is named in the error.
+statement ok
+set variable scan_task_list_missing_snapshot = (select list(task) from (select * replace(42::bigint as snapshot_id) from tasks) task);
+
+statement error
+select * from iceberg_scan_tasks(getvariable('scan_task_list_missing_snapshot'));
+----
+iceberg_scan_tasks snapshot_id 42 is absent from the metadata
+
 
 # A source can parallelize a single task independently of task-input cardinality.
 statement ok
