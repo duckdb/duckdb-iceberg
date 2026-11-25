@@ -3,6 +3,7 @@
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/common/numeric_utils.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
+#include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/execution/column_binding_resolver.hpp"
 #include "duckdb/execution/operator/join/physical_join.hpp"
@@ -60,6 +61,8 @@ protected:
 		IcebergFileRewriteInput result(state.added_data_files ? IcebergSnapshotOperationType::OVERWRITE
 		                                                      : IcebergSnapshotOperationType::DELETE);
 		auto &rows_by_file = delete_filter.GetDeletes().rows_by_file;
+		//! The DELETE binder takes filename and file_row_number from the target scan. If the optimizer
+		//! eliminated that scan, the sink cannot have received a matching row.
 		if (!rows_by_file.empty() && !delete_filter.match_file_list) {
 			throw InternalException("Copy-on-write DELETE: matched rows without an Iceberg scan of the matching rows");
 		}
@@ -284,6 +287,8 @@ PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanRewrite(ClientContext &con
 	                   .Cast<IcebergCopyOnWriteDeleteFilter>();
 	filter.keep_logical_plan = std::move(keep_logical_plan);
 	filter.update_expressions = std::move(update_expressions);
+	auto &transaction_data = table.table_info.transaction_data;
+	filter.require_assigned_lineage = transaction_data && transaction_data->has_pending_v3_snapshot;
 	//! The optimizer can remove the scan when no rows match.
 	auto match_scan = IcebergDelete::FindIcebergScan(match_plan);
 	if (match_scan) {
@@ -489,6 +494,14 @@ OperatorResultType IcebergCopyOnWriteDeleteFilter::Execute(ExecutionContext &con
 		chunk.data[col].Slice(input.data[col], state.keep, kept);
 	}
 	chunk.SetChildCardinality(kept);
+	//! A NULL written here would inherit from the replacement file, changing the identity or last update
+	//! of an unchanged row between the two snapshots published at commit.
+	if (require_assigned_lineage && kept &&
+	    (VectorOperations::HasNull(chunk.data[column_count - 2]) ||
+	     VectorOperations::HasNull(chunk.data[column_count - 1]))) {
+		throw InvalidInputException("Copy-on-write DELETE cannot preserve uncommitted row lineage. "
+		                            "Commit the earlier changes to this table before running the DELETE.");
+	}
 	return OperatorResultType::NEED_MORE_INPUT;
 }
 

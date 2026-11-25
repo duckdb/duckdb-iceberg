@@ -104,6 +104,8 @@ public:
 	string GetName() const override;
 
 private:
+	//! An earlier V3 snapshot in this transaction will assign any lineage that still reads NULL.
+	bool require_assigned_lineage = false;
 	//! Plans the rewrite of the files `match_plan` matches; `update_expressions` is empty for a DELETE
 	static PhysicalOperator &PlanRewrite(ClientContext &context, PhysicalPlanGenerator &planner,
 	                                     IcebergTableSchemaVersion &table, PhysicalOperator &match_plan,
