@@ -1,0 +1,66 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/partitions/combined/test_pending_partition_filters.test
+# description: Read and delete files staged in the same transaction using typed partition filters
+# group: [combined]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SCAN_PLANNING_MODE client
+
+include test/sql/init_requires
+
+statement ok
+set iceberg_use_server_side_scan_planning=false;
+
+statement ok
+drop table if exists my_datalake.default.pending_partition_filters;
+
+statement ok
+create table my_datalake.default.pending_partition_filters (id INTEGER, i INTEGER, ts TIMESTAMP)
+partitioned by (i, day(ts)) with ('format-version'=2);
+
+statement ok
+begin;
+
+statement ok
+insert into my_datalake.default.pending_partition_filters values
+    (1, 9, '1970-01-10 00:00:00'), (2, 10, '1970-01-11 00:00:00'),
+    (3, 100, '1970-04-11 00:00:00'), (4, -5, '1969-12-31 00:00:00');
+
+query I
+select id from my_datalake.default.pending_partition_filters where i > 9 order by id;
+----
+2
+3
+
+query I
+select id from my_datalake.default.pending_partition_filters where i < 10 order by id;
+----
+1
+4
+
+query I
+select id from my_datalake.default.pending_partition_filters
+where ts > TIMESTAMP '1970-01-10 12:00:00' order by id;
+----
+2
+3
+
+query I
+select count(*) from iceberg_scan_plan('my_datalake.default.pending_partition_filters', row_filter := 'i > 9');
+----
+2
+
+statement ok
+delete from my_datalake.default.pending_partition_filters where i > 9;
+
+statement ok
+commit;
+
+query I
+select id from my_datalake.default.pending_partition_filters order by id;
+----
+1
+4
+
+statement ok
+drop table my_datalake.default.pending_partition_filters;

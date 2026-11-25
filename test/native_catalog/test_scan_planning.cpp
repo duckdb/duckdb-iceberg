@@ -2048,6 +2048,15 @@ TEST_CASE("Iceberg strict floating file bounds account for NaNs and missing metr
 		file.record_count = 2;
 		file.value_counts[field_id] = 2;
 		file.null_value_counts[field_id] = 0;
+		IcebergTableFilters not_null_filters;
+		not_null_filters.PushFilter(
+		    ColumnIndex(0),
+		    make_uniq<ExpressionFilter>(ExpressionFilter::CreateNullCheckExpression(
+		        make_uniq<BoundReferenceExpression>(type, 0ULL), ExpressionType::OPERATOR_IS_NOT_NULL)));
+		IcebergFilePruner not_null_pruner(*test.connection.context, metadata, schema, not_null_filters);
+		CHECK(not_null_pruner.FileMatchesFilter(manifest, entry) == Match::ROWS_MIGHT_MATCH);
+		CHECK(not_null_pruner.FileMatchesFilter(manifest, entry, true) == Match::ROWS_MUST_MATCH);
+
 		auto zero = Value(0).DefaultCastAs(type);
 		auto one = Value(1).DefaultCastAs(type);
 		auto two = Value(2).DefaultCastAs(type);
