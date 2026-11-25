@@ -281,7 +281,10 @@ IcebergMetricsMatch IcebergFilePruner::FileMatchesFilter(const IcebergManifest &
 			// A missing bbox is unknown, but the null counts can still prove that no geometry matches.
 			stats.geometry_stats = make_shared_ptr<BaseStatistics>(GeometryStats::CreateUnknown(column.type));
 		}
-		ApplyNullCounts(data_file, column_id, stats, parents);
+		// The VARIANT column's null count cannot tell us whether an extracted path is missing or null.
+		if (column.type.id() != LogicalTypeId::VARIANT || !column_index.HasChildren()) {
+			ApplyNullCounts(data_file, column_id, stats, parents);
+		}
 
 		auto nan_counts_it = data_file.nan_value_counts.find(column_id);
 		if (nan_counts_it != data_file.nan_value_counts.end()) {
