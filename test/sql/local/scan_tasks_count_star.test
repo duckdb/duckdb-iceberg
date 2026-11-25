@@ -6,25 +6,11 @@ include test/sql/init_requires
 
 require json
 
+# The v2 metadata file plans one data file with ids 1 through 4.
+# Stored plans can reorder fields and omit the optional row_filter.
 statement ok
-copy (select i::integer id, case when i=0 then NULL else i::integer*10 end value,
-             {'key': case when i=1 then NULL else i::integer end} nested, i::integer dropped
-      from range(4) t(i)) to '{TEST_DIR}/count_star_data.parquet'
-(format parquet, field_ids {id:1, value:2, nested:{__duckdb_field_id:3, key:4}, dropped:5});
-
-statement ok
-create temp table tasks as select
-    '{TEST_DIR}/count_star_data.parquet'::varchar file_path,
-    'PARQUET'::varchar file_format,
-    (select size from read_blob('{TEST_DIR}/count_star_data.parquet'))::bigint file_size_in_bytes,
-    4::bigint record_count, NULL::bigint sequence_number, NULL::bigint first_row_id,
-    0::integer partition_spec_id, {'6':'P'::varchar} partition_constants,
-    []::struct(file_path varchar, file_format varchar, content integer, file_size_in_bytes bigint,
-              record_count bigint, equality_ids integer[], referenced_data_file varchar,
-              content_offset bigint, content_size_in_bytes bigint)[] delete_files,
-    NULL::bigint snapshot_id, 1::integer schema_id,
-    '{"format-version": 3, "table-uuid": "00000000-0000-0000-0000-000000000001", "location": "{TEST_DIR}", "last-updated-ms": 0, "last-column-id": 7, "last-sequence-number": 0, "current-schema-id": 1, "schemas": [{"schema-id": 0, "type": "struct", "fields": [{"id": 1, "name": "id", "required": false, "type": "int"}, {"id": 2, "name": "value", "required": false, "type": "int"}, {"id": 3, "name": "nested", "required": false, "type": {"type": "struct", "fields": [{"id": 4, "name": "key", "required": false, "type": "int"}]}}, {"id": 6, "name": "part", "required": false, "type": "string", "initial-default": "fallback"}, {"id": 7, "name": "added", "required": false, "type": "int", "initial-default": 99}, {"id": 5, "name": "dropped", "required": false, "type": "int"}]}, {"schema-id": 1, "type": "struct", "fields": [{"id": 1, "name": "id", "required": false, "type": "int"}, {"id": 2, "name": "value", "required": false, "type": "int"}, {"id": 3, "name": "nested", "required": false, "type": {"type": "struct", "fields": [{"id": 4, "name": "key", "required": false, "type": "int"}]}}, {"id": 6, "name": "part", "required": false, "type": "string", "initial-default": "fallback"}, {"id": 7, "name": "added", "required": false, "type": "int", "initial-default": 99}]}], "partition-specs": [{"spec-id": 0, "fields": [{"name": "part", "transform": "identity", "source-id": 6, "field-id": 1000}]}], "default-spec-id": 0, "sort-orders": [{"order-id": 0, "fields": []}], "default-sort-order-id": 0, "properties": {"schema.name-mapping.default": "[{\"field-id\": 1, \"names\": [\"id\", \"old_id\"]}, {\"field-id\": 2, \"names\": [\"value\"]}, {\"field-id\": 3, \"names\": [\"nested\"], \"fields\": [{\"field-id\": 4, \"names\": [\"key\"]}]}, {\"field-id\": 5, \"names\": [\"dropped\"]}, {\"field-id\": 6, \"names\": [\"part\"]}, {\"field-id\": 7, \"names\": [\"added\"]}]"}}'::json::variant metadata,
-    NULL::struct(id integer, value integer, nested struct(key integer), part varchar, added integer) schema;
+create temp table tasks as select record_count, * exclude (record_count, row_filter)
+from iceberg_scan_plan('data/persistent/equality_deletes/warehouse/mydb/mytable', version='2');
 
 # A task whose data file does not exist and says it holds 7 rows: COUNT(*) is the task's record count, so no file is opened.
 statement ok
@@ -38,6 +24,23 @@ query I
 select count(*) from iceberg_scan_tasks(getvariable('missing_file_task_list'));
 ----
 7
+
+# The reader accepts mixed-case Parquet names. These tasks still qualify for a metadata-only count.
+statement ok
+set variable mixed_case_format = (select [struct_update(t, file_format := 'ParQuEt')] from missing_file_tasks t);
+
+query I
+select count(*) from iceberg_scan_tasks(getvariable('mixed_case_format'));
+----
+7
+
+statement ok
+set variable null_format = (select [t, struct_update(t, file_format := NULL::varchar)] from tasks t);
+
+statement error
+select count(*) from iceberg_scan_tasks(getvariable('null_format'));
+----
+input column 'file_format' cannot be NULL
 
 # Any column the query reads needs the file.
 statement error
@@ -56,19 +59,31 @@ select count(*) from iceberg_scan_tasks(getvariable('two_missing_file_task_list'
 
 # A row filter on a task can drop rows, so its record count is not the number of rows it returns: the file is read.
 statement ok
-set variable filtered_task_list = (select list(t) from (select * replace(7::bigint as record_count), 'id >= 2' row_filter from tasks) t);
+set variable filtered_task_list = (select list(t) from (select * replace(7::bigint as record_count), 'id > 2' row_filter from tasks) t);
 
 query I
 select count(*) from iceberg_scan_tasks(getvariable('filtered_task_list'));
 ----
 2
 
+# The unfiltered copy claims 7 rows. A predicate on the second copy makes both read the file, yielding 4 + 2.
+statement ok
+set variable mixed_filters = (select [
+    struct_update(t, record_count := 7::bigint, row_filter := NULL::varchar),
+    struct_update(t, row_filter := 'id > 2')
+] from tasks t);
+
+query I
+select count(*) from iceberg_scan_tasks(getvariable('mixed_filters'));
+----
+6
+
 # A filter in the query is applied to the rows of the file as well.
 statement ok
 set variable count_task_list = (select list(t) from tasks t);
 
 query I
-select count(*) from iceberg_scan_tasks(getvariable('count_task_list')) where id > 1;
+select count(*) from iceberg_scan_tasks(getvariable('count_task_list')) where id > 2;
 ----
 2
 
@@ -77,26 +92,19 @@ select count(*) from iceberg_scan_tasks(getvariable('count_task_list'));
 ----
 4
 
-# A task with a delete file is read: the deleted row is not counted, although the task says it holds 4.
+# Counting a supported file can skip metadata decoding. Reading a column still requires its metadata.
 statement ok
-create macro delete_descriptor(path, kind, ids, rows) as
- {'file_path':path::varchar, 'file_format':'PARQUET'::varchar, 'content':kind::integer,
-  'file_size_in_bytes':(select size::bigint from read_blob(path)), 'record_count':rows::bigint,
-  'equality_ids':ids::integer[], 'referenced_data_file':NULL::varchar,
-  'content_offset':NULL::bigint, 'content_size_in_bytes':NULL::bigint};
-
-statement ok
-copy (select '{TEST_DIR}/count_star_data.parquet'::varchar file_path, 0::bigint pos)
-to '{TEST_DIR}/count_star_pos_delete.parquet' (format parquet, field_ids {file_path:2147483546, pos:2147483545});
-
-statement ok
-set variable delete_task_list = (select list(t) from (select * replace([
- delete_descriptor('{TEST_DIR}/count_star_pos_delete.parquet', 1, [], 1)] as delete_files) from tasks) t);
+set variable missing_metadata = (select [struct_update(t, metadata := NULL::variant)] from tasks t);
 
 query I
-select count(*) from iceberg_scan_tasks(getvariable('delete_task_list'));
+select count(*) from iceberg_scan_tasks(getvariable('missing_metadata'));
 ----
-3
+4
+
+statement error
+select count(id) from iceberg_scan_tasks(getvariable('missing_metadata'));
+----
+metadata and schema_id cannot be NULL
 
 # Counting a column or its distinct values is not COUNT(*): it needs the file.
 statement error
@@ -118,6 +126,22 @@ select count(*) from iceberg_scan_tasks(getvariable('null_count_task_list'));
 ----
 <REGEX>:.*record_count.*cannot be NULL.*
 
+# A valid first task cannot hide a malformed second task.
+statement error
+select count(*) from iceberg_scan_tasks(list_append(getvariable('count_task_list'), NULL));
+----
+non-NULL task structs
+
+statement ok
+set variable null_deletes = (select [
+    t, struct_update(t, delete_files := cast_to_type(NULL, t.delete_files))
+] from tasks t);
+
+statement error
+select count(*) from iceberg_scan_tasks(getvariable('null_deletes'));
+----
+input column 'delete_files' cannot be NULL
+
 # A negative record count is an error, as it is when the task is scanned.
 statement ok
 set variable negative_count_task_list = (select list(t) from (select * replace(-1::bigint as record_count) from missing_file_tasks) t);
@@ -127,26 +151,38 @@ select count(*) from iceberg_scan_tasks(getvariable('negative_count_task_list'))
 ----
 <REGEX>:.*negative.*
 
-# Counts that add up to more than a BIGINT hold are not summed: the files are read.
+# The largest representable total can still be answered with every data file missing.
 statement ok
-set variable huge_count_task_list = (select list(t) from (
- select * replace(9223372036854775807::bigint as record_count) from missing_file_tasks
- union all select * replace(9223372036854775807::bigint as record_count) from missing_file_tasks
- union all select * replace(9223372036854775807::bigint as record_count) from missing_file_tasks) t);
+set variable max_count_tasks = (select [
+    struct_update(t, record_count := 9223372036854775806::bigint),
+    struct_update(t, record_count := 1::bigint),
+    struct_update(t, record_count := 0::bigint)
+] from missing_file_tasks t);
+
+query I
+select count(*) from iceberg_scan_tasks(getvariable('max_count_tasks'));
+----
+9223372036854775807
+
+# One row beyond that limit forces a scan of both copies of the four-row file.
+statement ok
+set variable overflow_tasks = (select [
+    struct_update(t, record_count := 9223372036854775807::bigint),
+    struct_update(t, record_count := 1::bigint)
+] from tasks t);
+
+query I
+select count(*) from iceberg_scan_tasks(getvariable('overflow_tasks'));
+----
+8
+
+# Three BIGINT maxima would wrap back into the signed range if summed in an unsigned integer.
+statement ok
+set variable huge_count_task_list = (select list(struct_update(t, record_count := 9223372036854775807::bigint))
+ from missing_file_tasks t, range(3));
 
 statement error
 select count(*) from iceberg_scan_tasks(getvariable('huge_count_task_list'));
-----
-<REGEX>:.*no_such_file.*
-
-# One task that needs its file puts the whole list on the scan path: the clean task is read too, not taken from its record count.
-statement ok
-set variable mixed_task_list = (select list(t) from (
- select * replace(7::bigint as record_count) from missing_file_tasks
- union all select * replace([delete_descriptor('{TEST_DIR}/count_star_pos_delete.parquet', 1, [], 1)] as delete_files) from tasks) t);
-
-statement error
-select count(*) from iceberg_scan_tasks(getvariable('mixed_task_list'));
 ----
 <REGEX>:.*no_such_file.*
 

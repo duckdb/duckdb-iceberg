@@ -9,6 +9,7 @@
 #include "function/scan_planning/iceberg_scan_task_codec.hpp"
 #include "execution/scan/iceberg_task_executor.hpp"
 #include "function/scan_planning/iceberg_row_filter.hpp"
+#include "planning/iceberg_multi_file_reader.hpp"
 
 namespace duckdb {
 
@@ -246,8 +247,8 @@ static void IcebergScanTasksFunction(ClientContext &context, TableFunctionInput 
 	}
 }
 
-//! The rows of tasks that need no data file to be counted: each states its record count (taken from the manifest and
-//! trusted as is), has no delete file to subtract from it and no row filter to narrow it.
+//! For supported data files without deletes or row filters, trust the manifest record counts.
+//! Only a scan decodes the metadata to validate schema IDs and partition constants.
 static vector<PartitionStatistics> IcebergScanTasksGetPartitionStats(ClientContext &context,
                                                                      GetPartitionStatsInput &input) {
 	auto &bind = input.bind_data->Cast<IcebergScanTasksBindData>();
@@ -262,6 +263,10 @@ static vector<PartitionStatistics> IcebergScanTasksGetPartitionStats(ClientConte
 	int64_t total = 0;
 	for (auto &descriptor : tasks) {
 		context.InterruptCheck();
+		auto format = TaskCodec::ReadValue(descriptor, bind.layout, TaskCodec::FILE_FORMAT, true);
+		if (format.IsNull() || !IcebergMultiFileReader::SupportsDataFileFormat(StringValue::Get(format))) {
+			return {};
+		}
 		auto record_count = TaskCodec::ReadValue(descriptor, bind.layout, TaskCodec::RECORD_COUNT, true);
 		if (record_count.IsNull() || BigIntValue::Get(record_count) < 0) {
 			return {};
