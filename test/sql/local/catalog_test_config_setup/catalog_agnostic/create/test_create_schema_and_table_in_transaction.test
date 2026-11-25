@@ -1,0 +1,94 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_schema_and_table_in_transaction.test
+# description: Test a schema created in the same transaction as one of its tables is visible after commit
+# group: [create]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require avro
+
+require parquet
+
+require iceberg
+
+require httpfs
+
+# Do not ignore 'HTTP' error messages!
+set ignore_error_messages
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.schema_with_ctas.my_table;
+
+statement ok
+DROP SCHEMA IF EXISTS my_datalake.schema_with_ctas;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.schema_with_table.my_table;
+
+statement ok
+DROP SCHEMA IF EXISTS my_datalake.schema_with_table;
+
+# CREATE SCHEMA and CTAS in one transaction
+statement ok con1
+begin
+
+statement ok con1
+CREATE SCHEMA my_datalake.schema_with_ctas;
+
+statement ok con1
+CREATE TABLE my_datalake.schema_with_ctas.my_table AS SELECT range id FROM range(3);
+
+statement ok con1
+commit
+
+query I con1
+SELECT count(*) FROM my_datalake.schema_with_ctas.my_table;
+----
+3
+
+query I con2
+SELECT count(*) FROM my_datalake.schema_with_ctas.my_table;
+----
+3
+
+query I con2
+SELECT count(*) FROM information_schema.schemata WHERE catalog_name = 'my_datalake' AND schema_name = 'schema_with_ctas';
+----
+1
+
+# CREATE SCHEMA IF NOT EXISTS and CREATE TABLE + INSERT in one transaction
+statement ok con1
+begin
+
+statement ok con1
+CREATE SCHEMA IF NOT EXISTS my_datalake.schema_with_table;
+
+statement ok con1
+CREATE TABLE my_datalake.schema_with_table.my_table (id INTEGER);
+
+statement ok con1
+INSERT INTO my_datalake.schema_with_table.my_table VALUES (1), (2);
+
+statement ok con1
+commit
+
+query I con1
+SELECT count(*) FROM my_datalake.schema_with_table.my_table;
+----
+2
+
+query I con2
+SELECT count(*) FROM my_datalake.schema_with_table.my_table;
+----
+2
+
+statement ok
+DROP TABLE my_datalake.schema_with_ctas.my_table;
+
+statement ok
+DROP SCHEMA my_datalake.schema_with_ctas;
+
+statement ok
+DROP TABLE my_datalake.schema_with_table.my_table;
+
+statement ok
+DROP SCHEMA my_datalake.schema_with_table;
