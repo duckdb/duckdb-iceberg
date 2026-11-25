@@ -352,7 +352,7 @@ set variable scan_task_list_2 = (select list(task) from (select * replace('{TEST
  0::bigint as record_count) from tasks union all select * from tasks) task);
 
 query I
-select count(*) from iceberg_scan_tasks(getvariable('scan_task_list_2'));
+select count(id) from iceberg_scan_tasks(getvariable('scan_task_list_2'));
 ----
 4
 
@@ -369,7 +369,7 @@ statement ok
 set variable scan_task_list_4 = (select list(task) from (select * from tasks) task);
 
 query I
-select count(*) from iceberg_scan_tasks(getvariable('scan_task_list_4'));
+select count(id) from iceberg_scan_tasks(getvariable('scan_task_list_4'));
 ----
 4
 
@@ -905,10 +905,17 @@ select id from iceberg_scan_tasks(getvariable('projection_tasks'));
 ----
 42
 
+# COUNT(*) is otherwise answered from the tasks' record counts, so statistics propagation is off to make the scan run.
+statement ok
+set disabled_optimizers = 'statistics_propagation';
+
 query I
 select count(*) from iceberg_scan_tasks(getvariable('projection_tasks'));
 ----
 1
+
+statement ok
+reset disabled_optimizers;
 
 statement error
 select value from iceberg_scan_tasks(getvariable('projection_tasks'));
@@ -991,8 +998,12 @@ select count(*) from projection_chunk_reads() where reads > 0;
 statement ok
 call disable_logging();
 
-# A scan that needs no column reads neither range, with one task and with two.
+# A scan that needs no column reads neither range, with one task and with two. COUNT(*) is otherwise answered from the
+# tasks' record counts, so statistics propagation is off to make the scan run.
 foreach task_copies 1 2
+
+statement ok
+set disabled_optimizers = 'statistics_propagation';
 
 statement ok
 set variable column_less_tasks =
@@ -1054,6 +1065,9 @@ select count(*) from duckdb_logs() where type='Iceberg' and message =
 
 statement ok
 call disable_logging();
+
+statement ok
+reset disabled_optimizers;
 
 endloop
 
@@ -1207,10 +1221,16 @@ select id from iceberg_scan_tasks(getvariable('filtered_tasks'));
 statement ok
 set variable filtered_tasks = (select list(task) from (select *, NULL::varchar row_filter from tasks) task);
 
+statement ok
+set disabled_optimizers = 'statistics_propagation';
+
 query I
 select count(*) from iceberg_scan_tasks(getvariable('filtered_tasks'));
 ----
 4
+
+statement ok
+reset disabled_optimizers;
 
 foreach predicate false NULL
 

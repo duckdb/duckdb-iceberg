@@ -50,8 +50,10 @@ public:
 	IcebergFileRewrite(PhysicalPlan &physical_plan, vector<LogicalType> types, idx_t estimated_cardinality,
 	                   IcebergWriteOperation write_operation);
 
+	//! The rows are the table's columns, followed by the lineage columns that virtual_columns selects
 	void PlanCopy(ClientContext &context, PhysicalPlanGenerator &planner, const IcebergTableMetadata &metadata,
-	              PhysicalOperator &rows, optional_idx target_file_size = optional_idx());
+	              PhysicalOperator &rows, optional_idx target_file_size = optional_idx(),
+	              IcebergInsertVirtualColumns virtual_columns = IcebergInsertVirtualColumns::NONE);
 
 	bool IsSink() const override {
 		return !children.empty();

@@ -72,6 +72,18 @@ call enable_logging('Iceberg');
 statement ok
 call truncate_duckdb_logs();
 
+# Counting a saved catalog plan uses its manifest counts.
+query I
+select count(*) from iceberg_scan_tasks(getvariable('virtual_task_list'));
+----
+9000
+
+query I
+select count(*) from duckdb_logs()
+where type='Iceberg' and message.starts_with('Iceberg scan tasks executor mode=');
+----
+0
+
 statement ok
 create temp table actual_virtuals as
 select id, filename, file_row_number from iceberg_scan_tasks(getvariable('virtual_task_list'));
@@ -169,7 +181,7 @@ set variable scan_task_list_6 = (select list(task) from (select schema, 42 as ex
 
 # Extra/reordered task fields and filtered task lists are accepted.
 query I
-select count(*) from iceberg_scan_tasks(getvariable('scan_task_list_6'));
+select count(id) from iceberg_scan_tasks(getvariable('scan_task_list_6'));
 ----
 9000
 
@@ -177,7 +189,7 @@ statement ok
 set variable scan_task_list_7 = (select list(task) from (select * from saved_tasks union all select * from saved_tasks) task);
 
 query I
-select count(*) from iceberg_scan_tasks(getvariable('scan_task_list_7'));
+select count(id) from iceberg_scan_tasks(getvariable('scan_task_list_7'));
 ----
 18000
 
@@ -269,8 +281,19 @@ select * from iceberg_scan_tasks(getvariable('scan_task_list_15'));
 ----
 only supports 'parquet'
 
+statement error
+select count(*) from iceberg_scan_tasks(getvariable('scan_task_list_15'));
+----
+only supports 'parquet'
+
 statement ok
 set variable scan_task_list_16 = (select list(task) from (select * replace(-1::integer as schema_id) from saved_tasks) task);
+
+# Counting trusts the manifest counts. Reading the rows looks up the schema ID in the metadata.
+query I
+select count(*) from iceberg_scan_tasks(getvariable('scan_task_list_16'));
+----
+9000
 
 statement error
 select * from iceberg_scan_tasks(getvariable('scan_task_list_16'));
@@ -301,6 +324,12 @@ select id, filename, file_row_number from my_datalake.default.scan_tasks_test;
 
 statement ok
 set variable deleted_virtual_task_list = (select list(task) from (select * from deleted_tasks) task);
+
+# These catalog tasks advertise the original 9000 rows and carry deletes for three of them.
+query I
+select count(*) from iceberg_scan_tasks(getvariable('deleted_virtual_task_list'));
+----
+8997
 
 statement ok
 call enable_logging('Iceberg');
@@ -357,10 +386,14 @@ select count(*), min(id) from iceberg_scan_tasks(getvariable('scan_task_list_18'
 ----
 8997	3
 
+# Each delete applies only to its original task. Inflate the counts on the delete-free copies
+# to verify that the entire mixed list is scanned.
 statement ok
-set variable scan_task_list_19 = (select list(task) from (select * from deleted_tasks union all select * replace([] as delete_files) from deleted_tasks) task);
+set variable scan_task_list_19 = (select list(task) from (
+  select * replace([] as delete_files, record_count + 1 as record_count) from deleted_tasks
+  union all select * from deleted_tasks
+) task);
 
-# Loading a delete for one occurrence must not affect a task without that descriptor.
 query I
 select count(*) from iceberg_scan_tasks(getvariable('scan_task_list_19'));
 ----
