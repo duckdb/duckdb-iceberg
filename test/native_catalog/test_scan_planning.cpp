@@ -915,6 +915,43 @@ TEST_CASE("Iceberg indexed candidates agree with exhaustive delete applicability
 	}
 }
 
+TEST_CASE("Iceberg deletes distinguish signed zeros in floating-point partitions", "[iceberg_planning]") {
+	PlanningTest test;
+	Query(test.connection, "CREATE TABLE lake.default.t (part DOUBLE)");
+	auto bound = test.Bind();
+	auto &base = bound->Cast<MultiFileBindData>().file_list->Cast<IcebergMultiFileList>().GetScanPlanner();
+	auto metadata = base.GetMetadata().Copy();
+	auto spec = PartitionSpec();
+	metadata.partition_specs.emplace(spec.spec_id, spec);
+	IcebergTableFilters filters;
+	IcebergFilePruner pruner(*test.connection.context, metadata, base.GetSchema(), filters);
+	IcebergManifest delete_manifest(spec.spec_id, IcebergManifestContentType::DELETE, 2);
+	IcebergManifest data_manifest(spec.spec_id, IcebergManifestContentType::DATA, 1);
+
+	auto applies = [&](const Value &delete_value, const Value &data_value) {
+		auto delete_entry = DeleteEntry(0, delete_value);
+		delete_entry.data_file.content = IcebergManifestEntryContentType::EQUALITY_DELETES;
+		auto data_entry = DeleteEntry(0, data_value);
+		data_entry.data_file.content = IcebergManifestEntryContentType::DATA;
+		IcebergEqualityDeleteBounds bounds;
+		return pruner.DeleteFileMatchesDataFile(delete_manifest, delete_entry, data_manifest, data_entry,
+		                                        IcebergFilePruner::PartitionValueMap(data_entry.data_file), &bounds);
+	};
+	for (auto type_id : {LogicalTypeId::FLOAT, LogicalTypeId::DOUBLE}) {
+		const LogicalType type(type_id);
+		INFO(type.ToString());
+		auto positive_zero = Value::DOUBLE(0.0).DefaultCastAs(type);
+		auto negative_zero = Value::DOUBLE(-0.0).DefaultCastAs(type);
+		auto nan = Value::DOUBLE(std::numeric_limits<double>::quiet_NaN()).DefaultCastAs(type);
+		auto negative_nan = Value::DOUBLE(-std::numeric_limits<double>::quiet_NaN()).DefaultCastAs(type);
+		REQUIRE_FALSE(applies(positive_zero, negative_zero));
+		REQUIRE_FALSE(applies(negative_zero, positive_zero));
+		REQUIRE(applies(positive_zero, positive_zero));
+		REQUIRE(applies(negative_zero, negative_zero));
+		REQUIRE(applies(nan, negative_nan));
+	}
+}
+
 TEST_CASE("Iceberg concurrent filtered views share completed indexes without sharing predicates",
           "[iceberg_planning]") {
 	PlanningTest test;

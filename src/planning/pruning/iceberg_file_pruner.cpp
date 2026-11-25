@@ -8,6 +8,8 @@
 #include "planning/pruning/iceberg_predicate.hpp"
 #include "storage/statistics/iceberg_variant_statistics.hpp"
 
+#include <cmath>
+
 namespace duckdb {
 
 namespace {
@@ -86,6 +88,18 @@ bool IsNaN(const Value &value) {
 	default:
 		return false;
 	}
+}
+
+bool PartitionValuesMatch(const Value &left, const Value &right) {
+	if (!Value::NotDistinctFrom(left, right)) {
+		return false;
+	}
+	if (left.IsNull() || !left.type().IsFloating() || !right.type().IsFloating()) {
+		return true;
+	}
+	//! Iceberg normalizes all NaN encodings, but positive and negative zero are different partitions.
+	auto left_number = left.GetValue<double>();
+	return left_number != 0.0 || std::signbit(left_number) == std::signbit(right.GetValue<double>());
 }
 
 } // namespace
@@ -554,7 +568,7 @@ bool IcebergFilePruner::DeleteFileMatchesDataFile(const IcebergManifest &delete_
 			if (!delete_value || !data_value) {
 				return false;
 			}
-			if (!Value::NotDistinctFrom(*delete_value, *data_value)) {
+			if (!PartitionValuesMatch(*delete_value, *data_value)) {
 				return false;
 			}
 		}
