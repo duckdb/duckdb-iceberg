@@ -1,0 +1,152 @@
+# name: test/sql/local/native_catalog/alter_identifier_fields.test
+# description: A schema change that would drop an identifier field or make it optional is refused
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+# DuckDB can't declare identifier fields, so the table is created through REST. An identifier field has to be
+# required and can only be nested in required structs.
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables',
+	'{"name":"identifier_fields","schema":{"type":"struct","schema-id":0,"identifier-field-ids":[1,5,10],"fields":[
+		{"id":1,"name":"id","required":true,"type":"long"},
+		{"id":2,"name":"v","required":false,"type":"string"},
+		{"id":3,"name":"r","required":true,"type":"long"},
+		{"id":4,"name":"s","required":true,"type":{"type":"struct","fields":[
+			{"id":5,"name":"key","required":true,"type":"int"},
+			{"id":6,"name":"other","required":false,"type":"int"},
+			{"id":7,"name":"req","required":true,"type":"int"}]}},
+		{"id":8,"name":"t","required":true,"type":{"type":"struct","fields":[
+			{"id":9,"name":"n","required":true,"type":{"type":"struct","fields":[
+				{"id":10,"name":"k","required":true,"type":"int"},
+				{"id":11,"name":"o","required":false,"type":"int"}]}},
+			{"id":12,"name":"x","required":false,"type":"int"}]}}]}}');
+----
+200
+
+# Dropping an identifier field, or the struct that holds one
+
+statement error
+ALTER TABLE my_datalake.default.identifier_fields DROP COLUMN id;
+----
+Can't drop column 'id' as it is an identifier field
+
+statement error
+ALTER TABLE my_datalake.default.identifier_fields DROP COLUMN s;
+----
+Can't drop column 's' as it holds 's.key', which is an identifier field
+
+statement error
+ALTER TABLE my_datalake.default.identifier_fields DROP COLUMN s.key;
+----
+Can't drop column 's.key' as it is an identifier field
+
+# Making an identifier field optional, or the struct that holds one
+
+statement error
+ALTER TABLE my_datalake.default.identifier_fields ALTER COLUMN id DROP NOT NULL;
+----
+Can't drop NOT NULL on column 'id' as it is an identifier field
+
+statement error
+ALTER TABLE my_datalake.default.identifier_fields ALTER COLUMN s DROP NOT NULL;
+----
+Can't drop NOT NULL on column 's' as it holds 's.key', which is an identifier field
+
+statement error
+ALTER TABLE my_datalake.default.identifier_fields ALTER COLUMN s.key DROP NOT NULL;
+----
+Can't drop NOT NULL on column 's.key' as it is an identifier field
+
+statement error
+ALTER TABLE my_datalake.default.identifier_fields DROP COLUMN t;
+----
+Can't drop column 't' as it holds 't.n.k', which is an identifier field
+
+statement error
+ALTER TABLE my_datalake.default.identifier_fields DROP COLUMN t.n;
+----
+Can't drop column 't.n' as it holds 't.n.k', which is an identifier field
+
+statement error
+ALTER TABLE my_datalake.default.identifier_fields ALTER COLUMN t DROP NOT NULL;
+----
+Can't drop NOT NULL on column 't' as it holds 't.n.k', which is an identifier field
+
+statement error
+ALTER TABLE my_datalake.default.identifier_fields ALTER COLUMN t.n DROP NOT NULL;
+----
+Can't drop NOT NULL on column 't.n' as it holds 't.n.k', which is an identifier field
+
+# The check reads the schema of the transaction
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE my_datalake.default.identifier_fields RENAME COLUMN s TO st;
+
+statement error
+ALTER TABLE my_datalake.default.identifier_fields DROP COLUMN st;
+----
+Can't drop column 'st' as it holds 'st.key', which is an identifier field
+
+statement ok
+ROLLBACK
+
+# None of the refused statements committed a schema
+query I
+SELECT body::JSON->'metadata'->>'current-schema-id'
+FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/identifier_fields', NULL);
+----
+0
+
+# The other fields can still be dropped or made optional, and an identifier field can be renamed
+
+statement ok
+ALTER TABLE my_datalake.default.identifier_fields DROP COLUMN v;
+
+statement ok
+ALTER TABLE my_datalake.default.identifier_fields DROP COLUMN s.other;
+
+statement ok
+ALTER TABLE my_datalake.default.identifier_fields ALTER COLUMN r DROP NOT NULL;
+
+statement ok
+ALTER TABLE my_datalake.default.identifier_fields ALTER COLUMN s.req DROP NOT NULL;
+
+statement ok
+ALTER TABLE my_datalake.default.identifier_fields RENAME COLUMN id TO pk;
+
+statement ok
+SET VARIABLE current_schema = (
+	SELECT schema FROM (
+		SELECT body::JSON->'metadata' AS metadata
+		FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/identifier_fields', NULL)
+	), (SELECT unnest(from_json(metadata->'schemas', '["JSON"]')) AS schema)
+	WHERE (schema->>'schema-id')::INT = (metadata->>'current-schema-id')::INT
+);
+
+query I
+SELECT getvariable('current_schema')->'identifier-field-ids';
+----
+[1,5,10]
+
+query III
+SELECT field->>'name', (field->>'id')::INT, (field->>'required')::BOOLEAN
+FROM (SELECT unnest(from_json(getvariable('current_schema')->'fields', '["JSON"]')) AS field) ORDER BY 2;
+----
+pk	1	true
+r	3	false
+s	4	true
+t	8	true
+
+query III
+SELECT field->>'name', (field->>'id')::INT, (field->>'required')::BOOLEAN
+FROM (SELECT unnest(from_json(getvariable('current_schema')->'fields'->2->'type'->'fields', '["JSON"]')) AS field) ORDER BY 2;
+----
+key	5	true
+req	7	false

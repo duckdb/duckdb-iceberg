@@ -69,7 +69,9 @@ public:
 	IcebergSchemaInformation schema_info;
 };
 
+//! 'is_alter' is false when the schema is that of a replacement of the table (CREATE OR REPLACE): an ALTER is verified
+//! against the table's partition spec, sort order and identifier fields, and moves the schema-dependent properties
 void IntroduceNewSchema(ClientContext &context, IcebergTable &updated_table, IcebergTransactionData &transaction_data,
-                        shared_ptr<IcebergTableSchema> new_schema, bool update_schema_properties = true);
+                        shared_ptr<IcebergTableSchema> new_schema, bool is_alter = true);
 
 } // namespace duckdb
