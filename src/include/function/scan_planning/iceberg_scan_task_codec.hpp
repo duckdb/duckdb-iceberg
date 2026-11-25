@@ -31,7 +31,8 @@ struct IcebergScanTaskCodec {
 	static LogicalType SchemaType(const IcebergTableSchema &schema);
 	//! The type of the partition_values column: one field per partition field of any of the table's specs, named by
 	//! its partition field id and typed as the table's manifests store it under its transform.
-	static LogicalType PartitionValuesType(const IcebergTableMetadata &metadata, const IcebergTableSchema &schema);
+	static LogicalType PartitionValuesType(ClientContext &context, const IcebergTableMetadata &metadata,
+	                                       const IcebergTableSchema &schema);
 	//! The partition field id of each field of a partition_values type, in the type's order: what WriteTask fills each
 	//! field by, parsed from the names once per plan rather than once per row.
 	static vector<uint64_t> PartitionValueIds(const LogicalType &partition_values_type);
@@ -50,13 +51,13 @@ struct IcebergScanTaskCodec {
 	};
 	static InputLayout BindInput(const LogicalType &task_type, vector<LogicalType> &types, vector<Identifier> &names);
 	static Value ReadValue(const Value &input, const InputLayout &layout, Column column, bool nullable = false);
-	static IcebergFileScanTask ReadTask(const Value &input, const InputLayout &layout,
+	static IcebergFileScanTask ReadTask(ClientContext &context, const Value &input, const InputLayout &layout,
 	                                    const IcebergTableMetadata &metadata, const IcebergTableSchema &schema);
 	static IcebergTableMetadata ReadMetadata(const string &text, int32_t schema_id, const Value &snapshot_id,
 	                                         const LogicalType &schema_type);
 	//! `partition_value_ids` are the PartitionValueIds of the output's partition_values type.
-	static void WriteTask(const IcebergFileScanTask &task, const vector<uint64_t> &partition_value_ids,
-	                      DataChunk &output, idx_t row);
+	static void WriteTask(ClientContext &context, const IcebergFileScanTask &task,
+	                      const vector<uint64_t> &partition_value_ids, DataChunk &output, idx_t row);
 	static void WriteContext(DataChunk &output, idx_t count, optional<int64_t> snapshot_id, int32_t schema_id,
 	                         Vector &metadata);
 };

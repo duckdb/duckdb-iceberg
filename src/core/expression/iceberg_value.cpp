@@ -29,7 +29,7 @@ static Value TransformPartitionValueTemplated(const Value &value, const LogicalT
 	return TransformPartitionValueFromBlob(blob, type);
 }
 
-Value IcebergValue::TransformPartitionValue(const Value &value, const LogicalType &type) {
+Value IcebergValue::TransformPartitionValue(ClientContext &context, const Value &value, const LogicalType &type) {
 	D_ASSERT(!value.type().IsNested());
 	// COPY's partition map contains textual values. VARCHAR and BLOB share a physical
 	// type, but only BLOB contains bytes that should be decoded as Iceberg values.
@@ -38,7 +38,7 @@ Value IcebergValue::TransformPartitionValue(const Value &value, const LogicalTyp
 			auto blob = value.DefaultCastAs(LogicalType::BLOB);
 			return TransformPartitionValueFromBlob(blob.GetValueUnsafe<string_t>(), type);
 		}
-		return value.DefaultCastAs(type);
+		return value.CastAs(context, type);
 	}
 	// DECIMAL partition values are already decoded as proper DuckDB DECIMALs by the Avro reader.
 	// The blob round-trip below misinterprets the little-endian internal representation as
@@ -47,7 +47,7 @@ Value IcebergValue::TransformPartitionValue(const Value &value, const LogicalTyp
 		if (value.type() == type) {
 			return value;
 		}
-		return value.DefaultCastAs(type);
+		return value.CastAs(context, type);
 	}
 	switch (value.type().InternalType()) {
 	case PhysicalType::BOOL:

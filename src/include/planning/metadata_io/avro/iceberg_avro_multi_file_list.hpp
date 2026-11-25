@@ -72,7 +72,8 @@ public:
 	static constexpr const AvroScanInfoType TYPE = AvroScanInfoType::MANIFEST_FILE;
 
 public:
-	IcebergManifestFileScanInfo(const IcebergTableMetadata &metadata, const IcebergSnapshotScanInfo &snapshot_info,
+	IcebergManifestFileScanInfo(ClientContext &context, const IcebergTableMetadata &metadata,
+	                            const IcebergSnapshotScanInfo &snapshot_info,
 	                            vector<IcebergManifestListEntry> &manifest_files, const IcebergOptions &options,
 	                            FileSystem &fs, const string &iceberg_pat,
 	                            optional_ptr<ManifestEntryReadState> read_state, vector<idx_t> manifest_indexes);

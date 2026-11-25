@@ -365,11 +365,11 @@ statement ok
 drop table if exists my_datalake.default.scan_tasks_promoted;
 
 statement ok
-create table my_datalake.default.scan_tasks_promoted(id integer, k integer, j integer)
-partitioned by (truncate(10, k), bucket(4, j)) with ('format-version'=2);
+create table my_datalake.default.scan_tasks_promoted(id integer, k integer, j integer, p integer)
+partitioned by (truncate(10, k), bucket(4, j), p) with ('format-version'=2);
 
 statement ok
-insert into my_datalake.default.scan_tasks_promoted select i, i, i from range(40) t(i);
+insert into my_datalake.default.scan_tasks_promoted select i, i, i, nullif(i // 10, 3) from range(40) t(i);
 
 statement ok
 set variable promoted_snapshot = (select max(snapshot_id) from iceberg_snapshots(my_datalake.default.scan_tasks_promoted));
@@ -379,6 +379,9 @@ alter table my_datalake.default.scan_tasks_promoted alter k type bigint;
 
 statement ok
 alter table my_datalake.default.scan_tasks_promoted alter j type bigint;
+
+statement ok
+alter table my_datalake.default.scan_tasks_promoted alter p type bigint;
 
 statement ok
 begin;
@@ -394,11 +397,11 @@ create temp table promoted_tasks as select * from iceberg_scan_plan('my_datalake
 query II
 select typeof(partition_values), schema_id < getvariable('promoted_schema') from promoted_tasks limit 1;
 ----
-STRUCT("1000" INTEGER, "1001" INTEGER)	true
+STRUCT("1000" INTEGER, "1001" INTEGER, "1002" INTEGER)	true
 
 statement ok
 set variable promoted_list = (select list(struct_update(t, schema_id := getvariable('promoted_schema'),
-                                                         "schema" := NULL::struct(id integer, k bigint, j bigint)))
+                                                         "schema" := NULL::struct(id integer, k bigint, j bigint, p bigint)))
                               from (select * from promoted_tasks) t);
 
 statement ok
@@ -421,7 +424,7 @@ statement ok
 call disable_logging();
 
 # The rows of the table's own scan.
-foreach pred k=5 k>=25 j=7 (k<12)and(j>3)
+foreach pred k=5 k>=25 j=7 p=2 (k<12)and(j>3)
 
 query I
 select count(*) from (
@@ -434,6 +437,56 @@ select count(*) from (
 0
 
 endloop
+
+query II
+select count(*), min(id) from iceberg_scan_tasks(getvariable('promoted_list')) where p is null;
+----
+10	30
+
+# If the data file omits the promoted identity column, its old constant must supply the BIGINT value.
+statement ok
+copy (select 123::integer id) to '{TEST_DIR}/promoted_identity.parquet' (field_ids {id:1});
+
+statement ok
+set variable promoted_fallback = (select [struct_update(t, file_path := '{TEST_DIR}/promoted_identity.parquet',
+ file_size_in_bytes := (select size::bigint from read_blob('{TEST_DIR}/promoted_identity.parquet')),
+ record_count := 1::bigint)] from unnest(getvariable('promoted_list')) u(t)
+ where t.partition_values."1002" = 2 limit 1);
+
+query IIT
+select id, p, typeof(p) from iceberg_scan_tasks(getvariable('promoted_fallback')) where p = 2;
+----
+123	2	BIGINT
+
+# A value that happens to fit is insufficient. Its type must match the source in the pinned snapshot.
+statement ok
+set variable mistyped_fallback = (select [struct_update(t, partition_constants := {'4': 2::smallint})]
+ from unnest(getvariable('promoted_fallback')) u(t));
+
+statement ok
+commit;
+
+statement error
+select * from iceberg_scan_tasks(getvariable('mistyped_fallback'));
+----
+partition constant 4 does not match the table schemas
+
+# Reversing the schema change would narrow the fallback, even when this particular value fits in INTEGER.
+statement ok
+insert into my_datalake.default.scan_tasks_promoted values (40, 40, 40, 4);
+
+statement ok
+begin;
+
+statement ok
+set variable narrowed_list = (select [struct_update(t, schema_id := (select min(schema_id) from promoted_tasks),
+ "schema" := NULL::struct(id integer, k integer, j integer, p integer))]
+ from iceberg_scan_plan('my_datalake.default.scan_tasks_promoted') t where partition_values."1002" = 4);
+
+statement error
+select * from iceberg_scan_tasks(getvariable('narrowed_list'));
+----
+partition constant 4 does not match the table schemas
 
 statement ok
 commit;

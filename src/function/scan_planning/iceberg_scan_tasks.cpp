@@ -79,7 +79,7 @@ struct IcebergScanTasksGlobalState : public GlobalTableFunctionState {
 			schema_id = schema;
 			snapshot_id = snapshot;
 		}
-		return TaskCodec::ReadTask(descriptor, bind.layout, execution->metadata, execution->schema);
+		return TaskCodec::ReadTask(context, descriptor, bind.layout, execution->metadata, execution->schema);
 	}
 
 	IcebergScanTasksListClassification ClassifyTasks(ClientContext &context, const IcebergScanTasksBindData &bind,

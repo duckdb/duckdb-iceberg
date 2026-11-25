@@ -19,7 +19,7 @@ IcebergManifestListScanInfo::~IcebergManifestListScanInfo() {
 }
 
 IcebergManifestFileScanInfo::IcebergManifestFileScanInfo(
-    const IcebergTableMetadata &metadata, const IcebergSnapshotScanInfo &snapshot_info,
+    ClientContext &context, const IcebergTableMetadata &metadata, const IcebergSnapshotScanInfo &snapshot_info,
     vector<IcebergManifestListEntry> &manifest_files, const IcebergOptions &options, FileSystem &fs,
     const string &iceberg_path, optional_ptr<ManifestEntryReadState> read_state, vector<idx_t> manifest_indexes_p)
     : IcebergAvroScanInfo(TYPE, metadata, snapshot_info), manifest_files(manifest_files), options(options), fs(fs),
@@ -49,7 +49,8 @@ IcebergManifestFileScanInfo::IcebergManifestFileScanInfo(
 
 	//! Since we are now reading *all* manifests in one reader, we have to merge these schemas,
 	//! and to do that we create a map of all relevant partition fields
-	partition_field_id_to_type = IcebergDataFile::GetFieldIdToTypeMapping(snapshot_info, metadata, partition_spec_ids);
+	partition_field_id_to_type =
+	    IcebergDataFile::GetFieldIdToTypeMapping(context, snapshot_info, metadata, partition_spec_ids);
 }
 
 IcebergManifestFileScanInfo::~IcebergManifestFileScanInfo() {

@@ -423,6 +423,55 @@ from iceberg_scan_tasks(getvariable('liar_tasks')) where part=2000;
 ----
 1000	499500
 
+# A NULL tuple leaves this file's partition unknown, even beside a task with an explicit NULL partition value.
+statement ok
+set variable partial_tasks = [
+ prune_task('1999', 0, 1999, 1000),
+ struct_insert(prune_descriptor('liar', 0, 1999, 1), partition_values := NULL::struct("1000" integer)),
+ prune_task('null', 0, NULL, 10), prune_task('2000', 0, 2000, 1000)];
+
+statement ok
+call enable_logging(['Iceberg', 'FileSystem']);
+
+statement ok
+call truncate_duckdb_logs();
+
+query II
+select count(*), sum(id) from iceberg_scan_tasks(getvariable('partial_tasks')) where part = 2000;
+----
+1001	499542
+
+query IIII
+select skipped_tasks(), file_ops('liar') > 0, file_ops('1999'), file_ops('null');
+----
+2	true	0	0
+
+statement ok
+call disable_logging();
+
+# Field IDs must fit a positive INTEGER. A fractional name must not round to a real field and skip the file.
+foreach invalid_id 1000.1 0 2147483648
+
+statement ok
+set variable malformed_tasks = [
+ struct_insert(prune_descriptor('2000', 0, 2000, 1000), partition_values := {'{invalid_id}': 1999})];
+
+statement error
+select count(*) from iceberg_scan_tasks(getvariable('malformed_tasks')) where part = 2000;
+----
+partition value names must be distinct positive partition field IDs
+
+endloop
+
+# Two spellings of the same ID cannot supply conflicting values.
+statement ok
+set variable duplicate_ids = [
+ struct_insert(prune_descriptor('2000', 0, 2000, 1000), partition_values := {'01000': 1999, '1000': 2000})];
+
+statement error
+select * from iceberg_scan_tasks(getvariable('duplicate_ids'));
+----
+partition value names must be distinct positive partition field IDs
 
 # ---- a DOUBLE identity partition holding NaN ------------------------------------------------------------------------
 

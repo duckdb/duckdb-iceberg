@@ -20,7 +20,7 @@ public:
 
 	//! Adapt to the scanner's manifest representation without allocating a file path.
 	//! Sequence numbers order deletes within the scan. Row IDs are assigned only at commit.
-	IcebergManifestListEntry CreateScanEntry(const IcebergTableMetadata &table_metadata,
+	IcebergManifestListEntry CreateScanEntry(ClientContext &context, const IcebergTableMetadata &table_metadata,
 	                                         sequence_number_t sequence_number) const;
 
 private:

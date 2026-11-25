@@ -2,6 +2,8 @@
 #include "core/metadata/partition/iceberg_partition_constants.hpp"
 #include "duckdb/common/vector/struct_vector.hpp"
 
+#include <charconv>
+
 namespace duckdb {
 
 LogicalType IcebergScanTaskCodec::DeleteFileType() {
@@ -29,7 +31,7 @@ LogicalType IcebergScanTaskCodec::SchemaType(const IcebergTableSchema &schema) {
 	return LogicalType::STRUCT(std::move(children));
 }
 
-LogicalType IcebergScanTaskCodec::PartitionValuesType(const IcebergTableMetadata &metadata,
+LogicalType IcebergScanTaskCodec::PartitionValuesType(ClientContext &context, const IcebergTableMetadata &metadata,
                                                       const IcebergTableSchema &schema) {
 	struct FieldType {
 		LogicalType type;
@@ -41,7 +43,8 @@ LogicalType IcebergScanTaskCodec::PartitionValuesType(const IcebergTableMetadata
 	for (auto &spec : metadata.partition_specs) {
 		for (auto &field : spec.second.fields) {
 			//! The types the manifest reader reads a partition tuple with (IcebergDataFile::GetFieldIdToTypeMapping)
-			auto source_type = IcebergPartitionConstants::GetType(field.source_id, schema, metadata.GetSchemas());
+			auto source_type =
+			    IcebergPartitionConstants::GetType(context, field.source_id, schema, metadata.GetSchemas());
 			if (!source_type) {
 				continue;
 			}
@@ -198,9 +201,12 @@ IcebergScanTaskCodec::BindInput(const LogicalType &task_type, vector<LogicalType
 		auto &values_type = fields[result.columns[PARTITION_VALUES]].second;
 		auto &value_fields = StructType::GetChildTypes(values_type);
 		for (idx_t i = 0; i < value_fields.size(); i++) {
-			auto id = Value(value_fields[i].first).DefaultTryCastAs(LogicalType::INTEGER);
-			if (!id || IntegerValue::Get(*id) <= 0 ||
-			    !result.partition_value_indexes.emplace(IntegerValue::Get(*id), i).second) {
+			auto &name = value_fields[i].first.GetIdentifierName();
+			auto end = name.data() + name.size();
+			int32_t id;
+			auto parsed = std::from_chars(name.data(), end, id);
+			if (parsed.ec != std::errc() || parsed.ptr != end || id <= 0 ||
+			    !result.partition_value_indexes.emplace(id, i).second) {
 				throw BinderException(
 				    "iceberg_scan_tasks partition value names must be distinct positive partition field IDs");
 			}
@@ -226,30 +232,54 @@ Value IcebergScanTaskCodec::ReadValue(const Value &input, const InputLayout &bin
 	return value;
 }
 
-//! A partition value as the type the task's schema gives its field. The value has another type when the list names a
-//! schema newer than the one it was planned with: a plan pinned to a snapshot types its values by the snapshot's
-//! schema, and a type promotion that wrote no snapshot leaves the current schema newer than that. The value is cast
-//! then, but only when the cast is exact (it casts back to the same value), as a promotion's always is. Otherwise it is
-//! not used: a partition value only ever skips its file, so leaving it out keeps the file.
-static optional<Value> ExactPartitionValue(const Value &value, const LogicalType &type) {
+//! A plan pinned to a snapshot can carry values from before a schema promotion. Require a lossless conversion
+//! to the execution type. Callers can omit an unusable pruning value, but must reject an unusable fallback.
+static optional<Value> ExactPartitionValue(ClientContext &context, const Value &value, const LogicalType &type) {
 	if (value.type() == type) {
 		return value;
 	}
 	if (value.IsNull()) {
 		return Value(type);
 	}
-	auto cast = value.DefaultTryCastAs(type, nullptr, true);
+	auto cast = value.TryCastAs(context, type, nullptr, true);
 	if (!cast) {
 		return nullopt;
 	}
-	auto back = cast->DefaultTryCastAs(value.type(), nullptr, true);
+	auto back = cast->TryCastAs(context, value.type(), nullptr, true);
 	if (!back || !Value::NotDistinctFrom(*back, value)) {
 		return nullopt;
 	}
 	return cast;
 }
 
-IcebergFileScanTask IcebergScanTaskCodec::ReadTask(const Value &input, const InputLayout &bind,
+//! The fallback constant of an identity field can have the same older type as its partition value.
+//! Only accept a different type for a constant when the pinned snapshot actually used it for this source.
+static optional<Value> ReadPartitionConstant(ClientContext &context, const Value &value, int32_t source_id,
+                                             const Value &snapshot_id, const IcebergTableMetadata &metadata,
+                                             const IcebergTableSchema &schema) {
+	auto type = IcebergPartitionConstants::GetType(context, source_id, schema, metadata.GetSchemas());
+	if (!type) {
+		return nullopt;
+	}
+	if (*type == value.type()) {
+		return value;
+	}
+	if (snapshot_id.IsNull()) {
+		return nullopt;
+	}
+	auto snapshot_schema_id = metadata.GetSnapshotById(BigIntValue::Get(snapshot_id))->GetSchemaId();
+	auto source = metadata.GetSchemaFromId(snapshot_schema_id).TryGetColumnByFieldId(source_id);
+	if (!source || source->type != value.type()) {
+		return nullopt;
+	}
+	LogicalType widest;
+	if (!LogicalType::TryGetMaxLogicalTypeUnchecked(context, value.type(), *type, widest) || widest != *type) {
+		return nullopt;
+	}
+	return ExactPartitionValue(context, value, *type);
+}
+
+IcebergFileScanTask IcebergScanTaskCodec::ReadTask(ClientContext &context, const Value &input, const InputLayout &bind,
                                                    const IcebergTableMetadata &metadata,
                                                    const IcebergTableSchema &schema) {
 	IcebergFileScanTask result;
@@ -283,16 +313,18 @@ IcebergFileScanTask IcebergScanTaskCodec::ReadTask(const Value &input, const Inp
 			identity_sources.insert(field.source_id);
 		}
 	}
+	auto snapshot_id = ReadValue(input, bind, SNAPSHOT_ID, true);
 	for (idx_t i = 0; i < values.size(); i++) {
-		auto type = IcebergPartitionConstants::GetType(bind.partition_ids[i], schema, metadata.GetSchemas());
-		if (!type || *type != values[i].type()) {
+		auto source_id = bind.partition_ids[i];
+		auto value = ReadPartitionConstant(context, values[i], source_id, snapshot_id, metadata, schema);
+		if (!value) {
 			throw InvalidInputException("iceberg_scan_tasks partition constant %d does not match the table schemas",
-			                            bind.partition_ids[i]);
+			                            source_id);
 		}
 		// The plan's type includes identity sources from every spec. NULL placeholders for other
 		// specs are not partition values and must not replace this file's schema defaults.
-		if (identity_sources.count(bind.partition_ids[i])) {
-			result.partition_constants.emplace(bind.partition_ids[i], values[i]);
+		if (identity_sources.count(source_id)) {
+			result.partition_constants.emplace(source_id, std::move(*value));
 		}
 	}
 	// The fields of the file's own spec in its partition tuple, which the scan's filters may skip the file by. The
@@ -306,12 +338,13 @@ IcebergFileScanTask IcebergScanTaskCodec::ReadTask(const Value &input, const Inp
 			if (index == bind.partition_value_indexes.end()) {
 				continue;
 			}
-			auto source_type = IcebergPartitionConstants::GetType(field.source_id, schema, metadata.GetSchemas());
+			auto source_type =
+			    IcebergPartitionConstants::GetType(context, field.source_id, schema, metadata.GetSchemas());
 			if (!source_type) {
 				continue;
 			}
-			auto value =
-			    ExactPartitionValue(value_children[index->second], field.transform.GetBoundsType(*source_type));
+			auto value = ExactPartitionValue(context, value_children[index->second],
+			                                 field.transform.GetBoundsType(*source_type));
 			if (value) {
 				result.partition_values.push_back(IcebergPartitionInfo {field.partition_field_id, std::move(*value)});
 			}
@@ -381,8 +414,8 @@ Value IcebergScanTaskCodec::WriteDeleteFile(const IcebergDeleteFile &file) {
 	     file.content_size_in_bytes ? Value::BIGINT(*file.content_size_in_bytes) : Value(LogicalType::BIGINT)});
 }
 
-void IcebergScanTaskCodec::WriteTask(const IcebergFileScanTask &task, const vector<uint64_t> &partition_value_ids,
-                                     DataChunk &output, idx_t row) {
+void IcebergScanTaskCodec::WriteTask(ClientContext &context, const IcebergFileScanTask &task,
+                                     const vector<uint64_t> &partition_value_ids, DataChunk &output, idx_t row) {
 	output.data[FILE_PATH].SetValue(row, Value(task.file_path));
 	output.data[FILE_FORMAT].SetValue(row, Value(task.file_format));
 	output.data[FILE_SIZE].SetValue(row, Value::BIGINT(task.file_size_in_bytes));
@@ -419,7 +452,7 @@ void IcebergScanTaskCodec::WriteTask(const IcebergFileScanTask &task, const vect
 				break;
 			}
 			string error;
-			auto cast = info.value.DefaultTryCastAs(field.second, &error, true);
+			auto cast = info.value.TryCastAs(context, field.second, &error, true);
 			if (!cast) {
 				throw InvalidConfigurationException("Partition value %s of data file '%s' cannot be read as %s: %s",
 				                                    info.value.ToString(), task.file_path, field.second.ToString(),
