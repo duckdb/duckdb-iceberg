@@ -1,0 +1,252 @@
+# name: test/sql/local/native_catalog/move_column_native.test
+# description: iceberg_move_column refuses geography fields like ALTER TABLE does, and keeps identifier-field-ids
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+# DuckDB can't create geography fields, so create the table with geometry and switch the fields to geography
+# through REST, as geography_column.test does.
+statement ok
+CREATE TABLE my_datalake.default.move_geography (
+	id BIGINT,
+	g GEOMETRY('OGC:CRS84'),
+	s STRUCT(a INTEGER, g GEOMETRY('OGC:CRS84')),
+	note VARCHAR
+) WITH ('format-version' = '3');
+
+statement ok
+SET VARIABLE table_metadata = (
+	SELECT body FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/move_geography', NULL)
+);
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/move_geography',
+	'{"requirements":[],"updates":[
+		{"action":"add-schema","schema":' ||
+			replace(replace(json_extract(getvariable('table_metadata'), '$.metadata.schemas[0]')::VARCHAR,
+				'"geometry(OGC:CRS84)"', '"geography(OGC:CRS84, spherical)"'),
+				'"schema-id":0', '"schema-id":1') || '},
+		{"action":"set-current-schema","schema-id":1}]}');
+----
+200
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE my_datalake.default.move_geography);
+----
+id	BIGINT
+g	geography(OGC:CRS84, spherical)
+s	STRUCT(a INTEGER, g geography(OGC:CRS84, spherical))
+note	VARCHAR
+
+# A geography field, or a column that holds one, can't be moved: the error of ALTER TABLE (geography_column.test)
+statement error
+CALL iceberg_move_column('my_datalake.default.move_geography', 'g', first => true);
+----
+Not implemented Error: Altering geography column "g" is not supported
+
+statement error
+CALL iceberg_move_column('my_datalake.default.move_geography', 'g', after => 'note');
+----
+Not implemented Error: Altering geography column "g" is not supported
+
+statement error
+CALL iceberg_move_column('my_datalake.default.move_geography', 's.g', first => true);
+----
+Not implemented Error: Altering geography column "s.g" is not supported
+
+statement error
+CALL iceberg_move_column('my_datalake.default.move_geography', 's', first => true);
+----
+Not implemented Error: Altering geography column "s" is not supported
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE my_datalake.default.move_geography);
+----
+id	BIGINT
+g	geography(OGC:CRS84, spherical)
+s	STRUCT(a INTEGER, g geography(OGC:CRS84, spherical))
+note	VARCHAR
+
+# The other columns of the table move, also next to a geography field
+statement ok
+CALL iceberg_move_column('my_datalake.default.move_geography', 'note', after => 'id');
+
+statement ok
+CALL iceberg_move_column('my_datalake.default.move_geography', 's.a', after => 's.g');
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE my_datalake.default.move_geography);
+----
+id	BIGINT
+note	VARCHAR
+g	geography(OGC:CRS84, spherical)
+s	STRUCT(g geography(OGC:CRS84, spherical), a INTEGER)
+
+# and the geography types reach the catalog as it sent them
+query IIII
+SELECT
+	json_extract_string(body, '$.metadata.schemas[-1].fields[1].name'),
+	json_extract_string(body, '$.metadata.schemas[-1].fields[2].type'),
+	json_extract_string(body, '$.metadata.schemas[-1].fields[3].type.fields[0].type'),
+	json_extract_string(body, '$.metadata.schemas[-1].fields[3].type.fields[1].name')
+FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/move_geography', NULL);
+----
+note	geography(OGC:CRS84, spherical)	geography(OGC:CRS84, spherical)	a
+
+statement ok
+DROP TABLE my_datalake.default.move_geography;
+
+# DuckDB can't declare identifier fields either: add them to the schema through REST
+statement ok
+CREATE TABLE my_datalake.default.move_identifier (id BIGINT NOT NULL, data VARCHAR, extra INTEGER);
+
+statement ok
+SET VARIABLE table_metadata = (
+	SELECT body FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/move_identifier', NULL)
+);
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/move_identifier',
+	'{"requirements":[],"updates":[
+		{"action":"add-schema","schema":' ||
+			json_merge_patch(json_extract(getvariable('table_metadata'), '$.metadata.schemas[0]'),
+				'{"schema-id":1,"identifier-field-ids":[1]}')::VARCHAR || '},
+		{"action":"set-current-schema","schema-id":1}]}');
+----
+200
+
+# the schema the catalog holds before the move
+query I
+SELECT json_extract(body, '$.metadata.schemas[-1]')::VARCHAR
+FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/move_identifier', NULL);
+----
+{"fields":[{"id":1,"name":"id","required":true,"type":"long"},{"id":2,"name":"data","required":false,"type":"string"},{"id":3,"name":"extra","required":false,"type":"int"}],"identifier-field-ids":[1],"schema-id":1,"type":"struct"}
+
+# moving an identifier field does not change the identifier field ids
+query II
+SELECT previous_schema_id, current_schema_id
+FROM iceberg_move_column('my_datalake.default.move_identifier', 'id', after => 'data');
+----
+1	2
+
+# the schema the move sends: the same fields with the same ids in the new order, and the identifier field ids
+query I
+SELECT json_extract(body, '$.metadata.schemas[-1]')::VARCHAR
+FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/move_identifier', NULL);
+----
+{"fields":[{"id":2,"name":"data","required":false,"type":"string"},{"id":1,"name":"id","required":true,"type":"long"},{"id":3,"name":"extra","required":false,"type":"int"}],"identifier-field-ids":[1],"schema-id":2,"type":"struct"}
+
+query II
+SELECT json_extract(body, '$.metadata."current-schema-id"')::INTEGER, json_array_length(json_extract(body, '$.metadata.schemas'))
+FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/move_identifier', NULL);
+----
+2	3
+
+statement ok
+DROP TABLE my_datalake.default.move_identifier;
+
+# A move that leaves the order as it is sends nothing to the catalog: the table is at the metadata file it was at
+statement ok
+CREATE TABLE my_datalake.default.move_noop_request (a INTEGER, b INTEGER);
+
+statement ok
+SET VARIABLE metadata_location_before = (
+	SELECT json_extract_string(body, '$."metadata-location"')
+	FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/move_noop_request', NULL)
+);
+
+query II
+SELECT previous_schema_id, current_schema_id
+FROM iceberg_move_column('my_datalake.default.move_noop_request', 'b', after => 'a');
+----
+0	0
+
+query I
+SELECT json_extract_string(body, '$."metadata-location"') = getvariable('metadata_location_before')
+FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/move_noop_request', NULL);
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.move_noop_request;
+
+# The call is a change of the catalog: a read-only attachment refuses it
+statement ok
+CREATE TABLE my_datalake.default.move_read_only (a INTEGER, b INTEGER);
+
+statement ok
+ATTACH '' AS move_read_only_datalake (
+	TYPE ICEBERG,
+	URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none',
+	ACCESS_DELEGATION_MODE 'none',
+	READ_ONLY
+);
+
+statement error
+CALL iceberg_move_column('move_read_only_datalake.default.move_read_only', 'b', first => true);
+----
+Invalid Input Error: Cannot execute statement of type "CALL" on database "move_read_only_datalake" which is attached in read-only mode!
+
+statement ok
+DETACH move_read_only_datalake;
+
+query I
+SELECT column_name FROM (DESCRIBE my_datalake.default.move_read_only);
+----
+a
+b
+
+statement ok
+DROP TABLE my_datalake.default.move_read_only;
+
+# Without multi-table commit a transaction can change one table. A move that leaves the order as it is does not
+# count as a change, so the transaction can still write to another table
+statement ok
+CREATE TABLE my_datalake.default.move_noop_a (a INTEGER, b INTEGER);
+
+statement ok
+CREATE TABLE my_datalake.default.move_noop_b (x INTEGER);
+
+statement ok
+ATTACH '' AS move_single_commit_datalake (
+	TYPE ICEBERG,
+	URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none',
+	ACCESS_DELEGATION_MODE 'none',
+	DISABLE_MULTI_TABLE_COMMIT true
+);
+
+statement ok
+BEGIN;
+
+query II
+SELECT previous_schema_id, current_schema_id
+FROM iceberg_move_column('move_single_commit_datalake.default.move_noop_a', 'a', first => true);
+----
+0	0
+
+statement ok
+INSERT INTO move_single_commit_datalake.default.move_noop_b VALUES (1);
+
+statement ok
+COMMIT;
+
+query I
+SELECT count(*) FROM my_datalake.default.move_noop_b;
+----
+1
+
+statement ok
+DETACH move_single_commit_datalake;
+
+statement ok
+DROP TABLE my_datalake.default.move_noop_a;
+
+statement ok
+DROP TABLE my_datalake.default.move_noop_b;
+

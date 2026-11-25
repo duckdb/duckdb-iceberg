@@ -36,12 +36,22 @@ void IcebergScanPlanState::SetTable(IcebergTableSchemaVersion &table) {
 	configuration.table = table;
 }
 
+//! The two restrictions the planner hook asks for. A prepared statement is planned again on every EXECUTE, with the
+//! bind data of the PREPARE, so the hook asks a second time, after the first plan froze the configuration: a request
+//! that changes nothing is not a change.
+
 void IcebergScanPlanState::DisableServerSidePlanning() {
+	if (!configuration.server_side_planning_enabled) {
+		return;
+	}
 	RequireConfigurable();
 	configuration.server_side_planning_enabled = false;
 }
 
 void IcebergScanPlanState::RequireRowIds() {
+	if (configuration.row_ids_required) {
+		return;
+	}
 	RequireConfigurable();
 	configuration.row_ids_required = true;
 }
