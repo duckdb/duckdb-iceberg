@@ -29,7 +29,9 @@ DuckLakePartitionColumn::DuckLakePartitionColumn(const IcebergPartitionSpecField
 
 string DuckLakePartitionColumn::FinalizeEntry(int64_t table_id, int64_t partition_id, int64_t partition_key_index) {
 	const auto PARTITION_COLUMN_SQL = R"(
-		INSERT INTO {METADATA_CATALOG}.ducklake_partition_column VALUES(
+		INSERT INTO {METADATA_CATALOG}.ducklake_partition_column (
+			partition_id, table_id, partition_key_index, column_id, transform
+		) VALUES (
 			%d, -- partition_id
 			%d, -- table_id
 			%d, -- partition_key_index

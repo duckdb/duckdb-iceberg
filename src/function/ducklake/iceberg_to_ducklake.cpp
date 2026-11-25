@@ -320,7 +320,9 @@ public:
 		sql.push_back("DELETE FROM {METADATA_CATALOG}.ducklake_snapshot_changes;");
 
 		const auto SCHEMA_VERSION_SQL = R"(
-			INSERT INTO {METADATA_CATALOG}.ducklake_schema_versions VALUES(
+			INSERT INTO {METADATA_CATALOG}.ducklake_schema_versions (
+				begin_snapshot, schema_version, table_id
+			) VALUES (
 				%llu, -- begin_snapshot
 				%llu, -- schema_version
 				%llu -- table_id
@@ -346,7 +348,9 @@ public:
 		)";
 
 		const auto FILE_PARTITION_VALUE_SQL = R"(
-			INSERT INTO {METADATA_CATALOG}.ducklake_file_partition_value VALUES(
+			INSERT INTO {METADATA_CATALOG}.ducklake_file_partition_value (
+				data_file_id, table_id, partition_key_index, partition_value
+			) VALUES (
 				%d, -- data_file_id
 				%d, -- table_id
 				%d, -- partition_key_index
@@ -355,7 +359,9 @@ public:
 		)";
 
 		const auto TABLE_STATS_SQL = R"(
-			INSERT INTO {METADATA_CATALOG}.ducklake_table_stats VALUES(
+			INSERT INTO {METADATA_CATALOG}.ducklake_table_stats (
+				table_id, record_count, next_row_id, file_size_bytes
+			) VALUES (
 				%d, -- table_id
 				%d, -- record_count
 				%d, -- next_row_id
@@ -378,7 +384,9 @@ public:
 		)";
 
 		const auto SNAPSHOT_CHANGES_SQL = R"(
-			INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes VALUES(
+			INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes (
+				snapshot_id, changes_made, author, commit_message, commit_extra_info
+			) VALUES (
 				%d, -- snapshot_id
 				%s, -- changes_made
 				%s, -- author
@@ -903,7 +911,7 @@ public:
 			    "DuckLake version metadata is corrupt, the value can't be NULL and has to be of type VARCHAR");
 		}
 		auto version_string = value.GetValue<string>();
-		// DuckLake 1.1 adds nullable columns to the 1.0 layout. The inserts name the shared columns.
+		// DuckLake 0.4 and 1.0 share a layout. The inserts name the columns common to 1.1.
 		if (!StringUtil::StartsWith(version_string, "0.4") && version_string != "1.0" && version_string != "1.1") {
 			throw InvalidInputException(
 			    "'iceberg_to_ducklake' supports DuckLake versions 0.4, 1.0, and 1.1, detected '%s' instead",

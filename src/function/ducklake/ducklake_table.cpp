@@ -148,7 +148,9 @@ string DuckLakeTable::FinalizeEntry(int64_t schema_id, const map<timestamp_t, Du
 	auto snapshot_ids = DuckLakeUtils::GetSnapshots(start_snapshot, false, timestamp_t(0), snapshots);
 
 	const auto TABLE_SQL = R"(
-		INSERT INTO {METADATA_CATALOG}.ducklake_table VALUES(
+		INSERT INTO {METADATA_CATALOG}.ducklake_table (
+			table_id, table_uuid, begin_snapshot, end_snapshot, schema_id, table_name, path, path_is_relative
+		) VALUES (
 			%d, -- table_id
 			%s, -- table_uuid
 			%d, -- begin_snapshot
