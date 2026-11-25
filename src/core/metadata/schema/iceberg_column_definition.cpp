@@ -3,6 +3,7 @@
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/types/decimal.hpp"
 #include "common/iceberg_constants.hpp"
+#include "common/iceberg_decimal.hpp"
 #include "duckdb/common/value_operations/value_operations.hpp"
 #include "duckdb/parser/column_definition.hpp"
 #include "duckdb/common/multi_file/multi_file_data.hpp"
@@ -180,11 +181,11 @@ LogicalType IcebergColumnDefinition::ParsePrimitiveTypeString(const string &type
 			throw InvalidConfigurationException("Invalid decimal type \"%s\" - precision and scale must be numbers",
 			                                    type_str);
 		}
-		if (width < 1 || width > Decimal::MAX_WIDTH_DECIMAL || scale < 0 || scale > width) {
+		if (width < 1 || width > NumericCast<int64_t>(IcebergDecimal::MAX_PRECISION) || scale < 0 || scale > width) {
 			throw InvalidConfigurationException(
 			    "Invalid decimal type \"%s\" - precision must be between 1 and %d and scale between 0 and the "
 			    "precision",
-			    type_str, Decimal::MAX_WIDTH_DECIMAL);
+			    type_str, IcebergDecimal::MAX_PRECISION);
 		}
 		return LogicalType::DECIMAL(NumericCast<uint8_t>(width), NumericCast<uint8_t>(scale));
 	}
