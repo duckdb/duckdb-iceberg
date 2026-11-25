@@ -489,6 +489,17 @@ idx_t IcebergColumnDefinition::GetChildCount() const {
 	return children.size();
 }
 
+void IcebergColumnDefinition::MoveChild(idx_t from, idx_t to) {
+	MoveField(children, from, to);
+	RewriteType();
+}
+
+void IcebergColumnDefinition::MoveField(vector<unique_ptr<IcebergColumnDefinition>> &fields, idx_t from, idx_t to) {
+	auto field = std::move(fields[from]);
+	fields.erase_at(from);
+	fields.insert(fields.begin() + NumericCast<int64_t>(to), std::move(field));
+}
+
 void IcebergColumnDefinition::RewriteType() {
 	switch (type.id()) {
 	case LogicalTypeId::STRUCT: {
