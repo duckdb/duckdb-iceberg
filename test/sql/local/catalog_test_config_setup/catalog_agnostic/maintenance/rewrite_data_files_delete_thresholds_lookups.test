@@ -1,0 +1,120 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_delete_thresholds_lookups.test
+# description: With the default delete_file_threshold, deletes that are not file-scoped are not checked against every data file
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env EQUALITY_DELETE_WRITES_ENABLED 1
+
+include test/sql/init_requires
+
+statement ok
+drop table if exists my_datalake.default.rewrite_delete_lookups;
+
+statement ok
+create table my_datalake.default.rewrite_delete_lookups (id INTEGER) with ('format-version' = 2);
+
+# Three data files
+statement ok
+insert into my_datalake.default.rewrite_delete_lookups select range from range(0, 3);
+
+statement ok
+insert into my_datalake.default.rewrite_delete_lookups select range from range(3, 6);
+
+statement ok
+insert into my_datalake.default.rewrite_delete_lookups select range from range(6, 9);
+
+# Three equality deletes. Equality deletes are not file-scoped.
+statement ok
+SET __iceberg_unsafe_enable_equality_deletes = true;
+
+statement ok
+delete from my_datalake.default.rewrite_delete_lookups where id = 0;
+
+statement ok
+delete from my_datalake.default.rewrite_delete_lookups where id = 1;
+
+statement ok
+delete from my_datalake.default.rewrite_delete_lookups where id = 2;
+
+statement ok
+SET __iceberg_unsafe_enable_equality_deletes = false;
+
+query II
+select content, count(*) from iceberg_metadata('my_datalake.default.rewrite_delete_lookups')
+where status <> 'DELETED' group by content order by content;
+----
+DATA	3
+EQUALITY_DELETES	3
+
+statement ok
+CALL enable_logging('Iceberg', storage='memory');
+
+statement ok
+CREATE MACRO delete_candidate_checks() AS (
+	SELECT sum(try_cast(regexp_extract(message, 'delete_candidate_checks=(\d+)', 1) AS BIGINT))
+	FROM duckdb_logs() WHERE message LIKE '%delete_candidate_checks=%'
+);
+
+# The default threshold exceeds the 3 live delete files, so only the ratio can select a file, and only
+# file-scoped deletes count towards it: no equality delete is checked against a data file.
+query IIIII
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_delete_lookups', min_file_size_bytes := 0);
+----
+0	0	0	0	0
+
+query I
+SELECT delete_candidate_checks();
+----
+0
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# A reachable threshold checks every delete against every data file: 3 x 3. The deletes' bounds match
+# only the first file, whose 3 rows they all remove.
+statement ok
+begin;
+
+query III
+select rewritten_data_files_count, added_data_files_count, failed_data_files_count
+from iceberg_rewrite_data_files('my_datalake.default.rewrite_delete_lookups', min_file_size_bytes := 0,
+	delete_file_threshold := 1);
+----
+1	0	0
+
+query I
+SELECT delete_candidate_checks();
+----
+9
+
+statement ok
+rollback;
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# An explicit threshold of 0 selects every file without checking any delete
+statement ok
+begin;
+
+query III
+select rewritten_data_files_count, added_data_files_count, failed_data_files_count
+from iceberg_rewrite_data_files('my_datalake.default.rewrite_delete_lookups', min_file_size_bytes := 0,
+	delete_file_threshold := 0);
+----
+3	<REGEX>:[1-9][0-9]*	0
+
+query I
+SELECT delete_candidate_checks();
+----
+0
+
+statement ok
+rollback;
+
+statement ok
+CALL disable_logging();
+
+statement ok
+drop table if exists my_datalake.default.rewrite_delete_lookups;

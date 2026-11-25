@@ -441,9 +441,63 @@ void IcebergFilePruner::InitializeEqualityDeleteBounds(const IcebergDataFile &de
 	bounds.initialized = true;
 }
 
+static optional<int64_t> FindCount(const unordered_map<int32_t, int64_t> &counts, int32_t field_id) {
+	auto it = counts.find(field_id);
+	if (it == counts.end()) {
+		return optional<int64_t>();
+	}
+	return it->second;
+}
+
+//! DeleteFileIndex.canContainEqDeletesForFile: the null and value counts can rule out a match even when bounds are
+//! missing. A key column that is all NULL in one file and known to have no NULL in the other cannot match.
+static bool NullCountsRuleOutEqualityDelete(const IcebergTableMetadata &metadata, const IcebergDataFile &delete_file,
+                                            const IcebergDataFile &data_file) {
+	for (auto field_id : delete_file.equality_ids) {
+		auto column = metadata.FindColumnByFieldId(field_id);
+		if (!column || column->type.IsNested()) {
+			//! No statistics are kept for nested types
+			continue;
+		}
+		auto data_nulls = FindCount(data_file.null_value_counts, field_id);
+		auto data_values = FindCount(data_file.value_counts, field_id);
+		auto delete_nulls = FindCount(delete_file.null_value_counts, field_id);
+		auto delete_values = FindCount(delete_file.value_counts, field_id);
+		//! A required column holds no NULL
+		const bool required = column->required;
+		auto contains_null = [&](const optional<int64_t> &nulls) {
+			//! An unknown count may contain NULL
+			return !required && (!nulls || *nulls > 0);
+		};
+		auto all_null = [&](const optional<int64_t> &nulls, const optional<int64_t> &values) {
+			return !required && nulls && values && *nulls == *values;
+		};
+		auto all_non_null = [&](const optional<int64_t> &nulls) {
+			return required || (nulls && *nulls == 0);
+		};
+		if (contains_null(data_nulls) && contains_null(delete_nulls)) {
+			continue;
+		}
+		if (all_null(data_nulls, data_values) && all_non_null(delete_nulls)) {
+			return true;
+		}
+		if (all_null(delete_nulls, delete_values) && all_non_null(data_nulls)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 bool IcebergFilePruner::EqualityDeleteMatchesDataFile(const IcebergDataFile &delete_file,
                                                       const IcebergDataFile &data_file,
                                                       const IcebergEqualityDeleteBounds &bounds) const {
+	if (NullCountsRuleOutEqualityDelete(metadata, delete_file, data_file)) {
+		DUCKDB_LOG(context, IcebergLogType,
+		           "Iceberg Equality Delete Pruning, skipped 'equality_delete_file': '%s' for 'data_file': '%s', "
+		           "null counts rule out a match",
+		           delete_file.file_path, data_file.file_path);
+		return false;
+	}
 	for (auto &delete_stats : bounds.columns) {
 		auto &column = delete_stats.column.get();
 		auto field_id = column.id;

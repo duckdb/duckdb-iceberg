@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
+#include "duckdb/common/limits.hpp"
 #include "duckdb/common/optional.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/types/value.hpp"
@@ -26,6 +27,8 @@ struct RewriteBucket {
 	//! Counted over every eligible file, so max_files_to_rewrite cannot change the gating decision below.
 	int64_t eligible_count = 0;
 	int64_t eligible_bytes = 0;
+	//! Whether an eligible file reached the delete-file or delete-ratio threshold.
+	bool too_many_deletes = false;
 };
 
 struct RewritePlan {
@@ -59,6 +62,11 @@ struct RewriteDataFilesPlanInput {
 	int64_t min_input_files = 5;
 	//! Optional upper bound on how many eligible files will be rewritten.
 	optional<int64_t> max_files_to_rewrite;
+	//! A file with at least this many applicable delete files is rewritten whatever its size. The Iceberg Java
+	//! default (Integer.MAX_VALUE) leaves this off.
+	int64_t delete_file_threshold = NumericLimits<int32_t>::Maximum();
+	//! A file whose file-scoped deletes remove at least this share of its rows is rewritten whatever its size.
+	double delete_ratio_threshold = 0.3;
 	bool rewrite_all = false;
 	//! Spec to rewrite into. Defaults to the table's current default spec (default_spec_id).
 	optional<int32_t> output_spec_id;

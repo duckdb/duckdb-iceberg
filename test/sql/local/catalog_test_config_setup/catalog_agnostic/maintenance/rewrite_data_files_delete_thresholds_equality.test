@@ -1,0 +1,118 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_delete_thresholds_equality.test
+# description: Equality deletes count towards delete_file_threshold but not towards delete_ratio_threshold
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env EQUALITY_DELETE_WRITES_ENABLED 1
+
+include test/sql/init_requires
+
+statement ok
+drop table if exists my_datalake.default.rewrite_delete_thresholds_equality;
+
+statement ok
+create table my_datalake.default.rewrite_delete_thresholds_equality (id INTEGER) with ('format-version' = 2);
+
+statement ok
+insert into my_datalake.default.rewrite_delete_thresholds_equality
+select case when range < 8 then 1 else range end from range(10);
+
+statement ok
+SET __iceberg_unsafe_enable_equality_deletes = true;
+
+statement ok
+delete from my_datalake.default.rewrite_delete_thresholds_equality where id = 1;
+
+statement ok
+SET __iceberg_unsafe_enable_equality_deletes = false;
+
+query I
+select count(*) from iceberg_metadata('my_datalake.default.rewrite_delete_thresholds_equality')
+where content = 'EQUALITY_DELETES' and status <> 'DELETED';
+----
+1
+
+# 8 of 10 rows are deleted, but equality deletes are not file-scoped, so the ratio stays at 0
+query IIIII
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_delete_thresholds_equality');
+----
+0	0	0	0	0
+
+query IIIII
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_delete_thresholds_equality',
+	delete_ratio_threshold := 0.01);
+----
+0	0	0	0	0
+
+# The equality delete file is one of the file's deletes
+query III
+select rewritten_data_files_count, added_data_files_count, failed_data_files_count
+from iceberg_rewrite_data_files('my_datalake.default.rewrite_delete_thresholds_equality', delete_file_threshold := 1);
+----
+1	1	0
+
+query I
+select list(id order by id) from my_datalake.default.rewrite_delete_thresholds_equality;
+----
+[8, 9]
+
+# Rewritten files take the starting sequence number, so the equality delete no longer applies to them
+query IIIII
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_delete_thresholds_equality', delete_file_threshold := 1);
+----
+0	0	0	0	0
+
+statement ok
+drop table if exists my_datalake.default.rewrite_delete_thresholds_equality;
+
+# A file whose key column is all NULL cannot match an equality delete with no NULL keys, even though it has
+# no bounds: the null and value counts rule it out, as in DeleteFileIndex.canContainEqDeletesForFile.
+statement ok
+drop table if exists my_datalake.default.rewrite_delete_thresholds_equality_nulls;
+
+statement ok
+create table my_datalake.default.rewrite_delete_thresholds_equality_nulls (id INTEGER) with ('format-version' = 2);
+
+statement ok
+insert into my_datalake.default.rewrite_delete_thresholds_equality_nulls values (NULL), (NULL);
+
+statement ok
+SET VARIABLE null_file = (
+	select file_path from iceberg_metadata('my_datalake.default.rewrite_delete_thresholds_equality_nulls')
+	where content = 'DATA' and status <> 'DELETED'
+);
+
+statement ok
+insert into my_datalake.default.rewrite_delete_thresholds_equality_nulls values (1), (2);
+
+statement ok
+SET __iceberg_unsafe_enable_equality_deletes = true;
+
+statement ok
+delete from my_datalake.default.rewrite_delete_thresholds_equality_nulls where id = 1;
+
+statement ok
+SET __iceberg_unsafe_enable_equality_deletes = false;
+
+query III
+select rewritten_data_files_count, added_data_files_count, failed_data_files_count
+from iceberg_rewrite_data_files('my_datalake.default.rewrite_delete_thresholds_equality_nulls',
+	min_file_size_bytes := 0, delete_file_threshold := 1);
+----
+1	1	0
+
+query I
+select count(*) from iceberg_metadata('my_datalake.default.rewrite_delete_thresholds_equality_nulls')
+where content = 'DATA' and status <> 'DELETED' and file_path = getvariable('null_file');
+----
+1
+
+query II
+select count(*), list(id order by id) filter (where id is not null)
+from my_datalake.default.rewrite_delete_thresholds_equality_nulls;
+----
+3	[2]
+
+statement ok
+drop table if exists my_datalake.default.rewrite_delete_thresholds_equality_nulls;

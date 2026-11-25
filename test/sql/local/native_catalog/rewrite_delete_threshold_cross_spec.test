@@ -1,0 +1,153 @@
+# name: test/sql/local/native_catalog/rewrite_delete_threshold_cross_spec.test
+# description: A partition-scoped position delete counts towards delete_file_threshold only for data files of its own spec
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+CREATE TABLE my_datalake.default.rewrite_delete_cross_spec (id INTEGER, p INTEGER) WITH ('format-version' = 2);
+
+# C is written under a partitioned spec
+statement ok
+ALTER TABLE my_datalake.default.rewrite_delete_cross_spec SET PARTITIONED BY (p);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_delete_cross_spec VALUES (9, 7);
+
+# A and B are written under an unpartitioned spec
+statement ok
+ALTER TABLE my_datalake.default.rewrite_delete_cross_spec RESET PARTITIONED BY;
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_delete_cross_spec VALUES (1, 1), (2, 1);
+
+statement ok
+INSERT INTO my_datalake.default.rewrite_delete_cross_spec VALUES (3, 1), (4, 1);
+
+statement ok
+SET VARIABLE c_path = (SELECT filename FROM my_datalake.default.rewrite_delete_cross_spec WHERE id = 9);
+
+statement ok
+SET VARIABLE ab_paths = (
+	SELECT list(file_path ORDER BY file_path) FROM iceberg_metadata(my_datalake.default.rewrite_delete_cross_spec)
+	WHERE content = 'DATA' AND status <> 'DELETED' AND file_path <> getvariable('c_path')
+);
+
+query I
+SELECT len(getvariable('ab_paths'));
+----
+2
+
+statement ok
+SET VARIABLE unpartitioned_spec = (
+	SELECT (metadata::JSON->>'default-spec-id')::INTEGER
+	FROM iceberg_load_table_response(my_datalake.default.rewrite_delete_cross_spec)
+);
+
+statement ok
+SET VARIABLE next_sequence = (
+	SELECT (metadata::JSON->>'last-sequence-number')::BIGINT + 1
+	FROM iceberg_load_table_response(my_datalake.default.rewrite_delete_cross_spec)
+);
+
+statement ok
+SET VARIABLE current_list = (
+	SELECT s->>'manifest-list'
+	FROM (SELECT unnest(metadata::JSON->'snapshots'->'$[*]') AS s, metadata::JSON->>'current-snapshot-id' AS cur
+		FROM iceberg_load_table_response(my_datalake.default.rewrite_delete_cross_spec))
+	WHERE s->>'snapshot-id' = cur
+);
+
+# One position delete file under the unpartitioned spec, without referenced_data_file and with unequal
+# file_path bounds, so it is partition-scoped. It deletes the first row of A and of B, and nothing in C.
+statement ok
+COPY (
+	SELECT unnest(getvariable('ab_paths')) AS file_path, 0::BIGINT AS pos ORDER BY file_path
+) TO '{TEST_DIR}/cross_spec_delete.parquet' (FORMAT PARQUET, FIELD_IDS {file_path: 2147483546, pos: 2147483545});
+
+statement ok
+COPY (
+	SELECT 1::INTEGER AS status, 900::BIGINT AS snapshot_id,
+		getvariable('next_sequence') AS sequence_number, getvariable('next_sequence') AS file_sequence_number,
+		{
+			content: 1::INTEGER, file_path: '{TEST_DIR}/cross_spec_delete.parquet',
+			file_format: 'PARQUET', partition: {}, record_count: 2::BIGINT, file_size_in_bytes: 1000::BIGINT,
+			lower_bounds: MAP {2147483546: encode(getvariable('ab_paths')[1])},
+			upper_bounds: MAP {2147483546: encode(getvariable('ab_paths')[2])}
+		} AS data_file
+) TO '{TEST_DIR}/cross_spec_deletes.avro' (
+	FORMAT AVRO,
+	METADATA {'schema-id': '0', 'partition-spec-id': getvariable('unpartitioned_spec')::VARCHAR,
+		'format-version': '2', 'content': 'deletes'},
+	FIELD_IDS {
+		status: 0, snapshot_id: 1, sequence_number: 3, file_sequence_number: 4,
+		data_file: {__duckdb_field_id: 2, content: 134, file_path: 100, file_format: 101,
+			partition: 102, record_count: 103, file_size_in_bytes: 104,
+			lower_bounds: {__duckdb_field_id: 125, key: 126, value: 127},
+			upper_bounds: {__duckdb_field_id: 128, key: 129, value: 130}}
+	}
+);
+
+statement ok
+COPY (
+	SELECT manifest_path, manifest_length, partition_spec_id, content, sequence_number, min_sequence_number,
+		added_snapshot_id, added_files_count, existing_files_count, deleted_files_count,
+		added_rows_count, existing_rows_count, deleted_rows_count
+	FROM read_avro(getvariable('current_list'))
+	UNION ALL
+	SELECT '{TEST_DIR}/cross_spec_deletes.avro', 1000::BIGINT, getvariable('unpartitioned_spec'), 1::INTEGER,
+		getvariable('next_sequence'), getvariable('next_sequence'), 900::BIGINT, 1::INTEGER, 0::INTEGER, 0::INTEGER,
+		2::BIGINT, 0::BIGINT, 0::BIGINT
+) TO '{TEST_DIR}/cross_spec_list.avro' (
+	FORMAT AVRO,
+	FIELD_IDS {
+		manifest_path: 500, manifest_length: 501, partition_spec_id: 502,
+		content: 517, sequence_number: 515, min_sequence_number: 516, added_snapshot_id: 503,
+		added_files_count: 504, existing_files_count: 505, deleted_files_count: 506,
+		added_rows_count: 512, existing_rows_count: 513, deleted_rows_count: 514
+	}
+);
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/rewrite_delete_cross_spec',
+	json_object('requirements', json_array(), 'updates', json_array(
+		json_object('action', 'add-snapshot', 'snapshot', json_object(
+			'snapshot-id', 900, 'sequence-number', getvariable('next_sequence'), 'schema-id', 0,
+			'timestamp-ms', epoch_ms(current_timestamp), 'manifest-list', '{TEST_DIR}/cross_spec_list.avro',
+			'summary', json_object('operation', 'overwrite'))),
+		json_object('action', 'set-snapshot-ref', 'ref-name', 'main', 'type', 'branch', 'snapshot-id', 900))));
+----
+200
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.rewrite_delete_cross_spec;
+----
+[2, 4, 9]
+
+# All three files are inside the size band. The shared delete applies to A and B, so they reach
+# delete_file_threshold => 1. C is under another spec, so the delete does not count for it.
+query III
+SELECT rewritten_data_files_count, added_data_files_count, failed_data_files_count
+FROM iceberg_rewrite_data_files('my_datalake.default.rewrite_delete_cross_spec', min_file_size_bytes => 0,
+	delete_file_threshold => 1);
+----
+2	1	0
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.rewrite_delete_cross_spec;
+----
+[2, 4, 9]
+
+# C keeps its file
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.rewrite_delete_cross_spec)
+WHERE content = 'DATA' AND status <> 'DELETED' AND file_path = getvariable('c_path');
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.rewrite_delete_cross_spec;
