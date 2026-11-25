@@ -230,7 +230,7 @@ PhysicalOperator &IcebergCatalog::PlanUpdate(ClientContext &context, PhysicalPla
 		auto &alter = irc_transaction.GetOrCreateAlter();
 		auto &updated_table = alter.GetOrInitializeTable(table_entry.table_info);
 		auto &table_metadata = updated_table.GetMetadata();
-		//! As for DELETE, a V3 table continues below, where a copy-on-write mode is refused as before
+		//! Only V2 supports copy-on-write UPDATE.
 		if (table_metadata.iceberg_version == 2 && table_metadata.UsesCopyOnWrite(WRITE_UPDATE_MODE)) {
 			table_entry.table_info.VerifyWriteEncryptionSupported();
 			table_entry.PrepareIcebergScanFromEntry(context);

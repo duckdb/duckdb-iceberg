@@ -3,6 +3,7 @@
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/common/numeric_utils.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
+#include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/execution/column_binding_resolver.hpp"
 #include "duckdb/execution/operator/join/physical_join.hpp"
@@ -23,7 +24,11 @@
 #include "duckdb/planner/table_filter_set.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "execution/operator/iceberg_delete.hpp"
 #include "execution/operator/iceberg_file_rewrite.hpp"
+#include "core/deletes/iceberg_delete_data.hpp"
+#include "planning/iceberg_multi_file_list.hpp"
+#include "planning/iceberg_multi_file_reader.hpp"
 
 namespace duckdb {
 
@@ -55,8 +60,23 @@ protected:
 		//! are rebuilt for each commit attempt, including those of files inserted in this transaction.
 		IcebergFileRewriteInput result(state.added_data_files ? IcebergSnapshotOperationType::OVERWRITE
 		                                                      : IcebergSnapshotOperationType::DELETE);
-		for (auto &entry : delete_filter.GetDeletes().rows_by_file) {
+		auto &rows_by_file = delete_filter.GetDeletes().rows_by_file;
+		//! The DELETE binder takes filename and file_row_number from the target scan. If the optimizer
+		//! eliminated that scan, the sink cannot have received a matching row.
+		if (!rows_by_file.empty() && !delete_filter.match_file_list) {
+			throw InternalException("Copy-on-write DELETE: matched rows without an Iceberg scan of the matching rows");
+		}
+		for (auto &entry : rows_by_file) {
 			result.replaced_files.emplace_back(entry.first);
+			//! SPEC: when removing a data file, writers must also remove any deletion vector that applies to it. Like
+			//! a merge-on-read DELETE replacing a vector, this also removes the file-scoped position delete files;
+			//! partition-scoped ones may still apply to other data files and stay.
+			auto existing_deletes = delete_filter.match_file_list->GetExistingPositionalDeleteData(entry.first);
+			if (existing_deletes) {
+				for (auto &delete_file : existing_deletes->source_files) {
+					result.replaced_files.push_back(delete_file);
+				}
+			}
 		}
 		return result;
 	}
@@ -126,9 +146,11 @@ optional_ptr<PhysicalTableScan> FindTableScan(PhysicalOperator &plan) {
 	return FindTableScan(plan.children[0].get());
 }
 
-//! Bind `SELECT * FROM <table>`, then add the filename and file_row_number virtual columns to its scan. They are
-//! added by column id, not by name, so a table column that happens to be called `filename` cannot shadow them.
-unique_ptr<LogicalOperator> BindKeepScan(ClientContext &context, IcebergTableSchemaVersion &table) {
+//! Bind `SELECT * FROM <table>`, then add virtual columns to its scan: on V3, the row lineage columns
+//! `_row_id` and `_last_updated_sequence_number`, then always `filename` and `file_row_number`. They are added by
+//! column id, not by name, so a table column that happens to be called `filename` cannot shadow them.
+unique_ptr<LogicalOperator> BindKeepScan(ClientContext &context, IcebergTableSchemaVersion &table,
+                                         bool with_row_lineage) {
 	auto select = make_uniq<SelectNode>();
 	select->select_list.push_back(make_uniq<StarExpression>());
 	auto table_ref = make_uniq<BaseTableRef>();
@@ -144,8 +166,14 @@ unique_ptr<LogicalOperator> BindKeepScan(ClientContext &context, IcebergTableSch
 	}
 	auto &projection = plan->Cast<LogicalProjection>();
 	auto &get = plan->children[0]->Cast<LogicalGet>();
-	for (auto virtual_column :
-	     {MultiFileReader::COLUMN_IDENTIFIER_FILENAME, MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER}) {
+	vector<column_t> virtual_columns;
+	if (with_row_lineage) {
+		virtual_columns.push_back(COLUMN_IDENTIFIER_ROW_ID);
+		virtual_columns.push_back(IcebergMultiFileReader::COLUMN_IDENTIFIER_LAST_SEQUENCE_NUMBER);
+	}
+	virtual_columns.push_back(MultiFileReader::COLUMN_IDENTIFIER_FILENAME);
+	virtual_columns.push_back(MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER);
+	for (auto virtual_column : virtual_columns) {
 		auto entry = get.virtual_columns.find(virtual_column);
 		if (entry == get.virtual_columns.end()) {
 			throw InternalException("Copy-on-write DELETE: the Iceberg scan does not expose virtual column %d",
@@ -156,6 +184,14 @@ unique_ptr<LogicalOperator> BindKeepScan(ClientContext &context, IcebergTableSch
 		ColumnBinding binding(get.table_index, ProjectionIndex(column_ids.size() - 1));
 		projection.expressions.push_back(
 		    make_uniq<BoundColumnRefExpression>(entry->second.name, entry->second.type, binding));
+	}
+	if (with_row_lineage) {
+		//! This scan is bound after IcebergPlannerRoutine runs, so do what it does for a scan of the lineage columns:
+		//! server scan plans carry no data sequence numbers, so inherited ones need manifest-based planning.
+		auto &scan_planner =
+		    get.bind_data->Cast<MultiFileBindData>().file_list->Cast<IcebergMultiFileList>().GetScanPlanner();
+		scan_planner.RequireRowIds();
+		scan_planner.DisableServerSidePlanning();
 	}
 	return plan;
 }
@@ -221,15 +257,14 @@ PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanRewrite(ClientContext &con
                                                               vector<idx_t> match_row_id_indexes,
                                                               vector<unique_ptr<Expression>> update_expressions) {
 	auto &metadata = table.table_info.GetMetadata();
-	if (metadata.iceberg_version >= 3) {
-		//! A V3 rewrite has to carry each kept row's _row_id and _last_updated_sequence_number into the new files
-		//! Pending rows may not have their final lineage yet, so carrying scan-time values is not sufficient.
-		throw NotImplementedException("Copy-on-write rewrites of Iceberg V%d tables", metadata.iceberg_version);
-	}
+	//! A V3 DELETE carries each kept row's _row_id and _last_updated_sequence_number into the new files.
+	//! Rows inserted in this transaction carry NULL until the commit assigns their lineage.
+	const bool with_row_lineage = metadata.iceberg_version >= 3;
+	D_ASSERT(!with_row_lineage || update_expressions.empty());
 
 	//! Probe side: the whole table again, so the rows of each matched file that survive can be rewritten. It is
 	//! planned here, after optimization, like PhysicalPlanGenerator::Plan does for a full statement.
-	auto keep_logical_plan = BindKeepScan(context, table);
+	auto keep_logical_plan = BindKeepScan(context, table, with_row_lineage);
 	ColumnBindingResolver resolver;
 	resolver.VisitOperator(*keep_logical_plan);
 	keep_logical_plan->ResolveOperatorTypes();
@@ -252,6 +287,14 @@ PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanRewrite(ClientContext &con
 	                   .Cast<IcebergCopyOnWriteDeleteFilter>();
 	filter.keep_logical_plan = std::move(keep_logical_plan);
 	filter.update_expressions = std::move(update_expressions);
+	auto &transaction_data = table.table_info.transaction_data;
+	filter.require_assigned_lineage = transaction_data && transaction_data->has_pending_v3_snapshot;
+	//! The optimizer can remove the scan when no rows match.
+	auto match_scan = IcebergDelete::FindIcebergScan(match_plan);
+	if (match_scan) {
+		auto &bind_data = match_scan->bind_data->Cast<MultiFileBindData>();
+		filter.match_file_list = bind_data.file_list->Cast<IcebergMultiFileList>();
+	}
 
 	auto keep_scan = FindTableScan(keep_plan);
 	if (keep_scan) {
@@ -271,7 +314,9 @@ PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanRewrite(ClientContext &con
 
 	//! Use the same replacement-file writer and snapshot staging as maintenance rewrites.
 	auto &rewrite = planner.Make<CopyOnWriteDeleteRewrite>(table.table_info, filter).Cast<CopyOnWriteDeleteRewrite>();
-	rewrite.PlanCopy(context, planner, metadata, filter);
+	rewrite.PlanCopy(context, planner, metadata, filter, optional_idx(),
+	                 with_row_lineage ? IcebergInsertVirtualColumns::WRITE_ROW_ID_AND_SEQUENCE_NUMBER
+	                                  : IcebergInsertVirtualColumns::NONE);
 	return rewrite;
 }
 
@@ -403,7 +448,8 @@ OperatorResultType IcebergCopyOnWriteDeleteFilter::Execute(ExecutionContext &con
 	auto &state = state_p.Cast<CopyOnWriteDeleteOperatorState>();
 	auto &rows_by_file = GetDeletes().rows_by_file;
 
-	//! The probe side emits the table's columns followed by filename and file_row_number
+	//! The probe side emits the columns this operator outputs (the table's columns, then on V3 _row_id and
+	//! _last_updated_sequence_number), followed by filename and file_row_number
 	auto column_count = types.size();
 	D_ASSERT(input.ColumnCount() == column_count + 2);
 
@@ -448,6 +494,14 @@ OperatorResultType IcebergCopyOnWriteDeleteFilter::Execute(ExecutionContext &con
 		chunk.data[col].Slice(input.data[col], state.keep, kept);
 	}
 	chunk.SetChildCardinality(kept);
+	//! A NULL written here would inherit from the replacement file, changing the identity or last update
+	//! of an unchanged row between the two snapshots published at commit.
+	if (require_assigned_lineage && kept &&
+	    (VectorOperations::HasNull(chunk.data[column_count - 2]) ||
+	     VectorOperations::HasNull(chunk.data[column_count - 1]))) {
+		throw InvalidInputException("Copy-on-write DELETE cannot preserve uncommitted row lineage. "
+		                            "Commit the earlier changes to this table before running the DELETE.");
+	}
 	return OperatorResultType::NEED_MORE_INPUT;
 }
 

@@ -15,6 +15,7 @@
 
 namespace duckdb {
 
+class IcebergMultiFileList;
 class IcebergTableSchemaVersion;
 class LogicalDelete;
 class LogicalUpdate;
@@ -30,8 +31,9 @@ struct IcebergCopyOnWriteDeletes {
 //! A DELETE on a table whose write.delete.mode is copy-on-write rewrites every data file that holds a matching row,
 //! instead of writing delete files. This operator is shaped like a join:
 //!  - the build side (children[1]) is the DELETE's own scan, which yields the file and position of each matching row;
-//!  - the probe side (children[0]) scans the table again, emitting its columns followed by those two virtual columns,
-//!    and this operator keeps only the rows of matched files that the DELETE does not remove.
+//!  - the probe side (children[0]) scans the table again, emitting its columns (on V3 followed by the row lineage
+//!    columns _row_id and _last_updated_sequence_number) and then those two virtual columns, and this operator keeps
+//!    only the rows of matched files that the DELETE does not remove.
 //! The kept rows are written by the IcebergFileRewrite above it, which replaces the matched files in one snapshot.
 //! A copy-on-write UPDATE uses the same operator: the build side also computes each matched row's new values, and
 //! once the probe side has read the matched files, the operator emits those rows in place of the ones it dropped.
@@ -42,6 +44,9 @@ public:
 
 	//! The filename and file_row_number columns of the build side
 	vector<idx_t> match_row_id_indexes;
+	//! The file list of the build-side scan. It has loaded the delete files of every matched data file, which are
+	//! removed together with that data file.
+	optional_ptr<IcebergMultiFileList> match_file_list;
 	//! The probe-side scan, if it is a plain table scan: it gets a runtime filter on the matched files
 	optional_ptr<PhysicalTableScan> keep_scan;
 	ProjectionIndex keep_scan_filename_index;
@@ -99,6 +104,8 @@ public:
 	string GetName() const override;
 
 private:
+	//! An earlier V3 snapshot in this transaction will assign any lineage that still reads NULL.
+	bool require_assigned_lineage = false;
 	//! Plans the rewrite of the files `match_plan` matches; `update_expressions` is empty for a DELETE
 	static PhysicalOperator &PlanRewrite(ClientContext &context, PhysicalPlanGenerator &planner,
 	                                     IcebergTableSchemaVersion &table, PhysicalOperator &match_plan,

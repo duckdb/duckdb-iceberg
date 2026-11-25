@@ -107,6 +107,8 @@ public:
 
 	//! Each data-changing statement creates an alter; the actions of one MERGE share an alter.
 	vector<reference<IcebergAddSnapshot>> alters;
+	//! A pending V3 snapshot assigns lineage at commit, including to retained files from before an upgrade.
+	bool has_pending_v3_snapshot = false;
 	//! Snapshot this transaction is based on (the tip when the manifest list was first cached).
 	//! Drives the delete commit-retry safety check.
 	optional<int64_t> base_snapshot_id;
