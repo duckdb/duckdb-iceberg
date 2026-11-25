@@ -81,7 +81,10 @@ PhysicalOperator &LogicalRewriteDataFiles::CreatePlan(ClientContext &context, Ph
 	auto &scan = planner.CreatePlan(*logical_child.children[0]);
 	//! Vended credentials are already installed: PlanRewrite loads them for the manifests,
 	//! and BindCandidateCopy's table scan bind calls PrepareIcebergScanFromEntry.
-	rewrite.PlanCopy(context, planner, metadata, scan, NumericCast<idx_t>(rewrite.plan.target_file_size_bytes));
+	//! SPEC: a V3 rewrite copies each row's _row_id and _last_updated_sequence_number; BindCandidateCopy scans them.
+	rewrite.PlanCopy(context, planner, metadata, scan, NumericCast<idx_t>(rewrite.plan.target_file_size_bytes),
+	                 metadata.iceberg_version >= 3 ? IcebergInsertVirtualColumns::WRITE_ROW_ID_AND_SEQUENCE_NUMBER
+	                                               : IcebergInsertVirtualColumns::NONE);
 	return rewrite;
 }
 
@@ -106,8 +109,8 @@ IcebergFileRewriteInput PhysicalRewriteDataFiles::GetRewriteInput(const IcebergF
 	for (auto &candidate : plan.selected_candidates) {
 		result.replaced_files.emplace_back(candidate.file_path);
 	}
-	for (auto &path : plan.delete_files_to_remove) {
-		result.replaced_files.emplace_back(path);
+	for (auto &file : plan.delete_files_to_remove) {
+		result.replaced_files.push_back(file);
 	}
 	return result;
 }

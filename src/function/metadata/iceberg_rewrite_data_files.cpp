@@ -16,12 +16,14 @@
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
+#include "duckdb/planner/operator/logical_projection.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "common/iceberg_utils.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "function/iceberg_functions.hpp"
 #include "maintenance/rewrite_data_files_operator.hpp"
 #include "maintenance/rewrite_data_files_planner.hpp"
+#include "planning/iceberg_multi_file_reader.hpp"
 
 #include <cmath>
 
@@ -220,6 +222,31 @@ static void FilterCandidateFiles(LogicalOperator &copy, const vector<RewriteCand
 	parent.get().children[0] = std::move(filter);
 }
 
+//! SPEC: a rewrite of a V3 table copies each row's _row_id and _last_updated_sequence_number into the new files.
+//! Append both after the table columns, where the writer expects them; the scan fills in inherited values.
+static void ProjectRowLineage(LogicalOperator &copy) {
+	if (copy.children.size() != 1 || copy.children[0]->type != LogicalOperatorType::LOGICAL_PROJECTION ||
+	    copy.children[0]->children.size() != 1 ||
+	    copy.children[0]->children[0]->type != LogicalOperatorType::LOGICAL_GET) {
+		throw InternalException("iceberg_rewrite_data_files: expected the COPY to read a projection over a scan");
+	}
+	auto &projection = copy.children[0]->Cast<LogicalProjection>();
+	auto &get = projection.children[0]->Cast<LogicalGet>();
+	for (auto virtual_column :
+	     {COLUMN_IDENTIFIER_ROW_ID, IcebergMultiFileReader::COLUMN_IDENTIFIER_LAST_SEQUENCE_NUMBER}) {
+		auto entry = get.virtual_columns.find(virtual_column);
+		if (entry == get.virtual_columns.end()) {
+			throw InternalException("iceberg_rewrite_data_files: the table scan does not expose virtual column %d",
+			                        static_cast<int64_t>(virtual_column));
+		}
+		auto &column_ids = get.GetMutableColumnIds();
+		column_ids.emplace_back(virtual_column);
+		ColumnBinding binding(get.table_index, ProjectionIndex(column_ids.size() - 1));
+		projection.expressions.push_back(
+		    make_uniq<BoundColumnRefExpression>(entry->second.name, entry->second.type, binding));
+	}
+}
+
 //! Bind a LogicalCopyToFile over the candidate scan. The logical COPY is not
 //! executed as-is: CreatePlan peels it off and rebuilds a PhysicalCopyToFile via
 //! IcebergInsert::PlanCopyForInsert (partitioned IcebergCopyOptions). Binding
@@ -247,6 +274,9 @@ static unique_ptr<LogicalOperator> BindCandidateCopy(Binder &binder, const Rewri
 
 	auto copy_binder = Binder::CreateBinder(binder.context, &binder);
 	auto bound_copy = copy_binder->Bind(copy_statement);
+	if (metadata.iceberg_version >= 3) {
+		ProjectRowLineage(*bound_copy.plan);
+	}
 	FilterCandidateFiles(*bound_copy.plan, plan.selected_candidates);
 	return std::move(bound_copy.plan);
 }

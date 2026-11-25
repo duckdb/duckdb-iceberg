@@ -504,8 +504,7 @@ bool DeleteFileFullyApplied(const IcebergTableMetadata &metadata, const IcebergM
                             const IcebergManifestEntry &delete_entry, const LiveDataFiles &live_data,
                             const unordered_set<string> &rewritten_paths) {
 	auto &delete_file = delete_entry.data_file;
-	//! InvalidateFile(path) addresses an ordinary file. An offset identifies a deletion-vector blob.
-	if (delete_file.content_offset || delete_file.file_path.empty()) {
+	if (delete_file.file_path.empty()) {
 		return false;
 	}
 	const bool has_reference = delete_file.referenced_data_file && !delete_file.referenced_data_file->empty();
@@ -513,6 +512,11 @@ bool DeleteFileFullyApplied(const IcebergTableMetadata &metadata, const IcebergM
 		return has_reference && rewritten_paths.count(*delete_file.referenced_data_file) > 0;
 	}
 	if (delete_file.content != IcebergManifestEntryContentType::POSITION_DELETES) {
+		return false;
+	}
+	//! A deletion vector is one blob of a Puffin file that other data files' vectors may share. Its offset
+	//! identifies it, and the spec requires it to reference its data file.
+	if (delete_file.content_offset && !has_reference) {
 		return false;
 	}
 	//! A position delete is file-scoped by referenced_data_file or by equal file_path bounds.
@@ -558,9 +562,9 @@ void CollectFullyAppliedDeleteFiles(RewritePlan &plan, const IcebergTableMetadat
 
 	auto live_data = CollectLiveDataFiles(manifest_files);
 
-	unordered_set<string> blocked_paths;
-	vector<string> removable_paths;
-	unordered_set<string> seen_removable;
+	unordered_set<IcebergFileIdentity, IcebergFileIdentityHash> blocked_files;
+	vector<IcebergFileIdentity> removable_files;
+	unordered_set<IcebergFileIdentity, IcebergFileIdentityHash> seen_removable;
 	for (const auto &list_entry : manifest_files) {
 		auto &manifest = list_entry.GetManifest();
 		for (const auto &entry : list_entry.GetManifestEntries()) {
@@ -572,20 +576,21 @@ void CollectFullyAppliedDeleteFiles(RewritePlan &plan, const IcebergTableMetadat
 			    delete_file.content != IcebergManifestEntryContentType::EQUALITY_DELETES) {
 				continue;
 			}
+			IcebergFileIdentity identity(delete_file.file_path, delete_file.content_offset);
 			if (!DeleteFileFullyApplied(metadata, manifest, entry, live_data, rewritten_paths)) {
-				blocked_paths.insert(delete_file.file_path);
+				blocked_files.insert(identity);
 				continue;
 			}
-			if (seen_removable.insert(delete_file.file_path).second) {
-				removable_paths.push_back(delete_file.file_path);
+			if (seen_removable.insert(identity).second) {
+				removable_files.push_back(identity);
 			}
 		}
 	}
-	for (auto &path : removable_paths) {
-		if (blocked_paths.count(path)) {
+	for (auto &file : removable_files) {
+		if (blocked_files.count(file)) {
 			continue;
 		}
-		plan.delete_files_to_remove.push_back(path);
+		plan.delete_files_to_remove.push_back(file);
 	}
 }
 
@@ -710,10 +715,6 @@ RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input)
 	}
 	plan.table_info = std::move(table_info_ptr);
 	table_info.VerifyWriteEncryptionSupported();
-
-	if (table_metadata.iceberg_version >= 3) {
-		throw NotImplementedException("iceberg_rewrite_data_files does not yet support V3 tables");
-	}
 
 	//! Reject an unknown or historical output spec before reading manifests.
 	auto output_spec_id = ResolveOutputSpecId(input, table_metadata);

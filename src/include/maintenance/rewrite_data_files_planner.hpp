@@ -9,6 +9,7 @@
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/parser/qualified_name.hpp"
 
+#include "core/metadata/iceberg_file_identity.hpp"
 #include "core/metadata/manifest/iceberg_manifest.hpp"
 
 namespace duckdb {
@@ -41,9 +42,9 @@ struct RewritePlan {
 	shared_ptr<IcebergTable> table_info;
 	//! Files selected for rewrite after per-partition size / min_input_files gating.
 	vector<RewriteCandidate> selected_candidates;
-	//! Distinct delete-file paths whose referenced data files were all selected.
-	//! Invalidated on the same REPLACE commit as the rewritten data files.
-	vector<string> delete_files_to_remove;
+	//! Distinct delete files whose referenced data files were all selected; a deletion vector is identified by its
+	//! Puffin path and offset. Invalidated on the same REPLACE commit as the rewritten data files.
+	vector<IcebergFileIdentity> delete_files_to_remove;
 	//! The rows the selected files hold before deletes: the most the rewrite can write
 	int64_t selected_record_count = 0;
 	//! The most rows the deletes that may apply to the selected files can remove, so the rewrite writes at least
