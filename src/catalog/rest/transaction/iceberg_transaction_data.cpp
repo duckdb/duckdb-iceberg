@@ -103,7 +103,12 @@ IcebergTransactionData::IcebergTransactionData(ClientContext &context, IcebergTr
 	initial_schema_id = table_info.GetMetadata().GetCurrentSchemaId();
 	initial_snapshot_id = table_info.GetMetadata().current_snapshot_id;
 	initial_last_column_id = table_info.GetMetadata().last_column_id;
-	initial_last_partition_field_id = table_info.GetMetadata().last_partition_field_id;
+	if (table_info.GetMetadata().HasLastPartitionId()) {
+		initial_last_partition_field_id = table_info.GetMetadata().GetLastPartitionFieldId();
+	} else {
+		//! V1 can omit last-partition-id. Infer it from all specs before this transaction adds any fields.
+		initial_last_partition_field_id = NumericCast<int32_t>(table_info.GetNextPartitionFieldId() - 1);
+	}
 	initial_default_spec_id = table_info.GetMetadata().default_spec_id;
 	if (table_info.GetMetadata().HasSortOrder()) {
 		initial_default_sort_order_id = table_info.GetMetadata().default_sort_order_id;
@@ -374,6 +379,10 @@ void IcebergTransactionData::AddUpdateSnapshot(partitioned_manifest_entry_map_t 
 }
 
 void IcebergTransactionData::TableAddSchema(int32_t schema_id) {
+	if (!has_assert_create && !initial_last_column_id.IsValid()) {
+		throw InvalidConfigurationException(
+		    "Cannot add a schema to table '%s': Iceberg metadata is missing 'last-column-id'", table_info.name);
+	}
 	auto &schema = table_info.GetMetadata().GetSchemaFromId(schema_id);
 	auto add_schema_update = make_uniq<AddSchemaUpdate>(schema.Copy(), table_info.GetMetadata().last_column_id);
 	updates.push_back(std::move(add_schema_update));

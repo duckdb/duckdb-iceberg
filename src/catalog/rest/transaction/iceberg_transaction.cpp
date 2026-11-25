@@ -200,20 +200,13 @@ static void CreateTableRequirements(DatabaseInstance &db, ClientContext &context
 	}
 	//! As in Iceberg's UpdateRequirements: these updates are only valid on top of the table state this transaction
 	//! started from, so the commit asserts that state.
-	if (!has_assert_create && transaction_data.HasUpdate(IcebergTableUpdateType::ADD_SCHEMA) &&
-	    transaction_data.initial_last_column_id.IsValid()) {
+	if (!has_assert_create && transaction_data.HasUpdate(IcebergTableUpdateType::ADD_SCHEMA)) {
 		AssertLastAssignedFieldIdRequirement requirement(
 		    NumericCast<int32_t>(transaction_data.initial_last_column_id.GetIndex()));
 		requirement.CreateRequirement(db, context, commit_state);
 	}
 	if (!has_assert_create && transaction_data.HasUpdate(IcebergTableUpdateType::ADD_PARTITION_SPEC)) {
-		//! Partition field ids start at 1000: 999 is asserted when the metadata has no last assigned partition id
-		int32_t last_assigned_partition_id = 999;
-		if (transaction_data.initial_last_partition_field_id.IsValid()) {
-			last_assigned_partition_id =
-			    NumericCast<int32_t>(transaction_data.initial_last_partition_field_id.GetIndex());
-		}
-		AssertLastAssignedPartitionIdRequirement requirement(last_assigned_partition_id);
+		AssertLastAssignedPartitionIdRequirement requirement(transaction_data.initial_last_partition_field_id);
 		requirement.CreateRequirement(db, context, commit_state);
 	}
 	if (!has_assert_create && transaction_data.HasUpdate(IcebergTableUpdateType::SET_DEFAULT_SPEC)) {

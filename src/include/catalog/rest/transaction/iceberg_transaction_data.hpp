@@ -89,7 +89,7 @@ public:
 	int32_t initial_format_version;
 	int32_t initial_schema_id;
 	optional_idx initial_last_column_id;
-	optional_idx initial_last_partition_field_id;
+	int32_t initial_last_partition_field_id;
 	int32_t initial_default_spec_id = 0;
 	optional_idx initial_default_sort_order_id;
 	optional<int64_t> initial_snapshot_id;

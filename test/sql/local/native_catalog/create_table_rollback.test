@@ -104,16 +104,17 @@ SELECT id FROM eager_catalog.create_rollback.shared;
 ----
 42
 
-# A commit is refused when another transaction has repartitioned the table since it was created, and the table is kept
+# Eager creation publishes the table before COMMIT. The creator must preserve a newer layout.
+foreach layout,default_id partitioned,default-spec-id sorted,default-sort-order-id
+
 statement ok con1
 BEGIN;
 
 statement ok con1
-CREATE TABLE eager_catalog.create_rollback.altered (a INTEGER, b INTEGER);
+CREATE TABLE eager_catalog.create_rollback.altered_{layout} (a INTEGER, b INTEGER);
 
-# con2 is in autocommit: the table is partitioned before con1 commits
 statement ok con2
-ALTER TABLE eager_catalog.create_rollback.altered SET PARTITIONED BY (b);
+ALTER TABLE eager_catalog.create_rollback.altered_{layout} SET {layout} BY (b);
 
 statement error con1
 COMMIT;
@@ -121,10 +122,12 @@ COMMIT;
 <REGEX>:.*Conflict_409.*
 
 query II
-SELECT status, json_extract(body, '$.metadata."default-spec-id"')::INTEGER
-FROM iceberg_test_catalog_request('GET', '/v1/namespaces/create_rollback/tables/altered', NULL);
+SELECT status, json_extract(body, '$.metadata."{default_id}"')::INTEGER
+FROM iceberg_test_catalog_request('GET', '/v1/namespaces/create_rollback/tables/altered_{layout}', NULL);
 ----
 200	1
+
+endloop
 
 # A statement refused after its create request was sent leaves no table either
 statement ok

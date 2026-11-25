@@ -45,5 +45,28 @@ select * from my_datalake.default.existing_schema_conflict order by id;
 1	100	NULL	NULL
 2	200	NULL	5
 
+# Reusing a schema allocates no field IDs. Another writer can advance last-column-id
+# and return to the same schema while the DROP is pending.
+statement ok con1
+BEGIN;
+
+statement ok con1
+ALTER TABLE my_datalake.default.existing_schema_conflict DROP COLUMN discount;
+
+statement ok con2
+ALTER TABLE my_datalake.default.existing_schema_conflict ADD COLUMN transient INTEGER;
+
+statement ok con2
+ALTER TABLE my_datalake.default.existing_schema_conflict DROP COLUMN transient;
+
+statement ok con1
+COMMIT;
+
+query III fresh
+SELECT * FROM my_datalake.default.existing_schema_conflict ORDER BY id;
+----
+1	100	NULL
+2	200	NULL
+
 statement ok
 drop table my_datalake.default.existing_schema_conflict;

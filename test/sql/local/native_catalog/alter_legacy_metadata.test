@@ -1,5 +1,5 @@
 # name: test/sql/local/native_catalog/alter_legacy_metadata.test
-# description: ALTERs bound to legacy V1 metadata protect the implicit unsorted order and unassigned partition IDs
+# description: ALTERs bound to legacy V1 metadata protect the implicit unsorted order and assigned partition IDs
 # group: [native_catalog]
 
 require-env CATALOG_TEST_CONFIG_SETUP mock
@@ -22,7 +22,7 @@ CREATE MACRO legacy_metadata(response) AS json_merge_patch(response::JSON,
 
 statement ok
 ATTACH '' AS legacy_catalog (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
-	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none');
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none', DISABLE_MULTI_TABLE_COMMIT true);
 
 statement ok
 CREATE TABLE my_datalake.default.legacy_sort_conflict (a INTEGER, b INTEGER);
@@ -81,15 +81,27 @@ WHERE sort_order."order-id"::INTEGER = metadata."default-sort-order-id"::INTEGER
 statement ok
 CREATE TABLE my_datalake.default.legacy_layout_upgrade (a INTEGER, b INTEGER);
 
+# Only a historical spec contains fields 1000 and 1001. Both tables now use the empty spec.
+statement ok
+CREATE TABLE my_datalake.default.legacy_layout_history (a INTEGER, b INTEGER);
+
+statement ok
+ALTER TABLE my_datalake.default.legacy_layout_history SET PARTITIONED BY (bucket(4, a), b);
+
+statement ok
+ALTER TABLE my_datalake.default.legacy_layout_history RESET PARTITIONED BY;
+
+foreach table,last_id,spec_id legacy_layout_upgrade,999,1 legacy_layout_history,1001,2
+
 statement ok
 SET VARIABLE legacy_response = (
 	SELECT legacy_metadata(body)
-	FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/legacy_layout_upgrade', NULL)
+	FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/{table}', NULL)
 );
 
 query I
 SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
-	json_object('method', 'GET', 'path', '/v1/namespaces/default/tables/legacy_layout_upgrade',
+	json_object('method', 'GET', 'path', '/v1/namespaces/default/tables/{table}',
 		'status', 200, 'body', getvariable('legacy_response')));
 ----
 204
@@ -98,13 +110,13 @@ statement ok writer
 BEGIN;
 
 statement ok writer
-ALTER TABLE legacy_catalog.default.legacy_layout_upgrade SET ('format-version' = 2);
+ALTER TABLE legacy_catalog.default.{table} SET ('format-version' = 2);
 
 statement ok writer
-ALTER TABLE legacy_catalog.default.legacy_layout_upgrade SET PARTITIONED BY (a);
+ALTER TABLE legacy_catalog.default.{table} SET PARTITIONED BY (a);
 
 statement ok writer
-ALTER TABLE legacy_catalog.default.legacy_layout_upgrade SET SORTED BY (b);
+ALTER TABLE legacy_catalog.default.{table} SET SORTED BY (b);
 
 query I
 SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
@@ -115,25 +127,37 @@ statement ok writer
 COMMIT;
 
 query IIII
-SELECT metadata."format-version", metadata."default-spec-id",
-	metadata."last-partition-id", metadata."default-sort-order-id"
-FROM iceberg_load_table_response('my_datalake.default.legacy_layout_upgrade');
+SELECT metadata."format-version", metadata."default-spec-id"::INTEGER = {spec_id},
+	metadata."last-partition-id"::INTEGER = {last_id} + 1, metadata."default-sort-order-id"
+FROM iceberg_load_table_response('my_datalake.default.{table}');
 ----
-2	1	1000	1
+2	true	true	1
+
+# A successful upgrade must still protect that inferred ID against concurrent field allocation.
+query I
+SELECT requirement.value->>'last-assigned-partition-id' = '{last_id}'
+FROM read_json_auto('{TEMP_DIR}/iceberg-native/*/requests.jsonl') AS journal,
+json_each(try_cast(journal.request AS JSON), '$.requirements') AS requirement
+WHERE journal.method = 'POST' AND journal.path = '/v1/namespaces/default/tables/{table}'
+	AND requirement.value->>'type' = 'assert-last-assigned-partition-id';
+----
+true
 
 statement ok
-INSERT INTO my_datalake.default.legacy_layout_upgrade VALUES (1, 2);
+INSERT INTO my_datalake.default.{table} VALUES (1, 2);
 
 query II fresh
-SELECT * FROM my_datalake.default.legacy_layout_upgrade;
+SELECT * FROM my_datalake.default.{table};
 ----
 1	2
 
 statement ok
-DROP TABLE my_datalake.default.legacy_sort_conflict;
+DROP TABLE my_datalake.default.{table};
+
+endloop
 
 statement ok
-DROP TABLE my_datalake.default.legacy_layout_upgrade;
+DROP TABLE my_datalake.default.legacy_sort_conflict;
 
 statement ok
 DETACH legacy_catalog;

@@ -1,0 +1,42 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/test_layout_schema_conflict.test
+# description: A layout change conflicts when another writer drops its source column
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+foreach layout PARTITIONED SORTED
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.layout_schema_conflict;
+
+statement ok
+CREATE TABLE my_datalake.default.layout_schema_conflict (id INTEGER, val INTEGER);
+
+statement ok writer
+BEGIN;
+
+statement ok writer
+ALTER TABLE my_datalake.default.layout_schema_conflict SET {layout} BY (val);
+
+statement ok
+ALTER TABLE my_datalake.default.layout_schema_conflict DROP COLUMN val;
+
+statement error writer
+COMMIT;
+----
+<REGEX>:.*Conflict_409.*
+
+statement ok
+INSERT INTO my_datalake.default.layout_schema_conflict VALUES (42);
+
+query I fresh
+SELECT * FROM my_datalake.default.layout_schema_conflict;
+----
+42
+
+statement ok
+DROP TABLE my_datalake.default.layout_schema_conflict;
+
+endloop

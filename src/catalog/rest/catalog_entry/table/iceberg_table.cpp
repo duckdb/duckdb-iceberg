@@ -465,7 +465,7 @@ idx_t IcebergTable::GetNextPartitionSpecId() {
 	return max_partition_spec_id + 1;
 }
 
-idx_t IcebergTable::GetNextPartitionFieldId() {
+idx_t IcebergTable::GetNextPartitionFieldId() const {
 	idx_t next_partition_field_id = 1000;
 	if (GetMetadata().HasLastPartitionId()) {
 		next_partition_field_id = GetMetadata().GetLastPartitionFieldId() + 1;
