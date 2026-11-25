@@ -36,12 +36,14 @@ void IcebergCopyToFile::ApplyCopyOptions(IcebergCopyOptions &copy_options, const
 			for (idx_t i = 0; i < StructType::GetChildCount(type); i++) {
 				auto &name = StructType::GetChildName(type, i);
 				auto child = field.GetChild(name.GetIdentifierName());
-				if (child) {
-					auto next = path;
-					next.struct_path.push_back(i);
-					next.name += "." + child->name;
-					self(self, *child, StructType::GetChildType(type, i), std::move(next));
+				if (!child) {
+					throw InternalException("Written struct field %s.%s not found in Iceberg schema", path.name,
+					                        name.GetIdentifierName());
 				}
+				auto next = path;
+				next.struct_path.push_back(i);
+				next.name += "." + child->name;
+				self(self, *child, StructType::GetChildType(type, i), std::move(next));
 			}
 		}
 	};
