@@ -45,10 +45,30 @@ INSERT INTO my_datalake.default.required_list_elements VALUES (NULL, [NULL]::VAR
 ----
 NOT NULL constraint failed
 
-query I
-SELECT count(*) FROM my_datalake.default.required_list_elements;
+statement error
+UPDATE my_datalake.default.required_list_elements SET tags = [NULL]::VARCHAR[] WHERE tags = ['y'];
 ----
-3
+NOT NULL constraint failed
+
+statement error
+MERGE INTO my_datalake.default.required_list_elements AS t
+USING (SELECT [NULL]::VARCHAR[] AS tags) AS s ON false
+WHEN NOT MATCHED THEN INSERT (label, tags) VALUES (NULL, s.tags);
+----
+NOT NULL constraint failed
+
+statement error
+INSERT INTO my_datalake.default.required_list_elements
+SELECT NULL, CASE WHEN i = 3000 THEN [NULL] ELSE [] END::VARCHAR[] FROM range(5000) t(i);
+----
+NOT NULL constraint failed
+
+query II
+SELECT label.controls, tags FROM my_datalake.default.required_list_elements ORDER BY len(label.controls) NULLS LAST;
+----
+[]	[]
+[x]	[y]
+NULL	[]
 
 statement ok
 DROP TABLE my_datalake.default.required_list_elements;
