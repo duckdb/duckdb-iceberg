@@ -303,29 +303,45 @@ set variable delete_list = (select list(t) from (select f.* from range(300), del
 statement ok
 call enable_logging('Iceberg');
 
+# Freeze the inputs as macro defaults. Preparing with the optimizer off keeps the bound plan
+# across executions, since DuckDB otherwise rebinds a scan that references a catalog macro.
 statement ok
-call truncate_duckdb_logs();
+create temp macro delete_scan(task_rows := getvariable('delete_list'), doc := getvariable('ctx_metadata')) as table
+select id from iceberg_scan_tasks(task_rows, schema_id := 1, metadata := doc);
+
+statement ok
+pragma disable_optimizer;
+
+statement ok
+prepare scan_with_deletes as select count(*), sum(id) from delete_scan();
+
+statement ok
+pragma enable_optimizer;
 
 loop threads 1 5
 
 statement ok
 set threads={threads};
 
+statement ok
+call truncate_duckdb_logs();
+
 # Per copy of the three tasks: ids 1, 2, 3 survive the position delete, 0, 1, 3 the equality delete, all four the
 # third task.
 query II
-select count(*), sum(id) from iceberg_scan_tasks(getvariable('delete_list'), snapshot_id := NULL, schema_id := 1,
- metadata := getvariable('ctx_metadata'), schema := getvariable('ctx_schema'));
+execute scan_with_deletes;
 ----
 3000	4800
 
-endloop
-
-query I
-select count(*) filter (where message.contains('Iceberg scan tasks executor mode=multi_file'))
+# Each execution reads the position delete once for all 300 tasks that use it.
+query II
+select count(*) filter (where message.contains('Iceberg scan tasks executor mode=multi_file')),
+       count(*) filter (where message.contains('Iceberg Delete Scan') and message.contains('ctx_pos.parquet'))
 from duckdb_logs() where type='Iceberg';
 ----
-0
+0	1
+
+endloop
 
 statement ok
 call disable_logging();
@@ -335,13 +351,34 @@ reset threads;
 
 # Every argument may be a prepared statement's parameter.
 statement ok
-prepare by_parameters as select count(*), sum(id) from iceberg_scan_tasks($1, snapshot_id := $2, schema_id := $3,
- metadata := $4, schema := $5);
+prepare by_parameters as select * from iceberg_scan_tasks($1, snapshot_id := $2, schema_id := $3,
+ metadata := $4, schema := $5) order by id;
 
-query II
+query IIIII
 execute by_parameters(getvariable('file_list'), NULL::bigint, 1, getvariable('ctx_metadata'), getvariable('ctx_schema'));
 ----
-4	6
+0	NULL	{'key': 0}	P	99
+1	10	{'key': NULL}	P	99
+2	20	{'key': 2}	P	99
+3	30	{'key': 3}	P	99
+
+# Rebind the same statement to a v1 document with a different schema and a legacy partition spec.
+statement ok
+set variable v1_metadata = (select content::json from
+ read_text('data/persistent/iceberg_v1_deprecated/default/legacy_v1/metadata/v2.metadata.json'));
+
+statement ok
+set variable v1_files = (select list(t) from (
+ select f.* replace(p.filename as file_path, p.size::bigint as file_size_in_bytes, 2::bigint as record_count,
+                    {'2':'alpha'} as partition_constants)
+ from files f, read_blob('data/persistent/iceberg_v1_deprecated/default/legacy_v1/data/category=alpha/*.parquet') p) t);
+
+query III
+execute by_parameters(getvariable('v1_files'), 2456114553637229296, 0, getvariable('v1_metadata'),
+ NULL::struct(id integer, category varchar, amount integer));
+----
+1	alpha	10
+3	alpha	NULL
 
 # A scan that stops early releases its tasks.
 query I
