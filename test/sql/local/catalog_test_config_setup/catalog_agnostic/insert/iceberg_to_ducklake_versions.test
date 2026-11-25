@@ -2,7 +2,9 @@
 # description: Convert a partitioned Iceberg table with position deletes across DuckLake versions
 # group: [insert]
 
-require-env CATALOG_TEST_CONFIG_SETUP
+# DuckLake reads the source files directly. The fixture has a storage secret
+# independent of the Iceberg transaction, and the mock uses local files.
+require-env CATALOG_TEST_CONFIG_SETUP fixture mock
 
 include test/sql/init_requires
 
