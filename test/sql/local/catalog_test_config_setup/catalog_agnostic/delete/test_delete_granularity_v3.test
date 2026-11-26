@@ -1,0 +1,42 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_delete_granularity_v3.test
+# description: write.delete.granularity has no effect on v3 deletion vectors, which are per data file by spec
+# group: [delete]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+# The property is accepted on a v3 table but does not apply: every data file keeps its own deletion vector.
+# How the vectors are packed into Puffin files is covered by test_deletion_vector_target_file_size.test.
+
+statement ok
+CREATE TABLE my_datalake.default.delete_granularity_v3 (id INTEGER, dep VARCHAR)
+PARTITIONED BY (dep)
+WITH ('format-version' = '3', 'write.delete.granularity' = 'partition');
+
+statement ok
+INSERT INTO my_datalake.default.delete_granularity_v3 VALUES (1, 'hr'), (2, 'hr');
+
+statement ok
+INSERT INTO my_datalake.default.delete_granularity_v3 VALUES (3, 'hr'), (4, 'hr');
+
+statement ok
+DELETE FROM my_datalake.default.delete_granularity_v3 WHERE id IN (1, 3);
+
+query II
+SELECT dep, id FROM my_datalake.default.delete_granularity_v3 ORDER BY id;
+----
+hr	2
+hr	4
+
+query I
+SELECT bool_and(file_format = 'puffin')
+FROM iceberg_metadata(my_datalake.default.delete_granularity_v3)
+WHERE content = 'POSITION_DELETES' AND status <> 'DELETED';
+----
+true
+
+statement ok
+DROP TABLE my_datalake.default.delete_granularity_v3;

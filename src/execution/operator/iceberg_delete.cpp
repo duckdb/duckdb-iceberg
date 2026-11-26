@@ -198,9 +198,10 @@ vector<data_t> IcebergDelete::SerializeDeletionVector(const set<idx_t> &sorted_d
 	return IcebergDeletionVectorData::ToBlob(bitmaps);
 }
 
-IcebergDeleteFileInfo IcebergDelete::WritePositionalDeleteFile(ClientContext &context, const string &filename,
-                                                               IcebergDeleteFileInfo delete_file,
-                                                               const set<idx_t> &sorted_deletes) const {
+IcebergDeleteFileInfo IcebergDelete::WritePositionalDeleteFile(ClientContext &context,
+                                                               const vector<pair<string, set<idx_t>>> &deletes_by_file,
+                                                               IcebergDeleteFileInfo delete_file) const {
+	D_ASSERT(!deletes_by_file.empty());
 	auto delete_file_path = delete_file.file_name;
 	auto info = make_uniq<CopyInfo>();
 	info->file_path = delete_file_path;
@@ -250,25 +251,30 @@ IcebergDeleteFileInfo IcebergDelete::WritePositionalDeleteFile(ClientContext &co
 
 	DataChunk write_chunk;
 	write_chunk.Initialize(context, write_types);
-	// the first vector is constant (the file name)
-	Value filename_val(filename);
-	write_chunk.data[0].Reference(filename_val, count_t(STANDARD_VECTOR_SIZE));
-
-	idx_t row_count = 0;
 	auto row_data = FlatVector::GetDataMutable<int64_t>(write_chunk.data[1]);
-	for (auto &row_idx : sorted_deletes) {
-		row_data[row_count++] = NumericCast<int64_t>(row_idx);
-		if (row_count >= STANDARD_VECTOR_SIZE) {
-			write_chunk.SetChildCardinality(row_count);
-			copy_fun.function.copy_to_sink(execution_context, *function_data, *copy_global_state, *copy_local_state,
-			                               write_chunk);
-			row_count = 0;
-		}
-	}
-	if (row_count > 0) {
+	auto sink = [&](idx_t row_count) {
 		write_chunk.SetChildCardinality(row_count);
 		copy_fun.function.copy_to_sink(execution_context, *function_data, *copy_global_state, *copy_local_state,
 		                               write_chunk);
+	};
+
+	// `deletes_by_file` is ordered by data-file path and each position set is ascending, so the rows
+	// are written sorted by `file_path` then `pos`, as the spec requires.
+	for (auto &entry : deletes_by_file) {
+		// The file_path vector is constant, so one chunk carries the positions of one data file only.
+		Value filename_val(entry.first);
+		write_chunk.data[0].Reference(filename_val, count_t(STANDARD_VECTOR_SIZE));
+		idx_t row_count = 0;
+		for (auto &row_idx : entry.second) {
+			row_data[row_count++] = NumericCast<int64_t>(row_idx);
+			if (row_count >= STANDARD_VECTOR_SIZE) {
+				sink(row_count);
+				row_count = 0;
+			}
+		}
+		if (row_count > 0) {
+			sink(row_count);
+		}
 	}
 
 	copy_fun.function.copy_to_combine(execution_context, *function_data, *copy_global_state, *copy_local_state);
@@ -276,6 +282,10 @@ IcebergDeleteFileInfo IcebergDelete::WritePositionalDeleteFile(ClientContext &co
 
 	delete_file.file_name = delete_file_path;
 	delete_file.file_format = "parquet";
+	// Left empty for a single data file, so its equal `file_path` bounds mark the file as file-scoped.
+	if (deletes_by_file.size() > 1) {
+		delete_file.data_file_path_upper = deletes_by_file.back().first;
+	}
 	delete_file.delete_count = stats.row_count;
 	delete_file.file_size_bytes = stats.file_size_bytes;
 	delete_file.footer_size = stats.footer_size_bytes.GetValue<idx_t>();
@@ -287,9 +297,10 @@ IcebergDeleteFileInfo IcebergDelete::WritePositionalDeleteFile(ClientContext &co
 	delete_file.pos_min_value = pos_min_value;
 	delete_file.pos_max_value = pos_max_value;
 	DUCKDB_LOG(context, IcebergLogType,
-	           "Iceberg DELETE, wrote positional_delete_file '%s' for data_file '%s', delete_count=%llu, "
-	           "file_size=%llu bytes",
-	           delete_file_path, filename, stats.row_count, stats.file_size_bytes);
+	           "Iceberg DELETE, wrote positional_delete_file '%s' for %llu data_file(s) '%s'..'%s', "
+	           "delete_count=%llu, file_size=%llu bytes",
+	           delete_file_path, deletes_by_file.size(), deletes_by_file.front().first, deletes_by_file.back().first,
+	           stats.row_count, stats.file_size_bytes);
 	return delete_file;
 }
 
@@ -329,6 +340,38 @@ idx_t DeleteTargetFileSize(const IcebergTableMetadata &metadata) {
 	return static_cast<idx_t>(size);
 }
 
+IcebergDeleteGranularity DeleteGranularity(const IcebergTableMetadata &metadata) {
+	constexpr const char *PROPERTY = "write.delete.granularity";
+	auto &properties = metadata.GetTableProperties();
+	auto entry = properties.find(PROPERTY);
+	if (entry == properties.end()) {
+		return IcebergDeleteGranularity::FILE;
+	}
+	if (StringUtil::CIEquals(entry->second, "file")) {
+		return IcebergDeleteGranularity::FILE;
+	}
+	if (StringUtil::CIEquals(entry->second, "partition")) {
+		return IcebergDeleteGranularity::PARTITION;
+	}
+	throw InvalidInputException("Iceberg: '%s' must be 'file' or 'partition', got '%s'", PROPERTY, entry->second);
+}
+
+//! Deletes may share a delete file only when both the partition values and the spec id are equal: a
+//! reader applies a delete file to a data file only if the partition, spec included, is the same.
+string PartitionGroupKey(const IcebergPartition &partition) {
+	vector<IcebergPartitionInfo> sorted = partition.fields;
+	std::sort(sorted.begin(), sorted.end(),
+	          [](const IcebergPartitionInfo &a, const IcebergPartitionInfo &b) { return a.field_id < b.field_id; });
+	// Length-prefix the values so that keys cannot collide on a delimiter.
+	string key = std::to_string(partition.partition_spec_id);
+	for (auto &field : sorted) {
+		key += ":" + std::to_string(field.field_id) + ":";
+		auto value = field.value.IsNull() ? string() : field.value.ToString();
+		key += std::to_string(value.size()) + ":" + value;
+	}
+	return key;
+}
+
 IcebergPuffinBlobMetadata DeletionVectorMetadata(const IcebergDeleteFileInfo &file) {
 	IcebergPuffinBlobMetadata metadata;
 	metadata.type = "deletion-vector-v1";
@@ -349,8 +392,7 @@ void FinishDeleteFiles(const IcebergDelete &op, ClientContext &context, IcebergD
 			if (write.superseded_deletes) {
 				PopulateAlteredManifests(result.altered_manifests, *write.superseded_deletes);
 			}
-			auto data_file_path = write.delete_file.data_file_path;
-			result.written_files.emplace(std::move(data_file_path), std::move(write.delete_file));
+			result.written_files.push_back(std::move(write.delete_file));
 		}
 	}
 	if (stage_snapshot) {
@@ -445,20 +487,21 @@ private:
 	idx_t target_file_size;
 };
 
-//! Merge old deletes and serialize each vector in parallel before packing by actual encoded size.
+//! Materialize one delete file in parallel: a v2 position-delete file, or a v3 vector that the write
+//! event then packs by its actual encoded size.
 class IcebergDeleteFileMaterializeTask : public ExecutorTask {
 public:
 	IcebergDeleteFileMaterializeTask(Executor &executor, shared_ptr<Event> event, const IcebergDelete &op,
-	                                 const string &filename, vector<idx_t> &deleted_rows, IcebergDeleteFileWrite &out)
-	    : ExecutorTask(executor, std::move(event)), op(op), filename(filename), deleted_rows(deleted_rows), out(out) {
+	                                 IcebergDeleteFileGroup &group, IcebergDeleteFileWrite &out)
+	    : ExecutorTask(executor, std::move(event)), op(op), group(group), out(out) {
 	}
 
 	TaskExecutionResult ExecuteTask(TaskExecutionMode mode) override {
 		auto &context = event->GetClientContext();
 		context.InterruptCheck();
-		out = op.MaterializeDeletes(context, filename, deleted_rows);
-		// The encoded vector replaces the pending row positions while waiting for the write event.
-		deleted_rows = vector<idx_t>();
+		out = op.MaterializeDeletes(context, group);
+		// The written file replaces the pending row positions while waiting for the write event.
+		group.files.clear();
 		event->FinishTask();
 		return TaskExecutionResult::TASK_FINISHED;
 	}
@@ -469,8 +512,7 @@ public:
 
 private:
 	const IcebergDelete &op;
-	const string &filename;
-	vector<idx_t> &deleted_rows;
+	IcebergDeleteFileGroup &group;
 	IcebergDeleteFileWrite &out;
 };
 
@@ -480,18 +522,25 @@ public:
 	                                  IcebergDeleteGlobalState &global_state, IcebergPendingDeletes pending_deletes,
 	                                  bool stage_snapshot)
 	    : BasePipelineEvent(pipeline), op(op), global_state(global_state), pending_deletes(std::move(pending_deletes)),
-	      writes(this->pending_deletes.rows_by_file.size()), stage_snapshot(stage_snapshot) {
+	      stage_snapshot(stage_snapshot) {
 	}
 
 	void Schedule() override {
-		if (op.table.table_info.GetMetadata().iceberg_version >= 3) {
-			target_file_size = DeleteTargetFileSize(op.table.table_info.GetMetadata());
+		auto &metadata = op.table.table_info.GetMetadata();
+		// Read the property on every version, so that an invalid value fails the write.
+		auto granularity = DeleteGranularity(metadata);
+		if (metadata.iceberg_version >= 3) {
+			target_file_size = DeleteTargetFileSize(metadata);
+			// A deletion vector is per data file by spec; granularity applies to position deletes only.
+			granularity = IcebergDeleteGranularity::FILE;
 		}
+		GroupPendingDeletes(granularity);
+		writes = vector<IcebergDeleteFileWrite>(groups.size());
+
 		vector<shared_ptr<Task>> tasks;
-		idx_t index = 0;
-		for (auto &entry : pending_deletes.rows_by_file) {
-			tasks.push_back(make_shared_ptr<IcebergDeleteFileMaterializeTask>(
-			    executor, shared_from_this(), op, entry.first, entry.second, writes[index++]));
+		for (idx_t i = 0; i < groups.size(); i++) {
+			tasks.push_back(make_shared_ptr<IcebergDeleteFileMaterializeTask>(executor, shared_from_this(), op,
+			                                                                  groups[i], writes[i]));
 		}
 		SetTasks(std::move(tasks));
 	}
@@ -506,9 +555,32 @@ public:
 	}
 
 private:
+	//! Each group becomes one delete file. Under file granularity every data file is its own group. Under
+	//! partition granularity the data files of one partition and spec share a group, ordered by path, so the
+	//! delete file comes out sorted by file_path; an unpartitioned table is a single group.
+	void GroupPendingDeletes(IcebergDeleteGranularity granularity) {
+		auto &planner = op.multi_file_list->GetScanPlanner();
+		map<string, IcebergDeleteFileGroup> groups_by_key;
+		for (auto &entry : pending_deletes.rows_by_file) {
+			auto key = granularity == IcebergDeleteGranularity::PARTITION
+			               ? PartitionGroupKey(planner.GetPartitionForDataFile(entry.first))
+			               : entry.first;
+			groups_by_key[key].files.emplace_back(entry.first, std::move(entry.second));
+		}
+		for (auto &entry : groups_by_key) {
+			auto &group = entry.second;
+			std::sort(group.files.begin(), group.files.end(),
+			          [](const pair<string, vector<idx_t>> &a, const pair<string, vector<idx_t>> &b) {
+				          return a.first < b.first;
+			          });
+			groups.push_back(std::move(group));
+		}
+	}
+
 	const IcebergDelete &op;
 	IcebergDeleteGlobalState &global_state;
 	IcebergPendingDeletes pending_deletes;
+	vector<IcebergDeleteFileGroup> groups;
 	vector<IcebergDeleteFileWrite> writes;
 	bool stage_snapshot;
 	idx_t target_file_size = 0;
@@ -546,42 +618,49 @@ void IcebergDelete::ScheduleDeletes(Pipeline &pipeline, Event &event, IcebergDel
 	                                                                     std::move(pending_deletes), stage_snapshot));
 }
 
-IcebergDeleteFileWrite IcebergDelete::MaterializeDeletes(ClientContext &context, const string &filename,
-                                                         const vector<idx_t> &deleted_rows) const {
+IcebergDeleteFileWrite IcebergDelete::MaterializeDeletes(ClientContext &context,
+                                                         const IcebergDeleteFileGroup &group) const {
+	D_ASSERT(!group.files.empty());
 	bool write_deletion_vector = table.table_info.GetMetadata().iceberg_version >= 3;
+	// A deletion vector is per data file by spec, so a v3 group never holds more than one.
+	D_ASSERT(!write_deletion_vector || group.files.size() == 1);
 	IcebergDeleteFileWrite result;
 
 	// Check newly selected positions before adding existing deletes: only new duplicate matches are errors.
-	set<idx_t> sorted_deletes;
-	for (auto &row_idx : deleted_rows) {
-		sorted_deletes.insert(row_idx);
-	}
-	if (sorted_deletes.size() != deleted_rows.size()) {
-		throw NotImplementedException("The same row was updated multiple times - this is not (yet) supported in "
-		                              "Iceberg. Eliminate duplicate matches prior to running the UPDATE");
-	}
-	if (write_deletion_vector) {
-		// A v3 vector must also retain all positions already deleted from this data file.
-		result.superseded_deletes = multi_file_list->GetExistingPositionalDeleteData(filename);
-		if (result.superseded_deletes) {
-			result.superseded_deletes->ToSet(sorted_deletes);
+	vector<pair<string, set<idx_t>>> deletes_by_file;
+	deletes_by_file.reserve(group.files.size());
+	for (auto &entry : group.files) {
+		set<idx_t> sorted_deletes(entry.second.begin(), entry.second.end());
+		if (sorted_deletes.size() != entry.second.size()) {
+			throw NotImplementedException("The same row was updated multiple times - this is not (yet) supported in "
+			                              "Iceberg. Eliminate duplicate matches prior to running the UPDATE");
 		}
+		deletes_by_file.emplace_back(entry.first, std::move(sorted_deletes));
 	}
 
+	auto &filename = deletes_by_file.front().first;
+	auto &sorted_deletes = deletes_by_file.front().second;
 	IcebergDeleteFileInfo delete_file;
 	delete_file.data_file_path = filename;
+	// Every data file of a group shares one partition and spec, so the first describes them all.
 	delete_file.partition_info = multi_file_list->GetScanPlanner().GetPartitionForDataFile(filename);
 
 	if (!write_deletion_vector) {
 		delete_file.file_name = DeleteFilePath(FileSystem::GetFileSystem(context), filename, "parquet");
-		result.delete_file = WritePositionalDeleteFile(context, filename, std::move(delete_file), sorted_deletes);
-	} else {
-		result.deletion_vector = SerializeDeletionVector(sorted_deletes);
-		delete_file.file_format = "puffin";
-		delete_file.delete_count = sorted_deletes.size();
-		delete_file.content_size_in_bytes = result.deletion_vector.size();
-		result.delete_file = std::move(delete_file);
+		result.delete_file = WritePositionalDeleteFile(context, deletes_by_file, std::move(delete_file));
+		return result;
 	}
+
+	// A v3 vector must also retain all positions already deleted from this data file.
+	result.superseded_deletes = multi_file_list->GetExistingPositionalDeleteData(filename);
+	if (result.superseded_deletes) {
+		result.superseded_deletes->ToSet(sorted_deletes);
+	}
+	result.deletion_vector = SerializeDeletionVector(sorted_deletes);
+	delete_file.file_format = "puffin";
+	delete_file.delete_count = sorted_deletes.size();
+	delete_file.content_size_in_bytes = result.deletion_vector.size();
+	result.delete_file = std::move(delete_file);
 	return result;
 }
 
@@ -592,9 +671,8 @@ partitioned_manifest_entry_map_t IcebergDelete::GenerateDeleteManifestEntries(Ic
 
 partitioned_manifest_entry_map_t IcebergDeleteWriteResult::GenerateManifestEntries() const {
 	partitioned_manifest_entry_map_t iceberg_delete_files;
-	for (const auto &delete_entry : written_files) {
-		auto data_file_name = delete_entry.first;
-		auto &delete_file = delete_entry.second;
+	for (const auto &delete_file : written_files) {
+		auto &data_file_name = delete_file.data_file_path;
 
 		IcebergManifestEntry manifest_entry;
 		manifest_entry.status = IcebergManifestEntryStatusType::ADDED;
@@ -632,11 +710,16 @@ partitioned_manifest_entry_map_t IcebergDeleteWriteResult::GenerateManifestEntri
 			data_file.content_offset = delete_file.content_offset.GetIndex();
 		}
 
-		// Filename bounds contain raw UTF-8 bytes, not escaped BLOB literals.
+		// Filename bounds contain raw UTF-8 bytes, not escaped BLOB literals. They span every data file
+		// the delete file covers, so equal bounds still mean it holds deletes for one data file only.
+		const auto &data_file_name_upper =
+		    delete_file.data_file_path_upper.empty() ? data_file_name : delete_file.data_file_path_upper;
 		data_file.lower_bounds[MultiFileReader::DELETE_FILE_PATH_FIELD_ID] = Value::BLOB_RAW(data_file_name);
-		data_file.upper_bounds[MultiFileReader::DELETE_FILE_PATH_FIELD_ID] = Value::BLOB_RAW(data_file_name);
-		// set referenced_data_file
-		data_file.referenced_data_file = data_file_name;
+		data_file.upper_bounds[MultiFileReader::DELETE_FILE_PATH_FIELD_ID] = Value::BLOB_RAW(data_file_name_upper);
+		if (delete_file.data_file_path_upper.empty()) {
+			// Only a delete file for a single data file may name it; the spec allows the field only then.
+			data_file.referenced_data_file = data_file_name;
+		}
 		// copy partition info from the data file being deleted
 		auto &partition = delete_file.partition_info;
 		data_file.partition_info = partition.fields;

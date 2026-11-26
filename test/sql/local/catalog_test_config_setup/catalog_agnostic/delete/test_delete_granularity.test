@@ -1,0 +1,143 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_delete_granularity.test
+# description: write.delete.granularity=partition writes one v2 position-delete file per partition
+# group: [delete]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+# Two partitions with two data files each, created the same way for both granularities.
+
+foreach granularity file partition
+
+statement ok
+CREATE TABLE my_datalake.default.delete_granularity_{granularity} (id INTEGER, dep VARCHAR)
+PARTITIONED BY (dep)
+WITH ('format-version' = '2', 'write.delete.granularity' = '{granularity}');
+
+statement ok
+INSERT INTO my_datalake.default.delete_granularity_{granularity} VALUES (1, 'hr'), (2, 'hr');
+
+statement ok
+INSERT INTO my_datalake.default.delete_granularity_{granularity} VALUES (3, 'hr'), (4, 'hr');
+
+statement ok
+INSERT INTO my_datalake.default.delete_granularity_{granularity} VALUES (1, 'hardware'), (2, 'hardware');
+
+statement ok
+INSERT INTO my_datalake.default.delete_granularity_{granularity} VALUES (3, 'hardware'), (4, 'hardware');
+
+# One row of every data file.
+statement ok
+DELETE FROM my_datalake.default.delete_granularity_{granularity} WHERE id IN (1, 3);
+
+query II
+SELECT dep, id FROM my_datalake.default.delete_granularity_{granularity} ORDER BY dep, id;
+----
+hardware	2
+hardware	4
+hr	2
+hr	4
+
+endloop
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE file_manifests = (
+	SELECT list(DISTINCT manifest_path)
+	FROM iceberg_metadata(my_datalake.default.delete_granularity_file)
+	WHERE manifest_content = 'DELETE'
+);
+
+statement ok
+SET VARIABLE partition_manifests = (
+	SELECT list(DISTINCT manifest_path)
+	FROM iceberg_metadata(my_datalake.default.delete_granularity_partition)
+	WHERE manifest_content = 'DELETE'
+);
+
+# File granularity (the default): one delete file per data file, each naming its data file with equal
+# file_path bounds.
+query III
+SELECT
+	count(*),
+	bool_and(data_file.referenced_data_file IS NOT NULL),
+	bool_and(data_file.lower_bounds[2147483546] = data_file.upper_bounds[2147483546])
+FROM read_avro(getvariable('file_manifests'))
+WHERE data_file.content = 1 AND status <> 2;
+----
+4	true	true
+
+# Partition granularity: one delete file per partition. It covers two data files, so it names none and its
+# file_path bounds span them.
+query III
+SELECT
+	count(*),
+	bool_and(data_file.referenced_data_file IS NULL),
+	bool_and(data_file.lower_bounds[2147483546] < data_file.upper_bounds[2147483546])
+FROM read_avro(getvariable('partition_manifests'))
+WHERE data_file.content = 1 AND status <> 2;
+----
+2	true	true
+
+statement ok
+COMMIT;
+
+# A second delete over a live partition-scoped delete file still reads correctly.
+statement ok
+DELETE FROM my_datalake.default.delete_granularity_partition WHERE id = 2 AND dep = 'hr';
+
+query I
+SELECT count(*) FROM my_datalake.default.delete_granularity_partition;
+----
+3
+
+statement ok
+DROP TABLE my_datalake.default.delete_granularity_file;
+
+statement ok
+DROP TABLE my_datalake.default.delete_granularity_partition;
+
+# An unpartitioned table is a single partition, so one statement writes one delete file.
+
+statement ok
+CREATE TABLE my_datalake.default.delete_granularity_unpartitioned (id INTEGER)
+WITH ('format-version' = '2', 'write.delete.granularity' = 'partition');
+
+statement ok
+INSERT INTO my_datalake.default.delete_granularity_unpartitioned VALUES (1), (2);
+
+statement ok
+INSERT INTO my_datalake.default.delete_granularity_unpartitioned VALUES (3), (4);
+
+statement ok
+DELETE FROM my_datalake.default.delete_granularity_unpartitioned WHERE id IN (1, 3);
+
+query I
+SELECT summary['added-delete-files']
+FROM iceberg_snapshots(my_datalake.default.delete_granularity_unpartitioned)
+ORDER BY sequence_number DESC LIMIT 1;
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.delete_granularity_unpartitioned;
+
+# A value that is neither 'file' nor 'partition' fails the write instead of being ignored.
+
+statement ok
+CREATE TABLE my_datalake.default.delete_granularity_invalid (id INTEGER)
+WITH ('format-version' = '2', 'write.delete.granularity' = 'banana');
+
+statement ok
+INSERT INTO my_datalake.default.delete_granularity_invalid VALUES (1), (2);
+
+statement error
+DELETE FROM my_datalake.default.delete_granularity_invalid WHERE id = 1;
+----
+<REGEX>:.*write.delete.granularity.*must be 'file' or 'partition'.*
+
+statement ok
+DROP TABLE my_datalake.default.delete_granularity_invalid;
