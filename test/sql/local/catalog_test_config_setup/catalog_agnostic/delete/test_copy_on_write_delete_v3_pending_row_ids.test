@@ -1,0 +1,134 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/delete/test_copy_on_write_delete_v3_pending_row_ids.test
+# description: A copy-on-write DELETE can only move rows whose lineage is known from the preceding v3 snapshot
+# group: [delete]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+require-env TIMETRAVEL_SUPPORT
+
+require-env SNAPSHOT_HISTORY_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cow_pending_ids;
+
+statement ok
+CREATE TABLE my_datalake.default.cow_pending_ids (k INTEGER, v INTEGER)
+WITH ('format-version' = '3', 'write.delete.mode' = 'copy-on-write');
+
+statement ok
+INSERT INTO my_datalake.default.cow_pending_ids VALUES (10, 0), (20, 0), (30, 0);
+
+statement ok
+PREPARE remove_pending AS DELETE FROM my_datalake.default.cow_pending_ids WHERE k = $1;
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.cow_pending_ids VALUES (40, 0), (50, 0);
+
+# Both new rows inherit their ID and sequence from the INSERT snapshot at commit.
+statement error
+EXECUTE remove_pending(50);
+----
+cannot preserve uncommitted row lineage
+
+statement ok
+ROLLBACK;
+
+statement ok
+BEGIN;
+
+# Even rows with an assigned ID inherit a new sequence from a pending UPDATE.
+statement ok
+UPDATE my_datalake.default.cow_pending_ids SET v = 1 WHERE k IN (10, 20);
+
+query III
+SELECT k, _row_id, _last_updated_sequence_number FROM my_datalake.default.cow_pending_ids WHERE v = 1 ORDER BY k;
+----
+10	0	NULL
+20	1	NULL
+
+statement error
+EXECUTE remove_pending(20);
+----
+cannot preserve uncommitted row lineage
+
+statement ok
+ROLLBACK;
+
+statement ok
+BEGIN;
+
+statement ok
+MERGE INTO my_datalake.default.cow_pending_ids t USING (VALUES (10), (20)) s(k) ON t.k = s.k
+WHEN MATCHED THEN UPDATE SET v = 2;
+
+statement error
+EXECUTE remove_pending(20);
+----
+cannot preserve uncommitted row lineage
+
+statement ok
+ROLLBACK;
+
+query IIII
+SELECT k, v, _row_id, _last_updated_sequence_number FROM my_datalake.default.cow_pending_ids ORDER BY k;
+----
+10	0	0	1
+20	0	1	1
+30	0	2	1
+
+query I
+SELECT metadata."next-row-id"::BIGINT FROM iceberg_load_table_response(my_datalake.default.cow_pending_ids);
+----
+3
+
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.cow_pending_ids);
+----
+1
+
+# In the opposite order the DELETE carries assigned lineage, then MERGE updates only its matched survivor.
+statement ok
+BEGIN;
+
+statement ok
+EXECUTE remove_pending(20);
+
+statement ok
+MERGE INTO my_datalake.default.cow_pending_ids t USING (VALUES (10), (40)) s(k) ON t.k = s.k
+WHEN MATCHED THEN UPDATE SET v = 3
+WHEN NOT MATCHED THEN INSERT VALUES (s.k, 3);
+
+statement ok
+COMMIT;
+
+statement ok
+SET VARIABLE pending_ids_delete = (
+    SELECT snapshot_id FROM iceberg_snapshots(my_datalake.default.cow_pending_ids) WHERE sequence_number = 2);
+
+query III
+SELECT k, _row_id, _last_updated_sequence_number FROM my_datalake.default.cow_pending_ids
+AT (VERSION => getvariable('pending_ids_delete')) ORDER BY k;
+----
+10	0	1
+30	2	1
+
+query IIII
+SELECT k, v, CASE WHEN k = 40 THEN (_row_id >= 5)::VARCHAR ELSE _row_id::VARCHAR END, _last_updated_sequence_number
+FROM my_datalake.default.cow_pending_ids ORDER BY k;
+----
+10	3	0	3
+30	0	2	1
+40	3	true	3
+
+statement ok
+DEALLOCATE remove_pending;
+
+statement ok
+DROP TABLE my_datalake.default.cow_pending_ids;

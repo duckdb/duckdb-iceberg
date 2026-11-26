@@ -184,8 +184,8 @@ idx_t IcebergPuffinFileLayout::AddBlob(idx_t size, IcebergPuffinBlobMetadata met
 	return data_size + footer_size;
 }
 
-IcebergPuffinWriter::IcebergPuffinWriter(FileSystem &fs, const string &path)
-    : writer(fs, path, FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_FILE_CREATE) {
+IcebergPuffinWriter::IcebergPuffinWriter(FileSystem &fs, const string &path, QueryContext context)
+    : writer(fs, path, FileFlags::FILE_FLAGS_WRITE | FileFlags::FILE_FLAGS_FILE_CREATE, context) {
 	writer.WriteData(PUFFIN_MAGIC, sizeof(PUFFIN_MAGIC));
 }
 

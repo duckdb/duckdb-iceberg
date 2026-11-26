@@ -1,0 +1,70 @@
+# name: test/sql/local/iceberg_scans/skip_manifests_without_live_files.test
+# description: A scan skips manifests whose manifest-list counts prove they hold only DELETED entries
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+# lineitem_iceberg's current snapshot is a copy-on-write overwrite with two data manifests:
+# m1 ADDS the new file, m0 only tombstones the replaced file (no added or existing files).
+query III
+SELECT parse_filename(manifest_path), added_data_files_count + existing_data_files_count, deleted_data_files_count
+FROM read_avro('data/persistent/iceberg/lineitem_iceberg/metadata/snap-2354745328521181395-1-179b4fb1-0366-4f7d-ad35-99ee8da0abf5.avro')
+ORDER BY ALL;
+----
+179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m0.avro	0	1
+179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m1.avro	1	0
+
+# Parse every manifest from disk, so the counts below don't depend on what an earlier query cached
+statement ok
+SET iceberg_enable_manifest_cache = false;
+
+statement ok
+CALL enable_logging('Iceberg', storage='memory');
+
+# Sums a counter over the Iceberg metadata log lines
+statement ok
+CREATE MACRO iceberg_log_counter(name) AS (
+	SELECT sum(try_cast(regexp_extract(message, name || '=(\d+)', 1) AS BIGINT))
+	FROM duckdb_logs()
+	WHERE type = 'Iceberg' AND message LIKE 'Iceberg metadata phase=%'
+);
+
+# iceberg_metadata lists DELETED entries too, so it has to read both manifests
+query II
+SELECT status, parse_filename(manifest_path)
+FROM iceberg_metadata('data/persistent/iceberg/lineitem_iceberg', allow_moved_paths = true)
+ORDER BY ALL;
+----
+ADDED	179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m1.avro
+DELETED	179b4fb1-0366-4f7d-ad35-99ee8da0abf5-m0.avro
+
+query I
+SELECT iceberg_log_counter('manifest_parses');
+----
+2
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# The scan selects 1 of the 2 data manifests and parses only m1.
+# Before skipping manifests without live files, this logged selected_data_manifests=2 and manifest_parses=2.
+query II
+SELECT count(*), sum(l_quantity)
+FROM iceberg_scan('data/persistent/iceberg/lineitem_iceberg', allow_moved_paths = true)
+WHERE l_orderkey > 0;
+----
+51793	1500900.00
+
+query III
+SELECT
+	iceberg_log_counter('total_data_manifests'),
+	iceberg_log_counter('selected_data_manifests'),
+	iceberg_log_counter('manifest_parses');
+----
+2	1	1
+
+# The estimate still comes from the manifest list: 51,793 live rows in m1, 0 in m0
+query II
+EXPLAIN SELECT * FROM iceberg_scan('data/persistent/iceberg/lineitem_iceberg', allow_moved_paths = true);
+----
+physical_plan	<REGEX>:.*~51,793.*

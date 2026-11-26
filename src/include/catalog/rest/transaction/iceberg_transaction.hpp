@@ -114,6 +114,9 @@ public:
 	IcebergTable &DeleteTable(IcebergTable &table);
 	IcebergTable &RenameTable(IcebergTable &table, const string &new_name);
 	bool MultiTableCommitAvailable() const;
+	//! Register a table the catalog created without stage-create, which exists there ahead of the commit.
+	void TableCreatedInCatalog(const string &table_key, const vector<string> &namespace_items, const string &name,
+	                           shared_ptr<const IcebergLoadTableResponse> created);
 
 public:
 	//! Set while a MERGE INTO is planned: its UPDATE and DELETE actions are governed by write.merge.mode, not by
@@ -130,11 +133,22 @@ private:
 	void RefreshRetryTables(IcebergTransactionAlterUpdate &alter_update, const unordered_set<string> &table_keys,
 	                        ClientContext &context);
 	void CleanupFiles();
+	//! Drop the tables registered through TableCreatedInCatalog, when the transaction does not commit.
+	void DropCreatedTables();
 	//! Evict the touched tables' cached LoadTableResult so a retry after a failed commit (e.g. a 409
 	//! conflict) doesn't keep reusing the same stale metadata.
 	void EvictCachedTables();
 	//! Commit outcome unknown (5xx / no HTTP status); CleanupFiles() then keeps the written files.
 	bool commit_state_unknown = false;
+
+	struct CreatedTable {
+		string table_key;
+		vector<string> namespace_items;
+		string name;
+		//! The catalog's response to the create request
+		shared_ptr<const IcebergLoadTableResponse> created;
+	};
+	vector<CreatedTable> created_tables;
 
 private:
 	DatabaseInstance &db;
@@ -182,13 +196,22 @@ public:
 
 	unordered_set<string> looked_up_entries;
 	mutex lock;
-	//! Serialize rewrite finalization, including the initialization of transaction table state.
-	mutex rewrite_commit_lock;
+	//! Operators and table functions of one statement run on different threads. This lock serializes the ones that
+	//! change the table state of this transaction: ApplyTableUpdate, a snapshot expiration from loading its table to
+	//! staging its update, and the table creation of a CREATE TABLE AS.
+	//! Lock order: IcebergCopyToFile::create_lock before table_update_lock, and table_update_lock before
+	//! IcebergTransaction::lock and IcebergTransactionData::lock.
+	mutex table_update_lock;
 
 	unordered_map<string, SchemaPropertyUpdates> schema_property_updates;
 };
 
+//! Registers 'table_info' as changed in the transaction and applies 'callback' to its transaction-local state, while
+//! holding IcebergTransaction::table_update_lock. The lock is not recursive: 'callback' must not call ApplyTableUpdate
 void ApplyTableUpdate(IcebergTable &table_info, IcebergTransaction &iceberg_transaction,
                       const std::function<void(IcebergTable &)> &callback);
+//! The same for a caller that holds the lock already: 'table_update_guard' has to own table_update_lock
+void ApplyTableUpdate(unique_lock<mutex> &table_update_guard, IcebergTable &table_info,
+                      IcebergTransaction &iceberg_transaction, const std::function<void(IcebergTable &)> &callback);
 
 } // namespace duckdb

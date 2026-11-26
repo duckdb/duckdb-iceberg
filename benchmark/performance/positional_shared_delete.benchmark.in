@@ -1,0 +1,98 @@
+# name: ${FILE_PATH}
+# description: Scan a table whose eight data files share 32 positional delete files, ${THREADS} threads and ${ASYNC_THREADS} async threads
+# group: [performance]
+
+name Shared positional deletes - ${THREADS} threads, ${ASYNC_THREADS} async threads
+group performance
+subgroup positional_deletes
+
+require avro
+
+require parquet
+
+require iceberg
+
+require json
+
+# Each of the 32 delete files holds positions for all eight data files, so the thread that opens the first data
+# file claims every delete file and the threads that open the other data files need them as well. A table scan
+# opens data files concurrently, unlike iceberg_scan_tasks, which runs tasks with delete files one at a time.
+# DuckDB writes one delete file per data file, so the table is written by hand. Local files and disabled
+# external caching isolate CPU costs; OS pages stay warm.
+load
+SET threads=1;
+SET enable_external_file_cache=false;
+COPY (SELECT k, (i + k * 2097152)::BIGINT id, (3 * i + 7)::BIGINT payload, 'a' AS p FROM range(8) f(k), range(2097152) t(i))
+TO '${BENCHMARK_DIR}/positional_shared_${THREADS}_${ASYNC_THREADS}_data'
+(FORMAT PARQUET, PARTITION_BY (k), ROW_GROUP_SIZE 131072, FIELD_IDS {id:1, payload:2, p:3}, OVERWRITE);
+COPY (SELECT (i % 40)::INTEGER j,
+             '${BENCHMARK_DIR}/positional_shared_${THREADS}_${ASYNC_THREADS}_data/k=' || k || '/data_0.parquet' file_path, i::BIGINT pos
+      FROM range(8) f(k), range(2097152) t(i) WHERE i % 40 < 32 ORDER BY j, k, i)
+TO '${BENCHMARK_DIR}/positional_shared_${THREADS}_${ASYNC_THREADS}_deletes'
+(FORMAT PARQUET, PARTITION_BY (j), ROW_GROUP_SIZE 131072, FIELD_IDS {file_path:2147483546, pos:2147483545}, OVERWRITE);
+COPY (
+	SELECT 1::INTEGER AS status, 2::BIGINT AS snapshot_id, 1::BIGINT AS sequence_number, 1::BIGINT AS file_sequence_number,
+		{content: 0::INTEGER, file_path: filename, file_format: 'PARQUET', partition: {p: 'a'},
+		 record_count: 2097152::BIGINT, file_size_in_bytes: size::BIGINT} AS data_file
+	FROM read_blob('${BENCHMARK_DIR}/positional_shared_${THREADS}_${ASYNC_THREADS}_data/*/*.parquet') ORDER BY filename
+) TO '${BENCHMARK_DIR}/positional_shared_${THREADS}_${ASYNC_THREADS}_data.avro' (
+	FORMAT AVRO,
+	METADATA {'schema-id': '0', 'partition-spec-id': '0', 'format-version': '2', 'content': 'data'},
+	FIELD_IDS {status: 0, snapshot_id: 1, sequence_number: 3, file_sequence_number: 4,
+		data_file: {__duckdb_field_id: 2, content: 134, file_path: 100, file_format: 101,
+			partition: {__duckdb_field_id: 102, p: 1000}, record_count: 103, file_size_in_bytes: 104}}
+);
+COPY (
+	SELECT 1::INTEGER AS status, 2::BIGINT AS snapshot_id, 2::BIGINT AS sequence_number, 2::BIGINT AS file_sequence_number,
+		{content: 1::INTEGER, file_path: filename, file_format: 'PARQUET', partition: {p: 'a'},
+		 record_count: 419432::BIGINT, file_size_in_bytes: size::BIGINT} AS data_file
+	FROM read_blob('${BENCHMARK_DIR}/positional_shared_${THREADS}_${ASYNC_THREADS}_deletes/*/*.parquet') ORDER BY filename
+) TO '${BENCHMARK_DIR}/positional_shared_${THREADS}_${ASYNC_THREADS}_deletes.avro' (
+	FORMAT AVRO,
+	METADATA {'schema-id': '0', 'partition-spec-id': '0', 'format-version': '2', 'content': 'deletes'},
+	FIELD_IDS {status: 0, snapshot_id: 1, sequence_number: 3, file_sequence_number: 4,
+		data_file: {__duckdb_field_id: 2, content: 134, file_path: 100, file_format: 101,
+			partition: {__duckdb_field_id: 102, p: 1000}, record_count: 103, file_size_in_bytes: 104}}
+);
+COPY (
+	SELECT filename AS manifest_path, size::BIGINT AS manifest_length, 0::INTEGER AS partition_spec_id,
+		(CASE WHEN filename LIKE '%deletes.avro' THEN 1 ELSE 0 END)::INTEGER AS content,
+		(CASE WHEN filename LIKE '%deletes.avro' THEN 2 ELSE 1 END)::BIGINT AS sequence_number,
+		0::BIGINT AS min_sequence_number, 2::BIGINT AS added_snapshot_id,
+		(CASE WHEN filename LIKE '%deletes.avro' THEN 32 ELSE 8 END)::INTEGER AS added_files_count,
+		0::INTEGER AS existing_files_count, 0::INTEGER AS deleted_files_count,
+		(CASE WHEN filename LIKE '%deletes.avro' THEN 13421824 ELSE 16777216 END)::BIGINT AS added_rows_count,
+		0::BIGINT AS existing_rows_count, 0::BIGINT AS deleted_rows_count
+	FROM read_blob(['${BENCHMARK_DIR}/positional_shared_${THREADS}_${ASYNC_THREADS}_data.avro',
+	                '${BENCHMARK_DIR}/positional_shared_${THREADS}_${ASYNC_THREADS}_deletes.avro']) ORDER BY filename
+) TO '${BENCHMARK_DIR}/positional_shared_${THREADS}_${ASYNC_THREADS}_list.avro' (
+	FORMAT AVRO,
+	FIELD_IDS {manifest_path: 500, manifest_length: 501, partition_spec_id: 502, content: 517, sequence_number: 515,
+		min_sequence_number: 516, added_snapshot_id: 503, added_files_count: 504, existing_files_count: 505,
+		deleted_files_count: 506, added_rows_count: 512, existing_rows_count: 513, deleted_rows_count: 514}
+);
+COPY (
+	SELECT 2 AS "format-version", '00000000-0000-0000-0000-000000000005' AS "table-uuid",
+		'${BENCHMARK_DIR}/positional_shared_${THREADS}_${ASYNC_THREADS}' AS location,
+		2 AS "last-sequence-number", 0 AS "last-updated-ms", 3 AS "last-column-id", 0 AS "current-schema-id",
+		[{'type': 'struct', 'schema-id': 0, 'fields': [
+			{'id': 1, 'name': 'id', 'required': false, 'type': 'long'},
+			{'id': 2, 'name': 'payload', 'required': false, 'type': 'long'},
+			{'id': 3, 'name': 'p', 'required': false, 'type': 'string'}]}] AS schemas,
+		0 AS "default-spec-id",
+		[{'spec-id': 0, 'fields': [{'name': 'p', 'transform': 'identity', 'source-id': 3, 'field-id': 1000}]}] AS "partition-specs",
+		1000 AS "last-partition-id", 0 AS "default-sort-order-id",
+		[{'order-id': 0, 'fields': []::INTEGER[]}] AS "sort-orders",
+		2 AS "current-snapshot-id",
+		[{'snapshot-id': 2, 'sequence-number': 2, 'timestamp-ms': 0, 'schema-id': 0,
+		  'manifest-list': '${BENCHMARK_DIR}/positional_shared_${THREADS}_${ASYNC_THREADS}_list.avro',
+		  'summary': {'operation': 'overwrite'}}] AS snapshots
+) TO '${BENCHMARK_DIR}/positional_shared_${THREADS}_${ASYNC_THREADS}_v1.metadata.json' (FORMAT JSON);
+SET threads=${THREADS};
+SET async_threads=${ASYNC_THREADS};
+
+run
+SELECT count(*), sum(id), sum(payload) FROM iceberg_scan('${BENCHMARK_DIR}/positional_shared_${THREADS}_${ASYNC_THREADS}_v1.metadata.json');
+
+result III
+3355392	28147066496640	10555169020032

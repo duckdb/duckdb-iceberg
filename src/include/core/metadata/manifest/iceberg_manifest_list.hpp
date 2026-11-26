@@ -56,6 +56,11 @@ public:
 	bool Complete() const {
 		return FilesComplete() && RowsComplete();
 	}
+	//! True only when the counts prove the manifest holds nothing but DELETED entries. Unknown counts
+	//! (optional in V1 manifest lists) are treated as possibly non-zero.
+	bool HasNoLiveFiles() const {
+		return added_files_count && existing_files_count && *added_files_count == 0 && *existing_files_count == 0;
+	}
 
 public:
 	optional<idx_t> added_files_count;

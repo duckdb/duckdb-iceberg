@@ -352,7 +352,7 @@ set variable scan_task_list_2 = (select list(task) from (select * replace('{TEST
  0::bigint as record_count) from tasks union all select * from tasks) task);
 
 query I
-select count(*) from iceberg_scan_tasks(getvariable('scan_task_list_2'));
+select count(id) from iceberg_scan_tasks(getvariable('scan_task_list_2'));
 ----
 4
 
@@ -369,7 +369,7 @@ statement ok
 set variable scan_task_list_4 = (select list(task) from (select * from tasks) task);
 
 query I
-select count(*) from iceberg_scan_tasks(getvariable('scan_task_list_4'));
+select count(id) from iceberg_scan_tasks(getvariable('scan_task_list_4'));
 ----
 4
 
@@ -704,6 +704,15 @@ select * from iceberg_scan_tasks(getvariable('scan_task_list_25'));
 ----
 partition constant 999 does not match
 
+# A snapshot_id the metadata lacks is named in the error.
+statement ok
+set variable scan_task_list_missing_snapshot = (select list(task) from (select * replace(42::bigint as snapshot_id) from tasks) task);
+
+statement error
+select * from iceberg_scan_tasks(getvariable('scan_task_list_missing_snapshot'));
+----
+iceberg_scan_tasks snapshot_id 42 is absent from the metadata
+
 
 # A source can parallelize a single task independently of task-input cardinality.
 statement ok
@@ -905,10 +914,17 @@ select id from iceberg_scan_tasks(getvariable('projection_tasks'));
 ----
 42
 
+# COUNT(*) is otherwise answered from the tasks' record counts, so statistics propagation is off to make the scan run.
+statement ok
+set disabled_optimizers = 'statistics_propagation';
+
 query I
 select count(*) from iceberg_scan_tasks(getvariable('projection_tasks'));
 ----
 1
+
+statement ok
+reset disabled_optimizers;
 
 statement error
 select value from iceberg_scan_tasks(getvariable('projection_tasks'));
@@ -991,6 +1007,79 @@ select count(*) from projection_chunk_reads() where reads > 0;
 statement ok
 call disable_logging();
 
+# A scan that needs no column reads neither range, with one task and with two. COUNT(*) is otherwise answered from the
+# tasks' record counts, so statistics propagation is off to make the scan run.
+foreach task_copies 1 2
+
+statement ok
+set disabled_optimizers = 'statistics_propagation';
+
+statement ok
+set variable column_less_tasks =
+ list_concat(getvariable('projection_io_tasks'), getvariable('projection_io_tasks'))[1:{task_copies}];
+
+statement ok
+call enable_logging(['FileSystem', 'Iceberg']);
+
+statement ok
+call truncate_duckdb_logs();
+
+query I
+select count(*) = 100000 * {task_copies} from iceberg_scan_tasks(getvariable('column_less_tasks'));
+----
+true
+
+query I
+select count(*) from projection_chunk_reads() where reads > 0;
+----
+0
+
+# One task runs in the single-file executor, two in the multi-file one.
+query II
+select count(*) filter (where message='Iceberg scan tasks executor mode=multi_file task_count=2') =
+         case when {task_copies} = 2 then 1 else 0 end,
+       count(*) filter (where message='Iceberg scan tasks executor mode=single_file task_count=1') =
+         case when {task_copies} = 1 then 1 else 0 end
+from duckdb_logs() where type='Iceberg';
+----
+true	true
+
+# A residual filter reads its predicate column; the missing 'added' field defaults to 99.
+statement ok
+set variable column_less_filtered_tasks = (select list(task) from (
+ select t.*, 'value >= 50000 OR added = 0'::varchar row_filter
+ from (select unnest(getvariable('column_less_tasks')) t)
+) task);
+
+statement ok
+call truncate_duckdb_logs();
+
+query I
+select count(*) = 50000 * {task_copies} from iceberg_scan_tasks(getvariable('column_less_filtered_tasks'));
+----
+true
+
+query TI rowsort
+select column_name, reads > 0 from projection_chunk_reads();
+----
+id	false
+value	true
+
+query I
+select count(*) from duckdb_logs() where type='Iceberg' and message =
+ concat('Iceberg scan tasks executor mode=', case when {task_copies} = 2 then 'multi_file' else 'single_file' end,
+        ' task_count=', {task_copies});
+----
+1
+
+statement ok
+call disable_logging();
+
+statement ok
+reset disabled_optimizers;
+
+endloop
+
 # An unprojected equality key must still be read; unrelated data columns must not.
 statement ok
 copy (select 123::integer value) to '{TEST_DIR}/task_projection_eq.parquet'
@@ -1008,6 +1097,8 @@ foreach fast_filter true false
 statement ok
 set iceberg_equality_delete_fast_filter={fast_filter};
 
+foreach aggregate count(part) count(*)
+
 statement ok
 call enable_logging('FileSystem');
 
@@ -1015,7 +1106,7 @@ statement ok
 call truncate_duckdb_logs();
 
 query I
-select count(part) from iceberg_scan_tasks(getvariable('projection_io_delete_tasks'));
+select {aggregate} from iceberg_scan_tasks(getvariable('projection_io_delete_tasks'));
 ----
 99999
 
@@ -1027,6 +1118,8 @@ value	true
 
 statement ok
 call disable_logging();
+
+endloop
 
 endloop
 
@@ -1137,10 +1230,16 @@ select id from iceberg_scan_tasks(getvariable('filtered_tasks'));
 statement ok
 set variable filtered_tasks = (select list(task) from (select *, NULL::varchar row_filter from tasks) task);
 
+statement ok
+set disabled_optimizers = 'statistics_propagation';
+
 query I
 select count(*) from iceberg_scan_tasks(getvariable('filtered_tasks'));
 ----
 4
+
+statement ok
+reset disabled_optimizers;
 
 foreach predicate false NULL
 

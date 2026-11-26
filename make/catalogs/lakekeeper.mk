@@ -1,6 +1,7 @@
 LAKEKEEPER_ENV_FILE ?= scripts/envs/lakekeeper.env
 LAKEKEEPER_SPARK_LOCAL_DIR ?= /home/jovyan/.spark-local
-LAKEKEEPER_IMAGE ?= quay.io/lakekeeper/catalog:v0.14.0
+# v0.14.1 persists removal of the last snapshot reference (lakekeeper/lakekeeper#2117).
+LAKEKEEPER_IMAGE ?= quay.io/lakekeeper/catalog:v0.14.1
 
 lakekeeper-clone:
 	@if [ ! -d ".catalogs/lakekeeper" ]; then \

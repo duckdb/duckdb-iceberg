@@ -38,6 +38,11 @@ public:
 	optional_ptr<CatalogEntry> CreateCollation(CatalogTransaction transaction, CreateCollationInfo &info) override;
 	optional_ptr<CatalogEntry> CreateType(CatalogTransaction transaction, CreateTypeInfo &info) override;
 	void Alter(CatalogTransaction transaction, AlterInfo &info) override;
+	//! Move a column or struct field of 'table' among its siblings (iceberg_move_column). Returns the schema id that
+	//! was current before the move and the one that is current after it
+	pair<int32_t, int32_t> MoveColumn(ClientContext &context, IcebergTableSchemaVersion &table,
+	                                  const vector<Identifier> &column_path, IcebergColumnMove move,
+	                                  const vector<Identifier> &reference_path);
 	void Scan(ClientContext &context, CatalogType type, const std::function<void(CatalogEntry &)> &callback) override;
 	void Scan(CatalogType type, const std::function<void(CatalogEntry &)> &callback) override;
 	void DropEntry(ClientContext &context, DropInfo &info) override;
@@ -63,5 +68,8 @@ public:
 	IcebergTableSet tables;
 	IcebergSchemaInformation schema_info;
 };
+
+void IntroduceNewSchema(ClientContext &context, IcebergTable &updated_table, IcebergTransactionData &transaction_data,
+                        shared_ptr<IcebergTableSchema> new_schema, bool update_schema_properties = true);
 
 } // namespace duckdb

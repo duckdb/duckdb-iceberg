@@ -131,6 +131,8 @@ virtual_column_map_t IcebergTableSchemaVersion::VirtualColumns(int32_t iceberg_v
 	result.emplace(MultiFileReader::COLUMN_IDENTIFIER_FILENAME, TableColumn("filename", LogicalType::VARCHAR));
 	result.emplace(MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER,
 	               TableColumn("file_row_number", LogicalType::BIGINT));
+	//! Bound by a scan that needs no column, so that it reads none
+	result.emplace(COLUMN_IDENTIFIER_EMPTY, TableColumn("", LogicalType::BOOLEAN));
 	//! Row lineage columns only exist for format version >= 3
 	if (iceberg_version >= 3) {
 		result.emplace(COLUMN_IDENTIFIER_ROW_ID, TableColumn("_row_id", LogicalType::BIGINT));

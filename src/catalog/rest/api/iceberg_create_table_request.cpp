@@ -198,6 +198,54 @@ shared_ptr<IcebergTableSchema> IcebergCreateTableRequest::CreateIcebergSchema(
 	return schema;
 }
 
+static void AssignFieldIds(const vector<unique_ptr<IcebergColumnDefinition>> &columns, const string &parent,
+                           unordered_map<string, int32_t> &ids, int32_t &last_id) {
+	// Iceberg assigns sibling IDs before descending into structs, list elements or map keys/values
+	for (auto &column : columns) {
+		auto name = parent.empty() ? column->name : parent + "." + column->name;
+		auto existing = ids.find(name);
+		if (existing != ids.end()) {
+			column->id = existing->second;
+		} else {
+			last_id = NumericCast<int32_t>(static_cast<int64_t>(last_id) + 1);
+			column->id = last_id;
+			ids.emplace(std::move(name), last_id);
+		}
+	}
+	for (auto &column : columns) {
+		auto name = parent.empty() ? column->name : parent + "." + column->name;
+		AssignFieldIds(column->GetChildren(), name, ids, last_id);
+	}
+}
+
+int32_t IcebergCreateTableRequest::AssignReplacementFieldIds(IcebergTableSchema &schema,
+                                                             const IcebergTableMetadata &metadata) {
+	unordered_map<string, int32_t> ids;
+	for (auto &field : metadata.GetLatestSchema().GetFullNames()) {
+		if (!ids.emplace(field.second, field.first).second) {
+			throw InvalidConfigurationException("Invalid schema: multiple fields for name %s", field.second);
+		}
+	}
+	unordered_set<string> replacement_names;
+	for (auto &field : schema.GetFullNames()) {
+		if (!replacement_names.insert(field.second).second) {
+			throw InvalidConfigurationException("Invalid schema: multiple fields for name %s", field.second);
+		}
+	}
+	vector<string> identifier_names;
+	for (auto field_id : schema.identifier_field_ids) {
+		identifier_names.push_back(schema.GetFullColumnName(field_id));
+	}
+	auto last_id = NumericCast<int32_t>(metadata.GetLastColumnId());
+	schema.InvalidateSourceIdMap();
+	AssignFieldIds(schema.columns, string(), ids, last_id);
+	for (idx_t i = 0; i < identifier_names.size(); i++) {
+		schema.identifier_field_ids[i] = ids.at(identifier_names[i]);
+	}
+	schema.last_column_id = last_id;
+	return last_id;
+}
+
 void IcebergCreateTableRequest::PopulateSchema(JSONWriter &writer, JSONMutableValue schema_json,
                                                const IcebergTableSchema &schema) {
 	schema_json.AddString("type", "struct");

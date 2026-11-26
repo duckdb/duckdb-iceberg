@@ -121,5 +121,9 @@ drop view v_recursive_cte;
 statement ok
 drop table vn_base;
 
+# Leave the test namespace before dropping it, avoiding a reset to DuckDB's main schema.
+statement ok
+use my_datalake.default;
+
 statement ok
 drop schema my_datalake.view_names;

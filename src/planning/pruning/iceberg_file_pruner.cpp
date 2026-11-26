@@ -273,8 +273,8 @@ IcebergMetricsMatch IcebergFilePruner::FileMatchesFilter(const IcebergManifest &
 				stats.SetUpperBound(upper_variant);
 			}
 		} else {
-			stats =
-			    IcebergPredicateStats::DeserializeBounds(context, lower_bound, upper_bound, column_name, column.type);
+			stats = IcebergPredicateStats::DeserializeBoundsForPruning(context, lower_bound, upper_bound, column_name,
+			                                                           column.type);
 		}
 
 		if (column.type.id() == LogicalTypeId::GEOMETRY && !stats.geometry_stats) {
@@ -379,7 +379,7 @@ bool IcebergFilePruner::DeleteManifestMatchesDataFile(const IcebergManifest &del
 			}
 			continue;
 		}
-		auto stats = IcebergPredicateStats::DeserializeBounds(
+		auto stats = IcebergPredicateStats::DeserializeBoundsForPruning(
 		    context, field_summary.lower_bound, field_summary.upper_bound, source_column->name, partition_type);
 		if (stats.lower_bound && typed_partition_value < *stats.lower_bound) {
 			return false;
@@ -423,7 +423,7 @@ void IcebergFilePruner::InitializeEqualityDeleteBounds(const IcebergDataFile &de
 		}
 
 		try {
-			auto delete_stats = IcebergPredicateStats::DeserializeBounds(
+			auto delete_stats = IcebergPredicateStats::DeserializeBoundsForPruning(
 			    context, delete_lower->second, delete_upper->second, column.name, column.type);
 			if (!delete_stats.lower_bound || !delete_stats.upper_bound || delete_stats.lower_bound->IsNull() ||
 			    delete_stats.upper_bound->IsNull()) {
@@ -453,8 +453,8 @@ bool IcebergFilePruner::EqualityDeleteMatchesDataFile(const IcebergDataFile &del
 			continue;
 		}
 		try {
-			auto data_stats = IcebergPredicateStats::DeserializeBounds(context, data_lower->second, data_upper->second,
-			                                                           column.name, column.type);
+			auto data_stats = IcebergPredicateStats::DeserializeBoundsForPruning(
+			    context, data_lower->second, data_upper->second, column.name, column.type);
 			if (!data_stats.lower_bound || !data_stats.upper_bound || data_stats.lower_bound->IsNull() ||
 			    data_stats.upper_bound->IsNull()) {
 				continue;
@@ -501,7 +501,8 @@ bool IcebergFilePruner::DeleteFileMatchesDataFile(const IcebergManifest &delete_
                                                   optional_ptr<IcebergEqualityDeleteBounds> delete_bounds) const {
 	auto &delete_file = delete_manifest_entry.data_file;
 	auto &data_file = data_manifest_entry.data_file;
-	if (delete_file.referenced_data_file && *delete_file.referenced_data_file != data_file.file_path) {
+	auto referenced_data_file = delete_file.SingleReferencedDataFile();
+	if (referenced_data_file && *referenced_data_file != data_file.file_path) {
 		return false;
 	}
 
@@ -615,8 +616,8 @@ bool IcebergFilePruner::ManifestMatchesFilter(const IcebergManifestListEntry &en
 
 		auto &column = IcebergTableSchema::GetFromColumnIndex(schema.columns, column_id, 0);
 		auto result_type = field.transform.GetSerializedType(column.type);
-		auto stats = IcebergPredicateStats::DeserializeBounds(context, field_summary.lower_bound,
-		                                                      field_summary.upper_bound, column.name, result_type);
+		auto stats = IcebergPredicateStats::DeserializeBoundsForPruning(
+		    context, field_summary.lower_bound, field_summary.upper_bound, column.name, result_type);
 		stats.has_nan = field_summary.contains_nan;
 		stats.has_null = field_summary.contains_null;
 		stats.has_not_null = true;

@@ -1,0 +1,244 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/move_column/move_column.test
+# description: iceberg_move_column moves a top-level column first, after or before another column
+# group: [move_column]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.move_first;
+
+# (id, data): data moves first
+statement ok
+CREATE TABLE my_datalake.default.move_first (id BIGINT, data VARCHAR);
+
+query II
+SELECT previous_schema_id, current_schema_id
+FROM iceberg_move_column('my_datalake.default.move_first', 'data', first => true);
+----
+0	1
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE my_datalake.default.move_first);
+----
+data	VARCHAR
+id	BIGINT
+
+query II
+SELECT metadata."current-schema-id"::INTEGER, len(metadata.schemas::VARIANT[])
+FROM iceberg_load_table_response('my_datalake.default.move_first');
+----
+1	2
+
+statement ok
+DROP TABLE my_datalake.default.move_first;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.move_multiple;
+
+# several moves in a row; the columns that are not moved keep their relative order
+statement ok
+CREATE TABLE my_datalake.default.move_multiple (a INTEGER, b INTEGER, c INTEGER, d INTEGER);
+
+statement ok
+CALL iceberg_move_column('my_datalake.default.move_multiple', 'd', first => true);
+
+# a short table name resolves through the search path, and `:=` names an argument as `=>` does
+statement ok
+USE my_datalake.default;
+
+query II
+SELECT previous_schema_id, current_schema_id FROM iceberg_move_column('move_multiple', 'c', first := true);
+----
+1	2
+
+query I
+SELECT column_name FROM (DESCRIBE my_datalake.default.move_multiple);
+----
+c
+d
+a
+b
+
+# 'schema.table' resolves the same way; b is last already, so this changes nothing
+query II
+SELECT previous_schema_id, current_schema_id FROM iceberg_move_column('default.move_multiple', 'b', after => 'a');
+----
+2	2
+
+statement ok
+USE memory;
+
+statement ok
+CALL iceberg_move_column('my_datalake.default.move_multiple', 'b', after => 'd');
+
+statement ok
+CALL iceberg_move_column('my_datalake.default.move_multiple', 'd', before => 'a');
+
+query I
+SELECT column_name FROM (DESCRIBE my_datalake.default.move_multiple);
+----
+c
+b
+d
+a
+
+statement ok
+DROP TABLE my_datalake.default.move_multiple;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.move_relative;
+
+# (id, data): data before the first column
+statement ok
+CREATE TABLE my_datalake.default.move_relative (id BIGINT, data VARCHAR);
+
+statement ok
+CALL iceberg_move_column('my_datalake.default.move_relative', 'data', before => 'id');
+
+query I
+SELECT column_name FROM (DESCRIBE my_datalake.default.move_relative);
+----
+data
+id
+
+statement ok
+DROP TABLE my_datalake.default.move_relative;
+
+# (id, data): id after the last column
+statement ok
+CREATE TABLE my_datalake.default.move_relative (id BIGINT, data VARCHAR);
+
+statement ok
+CALL iceberg_move_column('my_datalake.default.move_relative', 'id', after => 'data');
+
+query I
+SELECT column_name FROM (DESCRIBE my_datalake.default.move_relative);
+----
+data
+id
+
+statement ok
+DROP TABLE my_datalake.default.move_relative;
+
+# (id, data, ts): ts after id
+statement ok
+CREATE TABLE my_datalake.default.move_relative (id BIGINT, data VARCHAR, ts TIMESTAMPTZ);
+
+statement ok
+CALL iceberg_move_column('my_datalake.default.move_relative', 'ts', after => 'id');
+
+query I
+SELECT column_name FROM (DESCRIBE my_datalake.default.move_relative);
+----
+id
+ts
+data
+
+statement ok
+DROP TABLE my_datalake.default.move_relative;
+
+# (ts, id, data): ts before data
+statement ok
+CREATE TABLE my_datalake.default.move_relative (ts TIMESTAMPTZ, id BIGINT, data VARCHAR);
+
+statement ok
+CALL iceberg_move_column('my_datalake.default.move_relative', 'ts', before => 'data');
+
+query I
+SELECT column_name FROM (DESCRIBE my_datalake.default.move_relative);
+----
+id
+ts
+data
+
+statement ok
+DROP TABLE my_datalake.default.move_relative;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.move_prepared;
+
+statement ok
+CREATE TABLE my_datalake.default.move_prepared (a INTEGER, b INTEGER, c INTEGER);
+
+statement ok
+PREPARE move_b_after_c AS
+SELECT * FROM iceberg_move_column('my_datalake.default.move_prepared', 'b', after => 'c');
+
+statement ok
+EXECUTE move_b_after_c;
+
+query I
+SELECT column_name FROM (DESCRIBE my_datalake.default.move_prepared);
+----
+a
+c
+b
+
+statement ok
+CALL iceberg_move_column('my_datalake.default.move_prepared', 'b', first => true);
+
+query I
+SELECT column_name FROM (DESCRIBE my_datalake.default.move_prepared);
+----
+b
+a
+c
+
+# a prepared move is bound again when it is executed, so it works on the table as it is now
+statement ok
+EXECUTE move_b_after_c;
+
+query I
+SELECT column_name FROM (DESCRIBE my_datalake.default.move_prepared);
+----
+a
+c
+b
+
+# the same holds after the table is dropped and created again: the prepared move works on the new table
+statement ok
+DROP TABLE my_datalake.default.move_prepared;
+
+statement ok
+CREATE TABLE my_datalake.default.move_prepared (b INTEGER, x INTEGER, c INTEGER, y INTEGER);
+
+statement ok
+EXECUTE move_b_after_c;
+
+query I
+SELECT column_name FROM (DESCRIBE my_datalake.default.move_prepared);
+----
+x
+c
+b
+y
+
+statement ok
+DROP TABLE my_datalake.default.move_prepared;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.move_quoted;
+
+# a name that holds a dot is written in double quotes, as in a column path of ALTER TABLE
+statement ok
+CREATE TABLE my_datalake.default.move_quoted ("x.y" INTEGER, z INTEGER, s STRUCT("p.q" INTEGER, r INTEGER));
+
+statement ok
+CALL iceberg_move_column('my_datalake.default.move_quoted', '"x.y"', after => 'z');
+
+statement ok
+CALL iceberg_move_column('my_datalake.default.move_quoted', 's.r', before => 's."p.q"');
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE my_datalake.default.move_quoted);
+----
+z	INTEGER
+x.y	INTEGER
+s	STRUCT(r INTEGER, "p.q" INTEGER)
+
+statement ok
+DROP TABLE my_datalake.default.move_quoted;

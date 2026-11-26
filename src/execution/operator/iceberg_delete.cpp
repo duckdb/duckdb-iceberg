@@ -370,7 +370,8 @@ public:
 		auto &context = event->GetClientContext();
 		context.InterruptCheck();
 		auto &fs = FileSystem::GetFileSystem(context);
-		IcebergPuffinWriter writer(fs, DeleteFilePath(fs, inputs[0].get().delete_file.data_file_path, "puffin"));
+		IcebergPuffinWriter writer(fs, DeleteFilePath(fs, inputs[0].get().delete_file.data_file_path, "puffin"),
+		                           context);
 		for (auto &entry : inputs) {
 			context.InterruptCheck();
 			auto &input = entry.get();
@@ -744,9 +745,8 @@ PhysicalOperator &IcebergCatalog::PlanDelete(ClientContext &context, PhysicalPla
 		auto &alter = irc_transaction.GetOrCreateAlter();
 		auto &updated_table = alter.GetOrInitializeTable(table_entry.table_info);
 		auto &table_metadata = updated_table.GetMetadata();
-		//! V3 is not supported yet: a rewrite has to carry each kept row's lineage into the new files. A V3 DELETE
-		//! continues below, where a copy-on-write mode is refused as before.
-		if (table_metadata.iceberg_version == 2 && table_metadata.UsesCopyOnWrite(WRITE_DELETE_MODE)) {
+		//! V1 tables continue below, where a DELETE is refused
+		if (table_metadata.iceberg_version >= 2 && table_metadata.UsesCopyOnWrite(WRITE_DELETE_MODE)) {
 			table_entry.table_info.VerifyWriteEncryptionSupported();
 			table_entry.PrepareIcebergScanFromEntry(context);
 			auto &updated_table_entry = *updated_table.schema_versions[table_metadata.GetLatestSchema().schema_id];

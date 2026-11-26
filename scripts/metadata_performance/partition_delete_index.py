@@ -13,6 +13,9 @@ import fastavro
 from run import CONFIG, ROOT, Shell, git, payload, response
 from workloads import literal
 
+# Reserved field id of the file_path column of a position delete file.
+FILE_PATH_FIELD_ID = 2147483546
+
 
 def rewrite_avro(path, mutate, output):
     # Only edit this benchmark's newly generated, private files before publishing cases.json.
@@ -28,6 +31,16 @@ def rewrite_avro(path, mutate, output):
     with path.open("wb") as target:
         fastavro.writer(target, schema, records, codec=codec, metadata=metadata)
     return path.stat().st_size
+
+
+def unreference(row):
+    # Our writer names the data file a v2 position delete file targets twice: in the optional
+    # referenced_data_file field and as both file_path bounds. Either one scopes the delete file
+    # to that data file. Remove both from private fixtures to exercise valid unreferenced position deletes.
+    data_file = row["data_file"]
+    data_file["referenced_data_file"] = None
+    for bounds in ("lower_bounds", "upper_bounds"):
+        data_file[bounds] = [bound for bound in data_file[bounds] if bound["key"] != FILE_PATH_FIELD_ID]
 
 
 def prepare(shell, partitions):
@@ -62,10 +75,8 @@ def prepare(shell, partitions):
                 WHERE content='POSITION_DELETES' AND status<>'DELETED'"""
         )
         assert len(paths) == 1, paths
-        # Our writer includes this optional field even in v2. Remove it from
-        # private fixtures to exercise valid unreferenced position deletes.
         manifest = paths[0]["manifest_path"]
-        length = rewrite_avro(manifest, lambda row: row["data_file"].update(referenced_data_file=None), shell.output)
+        length = rewrite_avro(manifest, unreference, shell.output)
         table_payload = payload(shell, name)
         metadata = table_payload["metadata"]
         snapshot = next(s for s in metadata["snapshots"] if s["snapshot-id"] == metadata["current-snapshot-id"])
@@ -77,10 +88,12 @@ def prepare(shell, partitions):
         shell.query("SET enable_external_file_cache=false")
         unreferenced = shell.query(
             f"""SELECT count(*) AS entries,
-                       count(json_extract_string(to_json(data_file), '$.referenced_data_file')) AS references
+                       count(json_extract_string(to_json(data_file), '$.referenced_data_file')) AS references,
+                       count(data_file.lower_bounds[{FILE_PATH_FIELD_ID}])
+                           + count(data_file.upper_bounds[{FILE_PATH_FIELD_ID}]) AS path_bounds
                 FROM read_avro({literal(paths[0]['manifest_path'])})"""
         )[0]
-        assert unreferenced == {"entries": partitions * 4, "references": 0}, unreferenced
+        assert unreferenced == {"entries": partitions * 4, "references": 0, "path_bounds": 0}, unreferenced
     finally:
         shell.query("COMMIT")
     return {
