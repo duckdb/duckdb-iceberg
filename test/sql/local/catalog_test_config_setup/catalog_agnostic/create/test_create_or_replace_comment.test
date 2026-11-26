@@ -1,0 +1,66 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_or_replace_comment.test
+# description: Replacement table comments are visible inside the transaction for new and reused schemas
+# group: [create]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cor_comment;
+
+statement ok
+CREATE TABLE my_datalake.default.cor_comment (id INTEGER) WITH ('comment' = 'original');
+
+statement ok
+CREATE TEMP MACRO cor_table_comment() AS (
+    SELECT comment FROM duckdb_tables()
+    WHERE database_name = 'my_datalake' AND schema_name = 'default' AND table_name = 'cor_comment'
+);
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_comment (label VARCHAR) WITH ('comment' = 'new schema');
+
+query T
+SELECT cor_table_comment();
+----
+new schema
+
+statement ok
+ROLLBACK;
+
+statement ok
+DESCRIBE my_datalake.default.cor_comment;
+
+query T
+SELECT cor_table_comment();
+----
+original
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_comment WITH ('comment' = 'same schema') AS SELECT 42 AS id;
+
+query T
+SELECT cor_table_comment();
+----
+same schema
+
+statement ok
+COMMIT;
+
+statement ok
+DESCRIBE my_datalake.default.cor_comment;
+
+query T
+SELECT cor_table_comment();
+----
+same schema
+
+statement ok
+DROP TABLE my_datalake.default.cor_comment;

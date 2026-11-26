@@ -1,5 +1,5 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_or_replace_copy_on_write.test
-# description: V2 replacement and copy-on-write DELETE share a transaction without losing rows or history
+# description: V2 replacement and copy-on-write DELETE or UPDATE share a transaction without losing rows or history
 # group: [create]
 
 require-env CATALOG_TEST_CONFIG_SETUP
@@ -172,6 +172,49 @@ statement ok
 DROP TABLE my_datalake.default.cor_cow;
 
 endloop
+
+statement ok
+CREATE TABLE my_datalake.default.cor_cow (original INTEGER)
+WITH ('format-version' = '2', 'write.update.mode' = 'copy-on-write');
+
+statement ok
+INSERT INTO my_datalake.default.cor_cow VALUES (7);
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_cow AS SELECT * FROM (VALUES (1, 'a'), (2, 'b')) t(id, label);
+
+query I
+UPDATE my_datalake.default.cor_cow SET label = upper(label) WHERE id = 2;
+----
+1
+
+query IT
+SELECT id, label FROM my_datalake.default.cor_cow ORDER BY id;
+----
+1	a
+2	B
+
+statement ok
+COMMIT;
+
+query IT
+SELECT id, label FROM my_datalake.default.cor_cow ORDER BY id;
+----
+1	a
+2	B
+
+# The update rewrote the replacement file using the inherited write mode.
+query II
+SELECT count(*) FILTER (WHERE content <> 'DATA'), sum(record_count) FILTER (WHERE content = 'DATA')
+FROM iceberg_metadata(my_datalake.default.cor_cow) WHERE status <> 'DELETED';
+----
+0	2
+
+statement ok
+DROP TABLE my_datalake.default.cor_cow;
 
 statement ok
 RESET threads;
