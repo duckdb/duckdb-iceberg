@@ -1,5 +1,6 @@
 #include "catalog/rest/api/iceberg_type.hpp"
 #include "common/iceberg_constants.hpp"
+#include "common/iceberg_decimal.hpp"
 #include "common/iceberg_fixed_type.hpp"
 #include "common/iceberg_geography_type.hpp"
 
@@ -57,13 +58,17 @@ string IcebergTypeHelper::LogicalTypeToIcebergType(const LogicalType &type) {
 	case LogicalTypeId::BIGINT:
 		return "long";
 	case LogicalTypeId::HUGEINT:
-		// Iceberg doesnt have native 128bit int, decimal(38,0) covers the range
+		// Iceberg has no native 128-bit integer and its widest decimal is decimal(38, 0), which does not cover
+		// the full HUGEINT range (39 digits): values of 10^38 and beyond are rejected when they are written.
 		return "decimal(38, 0)";
 	case LogicalTypeId::FLOAT:
 		return "float";
 	case LogicalTypeId::DOUBLE:
 		return "double";
 	case LogicalTypeId::DECIMAL: {
+		// Every path that turns a DuckDB type into an Iceberg type (CREATE TABLE, CTAS, ADD COLUMN, ALTER TYPE)
+		// ends up here. DuckDB decimals can be wider than what Iceberg can store.
+		IcebergDecimal::Verify(type);
 		auto width = DecimalType::GetWidth(type);
 		auto scale = DecimalType::GetScale(type);
 		return StringUtil::Format("decimal(%d, %d)", width, scale);

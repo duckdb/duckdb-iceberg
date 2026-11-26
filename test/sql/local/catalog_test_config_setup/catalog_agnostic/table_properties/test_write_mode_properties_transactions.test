@@ -22,7 +22,8 @@ CREATE TABLE my_datalake.default.write_modes_transactions (id INTEGER, v VARCHAR
 statement ok
 INSERT INTO my_datalake.default.write_modes_transactions VALUES (1, 'a'), (2, 'b');
 
-# UPDATE must use the property changed in this transaction, not the catalog's committed value
+# UPDATE must use the property changed in this transaction, not the catalog's committed value: it rewrites the data
+# file instead of writing a delete file
 
 statement ok
 BEGIN;
@@ -31,10 +32,16 @@ statement ok
 CALL set_iceberg_table_properties(my_datalake.default.write_modes_transactions,
     {'write.update.mode': 'copy-on-write'});
 
-statement error
+query I
 UPDATE my_datalake.default.write_modes_transactions SET v = 'z' WHERE id = 1;
 ----
-<REGEX>:.*Not implemented Error.*write.update.mode.*copy-on-write.*
+1
+
+query II
+SELECT id, v FROM my_datalake.default.write_modes_transactions ORDER BY id;
+----
+1	z
+2	b
 
 statement ok
 ROLLBACK;

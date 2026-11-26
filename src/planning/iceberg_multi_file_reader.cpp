@@ -28,8 +28,12 @@
 
 namespace duckdb {
 
+bool IcebergMultiFileReader::SupportsDataFileFormat(const string &file_format) {
+	return StringUtil::CIEquals(file_format, "parquet");
+}
+
 OpenFileInfo IcebergMultiFileReader::FileInfo(const IcebergDataFileDescriptor &file) {
-	if (!StringUtil::CIEquals(file.file_format, "parquet")) {
+	if (!SupportsDataFileFormat(file.file_format)) {
 		throw NotImplementedException("File format '%s' not supported, only supports 'parquet' currently",
 		                              file.file_format);
 	}

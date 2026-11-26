@@ -9,6 +9,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "function/iceberg_functions.hpp"
+#include "common/iceberg_decimal.hpp"
 #include "core/expression/iceberg_hash.hpp"
 
 #include "duckdb.hpp"
@@ -157,6 +158,8 @@ static unique_ptr<FunctionData> IcebergBucketDecimalBind(BindScalarFunctionInput
 		}
 	}
 	auto &decimal_type = arguments[1]->GetReturnType();
+	// DuckDB decimals wider than Iceberg's are not stored as integers: reject them instead of misreading them
+	IcebergDecimal::Verify(decimal_type);
 	bound_function.GetArguments()[1] = decimal_type;
 	switch (decimal_type.InternalType()) {
 	case PhysicalType::INT16:
@@ -168,9 +171,11 @@ static unique_ptr<FunctionData> IcebergBucketDecimalBind(BindScalarFunctionInput
 	case PhysicalType::INT64:
 		bound_function.SetFunctionCallback(IcebergBucketDecimalInt64);
 		break;
-	default: // INT128
+	case PhysicalType::INT128:
 		bound_function.SetFunctionCallback(IcebergBucketDecimalHugeInt);
 		break;
+	default:
+		throw InternalException("iceberg_bucket: unexpected physical type for %s", decimal_type.ToString());
 	}
 	return nullptr;
 }
@@ -328,6 +333,8 @@ static unique_ptr<FunctionData> IcebergTruncateDecimalBind(BindScalarFunctionInp
 		}
 	}
 	auto &decimal_type = arguments[1]->GetReturnType();
+	// DuckDB decimals wider than Iceberg's are not stored as integers: reject them instead of misreading them
+	IcebergDecimal::Verify(decimal_type);
 	bound_function.GetArguments()[1] = decimal_type;
 	bound_function.SetReturnType(decimal_type);
 	switch (decimal_type.InternalType()) {
@@ -340,9 +347,11 @@ static unique_ptr<FunctionData> IcebergTruncateDecimalBind(BindScalarFunctionInp
 	case PhysicalType::INT64:
 		bound_function.SetFunctionCallback(IcebergTruncateDecimalInt64);
 		break;
-	default: // INT128
+	case PhysicalType::INT128:
 		bound_function.SetFunctionCallback(IcebergTruncateDecimalHugeInt);
 		break;
+	default:
+		throw InternalException("iceberg_truncate: unexpected physical type for %s", decimal_type.ToString());
 	}
 	return nullptr;
 }

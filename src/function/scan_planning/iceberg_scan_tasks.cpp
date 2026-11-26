@@ -1,12 +1,15 @@
 #include "function/iceberg_functions.hpp"
 
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
+#include "duckdb/common/operator/add.hpp"
 #include "duckdb/execution/execution_context.hpp"
+#include "duckdb/function/partition_stats.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/parallel/thread_context.hpp"
 #include "function/scan_planning/iceberg_scan_task_codec.hpp"
 #include "execution/scan/iceberg_task_executor.hpp"
 #include "function/scan_planning/iceberg_row_filter.hpp"
+#include "planning/iceberg_multi_file_reader.hpp"
 
 namespace duckdb {
 
@@ -25,6 +28,51 @@ struct IcebergScanTasksListClassification {
 	IcebergScanTasksListClass type;
 	string common_filter;
 };
+
+static IcebergScanTasksListClassification ClassifyTasks(ClientContext &context, const IcebergScanTasksBindData &bind,
+                                                        const vector<Value> &tasks) {
+	//! Delete processing retains per-file reader state for the executor lifetime. Keep every
+	//! delete-bearing list on the established one-task-at-a-time path.
+	for (auto &descriptor : tasks) {
+		context.InterruptCheck();
+		if (descriptor.IsNull()) {
+			return {IcebergScanTasksListClass::HETEROGENEOUS, {}};
+		}
+		auto deletes = TaskCodec::ReadValue(descriptor, bind.layout, TaskCodec::DELETE_FILES, true);
+		if (deletes.IsNull()) {
+			return {IcebergScanTasksListClass::HETEROGENEOUS, {}};
+		}
+		if (!ListValue::GetChildren(deletes).empty()) {
+			return {IcebergScanTasksListClass::DELETE_FILES, {}};
+		}
+	}
+
+	bool have_filter = false;
+	bool first_is_null = false;
+	string common_filter;
+	for (auto &descriptor : tasks) {
+		context.InterruptCheck();
+		auto filter = TaskCodec::ReadValue(descriptor, bind.layout, TaskCodec::ROW_FILTER, true);
+		if (!have_filter) {
+			have_filter = true;
+			first_is_null = filter.IsNull();
+			if (!first_is_null) {
+				common_filter = StringValue::Get(filter);
+			}
+			continue;
+		}
+		if (filter.IsNull() != first_is_null) {
+			return {IcebergScanTasksListClass::HETEROGENEOUS, {}};
+		}
+		if (!first_is_null && StringValue::Get(filter) != common_filter) {
+			return {IcebergScanTasksListClass::HETEROGENEOUS, {}};
+		}
+	}
+	if (first_is_null) {
+		return {IcebergScanTasksListClass::ALL_NULL_FILTERS, {}};
+	}
+	return {IcebergScanTasksListClass::COMMON_FILTER, std::move(common_filter)};
+}
 
 struct IcebergScanTasksGlobalState : public GlobalTableFunctionState {
 	IcebergScanTasksGlobalState(vector<ColumnIndex> column_indexes_p, optional_ptr<TableFilterSet> filters_p,
@@ -80,51 +128,6 @@ struct IcebergScanTasksGlobalState : public GlobalTableFunctionState {
 			snapshot_id = snapshot;
 		}
 		return TaskCodec::ReadTask(descriptor, bind.layout, execution->metadata, execution->schema);
-	}
-
-	IcebergScanTasksListClassification ClassifyTasks(ClientContext &context, const IcebergScanTasksBindData &bind,
-	                                                 const vector<Value> &tasks) const {
-		//! Delete processing retains per-file reader state for the executor lifetime. Keep every
-		//! delete-bearing list on the established one-task-at-a-time path.
-		for (auto &descriptor : tasks) {
-			context.InterruptCheck();
-			if (descriptor.IsNull()) {
-				return {IcebergScanTasksListClass::HETEROGENEOUS, {}};
-			}
-			auto deletes = TaskCodec::ReadValue(descriptor, bind.layout, TaskCodec::DELETE_FILES, true);
-			if (deletes.IsNull()) {
-				return {IcebergScanTasksListClass::HETEROGENEOUS, {}};
-			}
-			if (!ListValue::GetChildren(deletes).empty()) {
-				return {IcebergScanTasksListClass::DELETE_FILES, {}};
-			}
-		}
-
-		bool have_filter = false;
-		bool first_is_null = false;
-		string common_filter;
-		for (auto &descriptor : tasks) {
-			context.InterruptCheck();
-			auto filter = TaskCodec::ReadValue(descriptor, bind.layout, TaskCodec::ROW_FILTER, true);
-			if (!have_filter) {
-				have_filter = true;
-				first_is_null = filter.IsNull();
-				if (!first_is_null) {
-					common_filter = StringValue::Get(filter);
-				}
-				continue;
-			}
-			if (filter.IsNull() != first_is_null) {
-				return {IcebergScanTasksListClass::HETEROGENEOUS, {}};
-			}
-			if (!first_is_null && StringValue::Get(filter) != common_filter) {
-				return {IcebergScanTasksListClass::HETEROGENEOUS, {}};
-			}
-		}
-		if (first_is_null) {
-			return {IcebergScanTasksListClass::ALL_NULL_FILTERS, {}};
-		}
-		return {IcebergScanTasksListClass::COMMON_FILTER, std::move(common_filter)};
 	}
 
 	unique_ptr<Expression> BindRowFilter(ClientContext &context, const IcebergScanTasksBindData &bind,
@@ -244,6 +247,42 @@ static void IcebergScanTasksFunction(ClientContext &context, TableFunctionInput 
 	}
 }
 
+//! For supported data files without deletes or row filters, trust the manifest record counts.
+//! Only a scan decodes the metadata to validate schema IDs and partition constants.
+static vector<PartitionStatistics> IcebergScanTasksGetPartitionStats(ClientContext &context,
+                                                                     GetPartitionStatsInput &input) {
+	auto &bind = input.bind_data->Cast<IcebergScanTasksBindData>();
+	vector<PartitionStatistics> result;
+	if (bind.tasks.IsNull()) {
+		return result;
+	}
+	auto &tasks = ListValue::GetChildren(bind.tasks);
+	if (tasks.empty() || ClassifyTasks(context, bind, tasks).type != IcebergScanTasksListClass::ALL_NULL_FILTERS) {
+		return result;
+	}
+	int64_t total = 0;
+	for (auto &descriptor : tasks) {
+		context.InterruptCheck();
+		auto format = TaskCodec::ReadValue(descriptor, bind.layout, TaskCodec::FILE_FORMAT, true);
+		if (format.IsNull() || !IcebergMultiFileReader::SupportsDataFileFormat(StringValue::Get(format))) {
+			return {};
+		}
+		auto record_count = TaskCodec::ReadValue(descriptor, bind.layout, TaskCodec::RECORD_COUNT, true);
+		if (record_count.IsNull() || BigIntValue::Get(record_count) < 0) {
+			return {};
+		}
+		auto count = BigIntValue::Get(record_count);
+		if (!TryAddOperator::Operation(total, count, total)) {
+			return {};
+		}
+		PartitionStatistics stats;
+		stats.count = NumericCast<idx_t>(count);
+		stats.count_type = CountType::COUNT_EXACT;
+		result.push_back(std::move(stats));
+	}
+	return result;
+}
+
 //! The file virtual columns the reader can produce for any task: the data file's path as the task
 //! names it, and the row's position in that file -- the row id an Iceberg positional delete refers to.
 static virtual_column_map_t IcebergScanTasksVirtualColumns(ClientContext &, optional_ptr<FunctionData>) {
@@ -259,6 +298,7 @@ static virtual_column_map_t IcebergScanTasksVirtualColumns(ClientContext &, opti
 TableFunctionSet IcebergFunctions::GetIcebergScanTasksFunction() {
 	TableFunction function("iceberg_scan_tasks", {LogicalType::ANY}, IcebergScanTasksFunction, IcebergScanTasksBind);
 	function.get_virtual_columns = IcebergScanTasksVirtualColumns;
+	function.get_partition_stats = IcebergScanTasksGetPartitionStats;
 	function.init_global = [](ClientContext &context,
 	                          TableFunctionInitInput &input) -> unique_ptr<GlobalTableFunctionState> {
 		Value setting;

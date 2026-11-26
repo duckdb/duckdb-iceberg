@@ -1,4 +1,5 @@
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
+#include "common/iceberg_decimal.hpp"
 
 #include "duckdb/parser/column_list.hpp"
 #include "duckdb/common/type_visitor.hpp"
@@ -353,13 +354,13 @@ static void VerifySchemaEvolution(const IcebergTableMetadata &table_metadata, co
 		if (target_type.id() != LogicalTypeId::DECIMAL) {
 			break;
 		}
-		uint8_t width;
-		uint8_t scale;
-		original_type.GetDecimalProperties(width, scale);
+		// the new type is stored as is: it has to be a decimal that Iceberg can represent
+		IcebergDecimal::Verify(target_type);
+		auto width = DecimalType::GetWidth(original_type);
+		auto scale = DecimalType::GetScale(original_type);
 
-		uint8_t other_width;
-		uint8_t other_scale;
-		target_type.GetDecimalProperties(other_width, other_scale);
+		auto other_width = DecimalType::GetWidth(target_type);
+		auto other_scale = DecimalType::GetScale(target_type);
 
 		if (scale != other_scale) {
 			extra_info = "(DECIMAL evolution has to preserve the original scale, for reference: DECIMAL(width, scale))";
@@ -1176,6 +1177,38 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		                              EnumUtil::ToString(alter_table_info.alter_table_type));
 	}
 	}
+}
+
+pair<int32_t, int32_t> IcebergSchemaEntry::MoveColumn(ClientContext &context, IcebergTableSchemaVersion &table,
+                                                      const vector<Identifier> &column_path, IcebergColumnMove move,
+                                                      const vector<Identifier> &reference_path) {
+	auto &irc_transaction = IcebergTransaction::Get(context, catalog);
+	//! Held from reading the table to changing it: several calls in one statement run on different threads
+	unique_lock<mutex> guard(irc_transaction.table_update_lock);
+	//! The table as this transaction sees it; it is registered as changed only once the order does change
+	auto table_state = irc_transaction.GetLatestTableState(table.table_info.GetTableKey());
+	auto &current_table = table_state ? table_state->GetInfo() : table.table_info;
+	auto &current_schema = current_table.GetMetadata().GetLatestSchema();
+	auto previous_schema_id = current_schema.schema_id;
+	ThrowIfGeography(current_schema, column_path);
+	ThrowIfMapKey(current_schema, column_path);
+
+	auto new_schema = current_schema.Copy();
+	new_schema->MoveColumn(column_path, move, reference_path);
+	if (new_schema->Equals(current_schema)) {
+		//! The column stands there already: there is nothing to commit
+		return make_pair(previous_schema_id, previous_schema_id);
+	}
+	auto current_schema_id = previous_schema_id;
+	ApplyTableUpdate(guard, table.table_info, irc_transaction, [&](IcebergTable &updated_table) {
+		auto &transaction_data = updated_table.GetOrCreateTransactionData(irc_transaction);
+		//! A move that restores an earlier order only sets the current schema, so the commit has to assert the schema
+		//! it replaces: otherwise it would undo a schema change another writer committed in the meantime
+		transaction_data.TableAddAssertCurrentSchemaId();
+		IntroduceNewSchema(context, updated_table, transaction_data, new_schema);
+		current_schema_id = updated_table.GetMetadata().GetCurrentSchemaId();
+	});
+	return make_pair(previous_schema_id, current_schema_id);
 }
 
 static bool CatalogTypeIsSupported(CatalogType type) {
