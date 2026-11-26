@@ -458,6 +458,22 @@ select id, p, typeof(p) from iceberg_scan_tasks(getvariable('promoted_fallback')
 ----
 123	2	BIGINT
 
+# The call-level snapshot must authorize the same promotion when the file descriptor omits its context.
+statement ok
+set variable promoted_files = (select list(f) from (
+ select * exclude (snapshot_id, schema_id, metadata, schema)
+ from (select t.* from unnest(getvariable('promoted_fallback')) u(t))) f);
+
+statement ok
+set variable promoted_metadata = (select metadata from promoted_tasks limit 1);
+
+query IIT
+select id, p, typeof(p) from iceberg_scan_tasks(getvariable('promoted_files'),
+ metadata := getvariable('promoted_metadata'), schema_id := getvariable('promoted_schema'),
+ snapshot_id := getvariable('promoted_snapshot')) where p = 2;
+----
+123	2	BIGINT
+
 # A value that happens to fit is insufficient. Its type must match the source in the pinned snapshot.
 statement ok
 set variable mistyped_fallback = (select [struct_update(t, partition_constants := {'4': 2::smallint})]
@@ -465,6 +481,12 @@ set variable mistyped_fallback = (select [struct_update(t, partition_constants :
 
 statement ok
 commit;
+
+statement error
+select id, p from iceberg_scan_tasks(getvariable('promoted_files'),
+ metadata := getvariable('promoted_metadata'), schema_id := getvariable('promoted_schema'));
+----
+partition constant 4 does not match the table schemas
 
 statement error
 select * from iceberg_scan_tasks(getvariable('mistyped_fallback'));

@@ -48,12 +48,21 @@ struct IcebergScanTaskCodec {
 		unordered_map<int32_t, idx_t> partition_value_indexes;
 		LogicalType schema_type;
 	};
-	static InputLayout BindInput(const LogicalType &task_type, vector<LogicalType> &types, vector<Identifier> &names);
+	//! The task context (snapshot_id, schema_id, metadata, schema) comes in every row, as iceberg_scan_plan() emits
+	//! it, or once for the call: then `call_schema` is the STRUCT of the scan's columns and the rows must not carry the
+	//! context, whose columns are left at INVALID_INDEX.
+	static InputLayout BindInput(const LogicalType &task_type, optional_ptr<const LogicalType> call_schema,
+	                             vector<LogicalType> &types, vector<Identifier> &names);
 	static Value ReadValue(const Value &input, const InputLayout &layout, Column column, bool nullable = false);
 	static IcebergFileScanTask ReadTask(ClientContext &context, const Value &input, const InputLayout &layout,
-	                                    const IcebergTableMetadata &metadata, const IcebergTableSchema &schema);
+	                                    const IcebergTableMetadata &metadata, const IcebergTableSchema &schema,
+	                                    const Value &snapshot_id);
+	//! Parses the metadata a task list shares and checks it against the context it comes with: `schema_id` must be
+	//! one of its schemas, `schema_type`, when given, that schema's STRUCT (SchemaType), and `snapshot_id`, unless
+	//! NULL, one of its snapshots. `schema_source` names where `schema_type` came from in the error.
 	static IcebergTableMetadata ReadMetadata(const string &text, int32_t schema_id, const Value &snapshot_id,
-	                                         const LogicalType &schema_type);
+	                                         optional_ptr<const LogicalType> schema_type,
+	                                         const char *schema_source = "column");
 	//! `partition_value_ids` are the PartitionValueIds of the output's partition_values type.
 	static void WriteTask(ClientContext &context, const IcebergFileScanTask &task,
 	                      const vector<uint64_t> &partition_value_ids, DataChunk &output, idx_t row);

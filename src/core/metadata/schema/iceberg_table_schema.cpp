@@ -242,11 +242,12 @@ shared_ptr<IcebergTableSchema> IcebergTableSchema::RemoveColumn(const string &na
 	return res;
 }
 
-//! The position of 'field' in 'fields'
+//! The position of 'field' in 'fields'. Fields are matched on their field id, so 'field' can come from another copy of
+//! the schema
 static optional_idx FieldIndex(const vector<unique_ptr<IcebergColumnDefinition>> &fields,
                                const IcebergColumnDefinition &field) {
 	for (idx_t i = 0; i < fields.size(); i++) {
-		if (fields[i].get() == &field) {
+		if (fields[i]->id == field.id) {
 			return i;
 		}
 	}
@@ -268,7 +269,7 @@ void IcebergTableSchema::MoveColumn(const vector<Identifier> &path, IcebergColum
 			throw InvalidInputException("Cannot move %s %s missing column: %s", path_name, direction,
 			                            StringUtil::Join(IdentifiersToStrings(reference_path), "."));
 		}
-		if (reference.get() == column.get()) {
+		if (reference->id == column->id) {
 			throw InvalidInputException("Cannot move %s %s itself", path_name, direction);
 		}
 	}

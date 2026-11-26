@@ -327,6 +327,7 @@ void IcebergTransactionData::AddSnapshotUpdate(unique_ptr<IcebergAddSnapshot> ad
 	}
 	alters.push_back(*add_snapshot);
 	updates.push_back(std::move(add_snapshot));
+	has_pending_v3_snapshot |= table_info.GetMetadata().iceberg_version >= 3;
 }
 
 void IcebergTransactionData::AddDeleteSnapshot(partitioned_manifest_entry_map_t &&delete_files,
