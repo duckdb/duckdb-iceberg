@@ -1,5 +1,6 @@
 #include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
 
+#include "core/expression/iceberg_value.hpp"
 #include "duckdb/common/multi_file/multi_file_states.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/string.hpp"
@@ -365,7 +366,7 @@ void ManifestReader::ReadChunk(DataChunk &chunk, const map<idx_t, LogicalType> &
 				if (field_id == field.partition_field_id) {
 					IcebergPartitionInfo info;
 					info.field_id = static_cast<uint64_t>(field_id);
-					info.value = partition_vector.GetValue(i);
+					info.value = IcebergValue::NormalizePartitionNaN(partition_vector.GetValue(i));
 					data_file.partition_info.push_back(std::move(info));
 				}
 			}

@@ -45,6 +45,8 @@ public:
 	                               optional_ptr<IcebergEqualityDeleteBounds> delete_bounds) const;
 	//! Built once per data file: every delete file considered for it is matched against the same values.
 	static partition_value_map_t PartitionValueMap(const IcebergDataFile &data_file);
+	//! Iceberg partition equality normalizes NaNs and distinguishes positive and negative zero.
+	static bool PartitionValuesMatch(const Value &left, const Value &right);
 
 private:
 	bool FilePartitionMatchesFilter(const IcebergDataFile &data_file, const IcebergManifest &manifest_file,

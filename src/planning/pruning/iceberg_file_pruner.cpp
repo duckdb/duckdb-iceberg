@@ -90,19 +90,18 @@ bool IsNaN(const Value &value) {
 	}
 }
 
-bool PartitionValuesMatch(const Value &left, const Value &right) {
+} // namespace
+
+bool IcebergFilePruner::PartitionValuesMatch(const Value &left, const Value &right) {
 	if (!Value::NotDistinctFrom(left, right)) {
 		return false;
 	}
 	if (left.IsNull() || !left.type().IsFloating() || !right.type().IsFloating()) {
 		return true;
 	}
-	//! Iceberg normalizes all NaN encodings, but positive and negative zero are different partitions.
 	auto left_number = left.GetValue<double>();
 	return left_number != 0.0 || std::signbit(left_number) == std::signbit(right.GetValue<double>());
 }
-
-} // namespace
 
 bool IcebergFilePruner::FilePartitionMatchesFilter(const IcebergDataFile &data_file,
                                                    const IcebergManifest &manifest_file, bool evaluate_strict,

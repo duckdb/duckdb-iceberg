@@ -146,7 +146,7 @@ void IcebergDataFileStats::PopulateFromReturnStats(ClientContext &context, Icebe
 
 		if (write_bounds && stats.min) {
 			auto serialized_value =
-			    IcebergValue::SerializeValue(*stats.min, column_info.type, SerializeBound::LOWER_BOUND, metrics);
+			    IcebergValue::SerializeFileBound(*stats.min, column_info.type, SerializeBound::LOWER_BOUND, metrics);
 			if (serialized_value.HasError()) {
 				throw InvalidConfigurationException(serialized_value.GetError());
 			} else if (serialized_value.HasValue()) {
@@ -155,7 +155,7 @@ void IcebergDataFileStats::PopulateFromReturnStats(ClientContext &context, Icebe
 		}
 		if (write_bounds && stats.max) {
 			auto serialized_value =
-			    IcebergValue::SerializeValue(*stats.max, column_info.type, SerializeBound::UPPER_BOUND, metrics);
+			    IcebergValue::SerializeFileBound(*stats.max, column_info.type, SerializeBound::UPPER_BOUND, metrics);
 			if (serialized_value.HasError()) {
 				throw InvalidConfigurationException(serialized_value.GetError());
 			} else if (serialized_value.HasValue()) {

@@ -12,7 +12,17 @@
 #include "duckdb/common/types/vector.hpp"
 #include "utf8proc_wrapper.hpp"
 
+#include <limits>
+
 namespace duckdb {
+
+Value IcebergValue::NormalizePartitionNaN(Value value) {
+	if (!value.IsNull() && value.type().IsFloating() && Value::IsNan(value.GetValue<double>())) {
+		return value.type().id() == LogicalTypeId::FLOAT ? Value::FLOAT(std::numeric_limits<float>::quiet_NaN())
+		                                                 : Value::DOUBLE(std::numeric_limits<double>::quiet_NaN());
+	}
+	return value;
+}
 
 static Value TransformPartitionValueFromBlob(const string_t &blob, const LogicalType &type) {
 	auto result = IcebergValue::DeserializeValue(blob, type);
@@ -415,6 +425,17 @@ std::vector<uint8_t> HexStringToBytes(const std::string &hex) {
 		bytes.push_back(byte);
 	}
 	return bytes;
+}
+
+SerializeResult IcebergValue::SerializeFileBound(Value value, const LogicalType &type, SerializeBound bound,
+                                                 const IcebergMetricsConfig &metrics) {
+	if (type.IsFloating()) {
+		value = value.DefaultCastAs(type);
+		if (value.GetValue<double>() == 0) {
+			value = Value::DOUBLE(bound == SerializeBound::LOWER_BOUND ? -0.0 : 0.0);
+		}
+	}
+	return SerializeValue(std::move(value), type, bound, metrics);
 }
 
 SerializeResult IcebergValue::SerializeValue(Value input_value, const LogicalType &column_type,

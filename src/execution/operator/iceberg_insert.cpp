@@ -20,6 +20,7 @@
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/bound_result_modifier.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
+#include "duckdb/common/operator/string_cast.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/type_visitor.hpp"
 #include "duckdb/common/vector_operations/unary_executor.hpp"
@@ -217,7 +218,7 @@ static Value GetWrittenFieldIdValue(const IcebergColumnDefinition &column) {
 
 //! Whether every partition value is a top-level written column, so the copy operator can partition on the
 //! columns themselves. Transforms, nested sources and columns absent from the data file (unknown) need a
-//! computed partition value instead.
+//! computed partition value instead. Floating-point identity fields need a key that distinguishes signed zeros.
 static bool CanWriteIdentityPartitionsDirectly(const IcebergPartitionSpec &spec, const IcebergTableSchema &schema) {
 	for (auto &field : spec.fields) {
 		if (field.transform.Type() == IcebergTransformType::VOID_TRANSFORM) {
@@ -229,7 +230,8 @@ static bool CanWriteIdentityPartitionsDirectly(const IcebergPartitionSpec &spec,
 		if (!IsTopLevelColumnSourceId(schema, field.source_id)) {
 			return false;
 		}
-		if (!IsWrittenToDataFile(schema.GetColumnByFieldId(field.source_id).type)) {
+		auto &type = schema.GetColumnByFieldId(field.source_id).type;
+		if (!IsWrittenToDataFile(type) || type.IsFloating()) {
 			return false;
 		}
 	}
@@ -495,6 +497,15 @@ static bool CastTimestampNsToTimestampFloor(Vector &source, Vector &result, idx_
 			return timestamp_t(input.value);
 		}
 		return timestamp_t(IcebergNanosToMicrosFloor(input.value));
+	});
+	return true;
+}
+
+template <class T>
+static bool CastFloatingPartitionKey(Vector &source, Vector &result, idx_t count, CastParameters &) {
+	auto &heap = StringVector::GetStringHeap(result);
+	UnaryExecutor::Execute<T, string_t>(source, result, count, [&](T value) {
+		return Value::IsNan(value) ? string_t("nan") : StringCast::Operation(value, heap);
 	});
 	return true;
 }
@@ -889,6 +900,15 @@ static IcebergWriteLayout BuildWriteLayout(ClientContext &context, const Iceberg
 		write_column.name = field.GetPartitionSpecFieldName();
 		write_column.source =
 		    GetTransformExpression(context, copy_input, field.source_id, field.transform, "partitioning");
+		if (write_column.source->GetReturnType().IsFloating()) {
+			// COPY groups floating keys using SQL equality. Route by round-trip text with a single NaN spelling;
+			// the Parquet column stays numeric.
+			auto cast = write_column.source->GetReturnType().id() == LogicalTypeId::FLOAT
+			                ? CastFloatingPartitionKey<float>
+			                : CastFloatingPartitionKey<double>;
+			write_column.source =
+			    BoundCastExpression::Create(std::move(write_column.source), LogicalType::VARCHAR, BoundCastInfo(cast));
+		}
 		write_column.type = write_column.source->GetReturnType();
 		write_column.is_computed_partition_value = true;
 		write_column.transform = field.transform.Type();

@@ -24,6 +24,7 @@
 #include "duckdb/common/json_document.hpp"
 #include "re2/re2.h"
 
+#include <cmath>
 #include <optional>
 
 namespace duckdb {
@@ -401,6 +402,17 @@ static Value SerializeUUIDBound(const Value &uuid) {
 	return Value::BLOB(bytes, sizeof(bytes));
 }
 
+static bool PartitionBoundLessThan(const Value &left, const Value &right) {
+	if (left.type().IsFloating()) {
+		auto l = left.GetValue<double>();
+		auto r = right.GetValue<double>();
+		if (l == 0 && r == 0) {
+			return std::signbit(l) && !std::signbit(r);
+		}
+	}
+	return left < right;
+}
+
 void ManifestPartitions::Create(const IcebergTableMetadata &metadata, const IcebergTableSchema &target_schema,
                                 const IcebergPartitionSpec &partition_spec,
                                 const vector<IcebergManifestEntry> &manifest_entries) {
@@ -470,10 +482,10 @@ void ManifestPartitions::Create(const IcebergTableMetadata &metadata, const Iceb
 				signed_max_values[i] = typed_value;
 				initialized[i] = true;
 			} else {
-				if (typed_value < min_values[i]) {
+				if (PartitionBoundLessThan(typed_value, min_values[i])) {
 					min_values[i] = typed_value;
 				}
-				if (typed_value > max_values[i]) {
+				if (PartitionBoundLessThan(max_values[i], typed_value)) {
 					max_values[i] = typed_value;
 				}
 				if (typed_value.type().id() == LogicalTypeId::UUID) {
