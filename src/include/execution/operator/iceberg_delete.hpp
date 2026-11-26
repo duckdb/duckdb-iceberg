@@ -228,10 +228,10 @@ public:
 	//! Write a v2 delete file or serialize a v3 vector for subsequent size-based Puffin packing.
 	IcebergDeleteFileWrite MaterializeDeletes(ClientContext &context, const string &filename,
 	                                          const vector<idx_t> &deleted_rows) const;
-
-private:
 	//! Walk `plan` for the PhysicalTableScan that emits the row-id virtual columns the delete needs.
 	static optional_ptr<PhysicalTableScan> FindIcebergScan(PhysicalOperator &plan);
+
+private:
 	IcebergDeleteFileInfo WritePositionalDeleteFile(ClientContext &context, const string &filename,
 	                                                IcebergDeleteFileInfo delete_file,
 	                                                const set<idx_t> &sorted_deletes) const;

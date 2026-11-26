@@ -118,9 +118,10 @@ static void LoadInternal(ExtensionLoader &loader) {
 	                          LogicalType::BOOLEAN, Value::BOOLEAN(false));
 	config.AddExtensionOption(
 	    SKIP_PUFFIN_VERIFICATION_CONFIG_VARIABLE,
-	    "Skip structural Puffin verification for deletion-vector files. This unsafe compatibility option permits "
-	    "reading invalid bare-blob files written by DuckDB Iceberg 1.5.3.",
-	    LogicalType::BOOLEAN, Value::BOOLEAN(false), nullptr, SetScope::GLOBAL);
+	    "When true (default), trust the deletion-vector offset and length recorded in the manifest and skip "
+	    "structural Puffin footer verification. Set to false to require a valid Puffin footer; this rejects "
+	    "Delta deletion-vector files referenced by UniForm and legacy DuckDB bare-blob files.",
+	    LogicalType::BOOLEAN, Value::BOOLEAN(DEFAULT_SKIP_PUFFIN_VERIFICATION), nullptr, SetScope::GLOBAL);
 	config.AddExtensionOption("iceberg_test_force_token_expiry",
 	                          "DEBUG SETTING: force OAuth2 token expiry for testing automatic refresh",
 	                          LogicalType::BOOLEAN, Value::BOOLEAN(false));

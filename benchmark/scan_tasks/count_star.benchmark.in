@@ -1,0 +1,31 @@
+# name: ${FILE_PATH}
+# description: Count rows from ${TASKS} materialized Iceberg scan tasks
+# group: [scan_tasks]
+
+name Iceberg scan tasks - COUNT(*) - ${TASKS} tasks
+group scan_tasks
+subgroup count_star
+
+require avro
+
+require parquet
+
+require iceberg
+
+require json
+
+# This snapshot has one four-row Parquet file. Repeat its task so both scanning
+# and metadata-only counting run against the same readable file at every scale.
+load
+SET threads=1;
+SET VARIABLE task_list = (
+    SELECT list(task)
+    FROM iceberg_scan_plan('data/persistent/equality_deletes/warehouse/mydb/mytable', version='2') task
+    CROSS JOIN range(${TASKS})
+);
+
+run
+SELECT count(*) FROM iceberg_scan_tasks(getvariable('task_list'));
+
+result I
+${COUNT}

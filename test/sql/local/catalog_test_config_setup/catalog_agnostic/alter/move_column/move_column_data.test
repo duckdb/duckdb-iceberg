@@ -1,0 +1,266 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/move_column/move_column_data.test
+# description: A move changes the column order only: data, field ids, partition spec, sort order and properties stay; schema ids follow the ALTER TABLE rules
+# group: [move_column]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.move_data;
+
+statement ok
+CREATE TABLE my_datalake.default.move_data (id INTEGER, category VARCHAR, amount DOUBLE, day DATE)
+PARTITIONED BY (category) SORTED BY (id) WITH (
+	'write.metadata.metrics.column.amount' = 'counts',
+	'schema.name-mapping.default' = '[{"field-id":1,"names":["id"]},{"field-id":2,"names":["category"]},{"field-id":3,"names":["amount"]},{"field-id":4,"names":["day"]}]'
+);
+
+statement ok
+INSERT INTO my_datalake.default.move_data VALUES (1, 'a', 1.5, DATE '2026-01-01'), (2, 'b', 2.5, DATE '2026-01-02');
+
+statement ok
+CREATE MACRO move_data_fields() AS TABLE
+SELECT field_id, name, type, required
+FROM iceberg_schemas('my_datalake.default.move_data') WHERE is_current;
+
+statement ok
+CREATE MACRO move_data_layout() AS TABLE
+SELECT
+	metadata."default-spec-id"::INTEGER AS default_spec_id,
+	metadata."default-sort-order-id"::INTEGER AS default_sort_order_id,
+	metadata."last-column-id"::INTEGER AS last_column_id
+FROM iceberg_load_table_response('my_datalake.default.move_data');
+
+# the fields the default sort order refers to
+statement ok
+CREATE MACRO move_data_sort_fields() AS TABLE
+SELECT
+	sort_order."order-id"::INTEGER AS order_id,
+	list_transform(sort_order.fields::VARIANT[], lambda f: f."source-id"::INTEGER) AS source_ids
+FROM iceberg_load_table_response('my_datalake.default.move_data'),
+unnest(metadata."sort-orders"::VARIANT[]) AS t(sort_order)
+WHERE sort_order."order-id"::INTEGER = metadata."default-sort-order-id"::INTEGER;
+
+# the table before any move
+query ITTT
+SELECT field_id, name, type, required FROM move_data_fields() ORDER BY field_id;
+----
+1	id	INTEGER	false
+2	category	VARCHAR	false
+3	amount	DOUBLE	false
+4	day	DATE	false
+
+query III
+SELECT default_spec_id, default_sort_order_id, last_column_id FROM move_data_layout();
+----
+0	1	4
+
+query IIT
+SELECT spec_id, source_id, name FROM iceberg_partition_specs(my_datalake.default.move_data) WHERE is_default;
+----
+0	2	category
+
+query IT
+SELECT order_id, source_ids FROM move_data_sort_fields();
+----
+1	[1]
+
+query II
+SELECT previous_schema_id, current_schema_id
+FROM iceberg_move_column('my_datalake.default.move_data', 'amount', first => true);
+----
+0	1
+
+query II
+SELECT metadata."current-schema-id"::INTEGER, len(metadata.schemas::VARIANT[])
+FROM iceberg_load_table_response('my_datalake.default.move_data');
+----
+1	2
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE my_datalake.default.move_data);
+----
+amount	DOUBLE
+id	INTEGER
+category	VARCHAR
+day	DATE
+
+# the rows written before the move, each value under its own column
+query RITT
+SELECT * FROM my_datalake.default.move_data ORDER BY id;
+----
+1.5	1	a	2026-01-01
+2.5	2	b	2026-01-02
+
+query ITRT
+SELECT id, category, amount, day FROM my_datalake.default.move_data ORDER BY id;
+----
+1	a	1.5	2026-01-01
+2	b	2.5	2026-01-02
+
+# a move changes the order only: field ids, types, nullability, partition spec, sort order and last-column-id stay
+query ITTT
+SELECT field_id, name, type, required FROM move_data_fields() ORDER BY field_id;
+----
+1	id	INTEGER	false
+2	category	VARCHAR	false
+3	amount	DOUBLE	false
+4	day	DATE	false
+
+query III
+SELECT default_spec_id, default_sort_order_id, last_column_id FROM move_data_layout();
+----
+0	1	4
+
+query IIT
+SELECT spec_id, source_id, name FROM iceberg_partition_specs(my_datalake.default.move_data) WHERE is_default;
+----
+0	2	category
+
+query IT
+SELECT order_id, source_ids FROM move_data_sort_fields();
+----
+1	[1]
+
+query II
+SELECT key, value FROM iceberg_table_properties('my_datalake.default.move_data') WHERE key LIKE '%.column.%';
+----
+write.metadata.metrics.column.amount	counts
+
+# the name mapping names fields by id, so its entries are the ones the table was created with
+query IT
+SELECT (e->>'$."field-id"')::INTEGER AS field_id, json_extract_string(e, '$.names[*]') AS names
+FROM (
+	SELECT unnest(json_extract(value::JSON, '$[*]')) AS e
+	FROM iceberg_table_properties('my_datalake.default.move_data')
+	WHERE key = 'schema.name-mapping.default'
+)
+ORDER BY field_id;
+----
+1	[id]
+2	[category]
+3	[amount]
+4	[day]
+
+# positional INSERT follows the new order
+statement ok
+INSERT INTO my_datalake.default.move_data VALUES (3.5, 3, 'a', DATE '2026-01-03');
+
+query ITRT
+SELECT id, category, amount, day FROM my_datalake.default.move_data ORDER BY id;
+----
+1	a	1.5	2026-01-01
+2	b	2.5	2026-01-02
+3	a	3.5	2026-01-03
+
+# the partition column still holds the values of the INSERTs
+query I
+SELECT count(*) FROM my_datalake.default.move_data WHERE category = 'a';
+----
+2
+
+# moving amount back restores the order of schema 0: schema 0 is current again and no schema is added
+query II
+SELECT previous_schema_id, current_schema_id
+FROM iceberg_move_column('my_datalake.default.move_data', 'amount', after => 'category');
+----
+1	0
+
+query II
+SELECT metadata."current-schema-id"::INTEGER, len(metadata.schemas::VARIANT[])
+FROM iceberg_load_table_response('my_datalake.default.move_data');
+----
+0	2
+
+# all rows, also the one written under schema 1, in the order of schema 0
+query ITRT
+SELECT * FROM my_datalake.default.move_data ORDER BY id;
+----
+1	a	1.5	2026-01-01
+2	b	2.5	2026-01-02
+3	a	3.5	2026-01-03
+
+# a move that leaves the order as it is: id is the first column already
+query II
+SELECT previous_schema_id, current_schema_id
+FROM iceberg_move_column('my_datalake.default.move_data', 'id', first => true);
+----
+0	0
+
+query II
+SELECT previous_schema_id, current_schema_id
+FROM iceberg_move_column('my_datalake.default.move_data', 'category', after => 'id');
+----
+0	0
+
+query II
+SELECT metadata."current-schema-id"::INTEGER, len(metadata.schemas::VARIANT[])
+FROM iceberg_load_table_response('my_datalake.default.move_data');
+----
+0	2
+
+query III
+SELECT default_spec_id, default_sort_order_id, last_column_id FROM move_data_layout();
+----
+0	1	4
+
+query IIT
+SELECT spec_id, source_id, name FROM iceberg_partition_specs(my_datalake.default.move_data) WHERE is_default;
+----
+0	2	category
+
+query IT
+SELECT order_id, source_ids FROM move_data_sort_fields();
+----
+1	[1]
+
+statement ok
+DROP TABLE my_datalake.default.move_data;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.move_same_type;
+
+# two columns of the same type: a filter follows the column, not the position, also for rows written after the move
+statement ok
+CREATE TABLE my_datalake.default.move_same_type (a INTEGER, b INTEGER);
+
+statement ok
+INSERT INTO my_datalake.default.move_same_type VALUES (1, 2);
+
+statement ok
+CALL iceberg_move_column('my_datalake.default.move_same_type', 'b', first => true);
+
+statement ok
+INSERT INTO my_datalake.default.move_same_type VALUES (20, 10);
+
+query II
+SELECT a, b FROM my_datalake.default.move_same_type ORDER BY a;
+----
+1	2
+10	20
+
+query I
+SELECT a FROM my_datalake.default.move_same_type WHERE b = 20;
+----
+10
+
+query I
+SELECT a FROM my_datalake.default.move_same_type WHERE b = 2;
+----
+1
+
+query I
+SELECT count(*) FROM my_datalake.default.move_same_type WHERE a = 20;
+----
+0
+
+query I
+SELECT count(*) FROM my_datalake.default.move_same_type WHERE a = 2;
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.move_same_type;

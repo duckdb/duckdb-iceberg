@@ -40,6 +40,10 @@ public:
 	const vector<unique_ptr<IcebergColumnDefinition>> &GetChildren() const;
 	idx_t GetChildCount() const;
 	void RewriteType();
+	//! Move the child at index 'from' so that it ends up at index 'to'
+	void MoveChild(idx_t from, idx_t to);
+	//! Move the field at index 'from' of 'fields' so that it ends up at index 'to'
+	static void MoveField(vector<unique_ptr<IcebergColumnDefinition>> &fields, idx_t from, idx_t to);
 
 public:
 	Value GetInitialDefault() const;
