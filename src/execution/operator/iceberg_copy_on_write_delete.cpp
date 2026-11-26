@@ -223,7 +223,7 @@ optional_ptr<PhysicalTableScan> FindTableScan(PhysicalOperator &plan) {
 	return FindTableScan(plan.children[0].get());
 }
 
-//! The body of the `deletee` CTE: the DELETE's own scan, reduced to the (filename, file_row_number) of each row it
+//! The body of the `deletee` CTE: the DELETE's own scan, reduced to the (file number, file_row_number) of each row it
 //! matches. DELETE ... USING can match a row more than once; the anti join does not need the pairs to be distinct.
 //! The DELETE's plan is already optimized and resolved, so it is planned as is rather than as a child of this tree.
 class LogicalCopyOnWriteDeleteMatches : public LogicalExtensionOperator {
@@ -231,7 +231,7 @@ public:
 	LogicalCopyOnWriteDeleteMatches(LogicalOperator &match_plan, vector<idx_t> row_id_indexes,
 	                                vector<LogicalType> row_id_types)
 	    : match_plan(match_plan), row_id_indexes(std::move(row_id_indexes)), row_id_types(std::move(row_id_types)) {
-		types = this->row_id_types;
+		types = GetDeleteeTypes();
 	}
 
 	LogicalOperator &match_plan;
@@ -240,18 +240,25 @@ public:
 	vector<LogicalType> row_id_types;
 	optional_ptr<IcebergCopyOnWriteDeleteCollector> collector;
 
+	//! The columns of `deletee`: the file number, then file_row_number
+	vector<LogicalType> GetDeleteeTypes() const {
+		return {LogicalType::BIGINT, row_id_types[1]};
+	}
+
 public:
 	PhysicalOperator &CreatePlan(ClientContext &context, PhysicalPlanGenerator &planner) override {
 		auto &match = planner.CreatePlan(match_plan);
 
 		vector<unique_ptr<Expression>> select_list;
 		for (idx_t i = 0; i < row_id_indexes.size(); i++) {
-			select_list.push_back(make_uniq<BoundReferenceExpression>(types[i], row_id_indexes[i]));
+			select_list.push_back(make_uniq<BoundReferenceExpression>(row_id_types[i], row_id_indexes[i]));
 		}
-		auto &projection = planner.Make<PhysicalProjection>(types, std::move(select_list), match.estimated_cardinality);
+		auto &projection =
+		    planner.Make<PhysicalProjection>(row_id_types, std::move(select_list), match.estimated_cardinality);
 		projection.children.push_back(match);
 
-		auto &result = planner.Make<IcebergCopyOnWriteDeleteCollector>(types, projection.estimated_cardinality);
+		auto &result =
+		    planner.Make<IcebergCopyOnWriteDeleteCollector>(GetDeleteeTypes(), projection.estimated_cardinality);
 		result.children.push_back(projection);
 		collector = result.Cast<IcebergCopyOnWriteDeleteCollector>();
 		//! The optimizer can remove the scan when no rows match.
@@ -269,7 +276,7 @@ public:
 
 protected:
 	void ResolveTypes() override {
-		types = row_id_types;
+		types = GetDeleteeTypes();
 	}
 };
 
@@ -304,6 +311,88 @@ protected:
 	}
 };
 
+//! Maps the file numbers of `touched` back to the paths the collector numbered: outputs (filename, file number)
+class CopyOnWriteFilePaths : public PhysicalOperator {
+public:
+	CopyOnWriteFilePaths(PhysicalPlan &physical_plan, IcebergCopyOnWriteDeleteCollector &collector,
+	                     PhysicalOperator &child)
+	    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, {LogicalType::VARCHAR, LogicalType::BIGINT},
+	                       child.estimated_cardinality),
+	      collector(collector) {
+		children.push_back(child);
+	}
+
+	IcebergCopyOnWriteDeleteCollector &collector;
+
+	OperatorResultType Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
+	                           GlobalOperatorState &gstate, OperatorState &state) const override {
+		//! `touched` reads `deletee`, so the collector has numbered every file by now
+		auto &files = collector.GetDeletes().files;
+		UnifiedVectorFormat file_number_data;
+		input.data[0].ToUnifiedFormat(file_number_data);
+		auto file_numbers = UnifiedVectorFormat::GetData<int64_t>(file_number_data);
+		auto paths = FlatVector::GetDataMutable<string_t>(chunk.data[0]);
+		for (idx_t i = 0; i < input.size(); i++) {
+			auto idx = file_number_data.sel->get_index(i);
+			if (!file_number_data.validity.RowIsValid(idx) || file_numbers[idx] < 0 ||
+			    NumericCast<idx_t>(file_numbers[idx]) >= files.size()) {
+				throw InternalException("Copy-on-write DELETE: no file with this number");
+			}
+			paths[i] = StringVector::AddString(chunk.data[0], files[NumericCast<idx_t>(file_numbers[idx])]);
+		}
+		chunk.data[1].Reference(input.data[0]);
+		chunk.SetChildCardinality(input.size());
+		return OperatorResultType::NEED_MORE_INPUT;
+	}
+
+	bool ParallelOperator() const override {
+		return true;
+	}
+
+	string GetName() const override {
+		return "ICEBERG_COPY_ON_WRITE_FILE_PATHS";
+	}
+};
+
+class LogicalCopyOnWriteFilePaths : public LogicalExtensionOperator {
+public:
+	LogicalCopyOnWriteFilePaths(TableIndex table_index, LogicalCopyOnWriteDeleteMatches &matches,
+	                            unique_ptr<LogicalOperator> child)
+	    : table_index(table_index), matches(matches) {
+		children.push_back(std::move(child));
+	}
+
+	TableIndex table_index;
+	LogicalCopyOnWriteDeleteMatches &matches;
+
+public:
+	PhysicalOperator &CreatePlan(ClientContext &context, PhysicalPlanGenerator &planner) override {
+		auto &child = planner.CreatePlan(*children[0]);
+		//! The CTE body is planned before the CTE's consumers, so its collector exists
+		if (!matches.collector) {
+			throw InternalException("Copy-on-write DELETE: the files are numbered after they are read");
+		}
+		return planner.Make<CopyOnWriteFilePaths>(*matches.collector, child);
+	}
+
+	vector<ColumnBinding> GetColumnBindings() override {
+		return GenerateColumnBindings(table_index, 2);
+	}
+
+	vector<TableIndex> GetTableIndex() const override {
+		return {table_index};
+	}
+
+	string GetExtensionName() const override {
+		return "iceberg_copy_on_write_file_paths";
+	}
+
+protected:
+	void ResolveTypes() override {
+		types = {LogicalType::VARCHAR, LogicalType::BIGINT};
+	}
+};
+
 class RowCounterGlobalState : public GlobalOperatorState {
 public:
 	atomic<idx_t> count {0};
@@ -312,14 +401,47 @@ public:
 class CollectorGlobalState : public GlobalOperatorState {
 public:
 	mutex lock;
+	//! The files by number, and the number of each file
 	IcebergCopyOnWriteDeletedFiles deletes;
+	unordered_map<string, idx_t> file_numbers;
 };
 
 class CollectorLocalState : public OperatorState {
 public:
-	//! The files this thread has already recorded, so the global lock is only taken for new ones
-	unordered_set<string> seen_files;
-	vector<string> new_files;
+	//! The number of a file, taking the global lock only for a file this thread has not seen yet
+	int64_t GetFileNumber(CollectorGlobalState &gstate, const string_t &file_name) {
+		//! The scan reads one file at a time, so the last file is usually the next one
+		if (has_last_file && file_name == string_t(last_file)) {
+			return last_file_number;
+		}
+		auto path = file_name.GetString();
+		auto entry = file_numbers.find(path);
+		if (entry == file_numbers.end()) {
+			idx_t file_number;
+			{
+				lock_guard<mutex> guard(gstate.lock);
+				auto global_entry = gstate.file_numbers.find(path);
+				if (global_entry == gstate.file_numbers.end()) {
+					file_number = gstate.deletes.files.size();
+					gstate.deletes.files.push_back(path);
+					gstate.file_numbers.emplace(path, file_number);
+				} else {
+					file_number = global_entry->second;
+				}
+			}
+			entry = file_numbers.emplace(std::move(path), file_number).first;
+		}
+		has_last_file = true;
+		last_file = entry->first;
+		last_file_number = NumericCast<int64_t>(entry->second);
+		return last_file_number;
+	}
+
+private:
+	unordered_map<string, idx_t> file_numbers;
+	bool has_last_file = false;
+	string last_file;
+	int64_t last_file_number = 0;
 };
 
 //! Bind `SELECT * FROM <table>`, then add virtual columns to its scan: on V3, the row lineage columns
@@ -454,43 +576,46 @@ PhysicalOperator &IcebergCopyOnWriteDelete::PlanDelete(ClientContext &context, P
 	MaxTableIndex(match_plan, max_index);
 	MaxTableIndex(*keep, max_index);
 	TableIndex cte_index(MaxValue(max_index + 1, binder->GenerateTableIndex().index));
+	auto deletee_types = matches_ref.GetDeleteeTypes();
 	auto cte_ref = [&]() {
-		return make_uniq<LogicalCTERef>(binder->GenerateTableIndex(), cte_index, row_id_types,
-		                                vector<Identifier> {"filename", "file_row_number"});
+		return make_uniq<LogicalCTERef>(binder->GenerateTableIndex(), cte_index, deletee_types,
+		                                vector<Identifier> {"file_no", "file_row_number"});
 	};
 
-	//! touched: SELECT DISTINCT filename FROM deletee
+	//! touched: SELECT DISTINCT file_no FROM deletee, mapped back to (filename, file_no)
 	auto touched_ref = cte_ref();
 	auto touched_ref_index = touched_ref->table_index;
 	auto touched_projection_index = binder->GenerateTableIndex();
 	vector<unique_ptr<Expression>> touched_list;
-	touched_list.push_back(ColumnRef(row_id_types[0], touched_ref_index, 0));
+	touched_list.push_back(ColumnRef(deletee_types[0], touched_ref_index, 0));
 	auto touched_projection = make_uniq<LogicalProjection>(touched_projection_index, std::move(touched_list));
 	touched_projection->AddChild(std::move(touched_ref));
 	vector<unique_ptr<Expression>> distinct_targets;
-	distinct_targets.push_back(ColumnRef(row_id_types[0], touched_projection_index, 0));
-	auto touched = make_uniq<LogicalDistinct>(std::move(distinct_targets), DistinctType::DISTINCT);
-	touched->AddChild(std::move(touched_projection));
+	distinct_targets.push_back(ColumnRef(deletee_types[0], touched_projection_index, 0));
+	auto touched_numbers = make_uniq<LogicalDistinct>(std::move(distinct_targets), DistinctType::DISTINCT);
+	touched_numbers->AddChild(std::move(touched_projection));
+	auto touched_index = binder->GenerateTableIndex();
+	auto touched = make_uniq<LogicalCopyOnWriteFilePaths>(touched_index, matches_ref, std::move(touched_numbers));
 
-	//! keep SEMI JOIN touched ON keep.filename = touched.filename
-	auto semi_join = make_uniq<LogicalComparisonJoin>(JoinType::SEMI);
-	auto &semi_join_ref = *semi_join;
-	semi_join->conditions.emplace_back(ColumnRef(row_id_types[0], keep_index, column_count),
-	                                   ColumnRef(row_id_types[0], touched_projection_index, 0),
-	                                   ExpressionType::COMPARE_EQUAL);
-	semi_join->AddChild(std::move(keep));
-	semi_join->AddChild(std::move(touched));
+	//! keep JOIN touched ON keep.filename = touched.filename: touched has each file once, so this only adds the
+	//! file number to the rows of the touched files
+	auto touched_join = make_uniq<LogicalComparisonJoin>(JoinType::INNER);
+	auto &touched_join_ref = *touched_join;
+	touched_join->conditions.emplace_back(ColumnRef(row_id_types[0], keep_index, column_count),
+	                                      ColumnRef(row_id_types[0], touched_index, 0), ExpressionType::COMPARE_EQUAL);
+	touched_join->AddChild(std::move(keep));
+	touched_join->AddChild(std::move(touched));
 
-	//! ANTI JOIN deletee ON keep.filename = deletee.filename AND keep.file_row_number = deletee.file_row_number
+	//! ANTI JOIN deletee ON touched.file_no = deletee.file_no AND keep.file_row_number = deletee.file_row_number
 	auto deletee_ref = cte_ref();
 	auto deletee_index = deletee_ref->table_index;
 	auto anti_join = make_uniq<LogicalComparisonJoin>(JoinType::ANTI);
-	for (idx_t i = 0; i < 2; i++) {
-		anti_join->conditions.emplace_back(ColumnRef(row_id_types[i], keep_index, column_count + i),
-		                                   ColumnRef(row_id_types[i], deletee_index, i), ExpressionType::COMPARE_EQUAL);
-	}
+	anti_join->conditions.emplace_back(ColumnRef(deletee_types[0], touched_index, 1),
+	                                   ColumnRef(deletee_types[0], deletee_index, 0), ExpressionType::COMPARE_EQUAL);
+	anti_join->conditions.emplace_back(ColumnRef(deletee_types[1], keep_index, column_count + 1),
+	                                   ColumnRef(deletee_types[1], deletee_index, 1), ExpressionType::COMPARE_EQUAL);
 	//! count the rows of the touched files, before the anti join removes the deleted ones
-	auto touched_rows = make_uniq<LogicalCopyOnWriteRowCount>(std::move(semi_join));
+	auto touched_rows = make_uniq<LogicalCopyOnWriteRowCount>(std::move(touched_join));
 	auto &touched_rows_ref = *touched_rows;
 	anti_join->AddChild(std::move(touched_rows));
 	anti_join->AddChild(std::move(deletee_ref));
@@ -503,14 +628,14 @@ PhysicalOperator &IcebergCopyOnWriteDelete::PlanDelete(ClientContext &context, P
 	unique_ptr<LogicalOperator> rows = make_uniq<LogicalProjection>(binder->GenerateTableIndex(), std::move(keep_list));
 	rows->AddChild(std::move(anti_join));
 
-	//! The semi join restricts the keep scan to the touched files at runtime: its build side becomes a filter on the
-	//! constant `filename` column, which the scan evaluates once per file, skipping every other file unread.
+	//! The join with touched restricts the keep scan to the touched files at runtime: its build side becomes a filter
+	//! on the constant `filename` column, which the scan evaluates once per file, skipping every other file unread.
 	Optimizer optimizer(*binder, context);
 	JoinFilterPushdownOptimizer join_filter_pushdown(optimizer);
 	join_filter_pushdown.VisitOperator(*rows);
-	if (semi_join_ref.filter_pushdown) {
+	if (touched_join_ref.filter_pushdown) {
 		//! The DELETE's predicate usually selects few rows, so the touched files are worth filtering on
-		semi_join_ref.filter_pushdown->build_side_has_filter = true;
+		touched_join_ref.filter_pushdown->build_side_has_filter = true;
 	}
 
 	//! The DELETE's plan is resolved already; only the new operators above the CTE body need it.
@@ -910,29 +1035,32 @@ OperatorResultType IcebergCopyOnWriteDeleteCollector::Execute(ExecutionContext &
 	auto &gstate = gstate_p.Cast<CollectorGlobalState>();
 	auto &state = state_p.Cast<CollectorLocalState>();
 
-	UnifiedVectorFormat file_name_data;
-	input.data[0].ToUnifiedFormat(file_name_data);
-	auto file_names = UnifiedVectorFormat::GetData<string_t>(file_name_data);
-	for (idx_t i = 0; i < input.size(); i++) {
-		auto file_idx = file_name_data.sel->get_index(i);
-		if (!file_name_data.validity.RowIsValid(file_idx)) {
+	auto &file_name_vector = input.data[0];
+	auto &file_number_vector = chunk.data[0];
+	if (file_name_vector.GetVectorType() == VectorType::CONSTANT_VECTOR) {
+		//! The scan emits one file per chunk as a constant: number it once, not for every row
+		if (ConstantVector::IsNull(file_name_vector)) {
 			throw InternalException("Filename cannot be NULL!");
 		}
-		auto file_name = file_names[file_idx].GetString();
-		if (state.seen_files.insert(file_name).second) {
-			state.new_files.push_back(std::move(file_name));
+		auto file_name = ConstantVector::GetData<string_t>(file_name_vector)[0];
+		file_number_vector.SetVectorType(VectorType::CONSTANT_VECTOR);
+		ConstantVector::GetData<int64_t>(file_number_vector)[0] = state.GetFileNumber(gstate, file_name);
+	} else {
+		UnifiedVectorFormat file_name_data;
+		file_name_vector.ToUnifiedFormat(file_name_data);
+		auto file_names = UnifiedVectorFormat::GetData<string_t>(file_name_data);
+		file_number_vector.SetVectorType(VectorType::FLAT_VECTOR);
+		auto file_numbers = FlatVector::GetDataMutable<int64_t>(file_number_vector);
+		for (idx_t i = 0; i < input.size(); i++) {
+			auto file_idx = file_name_data.sel->get_index(i);
+			if (!file_name_data.validity.RowIsValid(file_idx)) {
+				throw InternalException("Filename cannot be NULL!");
+			}
+			file_numbers[i] = state.GetFileNumber(gstate, file_names[file_idx]);
 		}
 	}
-
-	{
-		lock_guard<mutex> guard(gstate.lock);
-		for (auto &file : state.new_files) {
-			gstate.deletes.files.insert(std::move(file));
-		}
-	}
-	state.new_files.clear();
-
-	chunk.Reference(input);
+	chunk.data[1].Reference(input.data[1]);
+	chunk.SetChildCardinality(input.size());
 	return OperatorResultType::NEED_MORE_INPUT;
 }
 

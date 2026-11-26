@@ -112,32 +112,40 @@ private:
 	void PushKeepScanFilter(const IcebergCopyOnWriteDeletes &deletes) const;
 };
 
-//! The data files a copy-on-write DELETE rewrites.
+//! The data files a copy-on-write DELETE rewrites. A file's number is its index here.
 struct IcebergCopyOnWriteDeletedFiles {
-	unordered_set<string> files;
+	vector<string> files;
 };
 
 //! A DELETE on a table whose write.delete.mode is copy-on-write rewrites every data file that holds a matching row,
 //! instead of writing delete files. It is planned as
 //!
-//!   WITH deletee AS MATERIALIZED (SELECT filename, file_row_number FROM <the DELETE's scan>)
+//!   WITH deletee AS MATERIALIZED (SELECT file_number(filename) AS file_no, file_row_number
+//!                                 FROM <the DELETE's scan>)
 //!   SELECT keep.* FROM <table> keep
-//!   SEMI JOIN (SELECT DISTINCT filename FROM deletee) touched ON keep.filename = touched.filename
-//!   ANTI JOIN deletee ON keep.filename = deletee.filename AND keep.file_row_number = deletee.file_row_number
+//!   JOIN (SELECT file_path(file_no) AS filename, file_no FROM (SELECT DISTINCT file_no FROM deletee)) touched
+//!     ON keep.filename = touched.filename
+//!   ANTI JOIN deletee ON touched.file_no = deletee.file_no AND keep.file_row_number = deletee.file_row_number
+//!
+//! file_number and file_path stand for the collector below, which numbers the files of the matched rows as it sees
+//! them: the paths are long, and deletee and the anti join's hash table hold one entry per deleted row, so they keep
+//! an 8-byte number instead. touched has one row per file, so the join that skips the untouched files still uses the
+//! path, and its build side becomes a runtime filter on the keep scan's `filename`.
 //!
 //! where on V3 `keep.*` ends with the row lineage columns _row_id and _last_updated_sequence_number, and the kept
 //! rows are written by an IcebergFileRewrite, which replaces the touched files in one snapshot.
 //!
 //! DELETE ... USING can match a row more than once, so `deletee` can hold a position twice. The anti join removes the
 //! row either way, so the number of deleted rows is not counted on `deletee` but on the probe side, where each row
-//! of the table appears once: the rows of the touched files (the semi join's output) minus the kept rows.
+//! of the table appears once: the rows of the touched files (the join with touched) minus the kept rows.
 struct IcebergCopyOnWriteDelete {
 	static PhysicalOperator &PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
 	                                    IcebergTableSchemaVersion &table);
 };
 
-//! Sits on top of the `deletee` CTE body and passes its rows through unchanged, recording the files they belong to.
-//! A file whose rows are all deleted produces no kept row, but it still has to be replaced.
+//! Sits on top of the `deletee` CTE body. It numbers the files of the matched rows in the order it sees them, and
+//! replaces each row's (filename, file_row_number) with (file number, file_row_number). The rewrite replaces these
+//! files: a file whose rows are all deleted produces no kept row, but it still has to be replaced.
 class IcebergCopyOnWriteDeleteCollector : public PhysicalOperator {
 public:
 	IcebergCopyOnWriteDeleteCollector(PhysicalPlan &physical_plan, vector<LogicalType> types,
@@ -147,7 +155,7 @@ public:
 	//! removed together with that data file. Null if the optimizer removed the scan because no rows can match.
 	optional_ptr<IcebergMultiFileList> match_file_list;
 
-	//! The files this DELETE removes rows from; valid once the CTE body has been fully produced
+	//! The files this DELETE removes rows from, by number; valid once the CTE body has been fully produced
 	const IcebergCopyOnWriteDeletedFiles &GetDeletes() const;
 
 public:
