@@ -24,6 +24,11 @@ IcebergExpression::LiteralExpression(const string &type, const string &column_na
 	if (value.IsNull()) {
 		return nullptr;
 	}
+	// Java compares UUID halves as signed longs. Even equality can lose matching files
+	// when the server searches bounds from a writer that used unsigned byte order.
+	if (value.type().id() == LogicalTypeId::UUID) {
+		return UnaryExpression("not-null", column_name);
+	}
 	auto result = make_uniq<rest_api_objects::Predicate>();
 	result->comparison_predicate.emplace();
 	result->comparison_predicate->type.value = type;
@@ -48,6 +53,9 @@ unique_ptr<rest_api_objects::Predicate> IcebergExpression::UnaryExpression(const
 
 unique_ptr<rest_api_objects::Predicate> IcebergExpression::SetExpression(const string &type, const string &column_name,
                                                                          const vector<reference<const Value>> &values) {
+	if (!values.empty() && values.front().get().type().id() == LogicalTypeId::UUID) {
+		return UnaryExpression("not-null", column_name);
+	}
 	auto result = make_uniq<rest_api_objects::Predicate>();
 	result->set_predicate.emplace();
 	result->set_predicate->type.value = type;

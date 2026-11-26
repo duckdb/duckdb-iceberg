@@ -90,12 +90,12 @@ static bool AddDeleteFile(GroupedAggregateHashTable &hash_table, const vector<Lo
 
 IcebergEqualityDeleteFastFilter::BuildResult IcebergEqualityDeleteFastFilterCache::GetOrCreate(
     const vector<reference<const IcebergEqualityDeleteFile>> &delete_files,
-    const unordered_map<int32_t, idx_t> &field_indexes, const vector<LogicalType> &target_types,
-    const set<int32_t> &local_field_ids, ClientContext &context, Allocator &allocator) {
+    const unordered_map<int32_t, idx_t> &field_indexes, const vector<LogicalType> &target_types, ClientContext &context,
+    Allocator &allocator) {
 	IcebergEqualityDeleteFastFilter::BuildResult result;
 	result.accelerated_files.resize(delete_files.size(), false);
 
-	//! This lightweight mapping is reader-specific: applicability, physical field presence,
+	//! This lightweight mapping is reader-specific: applicability, available equality keys,
 	//! evolved target types and reader column indexes can all differ between data files. Only
 	//! the expensive immutable hash tables below are shared through the layout cache.
 	map<vector<idx_t>, idx_t> layout_indexes;
@@ -117,7 +117,7 @@ IcebergEqualityDeleteFastFilter::BuildResult IcebergEqualityDeleteFastFilterCach
 			auto field_id = file.equality_ids[source_idx];
 			auto entry = field_indexes.find(field_id);
 			if (entry == field_indexes.end() || entry->second >= target_types.size() ||
-			    !local_field_ids.count(field_id) || !TypeIsSupported(target_types[entry->second])) {
+			    !TypeIsSupported(target_types[entry->second])) {
 				supported = false;
 				break;
 			}
