@@ -14,6 +14,7 @@
 #include "duckdb/parser/tableref/basetableref.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
@@ -223,10 +224,15 @@ PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanDelete(ClientContext &cont
 PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner,
                                                              LogicalUpdate &op, IcebergTableSchemaVersion &table) {
 	//! Build side: the UPDATE's own scan. An Iceberg UPDATE is bound as a delete and an insert, so its expressions
-	//! give the new value of every table column, followed in the scan's output by filename and file_row_number.
+	//! give the new value of every table column, followed in the scan's output by filename and file_row_number and,
+	//! on V3, _row_id (see IcebergTableSchemaVersion::GetRowIdColumns).
 	auto &match_plan = planner.CreatePlan(*op.children[0]);
+	const bool with_row_lineage = table.table_info.GetMetadata().iceberg_version >= 3;
 	auto match_column_count = match_plan.GetTypes().size();
-	vector<idx_t> match_row_id_indexes {match_column_count - 2, match_column_count - 1};
+	const idx_t lineage_column_count = with_row_lineage ? 1 : 0;
+	D_ASSERT(match_column_count >= 2 + lineage_column_count);
+	vector<idx_t> match_row_id_indexes {match_column_count - lineage_column_count - 2,
+	                                    match_column_count - lineage_column_count - 1};
 
 	auto &columns = table.table_info.GetMetadata().GetLatestSchema().columns;
 	if (op.columns.size() != columns.size()) {
@@ -247,6 +253,15 @@ PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanUpdate(ClientContext &cont
 		}
 		update_expressions.push_back(std::move(expression));
 	}
+	if (with_row_lineage) {
+		//! SPEC: an updated row keeps its _row_id, and its _last_updated_sequence_number is written as NULL, so it
+		//! inherits the sequence number of the snapshot that commits the update. A row inserted earlier in this
+		//! transaction has no _row_id yet; it gets one at commit, as with a merge-on-read UPDATE.
+		auto row_id_index = match_column_count - 1;
+		update_expressions.push_back(
+		    make_uniq<BoundReferenceExpression>(match_plan.GetTypes()[row_id_index], row_id_index));
+		update_expressions.push_back(make_uniq<BoundConstantExpression>(Value(LogicalType::BIGINT)));
+	}
 	return PlanRewrite(context, planner, table, match_plan, std::move(match_row_id_indexes),
 	                   std::move(update_expressions));
 }
@@ -257,10 +272,9 @@ PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanRewrite(ClientContext &con
                                                               vector<idx_t> match_row_id_indexes,
                                                               vector<unique_ptr<Expression>> update_expressions) {
 	auto &metadata = table.table_info.GetMetadata();
-	//! A V3 DELETE carries each kept row's _row_id and _last_updated_sequence_number into the new files.
+	//! A V3 rewrite carries each kept row's _row_id and _last_updated_sequence_number into the new files.
 	//! Rows inserted in this transaction carry NULL until the commit assigns their lineage.
 	const bool with_row_lineage = metadata.iceberg_version >= 3;
-	D_ASSERT(!with_row_lineage || update_expressions.empty());
 
 	//! Probe side: the whole table again, so the rows of each matched file that survive can be rewritten. It is
 	//! planned here, after optimization, like PhysicalPlanGenerator::Plan does for a full statement.
@@ -273,7 +287,8 @@ PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanRewrite(ClientContext &con
 	auto keep_types = keep_plan.GetTypes();
 	D_ASSERT(keep_types.size() > 2);
 	vector<LogicalType> output_types(keep_types.begin(), keep_types.end() - 2);
-	//! The updated rows are emitted in the same chunks as the kept ones
+	//! The updated rows are emitted in the same chunks as the kept ones, so on V3 they end with the lineage columns too
+	D_ASSERT(update_expressions.empty() || update_expressions.size() == output_types.size());
 	for (idx_t i = 0; i < update_expressions.size(); i++) {
 		if (update_expressions[i]->GetReturnType() != output_types[i]) {
 			update_expressions[i] =
@@ -499,8 +514,10 @@ OperatorResultType IcebergCopyOnWriteDeleteFilter::Execute(ExecutionContext &con
 	if (require_assigned_lineage && kept &&
 	    (VectorOperations::HasNull(chunk.data[column_count - 2]) ||
 	     VectorOperations::HasNull(chunk.data[column_count - 1]))) {
-		throw InvalidInputException("Copy-on-write DELETE cannot preserve uncommitted row lineage. "
-		                            "Commit the earlier changes to this table before running the DELETE.");
+		auto statement = update_expressions.empty() ? "DELETE" : "UPDATE";
+		throw InvalidInputException("Copy-on-write %s cannot preserve uncommitted row lineage. "
+		                            "Commit the earlier changes to this table before running the %s.",
+		                            statement, statement);
 	}
 	return OperatorResultType::NEED_MORE_INPUT;
 }
