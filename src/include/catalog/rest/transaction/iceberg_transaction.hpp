@@ -4,6 +4,7 @@
 #include "duckdb/transaction/transaction.hpp"
 #include "duckdb/parser/parsed_data/create_view_info.hpp"
 #include "catalog/rest/iceberg_schema_set.hpp"
+#include "catalog/rest/catalog_entry/schema/iceberg_schema_information.hpp"
 #include "catalog/rest/transaction/iceberg_pending_schema_creates.hpp"
 #include "catalog/rest/api/iceberg_retry.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_update.hpp"
@@ -114,6 +115,9 @@ public:
 	IcebergTable &DeleteTable(IcebergTable &table);
 	IcebergTable &RenameTable(IcebergTable &table, const string &new_name);
 	bool MultiTableCommitAvailable() const;
+	void VerifyCanAddNamespaceRequest() const;
+	case_insensitive_map_t<string> &GetSchemaProperties(ClientContext &context, const IcebergSchemaEntry &schema);
+	SchemaPropertyUpdates &GetOrCreateSchemaPropertyUpdates(const string &schema_name);
 	//! Register a table the catalog created without stage-create, which exists there ahead of the commit.
 	void TableCreatedInCatalog(const string &table_key, const vector<string> &namespace_items, const string &name,
 	                           shared_ptr<const IcebergLoadTableResponse> created);
@@ -125,6 +129,8 @@ public:
 
 private:
 	bool HasTableUpdate() const;
+	idx_t NamespaceRequestCount() const;
+	void VerifyCanStartTableUpdate() const;
 	IcebergTransactionAlterUpdate *GetAlterUpdate();
 	const IcebergTransactionAlterUpdate *GetAlterUpdate() const;
 	bool CanUseMultiTableCommit(const IcebergTransactionAlterUpdate &alter_update) const;
@@ -197,12 +203,15 @@ public:
 	unordered_set<string> looked_up_entries;
 	mutex lock;
 	//! Operators and table functions of one statement run on different threads. This lock serializes the ones that
-	//! change the table state of this transaction: ApplyTableUpdate, a snapshot expiration from loading its table to
-	//! staging its update, and the table creation of a CREATE TABLE AS.
+	//! change catalog state: table updates, snapshot expiration, the table creation of a CREATE TABLE AS, and
+	//! accesses to transaction-local namespace properties.
 	//! Lock order: IcebergCopyToFile::create_lock before table_update_lock, and table_update_lock before
 	//! IcebergTransaction::lock and IcebergTransactionData::lock.
 	mutex table_update_lock;
 
+private:
+	//! Loaded namespace properties and pending edits are visible only within this transaction.
+	unordered_map<string, IcebergSchemaInformation> schema_properties;
 	unordered_map<string, SchemaPropertyUpdates> schema_property_updates;
 };
 

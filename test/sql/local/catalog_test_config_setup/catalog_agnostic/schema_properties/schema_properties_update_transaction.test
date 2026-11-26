@@ -79,7 +79,82 @@ CALL remove_iceberg_schema_properties(my_datalake.myschema123, ['myprop1']);
 statement ok
 ROLLBACK;
 
-#cleanup
+# Pending namespace properties are visible only to their writer.
+statement ok
+DROP SCHEMA IF EXISTS my_datalake.prop_tx_other;
+
+statement ok
+CREATE SCHEMA my_datalake.prop_tx_other;
+
+statement ok writer
+BEGIN;
+
+statement ok writer
+CALL set_iceberg_schema_properties(my_datalake.myschema123, {'pending_key': 'pending'});
+
+query I writer
+SELECT value FROM iceberg_schema_properties(my_datalake.myschema123) WHERE key = 'pending_key';
+----
+pending
+
+query I reader
+SELECT count(*) FROM iceberg_schema_properties(my_datalake.myschema123) WHERE key = 'pending_key';
+----
+0
+
+# Property edits on two namespaces would require two requests.
+statement error writer
+CALL remove_iceberg_schema_properties(my_datalake.prop_tx_other, ['unused_key']);
+----
+cannot commit this transaction atomically
+
+statement ok writer
+ROLLBACK;
+
+query I writer
+SELECT count(*) FROM iceberg_schema_properties(my_datalake.myschema123) WHERE key = 'pending_key';
+----
+0
+
+statement ok writer
+BEGIN;
+
+statement ok writer
+CALL remove_iceberg_schema_properties(my_datalake.myschema123, ['myprop1']);
+
+statement error writer
+CREATE TABLE my_datalake.myschema123.prop_tx_table (i INTEGER);
+----
+cannot commit this transaction atomically
+
+statement ok writer
+ROLLBACK;
+
+query T
+SELECT value FROM iceberg_schema_properties(my_datalake.myschema123) WHERE key = 'myprop1';
+----
+1
+
+# The CTAS sink and the property function can both stage writes in a single statement.
+statement error writer
+CREATE TABLE my_datalake.myschema123.prop_tx_table AS
+SELECT success FROM set_iceberg_schema_properties(my_datalake.myschema123, {'myprop1': 'changed'});
+----
+cannot commit this transaction atomically
+
+statement error
+SELECT * FROM my_datalake.myschema123.prop_tx_table;
+----
+does not exist
+
+query T
+SELECT value FROM iceberg_schema_properties(my_datalake.myschema123) WHERE key = 'myprop1';
+----
+1
+
+statement ok
+DROP SCHEMA my_datalake.prop_tx_other;
+
 statement ok
 DROP SCHEMA my_datalake.myschema123;
 

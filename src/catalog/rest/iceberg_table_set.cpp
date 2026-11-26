@@ -383,6 +383,8 @@ shared_ptr<IcebergTable> IcebergTableSet::CreateEntryInternal(const string &name
 IcebergTable &IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCatalog &catalog,
                                               IcebergSchemaEntry &schema, CreateTableInfo &info) {
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
+	// An eager create publishes the table immediately. Validate the write set before issuing the request.
+	auto &alter_update = iceberg_transaction.GetOrCreateAlter();
 
 	auto binder = Binder::CreateBinder(context);
 	TableFunctionBinder property_binder(*binder, context, "format-version");
@@ -417,9 +419,9 @@ IcebergTable &IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCat
 		               .GetValue<string>();
 	}
 	if (location.empty() && catalog.attach_options.default_table_location_from_namespace) {
-		schema.LoadProperties(context);
-		auto ns_location_it = schema.schema_info.properties.find("location");
-		if (ns_location_it != schema.schema_info.properties.end() && !ns_location_it->second.empty()) {
+		auto &properties = iceberg_transaction.GetSchemaProperties(context, schema);
+		auto ns_location_it = properties.find("location");
+		if (ns_location_it != properties.end() && !ns_location_it->second.empty()) {
 			location = ns_location_it->second;
 			StringUtil::RTrim(location, "/");
 			location += "/" + info.GetTableName().GetIdentifierName();
@@ -473,7 +475,6 @@ IcebergTable &IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCat
 		                                          new_table_result);
 	}
 	auto load_table_result = new_table_result;
-	auto &alter_update = iceberg_transaction.GetOrCreateAlter();
 	auto &table_info = alter_update.CreateTable(
 	    key, IcebergTable(catalog, schema, info.GetTableName().GetIdentifierName(), load_table_result));
 	catalog.table_request_cache.SetOrOverwrite(key, std::move(new_table_result));

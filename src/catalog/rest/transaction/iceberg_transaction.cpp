@@ -1,6 +1,7 @@
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 
 #include "duckdb/common/assert.hpp"
+#include "duckdb/common/exception/http_exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "duckdb/common/types/timestamp.hpp"
@@ -423,6 +424,58 @@ bool IcebergTransaction::HasTableUpdate() const {
 	return !std::holds_alternative<std::monostate>(transaction_update);
 }
 
+idx_t IcebergTransaction::NamespaceRequestCount() const {
+	return created_schemas.Size() + deleted_schemas.size() + schema_property_updates.size();
+}
+
+static void ThrowNamespaceAtomicityError() {
+	throw TransactionException("Iceberg REST Catalog cannot commit this transaction atomically because the namespace "
+	                           "operation requires a separate REST request");
+}
+
+void IcebergTransaction::VerifyCanAddNamespaceRequest() const {
+	if (NamespaceRequestCount() || HasTableUpdate()) {
+		ThrowNamespaceAtomicityError();
+	}
+}
+
+void IcebergTransaction::VerifyCanStartTableUpdate() const {
+	if (NamespaceRequestCount()) {
+		ThrowNamespaceAtomicityError();
+	}
+	if (HasTableUpdate()) {
+		throw TransactionException("Iceberg REST Catalog cannot commit this transaction atomically because it mixes "
+		                           "table updates with rename/drop requests");
+	}
+}
+
+case_insensitive_map_t<string> &IcebergTransaction::GetSchemaProperties(ClientContext &context,
+                                                                        const IcebergSchemaEntry &schema) {
+	auto &info = schema_properties[schema.name.GetIdentifierName()];
+	if (!info.properties_loaded) {
+		auto result = IRCAPI::GetNamespace(context, catalog, schema);
+		if (result.error_) {
+			throw HTTPException(
+			    StringUtil::Format("GetNamespace endpoint returned response code %s with message \"%s\"",
+			                       EnumUtil::ToString(result.status_), result.error_->_error.message));
+		}
+		if (auto &properties = result.result_->properties) {
+			info.properties = *properties;
+		}
+		info.properties_loaded = true;
+	}
+	return info.properties;
+}
+
+SchemaPropertyUpdates &IcebergTransaction::GetOrCreateSchemaPropertyUpdates(const string &schema_name) {
+	auto it = schema_property_updates.find(schema_name);
+	if (it != schema_property_updates.end()) {
+		return it->second;
+	}
+	VerifyCanAddNamespaceRequest();
+	return schema_property_updates[schema_name];
+}
+
 IcebergTransactionAlterUpdate *IcebergTransaction::GetAlterUpdate() {
 	return std::get_if<IcebergTransactionAlterUpdate>(&transaction_update);
 }
@@ -526,21 +579,20 @@ static bool CommitStateUnknown(const ErrorData &error) {
 }
 
 void IcebergTransaction::Commit() {
-	if (!HasTableUpdate() && created_schemas.Empty() && deleted_schemas.empty() && schema_property_updates.empty() &&
-	    created_views.empty() && deleted_views.empty()) {
-		// Read-only transactions have no catalog commit work; temporary vended storage secrets
-		// are left to transaction/session cleanup.
+	auto view_requests = created_views.size() + deleted_views.size();
+	// Compatible table changes share one commit request. Each namespace or view mutation has its own endpoint.
+	auto requests = NamespaceRequestCount() + view_requests + HasTableUpdate();
+	if (requests == 0) {
 		return;
 	}
-	// Views use individual REST endpoints, not the atomic table commit endpoint. Validate
-	// the entire write set before any schema, table, or view request can reach the catalog.
-	auto view_operations = created_views.size() + deleted_views.size();
-	if (view_operations && (view_operations > 1 || HasTableUpdate() || !created_schemas.Empty() ||
-	                        !deleted_schemas.empty() || !schema_property_updates.empty())) {
+	if (requests > 1) {
 		CleanupFiles();
 		DropCreatedTables();
-		throw TransactionException("Iceberg REST Catalog cannot commit view changes atomically with other catalog "
-		                           "changes; commit each view create or drop separately");
+		if (view_requests) {
+			throw TransactionException("Iceberg REST Catalog cannot commit view changes atomically with other catalog "
+			                           "changes; commit each view create or drop separately");
+		}
+		ThrowNamespaceAtomicityError();
 	}
 
 	Connection temp_con(db);
@@ -750,12 +802,8 @@ void IcebergTransaction::DoSchemaDeletes(ClientContext &context) {
 void IcebergTransaction::DoSchemaPropertyUpdates(ClientContext &context) {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	for (auto &properties_update : this->schema_property_updates) {
-		auto schema_name_with_catalog = properties_update.first;
-		auto catalog_splitter = schema_name_with_catalog.find(".");
-		auto schema_name_no_catalog = schema_name_with_catalog.erase(0, catalog_splitter + 1);
-
-		auto schema_property_updates = properties_update.second;
-		auto namespace_identifiers = IRCAPI::ParseSchemaName(schema_name_no_catalog);
+		auto &schema_property_updates = properties_update.second;
+		auto namespace_identifiers = IRCAPI::ParseSchemaName(properties_update.first);
 
 		rest_api_objects::UpdateNamespacePropertiesRequest request;
 		request.removals = vector<string>();
@@ -1109,24 +1157,17 @@ IcebergTransactionTableState &IcebergTransaction::GetOrCreateTransactionTableSta
 }
 
 IcebergTransactionAlterUpdate &IcebergTransaction::GetOrCreateAlter() {
-	if (!HasTableUpdate()) {
-		transaction_update.emplace<IcebergTransactionAlterUpdate>(*this);
+	if (auto alter_update = GetAlterUpdate()) {
+		return *alter_update;
 	}
-	auto alter_update = GetAlterUpdate();
-	if (!alter_update) {
-		throw TransactionException("Iceberg REST Catalog cannot commit this transaction atomically because it mixes "
-		                           "table updates with rename/drop requests");
-	}
-	return *alter_update;
+	VerifyCanStartTableUpdate();
+	return transaction_update.emplace<IcebergTransactionAlterUpdate>(*this);
 }
 
 IcebergTable &IcebergTransaction::DeleteTable(IcebergTable &table) {
+	VerifyCanStartTableUpdate();
 	auto table_key = table.GetTableKey();
 	auto state = GetLatestTableState(table_key);
-	if (HasTableUpdate()) {
-		throw TransactionException("Iceberg REST Catalog cannot commit this transaction atomically because it mixes "
-		                           "table updates with rename/drop requests");
-	}
 
 	if (!state) {
 		state = GetOrCreateTransactionTableState(table);
@@ -1138,12 +1179,9 @@ IcebergTable &IcebergTransaction::DeleteTable(IcebergTable &table) {
 }
 
 IcebergTable &IcebergTransaction::RenameTable(IcebergTable &table, const string &new_name) {
+	VerifyCanStartTableUpdate();
 	auto table_key = table.GetTableKey();
 	auto state = GetLatestTableState(table_key);
-	if (HasTableUpdate()) {
-		throw TransactionException("Iceberg REST Catalog cannot commit this transaction atomically because it mixes "
-		                           "table updates with rename/drop requests");
-	}
 
 	if (!state) {
 		state = GetOrCreateTransactionTableState(table);

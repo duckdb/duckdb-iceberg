@@ -85,6 +85,46 @@ SELECT id FROM eager_catalog.create_rollback.committed ORDER BY id;
 1
 2
 
+# Reject the namespace drop while the insert's data file is still safe to delete.
+statement ok
+SET iceberg_store_written_files = true;
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO eager_catalog.create_rollback.committed VALUES (3);
+
+statement ok
+SET VARIABLE staged_file = (SELECT file_path FROM temp.main.iceberg_written_files);
+
+query I
+SELECT count(*) FROM glob(getvariable('staged_file'));
+----
+1
+
+statement error
+DROP SCHEMA eager_catalog.create_rollback;
+----
+cannot commit this transaction atomically
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT count(*) FROM glob(getvariable('staged_file'));
+----
+0
+
+query I
+SELECT id FROM eager_catalog.create_rollback.committed ORDER BY id;
+----
+1
+2
+
+statement ok
+SET iceberg_store_written_files = false;
+
 # A rollback does not drop a table that another transaction has committed to since it was created
 statement ok con1
 BEGIN;
@@ -104,26 +144,33 @@ SELECT id FROM eager_catalog.create_rollback.shared;
 ----
 42
 
-# A statement refused after its create request was sent leaves no table either
+# Reject an incompatible eager create before making the table visible to other transactions.
 statement ok
 CREATE TABLE eager_catalog.create_rollback.existing (id INTEGER);
+
+foreach operation drop_table create_schema
 
 statement ok
 BEGIN;
 
+onlyif operation=drop_table
 statement ok
 DROP TABLE eager_catalog.create_rollback.existing;
+
+onlyif operation=create_schema
+statement ok
+CREATE SCHEMA eager_catalog.pending_namespace;
 
 statement error
 CREATE TABLE eager_catalog.create_rollback.refused (id INTEGER);
 ----
-mixes table updates
+cannot commit this transaction atomically
 
 # probed from con2: the refused statement aborted this connection's transaction
 query I con2
 SELECT status FROM iceberg_test_catalog_request('GET', '/v1/namespaces/create_rollback/tables/refused', NULL);
 ----
-200
+404
 
 statement ok
 ROLLBACK;
@@ -137,6 +184,15 @@ query I
 SELECT status FROM iceberg_test_catalog_request('GET', '/v1/namespaces/create_rollback/tables/existing', NULL);
 ----
 200
+
+endloop
+
+query I
+SELECT count(*) FROM read_json_auto('{TEMP_DIR}/iceberg-native/*/requests.jsonl')
+WHERE method = 'POST' AND path = '/v1/namespaces/create_rollback/tables'
+  AND try_cast(request AS JSON)->>'name' = 'refused';
+----
+0
 
 # A table that is already gone when its creator rolls back is not an error
 statement ok

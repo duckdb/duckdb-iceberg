@@ -187,8 +187,8 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 		return created_schema.get();
 	}
 
-	// Verify schema existence on the server first
-	bool schema_exists = IRCAPI::VerifySchemaExistence(*context, *this, schema_name);
+	bool schema_exists = !iceberg_transaction.deleted_schemas.count(schema_name) &&
+	                     IRCAPI::VerifySchemaExistence(*context, *this, schema_name);
 
 	if (schema_exists) {
 		if (info.on_conflict == OnCreateConflict::IGNORE_ON_CONFLICT) {
@@ -206,6 +206,7 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 	}
 
 	// Schema does not exist - stage it locally and defer the server creation and catalog publication to commit
+	iceberg_transaction.VerifyCanAddNamespaceRequest();
 	auto new_schema = make_shared_ptr<IcebergSchemaEntry>(*this, info);
 	auto result = new_schema.get();
 	iceberg_transaction.created_schemas.Add(schema_name, std::move(new_schema), info.on_conflict);
@@ -223,23 +224,26 @@ void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 	}
 	info.SetQualifiedName(FoldName(info.GetQualifiedName()));
 
-	// Verify schema existence on the server first
-	bool schema_exists =
-	    IRCAPI::VerifySchemaExistence(context, *this, info.GetQualifiedName().Name().GetIdentifierName());
+	auto &iceberg_transaction = IcebergTransaction::Get(context, *this);
+	auto &schema_name = info.GetQualifiedName().Name().GetIdentifierName();
+	bool schema_exists = iceberg_transaction.created_schemas.Contains(schema_name) ||
+	                     IRCAPI::VerifySchemaExistence(context, *this, schema_name);
 
 	if (!schema_exists) {
 		if (info.if_not_found == OnEntryNotFound::RETURN_NULL) {
 			// remove the entry if it exists locally
 			// it could have been created during the bind phase.
-			GetSchemas().RemoveEntry(info.GetQualifiedName().Name().GetIdentifierName());
+			GetSchemas().RemoveEntry(schema_name);
 			return;
 		}
 		throw CatalogException("Schema with name %s does not exist", info.GetQualifiedName().Name());
 	}
 
 	// Schema exists - defer the server deletion to commit
-	auto &iceberg_transaction = IcebergTransaction::Get(context, *this);
-	iceberg_transaction.deleted_schemas.insert(info.GetQualifiedName().Name().GetIdentifierName());
+	if (!iceberg_transaction.deleted_schemas.count(schema_name)) {
+		iceberg_transaction.VerifyCanAddNamespaceRequest();
+		iceberg_transaction.deleted_schemas.insert(schema_name);
+	}
 }
 
 unique_ptr<LogicalOperator> IcebergCatalog::BindCreateIndex(Binder &binder, CreateStatement &stmt,
