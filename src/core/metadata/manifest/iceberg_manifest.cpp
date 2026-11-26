@@ -32,8 +32,9 @@ static void WriteIntIntMap(IntIntMapWriter &writer, const MAP &map);
 static void WriteBoundsMap(IntStringMapWriter &writer, const unordered_map<int32_t, Value> &bounds);
 static void WriteInt32List(Int32ListWriter &writer, const vector<int32_t> &values);
 static void WriteInt64List(Int64ListWriter &writer, const vector<int64_t> &values);
-static void WritePartitionStructRow(Vector &partition_vector, idx_t row_idx, const IcebergDataFile &data_file,
-                                    const IcebergTableMetadata &table_metadata, const IcebergTableSchema &target_schema,
+static void WritePartitionStructRow(ClientContext &context, Vector &partition_vector, idx_t row_idx,
+                                    const IcebergDataFile &data_file, const IcebergTableMetadata &table_metadata,
+                                    const IcebergTableSchema &target_schema,
                                     const vector<IcebergExtendedPartitionInfo> &schema_partition_info);
 
 struct DataFileVectorWriters {
@@ -67,7 +68,7 @@ struct DataFileVectorWriters {
 		}
 	}
 
-	void WriteRow(idx_t row_idx, const IcebergDataFile &data_file,
+	void WriteRow(ClientContext &context, idx_t row_idx, const IcebergDataFile &data_file,
 	              const vector<IcebergExtendedPartitionInfo> &schema_partition_info) {
 		if (content) {
 			content->WriteValue(static_cast<int32_t>(data_file.content));
@@ -76,7 +77,8 @@ struct DataFileVectorWriters {
 		file_path.WriteValue(string_t(data_file.file_path));
 		file_format.WriteValue(string_t(data_file.file_format));
 
-		WritePartitionStructRow(partition, row_idx, data_file, table_metadata, target_schema, schema_partition_info);
+		WritePartitionStructRow(context, partition, row_idx, data_file, table_metadata, target_schema,
+		                        schema_partition_info);
 
 		record_count.WriteValue(data_file.record_count);
 		file_size_in_bytes.WriteValue(data_file.file_size_in_bytes);
@@ -214,27 +216,16 @@ string IcebergManifestEntryStatusTypeToString(IcebergManifestEntryStatusType typ
 	}
 }
 
-map<idx_t, LogicalType> IcebergDataFile::GetFieldIdToTypeMapping(const IcebergSnapshotScanInfo &snapshot_info,
+map<idx_t, LogicalType> IcebergDataFile::GetFieldIdToTypeMapping(ClientContext &context,
+                                                                 const IcebergSnapshotScanInfo &snapshot_info,
                                                                  const IcebergTableMetadata &metadata,
-                                                                 const unordered_set<int32_t> &partition_spec_ids) {
-	D_ASSERT(!partition_spec_ids.empty());
+                                                                 const IcebergPartitionSpec &spec) {
 	auto &schema = metadata.GetSchemaFromId(snapshot_info.schema_id);
 
 	map<idx_t, LogicalType> partition_field_id_to_type;
-	for (auto &spec_id : partition_spec_ids) {
-		auto partition_spec = metadata.FindPartitionSpecById(spec_id);
-		if (!partition_spec) {
-			throw InvalidConfigurationException("Manifest refers to partition spec %d, which is not in the table's "
-			                                    "partition-specs",
-			                                    spec_id);
-		}
-		auto &fields = partition_spec->GetFields();
-
-		for (auto &field : fields) {
-			auto type = IcebergPartitionConstants::GetType(field.source_id, schema, metadata.GetSchemas());
-			if (!type) {
-				continue;
-			}
+	for (auto &field : spec.GetFields()) {
+		auto type = IcebergPartitionConstants::GetType(context, field.source_id, schema, metadata.GetSchemas());
+		if (type) {
 			partition_field_id_to_type.emplace(field.partition_field_id, field.transform.GetBoundsType(*type));
 		}
 	}
@@ -254,7 +245,7 @@ LogicalType IcebergDataFile::PartitionStructType(const map<idx_t, LogicalType> &
 }
 
 const vector<IcebergExtendedPartitionInfo>
-IcebergDataFile::GetExtendedPartitionInfo(const IcebergTableMetadata &metadata,
+IcebergDataFile::GetExtendedPartitionInfo(ClientContext &context, const IcebergTableMetadata &metadata,
                                           const IcebergTableSchema &target_schema) const {
 	if (partition_info.empty()) {
 		return {};
@@ -273,7 +264,7 @@ IcebergDataFile::GetExtendedPartitionInfo(const IcebergTableMetadata &metadata,
 			// Resolve promoted columns against the manifest schema; historical schemas are only
 			// a fallback for source columns that have since been dropped.
 			auto source_type =
-			    IcebergPartitionConstants::GetType(field.source_id, target_schema, metadata.GetSchemas());
+			    IcebergPartitionConstants::GetType(context, field.source_id, target_schema, metadata.GetSchemas());
 			if (!source_type) {
 				throw InvalidConfigurationException(
 				    "Partition %s with field_id %llu in data_file %s with source_id %llu not found in any table schema",
@@ -576,8 +567,9 @@ static void WritePartitionValue(Vector &vector, idx_t row_idx, const Value &valu
 	vector.SetValue(row_idx, *cast_value);
 }
 
-static void WritePartitionStructRow(Vector &partition_vector, idx_t row_idx, const IcebergDataFile &data_file,
-                                    const IcebergTableMetadata &table_metadata, const IcebergTableSchema &target_schema,
+static void WritePartitionStructRow(ClientContext &context, Vector &partition_vector, idx_t row_idx,
+                                    const IcebergDataFile &data_file, const IcebergTableMetadata &table_metadata,
+                                    const IcebergTableSchema &target_schema,
                                     const vector<IcebergExtendedPartitionInfo> &schema_partition_info) {
 	auto &partition_children = StructVector::GetEntries(partition_vector);
 	if (schema_partition_info.empty()) {
@@ -586,7 +578,7 @@ static void WritePartitionStructRow(Vector &partition_vector, idx_t row_idx, con
 		return;
 	}
 
-	auto extended_partition_info = data_file.GetExtendedPartitionInfo(table_metadata, target_schema);
+	auto extended_partition_info = data_file.GetExtendedPartitionInfo(context, table_metadata, target_schema);
 	unordered_map<uint64_t, const Value *> value_by_field_id;
 	for (auto &entry : extended_partition_info) {
 		value_by_field_id.emplace(entry.field_id, &entry.value);
@@ -726,7 +718,7 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 	auto &first_entry = manifest_entries.front();
 	auto &data_file = first_entry.data_file;
 
-	auto extended_partition_info = data_file.GetExtendedPartitionInfo(table_metadata, target_schema);
+	auto extended_partition_info = data_file.GetExtendedPartitionInfo(context, table_metadata, target_schema);
 	child_list_t<Value> partition;
 	// partition: struct(...)
 	children.emplace_back("partition", PartitionStructType(extended_partition_info));
@@ -903,7 +895,7 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 			WriteEntrySequenceNumber(file_sequence_number_writer, manifest_entry.ExplicitFileSequenceNumber(),
 			                         manifest_entry.status, "file_sequence_number");
 
-			data_file_writers.WriteRow(i, manifest_entry.data_file, extended_partition_info);
+			data_file_writers.WriteRow(context, i, manifest_entry.data_file, extended_partition_info);
 		}
 
 		chunk.SetChildCardinality(chunk_count);

@@ -1132,8 +1132,8 @@ TEST_CASE("Iceberg overlapping lazy delete loads publish atomically and propagat
 		annotated_lock_guard<annotated_mutex> guard(retry.lock);
 		retry.LoadManifestList();
 		auto descriptors = retry.DeleteManifests();
-		IcebergManifestFileScanInfo info(context.metadata, context.snapshot, descriptors, context.options, fs,
-		                                 context.path, nullptr, {0, 1});
+		IcebergManifestFileScanInfo info(context.context, context.metadata, context.snapshot, descriptors,
+		                                 context.options, fs, context.path, nullptr, {0, 1});
 		auto &cache = ObjectCache::GetObjectCache(context.context);
 		for (idx_t i = 0; i < 2; i++) {
 			auto cached = cache.GetWithTypePrefix<IcebergParsedManifest>(ManifestCacheKey(info, i));
@@ -1210,8 +1210,8 @@ TEST_CASE("Iceberg parsed manifest ownership inheritance identity and eviction",
 	REQUIRE(rewritten[0].status == IcebergManifestEntryStatusType::EXISTING);
 	REQUIRE(&first[0].GetManifestEntries()[0] == entry_address);
 
-	IcebergManifestFileScanInfo info(base.GetMetadata(), base.GetSnapshot(), descriptors, base.GetOptions(), fs,
-	                                 base.GetPath(), nullptr, {0});
+	IcebergManifestFileScanInfo info(context, base.GetMetadata(), base.GetSnapshot(), descriptors, base.GetOptions(),
+	                                 fs, base.GetPath(), nullptr, {0});
 	auto key = ManifestCacheKey(info, 0);
 	auto &cache = ObjectCache::GetObjectCache(context);
 	REQUIRE(cache.GetWithTypePrefix<IcebergParsedManifest>(key).get() == owner.get());
@@ -1283,8 +1283,8 @@ TEST_CASE("Iceberg parsed manifest ownership inheritance identity and eviction",
 
 	// Publication-time validation failure cannot destroy entries already exposed
 	// to streaming consumers, nor publish the successful prefix of the load.
-	IcebergManifestFileScanInfo both_info(base.GetMetadata(), base.GetSnapshot(), descriptors, base.GetOptions(), fs,
-	                                      base.GetPath(), nullptr, {0, 1});
+	IcebergManifestFileScanInfo both_info(context, base.GetMetadata(), base.GetSnapshot(), descriptors,
+	                                      base.GetOptions(), fs, base.GetPath(), nullptr, {0, 1});
 	auto second_key = ManifestCacheKey(both_info, 1);
 	cache.DeleteWithTypePrefix<IcebergParsedManifest>(key);
 	cache.DeleteWithTypePrefix<IcebergParsedManifest>(second_key);
@@ -1315,7 +1315,7 @@ TEST_CASE("Iceberg parsed manifest ownership inheritance identity and eviction",
 	info.partition_field_id_to_type[1000] = LogicalType::BIGINT;
 	REQUIRE(ManifestCacheKey(info, 0) != key);
 	auto metadata = base.GetMetadata().Copy();
-	IcebergManifestFileScanInfo changed(metadata, base.GetSnapshot(), descriptors, base.GetOptions(), fs,
+	IcebergManifestFileScanInfo changed(context, metadata, base.GetSnapshot(), descriptors, base.GetOptions(), fs,
 	                                    base.GetPath(), nullptr, {0});
 	REQUIRE(ManifestCacheKey(changed, 0) == key);
 	metadata.table_uuid += "-other";
@@ -1328,9 +1328,9 @@ TEST_CASE("Iceberg parsed manifest ownership inheritance identity and eviction",
 	REQUIRE(ManifestCacheKey(changed, 0) != key);
 	auto moved_options = base.GetOptions();
 	moved_options.allow_moved_paths = true;
-	IcebergManifestFileScanInfo moved_a(base.GetMetadata(), base.GetSnapshot(), descriptors, moved_options, fs,
+	IcebergManifestFileScanInfo moved_a(context, base.GetMetadata(), base.GetSnapshot(), descriptors, moved_options, fs,
 	                                    "/moved-a", nullptr, {0});
-	IcebergManifestFileScanInfo moved_b(base.GetMetadata(), base.GetSnapshot(), descriptors, moved_options, fs,
+	IcebergManifestFileScanInfo moved_b(context, base.GetMetadata(), base.GetSnapshot(), descriptors, moved_options, fs,
 	                                    "/moved-b", nullptr, {0});
 	REQUIRE(ManifestCacheKey(moved_a, 0) != ManifestCacheKey(moved_b, 0));
 	REQUIRE(ManifestCacheKey(moved_a, 0) != key);

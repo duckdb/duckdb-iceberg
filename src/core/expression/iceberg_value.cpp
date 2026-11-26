@@ -30,7 +30,7 @@ static Value TransformPartitionValueTemplated(const Value &value, const LogicalT
 	return TransformPartitionValueFromBlob(blob, type);
 }
 
-Value IcebergValue::TransformPartitionValue(const Value &value, const LogicalType &type) {
+Value IcebergValue::TransformPartitionValue(ClientContext &context, const Value &value, const LogicalType &type) {
 	D_ASSERT(!value.type().IsNested());
 	// COPY's partition map contains textual values. VARCHAR and BLOB share a physical
 	// type, but only BLOB contains bytes that should be decoded as Iceberg values.
@@ -39,25 +39,15 @@ Value IcebergValue::TransformPartitionValue(const Value &value, const LogicalTyp
 			auto blob = value.DefaultCastAs(LogicalType::BLOB);
 			return TransformPartitionValueFromBlob(blob.GetValueUnsafe<string_t>(), type);
 		}
-		return value.DefaultCastAs(type);
+		return value.CastAs(context, type);
 	}
-	// DECIMAL partition values are already decoded as proper DuckDB DECIMALs by the Avro reader.
-	// The blob round-trip below misinterprets the little-endian internal representation as
-	// big-endian Iceberg bytes, producing garbage. Return directly (or cast if params differ).
-	if (value.type().id() == LogicalTypeId::DECIMAL) {
+	// DECIMAL and UUID partition values are already decoded. Their internal values
+	// have a different byte order from the Iceberg encoding used by the blob path below.
+	if (value.type().id() == LogicalTypeId::DECIMAL || value.type().id() == LogicalTypeId::UUID) {
 		if (value.type() == type) {
 			return value;
 		}
-		return value.DefaultCastAs(type);
-	}
-	// UUID partition values are already DuckDB UUIDs too: the manifest's partition struct is read with the UUID
-	// type, and server-side planning parses them as UUIDs. Their internal hugeint is not Iceberg's big-endian
-	// 16 bytes either, so the blob round-trip below would scramble them.
-	if (value.type().id() == LogicalTypeId::UUID) {
-		if (value.type() == type) {
-			return value;
-		}
-		return value.DefaultCastAs(type);
+		return value.CastAs(context, type);
 	}
 	switch (value.type().InternalType()) {
 	case PhysicalType::BOOL:

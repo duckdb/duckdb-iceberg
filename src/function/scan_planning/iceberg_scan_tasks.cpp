@@ -21,6 +21,7 @@ struct IcebergScanTasksBindData : public TableFunctionData {
 	//! Metadata supplied as a named argument is parsed at bind. Each execution owns its delete caches.
 	unique_ptr<const IcebergTableMetadata> call_metadata;
 	int32_t schema_id = 0;
+	Value snapshot_id {LogicalType::BIGINT};
 };
 
 enum class IcebergScanTasksExecutionMode : uint8_t { UNSELECTED, SINGLE_FILE, MULTI_FILE };
@@ -113,7 +114,8 @@ struct IcebergScanTasksGlobalState : public GlobalTableFunctionState {
 			if (!execution) {
 				execution = make_shared_ptr<IcebergTaskExecutionContext>(bind.call_metadata->Copy(), bind.schema_id);
 			}
-			return TaskCodec::ReadTask(descriptor, bind.layout, execution->metadata, execution->schema);
+			return TaskCodec::ReadTask(context, descriptor, bind.layout, execution->metadata, execution->schema,
+			                           bind.snapshot_id);
 		}
 		auto schema = TaskCodec::ReadValue(descriptor, bind.layout, TaskCodec::SCHEMA_ID, true);
 		auto snapshot = TaskCodec::ReadValue(descriptor, bind.layout, TaskCodec::SNAPSHOT_ID, true);
@@ -137,7 +139,8 @@ struct IcebergScanTasksGlobalState : public GlobalTableFunctionState {
 			schema_id = schema;
 			snapshot_id = snapshot;
 		}
-		return TaskCodec::ReadTask(descriptor, bind.layout, execution->metadata, execution->schema);
+		return TaskCodec::ReadTask(context, descriptor, bind.layout, execution->metadata, execution->schema,
+		                           snapshot_id);
 	}
 
 	unique_ptr<Expression> BindRowFilter(ClientContext &context, const IcebergScanTasksBindData &bind,
@@ -240,7 +243,9 @@ static unique_ptr<FunctionData> IcebergScanTasksBind(ClientContext &context, Tab
 		}
 		auto json = metadata.CastAs(context, LogicalType::JSON());
 		result->schema_id = IntegerValue::Get(schema_id);
-		auto snapshot_id = arguments.contains("snapshot_id") ? arguments.at("snapshot_id") : Value(LogicalType::BIGINT);
+		if (arguments.contains("snapshot_id")) {
+			result->snapshot_id = arguments.at("snapshot_id");
+		}
 		// snapshot_id and schema, named as iceberg_scan_plan()'s columns, select nothing here: when given, they are
 		// only checked against the document. (In the rows, the schema column's type also spells the scan's columns.)
 		optional_ptr<const LogicalType> given_schema;
@@ -255,8 +260,8 @@ static unique_ptr<FunctionData> IcebergScanTasksBind(ClientContext &context, Tab
 		}
 		// A document that does not parse, or lacks the schema or the snapshot it comes with, fails here rather than
 		// at the first task.
-		result->call_metadata = make_uniq<IcebergTableMetadata>(
-		    TaskCodec::ReadMetadata(StringValue::Get(json), result->schema_id, snapshot_id, given_schema, "argument"));
+		result->call_metadata = make_uniq<IcebergTableMetadata>(TaskCodec::ReadMetadata(
+		    StringValue::Get(json), result->schema_id, result->snapshot_id, given_schema, "argument"));
 		// The scan's columns are the schema schema_id selects, spelled as the document spells them.
 		call_schema = TaskCodec::SchemaType(result->call_metadata->GetSchemaFromId(result->schema_id));
 	}
