@@ -206,6 +206,8 @@ public:
 	vector<pair<int64_t /*snapshot_id*/, timestamp_ms_t>> snapshot_log;
 	//! Table statistics files, at most one per snapshot
 	vector<IcebergStatisticsFile> statistics;
+	//! Partition statistics files, at most one per snapshot
+	vector<IcebergStatisticsFile> partition_statistics;
 	vector<IcebergFieldMapping> mappings;
 
 	//! Custom write paths from table properties
