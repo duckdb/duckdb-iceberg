@@ -103,8 +103,15 @@ IcebergDeleteFile IcebergScanTaskCodec::ReadDeleteFile(const Value &descriptor) 
 	return file;
 }
 
-IcebergScanTaskCodec::InputLayout
-IcebergScanTaskCodec::BindInput(const LogicalType &task_type, vector<LogicalType> &types, vector<Identifier> &names) {
+static bool IsContextColumn(idx_t column) {
+	return column == IcebergScanTaskCodec::SNAPSHOT_ID || column == IcebergScanTaskCodec::SCHEMA_ID ||
+	       column == IcebergScanTaskCodec::METADATA || column == IcebergScanTaskCodec::SCHEMA;
+}
+
+IcebergScanTaskCodec::InputLayout IcebergScanTaskCodec::BindInput(const LogicalType &task_type,
+                                                                  optional_ptr<const LogicalType> call_schema,
+                                                                  vector<LogicalType> &types,
+                                                                  vector<Identifier> &names) {
 	InputLayout result;
 	auto &fields = StructType::GetChildTypes(task_type);
 	case_insensitive_map_t<idx_t> indexes;
@@ -116,13 +123,25 @@ IcebergScanTaskCodec::BindInput(const LogicalType &task_type, vector<LogicalType
 	auto expected = Columns(LogicalType::STRUCT({}), LogicalType::STRUCT({}));
 	for (idx_t i = 0; i < expected.size(); i++) {
 		auto entry = indexes.find(expected[i].first.GetIdentifierName());
+		if (call_schema && IsContextColumn(i)) {
+			if (entry != indexes.end()) {
+				throw BinderException("iceberg_scan_tasks input column '%s' is part of the context the call gives as "
+				                      "arguments: the context comes in every row or once for the call, not both",
+				                      expected[i].first.GetIdentifierName());
+			}
+			result.columns.push_back(DConstants::INVALID_INDEX);
+			continue;
+		}
 		if (entry == indexes.end()) {
 			if (i == ROW_FILTER) {
 				result.columns.push_back(DConstants::INVALID_INDEX);
 				continue;
 			}
-			throw BinderException("iceberg_scan_tasks missing required input column '%s'",
-			                      expected[i].first.GetIdentifierName());
+			throw BinderException(
+			    "iceberg_scan_tasks missing required input column '%s'%s", expected[i].first.GetIdentifierName(),
+			    IsContextColumn(i)
+			        ? " (or leave the context out of the rows and pass metadata and schema_id as arguments)"
+			        : "");
 		}
 		auto &type = fields[entry->second].second;
 		bool valid =
@@ -134,7 +153,7 @@ IcebergScanTaskCodec::BindInput(const LogicalType &task_type, vector<LogicalType
 		}
 		result.columns.push_back(entry->second);
 	}
-	result.schema_type = fields[result.columns[SCHEMA]].second;
+	result.schema_type = call_schema ? *call_schema : fields[result.columns[SCHEMA]].second;
 	for (auto &column : StructType::GetChildTypes(result.schema_type)) {
 		names.emplace_back(column.first);
 		types.push_back(column.second);
@@ -155,7 +174,12 @@ IcebergScanTaskCodec::BindInput(const LogicalType &task_type, vector<LogicalType
 }
 
 Value IcebergScanTaskCodec::ReadValue(const Value &input, const InputLayout &bind, Column column, bool nullable) {
-	if (column == ROW_FILTER && bind.columns[column] == DConstants::INVALID_INDEX) {
+	if (bind.columns[column] == DConstants::INVALID_INDEX) {
+		if (column != ROW_FILTER) {
+			throw InternalException(
+			    "iceberg_scan_tasks input column '%s' is not in the rows",
+			    Columns(LogicalType::STRUCT({}), LogicalType::STRUCT({}))[column].first.GetIdentifierName());
+		}
 		return Value(LogicalType::VARCHAR);
 	}
 	auto value = StructValue::GetChildren(input)[bind.columns[column]];
@@ -222,7 +246,8 @@ IcebergFileScanTask IcebergScanTaskCodec::ReadTask(const Value &input, const Inp
 }
 
 IcebergTableMetadata IcebergScanTaskCodec::ReadMetadata(const string &text, int32_t schema_id, const Value &snapshot,
-                                                        const LogicalType &schema_type) {
+                                                        optional_ptr<const LogicalType> schema_type,
+                                                        const char *schema_source) {
 	IcebergTableMetadata result {IcebergTableMetadataSchemas()};
 	optional_ptr<const IcebergTableSchema> selected_schema;
 	auto doc = JSONDocument::Parse(text.c_str(), text.size());
@@ -253,11 +278,14 @@ IcebergTableMetadata IcebergScanTaskCodec::ReadMetadata(const string &text, int3
 	if (!selected_schema) {
 		throw InvalidInputException("iceberg_scan_tasks schema_id is absent from the metadata");
 	}
-	if (SchemaType(*selected_schema) != schema_type) {
-		throw InvalidInputException("iceberg_scan_tasks schema column does not match the selected metadata schema");
+	if (schema_type && SchemaType(*selected_schema) != *schema_type) {
+		throw InvalidInputException("iceberg_scan_tasks schema %s does not match the selected metadata schema",
+		                            schema_source);
 	}
-	if (!snapshot.IsNull() && !result.GetSnapshotById(BigIntValue::Get(snapshot))) {
-		throw InvalidInputException("iceberg_scan_tasks snapshot_id is absent from the metadata");
+	// The non-throwing lookup: GetSnapshotById throws a configuration error of its own first.
+	if (!snapshot.IsNull() && !result.FindSnapshotByIdInternal(BigIntValue::Get(snapshot))) {
+		throw InvalidInputException("iceberg_scan_tasks snapshot_id %d is absent from the metadata",
+		                            BigIntValue::Get(snapshot));
 	}
 	return result;
 }
