@@ -1,0 +1,143 @@
+# name: test/sql/local/native_catalog/uuid_partition_equality_delete.test
+# description: Server-planned UUID partitions supply missing equality delete keys in migrated files
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+# Keep spec 0 unpartitioned so the equality delete applies across partitions.
+statement ok
+CREATE TABLE my_datalake.default.uuid_delete (id INTEGER, u UUID) WITH ('format-version'=2);
+
+statement ok
+ALTER TABLE my_datalake.default.uuid_delete SET PARTITIONED BY (u);
+
+# A fallback to local manifests would only see this row.
+statement ok
+INSERT INTO my_datalake.default.uuid_delete VALUES (99, NULL);
+
+foreach part uuid null
+
+statement ok
+COPY (SELECT i::INTEGER AS id FROM range(1, 4) r(i))
+TO '{TEST_DIR}/uuid_delete_{part}.parquet' (FORMAT PARQUET, FIELD_IDS {id: 1});
+
+endloop
+
+statement ok
+COPY (SELECT * FROM (VALUES
+	(1, UUID 'fedcba98-7654-3210-8fed-cba987654321'), (2, NULL)
+) d(id, u)) TO '{TEST_DIR}/uuid_delete_keys.parquet' (FORMAT PARQUET, FIELD_IDS {id: 1, u: 2});
+
+statement ok
+SET VARIABLE uuid_plan_config = (
+	SELECT json_merge_patch(body::JSON, json_object('endpoints', list_append((body::JSON->'endpoints')::VARCHAR[],
+		'POST /v1/{prefix}/namespaces/{namespace}/tables/{table}/plan')))
+	FROM iceberg_test_catalog_request('GET', '/v1/config', NULL)
+);
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	json_object('method', 'GET', 'path', '/v1/config', 'status', 200, 'body', getvariable('uuid_plan_config')));
+----
+204
+
+statement ok
+ATTACH '' AS planned (TYPE ICEBERG, URI 'http://iceberg-mock.invalid',
+	AUTHORIZATION_TYPE 'none', ACCESS_DELEGATION_MODE 'none');
+
+statement ok
+CREATE TEMP MACRO uuid_data_task(path, bytes, u) AS json_object('delete-file-references', [0],
+	'data-file', json_object('spec-id', 1, 'partition', [u::VARCHAR], 'content', 'data',
+	'file-path', path, 'file-format', 'parquet', 'file-size-in-bytes', bytes, 'record-count', 3));
+
+statement ok
+SET VARIABLE uuid_plan = (
+	SELECT json_object('status', 'completed', 'file-scan-tasks', [
+		uuid_data_task(a.filename, a.size, 'fedcba98-7654-3210-8fed-cba987654321'),
+		uuid_data_task(b.filename, b.size, NULL)],
+		'delete-files', [json_object('spec-id', 0, 'partition', []::JSON[], 'content', 'equality-deletes',
+		'file-path', d.filename, 'file-format', 'parquet', 'file-size-in-bytes', d.size, 'record-count', 2,
+		'equality-ids', [1, 2])])
+	FROM read_blob('{TEST_DIR}/uuid_delete_uuid.parquet') a, read_blob('{TEST_DIR}/uuid_delete_null.parquet') b,
+		read_blob('{TEST_DIR}/uuid_delete_keys.parquet') d
+);
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	json_object('method', 'POST', 'path', '/v1/namespaces/default/tables/uuid_delete/plan',
+		'status', 200, 'body', getvariable('uuid_plan')));
+----
+204
+
+statement ok
+SET iceberg_use_server_side_scan_planning=true;
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE uuid_tasks = (SELECT list(t) FROM iceberg_scan_plan('planned.default.uuid_delete') t);
+
+query II
+SELECT t.partition_constants."2", len(t.delete_files) FROM unnest(getvariable('uuid_tasks')) p(t) ORDER BY 1 NULLS LAST;
+----
+fedcba98-7654-3210-8fed-cba987654321	1
+NULL	1
+
+statement ok
+CREATE TEMP MACRO uuid_direct() AS TABLE FROM planned.default.uuid_delete;
+
+statement ok
+CREATE TEMP MACRO uuid_replay() AS TABLE FROM iceberg_scan_tasks(getvariable('uuid_tasks'));
+
+foreach fast_filter true false
+
+statement ok
+SET iceberg_equality_delete_fast_filter={fast_filter};
+
+foreach scan uuid_direct uuid_replay
+
+query TI
+SELECT u, list(id ORDER BY id) FROM {scan}() GROUP BY u ORDER BY u NULLS LAST;
+----
+fedcba98-7654-3210-8fed-cba987654321	[2, 3]
+NULL	[1, 3]
+
+# u must also participate in the delete when it is only read privately.
+query I
+SELECT list(id ORDER BY id) FROM {scan}();
+----
+[1, 2, 3, 3]
+
+endloop
+
+endloop
+
+# A Java server can prune even equality and IN incorrectly using another writer's UUID bounds.
+# It can still eliminate NULLs; DuckDB applies each original predicate to the surviving rows.
+statement ok
+CALL enable_logging('Iceberg');
+
+query I
+SELECT list(id ORDER BY id) FROM uuid_direct() WHERE u = UUID 'fedcba98-7654-3210-8fed-cba987654321';
+----
+[2, 3]
+
+query I
+SELECT list(id ORDER BY id) FROM uuid_direct() WHERE u IN
+	(UUID 'fedcba98-7654-3210-8fed-cba987654321', UUID '01234567-89ab-cdef-8123-456789abcdef');
+----
+[2, 3]
+
+query I
+SELECT count(*) >= 2 AND bool_and(message.contains('"type":"not-null"') AND NOT message.contains('fedcba98'))
+FROM duckdb_logs() WHERE type='Iceberg' AND message.contains('/plan body=');
+----
+true
+
+statement ok
+COMMIT;

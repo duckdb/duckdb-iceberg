@@ -40,9 +40,11 @@ static constexpr bool DEFAULT_ENABLE_SCAN_SERIALIZATION = true;
 static constexpr const char *ENABLE_TABLE_STATISTICS_CONFIG_VARIABLE = "iceberg_enable_table_statistics";
 static constexpr bool DEFAULT_ENABLE_TABLE_STATISTICS = true;
 
-// Compatibility escape hatch for deletion-vector files written by DuckDB Iceberg 1.5.3,
-// which contain only the deletion-vector blob rather than a valid Puffin container.
+// Controls structural Puffin footer verification for deletion-vector files. When skipping is
+// enabled the deletion vector is read by the manifest's offset and length, which permits
+// reading Delta deletion-vector files referenced by UniForm and legacy DuckDB bare-blob files.
 static constexpr const char *SKIP_PUFFIN_VERIFICATION_CONFIG_VARIABLE = "iceberg_unsafe_skip_puffin_verification";
+static constexpr bool DEFAULT_SKIP_PUFFIN_VERIFICATION = true;
 
 // When this is true, a DELETE on a v2, v3 Iceberg table whose WHERE clause is a pure
 // conjunction of equality predicates writes an Iceberg equality-delete file instead

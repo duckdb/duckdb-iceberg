@@ -1,0 +1,37 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_insert_v2_lineage_named_columns.test
+# description: On a v2 table, real columns named _row_id and _last_updated_sequence_number are checked like any other column
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.v2_lineage_named_columns;
+
+statement ok
+CREATE TABLE my_datalake.default.v2_lineage_named_columns (
+    _row_id BIGINT NOT NULL,
+    _last_updated_sequence_number BIGINT NOT NULL
+) WITH ('format-version' = '2');
+
+statement error
+INSERT INTO my_datalake.default.v2_lineage_named_columns VALUES (NULL, 1);
+----
+NOT NULL constraint failed
+
+statement error
+INSERT INTO my_datalake.default.v2_lineage_named_columns VALUES (1, NULL);
+----
+NOT NULL constraint failed
+
+statement ok
+INSERT INTO my_datalake.default.v2_lineage_named_columns VALUES (1, 2);
+
+query II
+SELECT _row_id, _last_updated_sequence_number FROM my_datalake.default.v2_lineage_named_columns;
+----
+1	2
+
+statement ok
+DROP TABLE my_datalake.default.v2_lineage_named_columns;
