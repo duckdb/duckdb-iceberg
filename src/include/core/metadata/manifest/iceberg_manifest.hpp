@@ -78,7 +78,7 @@ public:
 	static map<idx_t, LogicalType> GetFieldIdToTypeMapping(ClientContext &context,
 	                                                       const IcebergSnapshotScanInfo &snapshot_info,
 	                                                       const IcebergTableMetadata &metadata,
-	                                                       const unordered_set<int32_t> &partition_spec_ids);
+	                                                       const IcebergPartitionSpec &spec);
 	static LogicalType PartitionStructType(const map<idx_t, LogicalType> &partition_field_id_to_type);
 	static LogicalType GetType(const IcebergTableMetadata &metadata, const LogicalType &partition_type);
 	// Get extended partition info. A data_file struct stores partition info as

@@ -219,25 +219,13 @@ string IcebergManifestEntryStatusTypeToString(IcebergManifestEntryStatusType typ
 map<idx_t, LogicalType> IcebergDataFile::GetFieldIdToTypeMapping(ClientContext &context,
                                                                  const IcebergSnapshotScanInfo &snapshot_info,
                                                                  const IcebergTableMetadata &metadata,
-                                                                 const unordered_set<int32_t> &partition_spec_ids) {
-	D_ASSERT(!partition_spec_ids.empty());
+                                                                 const IcebergPartitionSpec &spec) {
 	auto &schema = metadata.GetSchemaFromId(snapshot_info.schema_id);
 
 	map<idx_t, LogicalType> partition_field_id_to_type;
-	for (auto &spec_id : partition_spec_ids) {
-		auto partition_spec = metadata.FindPartitionSpecById(spec_id);
-		if (!partition_spec) {
-			throw InvalidConfigurationException("Manifest refers to partition spec %d, which is not in the table's "
-			                                    "partition-specs",
-			                                    spec_id);
-		}
-		auto &fields = partition_spec->GetFields();
-
-		for (auto &field : fields) {
-			auto type = IcebergPartitionConstants::GetType(context, field.source_id, schema, metadata.GetSchemas());
-			if (!type) {
-				continue;
-			}
+	for (auto &field : spec.GetFields()) {
+		auto type = IcebergPartitionConstants::GetType(context, field.source_id, schema, metadata.GetSchemas());
+		if (type) {
 			partition_field_id_to_type.emplace(field.partition_field_id, field.transform.GetBoundsType(*type));
 		}
 	}

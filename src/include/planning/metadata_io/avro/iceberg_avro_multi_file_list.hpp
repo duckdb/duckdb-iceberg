@@ -81,6 +81,7 @@ public:
 
 	idx_t GetManifestIndex(idx_t scan_index) const;
 	mutex &GetManifestLock(idx_t manifest_index);
+	void SetManifestMetadata(idx_t manifest_index, IcebergManifestMetadata header);
 
 	//! Adds entries in Avro block order, as files without a first_row_id inherit row ids in that order
 	void AddEntries(idx_t batch_index, idx_t manifest_index, vector<IcebergManifestEntry> entries);
@@ -104,6 +105,8 @@ public:
 	string iceberg_path;
 	//! partition_field_id -> semantic column type (e.g. INTEGER for DAY)
 	map<idx_t, LogicalType> partition_field_id_to_type;
+	//! Resolve a mixed-type field ID against the spec of the manifest that supplied its value.
+	map<int32_t, map<idx_t, LogicalType>> partition_types_by_spec;
 	optional_ptr<ManifestEntryReadState> read_state;
 	//! One increment per initialized manifest / converted chunk, never per entry.
 	atomic<idx_t> manifest_parses {0};

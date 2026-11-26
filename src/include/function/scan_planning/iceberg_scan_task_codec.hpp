@@ -29,8 +29,7 @@ struct IcebergScanTaskCodec {
 
 	static LogicalType DeleteFileType();
 	static LogicalType SchemaType(const IcebergTableSchema &schema);
-	//! The type of the partition_values column: one field per partition field of any of the table's specs, named by
-	//! its partition field id and typed as the table's manifests store it under its transform.
+	//! The partition_values column has one field per partition field ID with an unambiguous result type across specs.
 	static LogicalType PartitionValuesType(ClientContext &context, const IcebergTableMetadata &metadata,
 	                                       const IcebergTableSchema &schema);
 	//! The partition field id of each field of a partition_values type, in the type's order: what WriteTask fills each

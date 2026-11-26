@@ -34,11 +34,9 @@ LogicalType IcebergScanTaskCodec::SchemaType(const IcebergTableSchema &schema) {
 LogicalType IcebergScanTaskCodec::PartitionValuesType(ClientContext &context, const IcebergTableMetadata &metadata,
                                                       const IcebergTableSchema &schema) {
 	struct FieldType {
-		LogicalType type;
+		optional<LogicalType> type;
 		bool is_void;
 	};
-	//! Partition field ids are unique across a table's specs, and a spec that keeps a field keeps its id. A field a v1
-	//! table dropped is void in later specs; it keeps the type it had before, as its earlier files have values.
 	map<uint64_t, FieldType> fields;
 	for (auto &spec : metadata.partition_specs) {
 		for (auto &field : spec.second.fields) {
@@ -49,15 +47,23 @@ LogicalType IcebergScanTaskCodec::PartitionValuesType(ClientContext &context, co
 				continue;
 			}
 			bool is_void = field.transform.Type() == IcebergTransformType::VOID_TRANSFORM;
-			auto existing = fields.find(field.partition_field_id);
-			if (existing == fields.end() || (existing->second.is_void && !is_void)) {
-				fields[field.partition_field_id] = FieldType {field.transform.GetBoundsType(*source_type), is_void};
+			auto type = field.transform.GetBoundsType(*source_type);
+			auto entry = fields.emplace(field.partition_field_id, FieldType {type, is_void});
+			auto &existing = entry.first->second;
+			if (existing.is_void && !is_void) {
+				// A void replacement only supplies NULLs. Prefer the type of the live field.
+				existing = {type, false};
+			} else if (existing.is_void == is_void && existing.type && *existing.type != type) {
+				// V1 specs can reuse an ID for different types. A single SQL field cannot represent both.
+				existing.type = nullopt;
 			}
 		}
 	}
 	child_list_t<LogicalType> children;
 	for (auto &field : fields) {
-		children.emplace_back(std::to_string(field.first), field.second.type);
+		if (field.second.type) {
+			children.emplace_back(std::to_string(field.first), *field.second.type);
+		}
 	}
 	return LogicalType::STRUCT(std::move(children));
 }

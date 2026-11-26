@@ -109,7 +109,7 @@ void AvroScan::FindCachedManifests() {
 			if (cached) {
 				auto metadata = cached->Validate(info, manifest);
 				manifest.ResetManifestEntries();
-				manifest.manifest_metadata.emplace(metadata);
+				info.SetManifestMetadata(index, std::move(metadata));
 				manifest.parsed_manifest = std::move(cached);
 				if (info.read_state) {
 					info.read_state->PushBatch({index, 0, manifest.GetManifestEntries().size()});
