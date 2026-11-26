@@ -1,4 +1,5 @@
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
+#include "common/iceberg_decimal.hpp"
 
 #include "duckdb/parser/column_list.hpp"
 #include "duckdb/common/type_visitor.hpp"
@@ -355,13 +356,13 @@ static void VerifySchemaEvolution(const IcebergTableMetadata &table_metadata, co
 		if (target_type.id() != LogicalTypeId::DECIMAL) {
 			break;
 		}
-		uint8_t width;
-		uint8_t scale;
-		original_type.GetDecimalProperties(width, scale);
+		// the new type is stored as is: it has to be a decimal that Iceberg can represent
+		IcebergDecimal::Verify(target_type);
+		auto width = DecimalType::GetWidth(original_type);
+		auto scale = DecimalType::GetScale(original_type);
 
-		uint8_t other_width;
-		uint8_t other_scale;
-		target_type.GetDecimalProperties(other_width, other_scale);
+		auto other_width = DecimalType::GetWidth(target_type);
+		auto other_scale = DecimalType::GetScale(target_type);
 
 		if (scale != other_scale) {
 			extra_info = "(DECIMAL evolution has to preserve the original scale, for reference: DECIMAL(width, scale))";

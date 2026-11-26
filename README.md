@@ -50,6 +50,12 @@ of those snapshots: the updates cannot preserve an ID that has not been assigned
 yet. After commit, further updates preserve its assigned ID. Use a business key
 to identify pending rows, rather than relying on their nullable lineage columns.
 
+A copy-on-write DELETE must preserve the lineage of surviving rows in the files
+it rewrites. If an earlier v3 snapshot in the transaction still needs to assign
+a survivor's row ID or last update sequence, commit the earlier changes before
+running the DELETE. Removing a whole file or rewriting only rows with assigned
+lineage is supported in the same transaction.
+
 ## Development setup
 
 Clone the repository with its DuckDB and extension tooling submodules:

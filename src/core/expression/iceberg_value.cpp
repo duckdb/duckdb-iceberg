@@ -1,4 +1,5 @@
 #include "core/expression/iceberg_value.hpp"
+#include "common/iceberg_decimal.hpp"
 #include "common/iceberg_fixed_type.hpp"
 
 #include "duckdb/common/helper.hpp"
@@ -82,7 +83,7 @@ static DeserializeResult DeserializeError(const string_t &blob, const LogicalTyp
 }
 
 template <class VALUE_TYPE>
-static Value DeserializeDecimalTemplated(const string_t &blob, uint8_t width, uint8_t scale) {
+static Value DeserializeDecimalTemplated(const string_t &blob, const LogicalType &type) {
 	VALUE_TYPE ret = 0;
 	//! The blob has to be smaller or equal to the size of the type
 	D_ASSERT(blob.GetSize() <= sizeof(VALUE_TYPE));
@@ -105,10 +106,10 @@ static Value DeserializeDecimalTemplated(const string_t &blob, uint8_t width, ui
 		}
 	}
 
-	return Value::DECIMAL(ret, width, scale);
+	return Value::DECIMAL(ret, DecimalType::GetWidth(type), DecimalType::GetScale(type));
 }
 
-static Value DeserializeHugeintDecimal(const string_t &blob, uint8_t width, uint8_t scale) {
+static Value DeserializeHugeintDecimal(const string_t &blob, const LogicalType &type) {
 	//! The blob has to be smaller or equal to the size of the type
 	D_ASSERT(blob.GetSize() <= sizeof(hugeint_t));
 
@@ -125,15 +126,13 @@ static Value DeserializeHugeintDecimal(const string_t &blob, uint8_t width, uint
 	}
 
 	hugeint_t ret(static_cast<int64_t>(upper_val), lower_val);
-	return Value::DECIMAL(ret, width, scale);
+	return Value::DECIMAL(ret, DecimalType::GetWidth(type), DecimalType::GetScale(type));
 }
 
 static DeserializeResult DeserializeDecimal(const string_t &blob, const LogicalType &type) {
 	D_ASSERT(type.id() == LogicalTypeId::DECIMAL);
 
-	uint8_t width;
-	uint8_t scale;
-	if (!type.GetDecimalProperties(width, scale)) {
+	if (!IcebergDecimal::IsSupported(type)) {
 		return DeserializeError(blob, type);
 	}
 
@@ -143,16 +142,16 @@ static DeserializeResult DeserializeDecimal(const string_t &blob, const LogicalT
 	}
 	switch (physical_type) {
 	case PhysicalType::INT16: {
-		return DeserializeDecimalTemplated<int16_t>(blob, width, scale);
+		return DeserializeDecimalTemplated<int16_t>(blob, type);
 	}
 	case PhysicalType::INT32: {
-		return DeserializeDecimalTemplated<int32_t>(blob, width, scale);
+		return DeserializeDecimalTemplated<int32_t>(blob, type);
 	}
 	case PhysicalType::INT64: {
-		return DeserializeDecimalTemplated<int64_t>(blob, width, scale);
+		return DeserializeDecimalTemplated<int64_t>(blob, type);
 	}
 	case PhysicalType::INT128: {
-		return DeserializeHugeintDecimal(blob, width, scale);
+		return DeserializeHugeintDecimal(blob, type);
 	}
 	default:
 		throw InternalException("DeserializeDecimal not implemented for physical type '%s'",
@@ -532,6 +531,8 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, const LogicalTyp
 		return SerializeResult(column_type, serialized_val);
 	}
 	case LogicalTypeId::DECIMAL: {
+		// the unscaled value is serialized through a HUGEINT below
+		IcebergDecimal::Verify(column_type);
 		auto decimal_as_string = input_value.GetValue<string>();
 		auto dec_pos = decimal_as_string.find(".");
 		// remove the decimal point if found (when scale is 0 there is no decimal point)

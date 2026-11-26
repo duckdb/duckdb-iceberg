@@ -1,0 +1,7 @@
+# name: benchmark/scan_tasks/count_star_16384.benchmark
+# description: Count rows from 16384 Iceberg scan tasks
+# group: [scan_tasks]
+
+template benchmark/scan_tasks/count_star.benchmark.in
+TASKS=16384
+COUNT=65536
