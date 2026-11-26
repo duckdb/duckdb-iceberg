@@ -115,7 +115,9 @@ public:
 	IcebergTable &DeleteTable(IcebergTable &table);
 	IcebergTable &RenameTable(IcebergTable &table, const string &new_name);
 	bool MultiTableCommitAvailable() const;
-	void VerifyCanAddNamespaceRequest() const;
+	enum class RequestType : uint8_t { TABLE, NAMESPACE, VIEW };
+	//! Check before staging a write that needs a new catalog request.
+	void VerifyCanAddRequest(RequestType request) const;
 	case_insensitive_map_t<string> &GetSchemaProperties(ClientContext &context, const IcebergSchemaEntry &schema);
 	SchemaPropertyUpdates &GetOrCreateSchemaPropertyUpdates(const string &schema_name);
 	//! Register a table the catalog created without stage-create, which exists there ahead of the commit.
@@ -129,8 +131,7 @@ public:
 
 private:
 	bool HasTableUpdate() const;
-	idx_t NamespaceRequestCount() const;
-	void VerifyCanStartTableUpdate() const;
+	idx_t CatalogRequestCount() const;
 	IcebergTransactionAlterUpdate *GetAlterUpdate();
 	const IcebergTransactionAlterUpdate *GetAlterUpdate() const;
 	bool CanUseMultiTableCommit(const IcebergTransactionAlterUpdate &alter_update) const;

@@ -206,7 +206,7 @@ optional_ptr<CatalogEntry> IcebergCatalog::CreateSchema(CatalogTransaction trans
 	}
 
 	// Schema does not exist - stage it locally and defer the server creation and catalog publication to commit
-	iceberg_transaction.VerifyCanAddNamespaceRequest();
+	iceberg_transaction.VerifyCanAddRequest(IcebergTransaction::RequestType::NAMESPACE);
 	auto new_schema = make_shared_ptr<IcebergSchemaEntry>(*this, info);
 	auto result = new_schema.get();
 	iceberg_transaction.created_schemas.Add(schema_name, std::move(new_schema), info.on_conflict);
@@ -241,7 +241,7 @@ void IcebergCatalog::DropSchema(ClientContext &context, DropInfo &info) {
 
 	// Schema exists - defer the server deletion to commit
 	if (!iceberg_transaction.deleted_schemas.count(schema_name)) {
-		iceberg_transaction.VerifyCanAddNamespaceRequest();
+		iceberg_transaction.VerifyCanAddRequest(IcebergTransaction::RequestType::NAMESPACE);
 		iceberg_transaction.deleted_schemas.insert(schema_name);
 	}
 }

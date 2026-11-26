@@ -691,9 +691,7 @@ bool IcebergTableSet::TryGetLocalViewEntry(ClientContext &context, const string 
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 	auto view_key = IcebergTable::GetTableKey(ic_catalog, schema.namespace_items, view_name);
-	auto created_it = iceberg_transaction.created_views.find(view_key);
-	// A staged replacement is visible after DROP/CREATE in the same transaction.
-	if (created_it == iceberg_transaction.created_views.end() && iceberg_transaction.deleted_views.count(view_key)) {
+	if (iceberg_transaction.deleted_views.count(view_key)) {
 		return true;
 	}
 
@@ -703,6 +701,7 @@ bool IcebergTableSet::TryGetLocalViewEntry(ClientContext &context, const string 
 		return true;
 	}
 
+	auto created_it = iceberg_transaction.created_views.find(view_key);
 	if (created_it != iceberg_transaction.created_views.end()) {
 		auto view_entry = make_uniq<ViewCatalogEntry>(catalog, schema, *created_it->second);
 		auto result = view_entry.get();

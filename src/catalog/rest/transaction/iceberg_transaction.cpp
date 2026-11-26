@@ -424,29 +424,26 @@ bool IcebergTransaction::HasTableUpdate() const {
 	return !std::holds_alternative<std::monostate>(transaction_update);
 }
 
-idx_t IcebergTransaction::NamespaceRequestCount() const {
-	return created_schemas.Size() + deleted_schemas.size() + schema_property_updates.size();
+idx_t IcebergTransaction::CatalogRequestCount() const {
+	// Compatible table changes share a request, as do property edits to the same namespace.
+	return HasTableUpdate() + created_schemas.Size() + deleted_schemas.size() + schema_property_updates.size() +
+	       created_views.size() + deleted_views.size();
 }
 
-static void ThrowNamespaceAtomicityError() {
-	throw TransactionException("Iceberg REST Catalog cannot commit this transaction atomically because the namespace "
-	                           "operation requires a separate REST request");
-}
-
-void IcebergTransaction::VerifyCanAddNamespaceRequest() const {
-	if (NamespaceRequestCount() || HasTableUpdate()) {
-		ThrowNamespaceAtomicityError();
+void IcebergTransaction::VerifyCanAddRequest(RequestType request) const {
+	if (CatalogRequestCount() == 0) {
+		return;
 	}
-}
-
-void IcebergTransaction::VerifyCanStartTableUpdate() const {
-	if (NamespaceRequestCount()) {
-		ThrowNamespaceAtomicityError();
+	if (request == RequestType::VIEW || !created_views.empty() || !deleted_views.empty()) {
+		throw TransactionException("Iceberg REST Catalog cannot commit view changes atomically with other catalog "
+		                           "changes. Run each view create or drop in a separate transaction");
 	}
-	if (HasTableUpdate()) {
+	if (request == RequestType::TABLE && HasTableUpdate()) {
 		throw TransactionException("Iceberg REST Catalog cannot commit this transaction atomically because it mixes "
 		                           "table updates with rename/drop requests");
 	}
+	throw TransactionException("Iceberg REST Catalog cannot commit this transaction atomically because the namespace "
+	                           "operation requires a separate REST request");
 }
 
 case_insensitive_map_t<string> &IcebergTransaction::GetSchemaProperties(ClientContext &context,
@@ -472,7 +469,7 @@ SchemaPropertyUpdates &IcebergTransaction::GetOrCreateSchemaPropertyUpdates(cons
 	if (it != schema_property_updates.end()) {
 		return it->second;
 	}
-	VerifyCanAddNamespaceRequest();
+	VerifyCanAddRequest(RequestType::NAMESPACE);
 	return schema_property_updates[schema_name];
 }
 
@@ -579,20 +576,15 @@ static bool CommitStateUnknown(const ErrorData &error) {
 }
 
 void IcebergTransaction::Commit() {
-	auto view_requests = created_views.size() + deleted_views.size();
-	// Compatible table changes share one commit request. Each namespace or view mutation has its own endpoint.
-	auto requests = NamespaceRequestCount() + view_requests + HasTableUpdate();
+	auto requests = CatalogRequestCount();
 	if (requests == 0) {
 		return;
 	}
 	if (requests > 1) {
-		CleanupFiles();
-		DropCreatedTables();
-		if (view_requests) {
-			throw TransactionException("Iceberg REST Catalog cannot commit view changes atomically with other catalog "
-			                           "changes; commit each view create or drop separately");
-		}
-		ThrowNamespaceAtomicityError();
+		// Staging checks enforce this invariant. Fail closed before publishing if a write path missed a check.
+		Rollback();
+		throw TransactionException("Iceberg REST Catalog cannot commit this transaction atomically because it has "
+		                           "multiple pending catalog write requests");
 	}
 
 	Connection temp_con(db);
@@ -1160,12 +1152,12 @@ IcebergTransactionAlterUpdate &IcebergTransaction::GetOrCreateAlter() {
 	if (auto alter_update = GetAlterUpdate()) {
 		return *alter_update;
 	}
-	VerifyCanStartTableUpdate();
+	VerifyCanAddRequest(RequestType::TABLE);
 	return transaction_update.emplace<IcebergTransactionAlterUpdate>(*this);
 }
 
 IcebergTable &IcebergTransaction::DeleteTable(IcebergTable &table) {
-	VerifyCanStartTableUpdate();
+	VerifyCanAddRequest(RequestType::TABLE);
 	auto table_key = table.GetTableKey();
 	auto state = GetLatestTableState(table_key);
 
@@ -1179,7 +1171,7 @@ IcebergTable &IcebergTransaction::DeleteTable(IcebergTable &table) {
 }
 
 IcebergTable &IcebergTransaction::RenameTable(IcebergTable &table, const string &new_name) {
-	VerifyCanStartTableUpdate();
+	VerifyCanAddRequest(RequestType::TABLE);
 	auto table_key = table.GetTableKey();
 	auto state = GetLatestTableState(table_key);
 
