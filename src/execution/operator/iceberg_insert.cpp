@@ -726,6 +726,23 @@ static OrderByNullType GetDuckDBNullOrder(const string &null_order) {
 	throw NotImplementedException("Unsupported Iceberg null order '%s'", null_order);
 }
 
+template <class FLOAT, class UINT>
+static bool CastFloatingSortKey(Vector &source, Vector &result, idx_t count, CastParameters &) {
+	static_assert(sizeof(FLOAT) == sizeof(UINT), "Floating-point sort keys must match the input width");
+	UnaryExecutor::Execute<FLOAT, UINT>(source, result, count, [](FLOAT value) {
+		constexpr auto sign_bit = UINT(1) << (sizeof(UINT) * 8 - 1);
+		auto bits = Load<UINT>(const_data_ptr_cast(&value));
+		bool negative = (bits & sign_bit) != 0;
+		if (Value::IsNan(value)) {
+			// NaNs of each sign tie, beyond their respective infinity.
+			return negative ? NumericLimits<UINT>::Minimum() : NumericLimits<UINT>::Maximum();
+		}
+		// Reverse the negative bit patterns and move nonnegative ones above them, putting -0 just before +0.
+		return negative ? ~bits : (bits ^ sign_bit);
+	});
+	return true;
+}
+
 static void GenerateSortOrderExpressions(ClientContext &context, const IcebergCopyInput &copy_input,
                                          IcebergCopyOptions &result) {
 	if (!copy_input.table_metadata.HasSortOrder()) {
@@ -737,6 +754,13 @@ static void GenerateSortOrderExpressions(ClientContext &context, const IcebergCo
 	}
 	for (auto &field : sort_order.fields) {
 		auto expr = GetTransformExpression(context, copy_input, field.source_id, field.transform, "sorting");
+		if (expr->GetReturnType().id() == LogicalTypeId::FLOAT) {
+			expr = BoundCastExpression::Create(std::move(expr), LogicalType::UINTEGER,
+			                                   BoundCastInfo(CastFloatingSortKey<float, uint32_t>));
+		} else if (expr->GetReturnType().id() == LogicalTypeId::DOUBLE) {
+			expr = BoundCastExpression::Create(std::move(expr), LogicalType::UBIGINT,
+			                                   BoundCastInfo(CastFloatingSortKey<double, uint64_t>));
+		}
 		result.order_columns.emplace_back(GetDuckDBOrderType(field.direction), GetDuckDBNullOrder(field.null_order),
 		                                  std::move(expr));
 	}
