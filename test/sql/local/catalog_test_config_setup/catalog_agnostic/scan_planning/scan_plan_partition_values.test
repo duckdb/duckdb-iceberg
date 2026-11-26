@@ -1,0 +1,241 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/scan_planning/scan_plan_partition_values.test
+# description: iceberg_scan_plan's partition_values column holds each data file's partition tuple, under every transform
+# group: [scan_planning]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+drop table if exists my_datalake.default.scan_plan_partition_values;
+
+statement ok
+create table my_datalake.default.scan_plan_partition_values(id integer, i integer, k bigint, s varchar, ts timestamp,
+  d1 date, d2 date, ts2 timestamp, u uuid)
+partitioned by (i, bucket(4, k), truncate(3, s), day(ts), month(d1), year(d2), hour(ts2), u);
+
+# One row per file: no two rows share a partition tuple.
+statement ok
+create temp macro partition_values_rows() as table
+ select * from (values
+ (1, 7, 34, 'abcdef', '2024-03-05 10:11:12'::timestamp, '2024-03-05'::date, '2024-03-05'::date,
+  '2024-03-05 10:11:12'::timestamp, '00000000-0000-0000-0000-000000000001'::uuid),
+ (2, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+ (3, -1, -5, 'é€x', '1969-12-31 23:30:00'::timestamp, '1969-12-31'::date, '1969-12-31'::date,
+  '1969-12-31 23:30:00'::timestamp, 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid))
+ t(id, i, k, s, ts, d1, d2, ts2, u);
+
+# Per file, the partition fields whose value differs from the one its row implies. A bucket is compared with the
+# manifest's own value, as iceberg_files reports it.
+statement ok
+create temp macro partition_values_mismatches(plan) as table
+ select r.id, list_filter([
+   if(pv."1000" is distinct from r.i, 'i', NULL),
+   if(pv."1001" is distinct from f.partition.k_bucket_4, 'bucket(4, k)', NULL),
+   if(pv."1002" is distinct from left(r.s, 3), 'truncate(3, s)', NULL),
+   if(pv."1003" is distinct from datediff('day', date '1970-01-01', r.ts::date), 'day(ts)', NULL),
+   if(pv."1004" is distinct from datediff('month', date '1970-01-01', r.d1), 'month(d1)', NULL),
+   if(pv."1005" is distinct from datediff('year', date '1970-01-01', r.d2), 'year(d2)', NULL),
+   if(pv."1006" is distinct from datediff('hour', timestamp '1970-01-01', r.ts2), 'hour(ts2)', NULL),
+   if(pv."1007" is distinct from r.u, 'u', NULL)], lambda x: x IS NOT NULL) bad
+ from (select file_path, partition_values pv from query_table(plan)) p
+ join (select rr.*, filename from partition_values_rows() rr
+       join (select id, filename from my_datalake.default.scan_plan_partition_values) t using (id)) r
+ on r.filename = p.file_path
+ join iceberg_files(my_datalake.default.scan_plan_partition_values) f on f.file_path = p.file_path
+ order by r.id;
+
+# ---- files written in the planning transaction: their writer's textual values, typed as the manifest will be ----
+
+statement ok
+begin;
+
+statement ok
+insert into my_datalake.default.scan_plan_partition_values select * from partition_values_rows();
+
+statement ok
+set iceberg_use_server_side_scan_planning=false;
+
+statement ok
+create temp table partition_values_pending as
+select * from iceberg_scan_plan('my_datalake.default.scan_plan_partition_values');
+
+query I
+select typeof(partition_values) from partition_values_pending limit 1;
+----
+STRUCT("1000" INTEGER, "1001" INTEGER, "1002" VARCHAR, "1003" INTEGER, "1004" INTEGER, "1005" INTEGER, "1006" INTEGER, "1007" UUID)
+
+statement ok
+commit;
+
+# ---- committed files, with server-side planning requested and not ----
+
+foreach server_side true false
+
+statement ok
+set iceberg_use_server_side_scan_planning={server_side};
+
+statement ok
+begin;
+
+statement ok
+create or replace temp table partition_values_committed as
+select * from iceberg_scan_plan('my_datalake.default.scan_plan_partition_values');
+
+query IT
+select * from partition_values_mismatches('partition_values_committed');
+----
+1	[]
+2	[]
+3	[]
+
+# The values of a file in the planning transaction are the ones its manifest holds once committed.
+query I
+select count(*) from partition_values_pending p join partition_values_committed c using (file_path)
+where p.partition_values is not distinct from c.partition_values;
+----
+3
+
+statement ok
+commit;
+
+endloop
+
+statement ok
+set iceberg_use_server_side_scan_planning=false;
+
+query I
+select count(*) from partition_values_pending p join iceberg_files(my_datalake.default.scan_plan_partition_values) f
+using (file_path) where p.partition_values."1003" = datediff('day', date '1970-01-01', f.partition.ts_day);
+----
+2
+
+# ---- iceberg_scan_tasks reads rows with the column, and rows without it ----
+
+statement ok
+begin;
+
+statement ok
+set variable partition_values_tasks = (select list(task) from
+ (select * from iceberg_scan_plan('my_datalake.default.scan_plan_partition_values')) task);
+
+statement ok
+set variable partition_values_tasks_without = (select list(task) from
+ (select * exclude (partition_values) from iceberg_scan_plan('my_datalake.default.scan_plan_partition_values')) task);
+
+query IIIIIIIII
+select * from iceberg_scan_tasks(getvariable('partition_values_tasks')) order by id;
+----
+1	7	34	abcdef	2024-03-05 10:11:12	2024-03-05	2024-03-05	2024-03-05 10:11:12	00000000-0000-0000-0000-000000000001
+2	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
+3	-1	-5	é€x	1969-12-31 23:30:00	1969-12-31	1969-12-31	1969-12-31 23:30:00	ffffffff-ffff-ffff-ffff-ffffffffffff
+
+query I
+select count(*) from (
+ (select * from iceberg_scan_tasks(getvariable('partition_values_tasks'))
+  except all select * from iceberg_scan_tasks(getvariable('partition_values_tasks_without')))
+ union all
+ (select * from iceberg_scan_tasks(getvariable('partition_values_tasks_without'))
+  except all select * from iceberg_scan_tasks(getvariable('partition_values_tasks'))));
+----
+0
+
+# Its fields are named by partition field id.
+statement ok
+set variable partition_values_tasks_misnamed = (select list(task) from
+ (select * exclude (partition_values), {'k_bucket_4': 1} partition_values
+  from iceberg_scan_plan('my_datalake.default.scan_plan_partition_values')) task);
+
+statement error
+select * from iceberg_scan_tasks(getvariable('partition_values_tasks_misnamed'));
+----
+partition value names must be distinct positive partition field IDs
+
+statement ok
+commit;
+
+# ---- partition spec evolution: a file has its own spec's fields, and NULL for every other spec's ----
+
+statement ok
+drop table if exists my_datalake.default.scan_plan_partition_values_evolved;
+
+statement ok
+create table my_datalake.default.scan_plan_partition_values_evolved(id integer, a integer, b bigint)
+partitioned by (a);
+
+statement ok
+insert into my_datalake.default.scan_plan_partition_values_evolved values (1, 10, 100);
+
+statement ok
+alter table my_datalake.default.scan_plan_partition_values_evolved set partitioned by (bucket(8, b));
+
+statement ok
+insert into my_datalake.default.scan_plan_partition_values_evolved values (2, 20, 200);
+
+# Back to the first spec, which the table reuses. A promoted identity source reads its earlier files' values with the
+# current type.
+statement ok
+alter table my_datalake.default.scan_plan_partition_values_evolved set partitioned by (a);
+
+statement ok
+alter table my_datalake.default.scan_plan_partition_values_evolved alter a type bigint;
+
+statement ok
+insert into my_datalake.default.scan_plan_partition_values_evolved values (3, 30, 300);
+
+statement ok
+begin;
+
+query I
+select typeof(partition_values) from iceberg_scan_plan('my_datalake.default.scan_plan_partition_values_evolved') limit 1;
+----
+STRUCT("1000" BIGINT, "1001" INTEGER)
+
+query III
+select t.id, p.partition_spec_id, p.partition_values."1000"
+from iceberg_scan_plan('my_datalake.default.scan_plan_partition_values_evolved') p
+join (select id, filename from my_datalake.default.scan_plan_partition_values_evolved) t on t.filename = p.file_path
+order by t.id;
+----
+1	0	10
+2	1	NULL
+3	0	30
+
+query II
+select t.id, p.partition_values."1001" = f.partition.b_bucket_8
+from iceberg_scan_plan('my_datalake.default.scan_plan_partition_values_evolved') p
+join (select id, filename from my_datalake.default.scan_plan_partition_values_evolved) t on t.filename = p.file_path
+join iceberg_files(my_datalake.default.scan_plan_partition_values_evolved) f on f.file_path = p.file_path
+order by t.id;
+----
+1	NULL
+2	true
+3	NULL
+
+statement ok
+commit;
+
+# ---- an unpartitioned table: no fields ----
+
+statement ok
+drop table if exists my_datalake.default.scan_plan_partition_values_unpartitioned;
+
+statement ok
+create table my_datalake.default.scan_plan_partition_values_unpartitioned(id integer);
+
+statement ok
+insert into my_datalake.default.scan_plan_partition_values_unpartitioned values (1);
+
+statement ok
+begin;
+
+query II
+select typeof(partition_values), partition_values::varchar
+from iceberg_scan_plan('my_datalake.default.scan_plan_partition_values_unpartitioned');
+----
+STRUCT	{}
+
+statement ok
+commit;

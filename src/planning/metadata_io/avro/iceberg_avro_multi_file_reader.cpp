@@ -505,9 +505,10 @@ ReaderInitializeType IcebergAvroMultiFileReader::InitializeReader(
 				auto manifest_path = manifest_list_entry.GetFile().manifest_path.empty()
 				                         ? reader_data.reader->GetFileName()
 				                         : manifest_list_entry.GetFile().manifest_path;
-				manifest_list_entry.manifest_metadata.emplace(IcebergManifestMetadata::FromAvroMetadata(
-				    reader_data.reader->GetMetadata(), manifest_path, avro_scan_info.metadata,
-				    manifest_list_entry.GetFile().partition_spec_id));
+				manifest_scan_info.SetManifestMetadata(file_idx, IcebergManifestMetadata::FromAvroMetadata(
+				                                                     reader_data.reader->GetMetadata(), manifest_path,
+				                                                     avro_scan_info.metadata,
+				                                                     manifest_list_entry.GetFile().partition_spec_id));
 			}
 			manifest_list_entry.manifest_header = reader_data.reader->GetMetadata();
 			auto &header = *manifest_list_entry.manifest_metadata;

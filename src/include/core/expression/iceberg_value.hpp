@@ -84,7 +84,7 @@ public:
 
 public:
 	//! Convert a decoded manifest partition value to its source column type.
-	static Value TransformPartitionValue(const Value &value, const LogicalType &type);
+	static Value TransformPartitionValue(ClientContext &context, const Value &value, const LogicalType &type);
 	//! All NaN encodings identify the same Iceberg partition.
 	static Value NormalizePartitionNaN(Value value);
 	//! Pass 'bound' when deserializing a lower/upper bound: invalid UTF-8 string bounds are then repaired
