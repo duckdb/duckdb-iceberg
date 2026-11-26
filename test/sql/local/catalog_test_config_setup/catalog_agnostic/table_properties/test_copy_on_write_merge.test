@@ -187,6 +187,20 @@ SELECT id, v FROM my_datalake.default.cow_merge WHERE id = 3;
 ----
 3	y
 
+# RETURNING reports DuckDB's own error rather than asking for merge-on-read
+
+statement error
+MERGE INTO my_datalake.default.cow_merge AS t USING (VALUES (3, 'p')) AS s(id, v) ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET v = s.v
+RETURNING *;
+----
+<REGEX>:.*RETURNING clause not yet supported for MERGE INTO.*
+
+query II
+SELECT id, v FROM my_datalake.default.cow_merge WHERE id = 3;
+----
+3	y
+
 # rows removed earlier by merge-on-read delete files stay removed when their file is rewritten
 
 statement ok
