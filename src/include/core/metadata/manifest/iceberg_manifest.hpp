@@ -86,7 +86,8 @@ public:
 	// like source column id, source type, transform, and partition value.
 	// Resolve source types in target_schema, falling back to historical schemas for dropped columns.
 	const vector<IcebergExtendedPartitionInfo> GetExtendedPartitionInfo(const IcebergTableMetadata &metadata,
-	                                                                    const IcebergTableSchema &target_schema) const;
+	                                                                    const IcebergTableSchema &target_schema,
+	                                                                    const IcebergPartitionSpec &spec) const;
 
 public:
 	void SetFirstRowId(optional<int64_t> first_row_id);

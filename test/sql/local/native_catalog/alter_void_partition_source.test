@@ -1,0 +1,142 @@
+# name: test/sql/local/native_catalog/alter_void_partition_source.test
+# description: A void partition field does not prevent dropping its source
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+# Model an upgraded table that retained both versions of a v1 partition spec.
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables',
+	'{"name":"void_source","schema":{"type":"struct","schema-id":0,"fields":[
+		{"id":1,"name":"id","required":false,"type":"long"},
+		{"id":2,"name":"s","required":false,"type":{"type":"struct","fields":[
+			{"id":3,"name":"old_key","required":false,"type":"string"}]}}]},
+	  "partition-spec":{"spec-id":0,"fields":[
+		{"source-id":3,"field-id":1000,"name":"old_bucket","transform":"bucket[4]"},
+		{"source-id":1,"field-id":1001,"name":"id","transform":"identity"}]}}');
+----
+200
+
+statement ok
+INSERT INTO my_datalake.default.void_source VALUES (17, {'old_key': 'original'});
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/void_source',
+	'{"requirements":[],"updates":[
+		{"action":"add-spec","spec":{"spec-id":1,"fields":[
+			{"source-id":3,"field-id":1000,"name":"retired","transform":"void"},
+			{"source-id":1,"field-id":1001,"name":"id","transform":"identity"}]}},
+		{"action":"set-default-spec","spec-id":1}]}');
+----
+200
+
+statement error
+ALTER TABLE my_datalake.default.void_source DROP COLUMN id;
+----
+referenced by the current partition spec's field: 'id'
+
+statement ok
+ALTER TABLE my_datalake.default.void_source DROP COLUMN s;
+
+statement ok
+INSERT INTO my_datalake.default.void_source VALUES (42);
+
+query I
+SELECT * FROM my_datalake.default.void_source ORDER BY id;
+----
+17
+42
+
+query TTI
+SELECT name, transform, source_id FROM iceberg_partition_specs(my_datalake.default.void_source)
+WHERE is_default ORDER BY field_id;
+----
+retired	void	3
+id	identity	1
+
+# The manifest keeps the retired field's position and writes a null for it.
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE void_manifest = (SELECT manifest_path FROM iceberg_metadata(my_datalake.default.void_source)
+                             WHERE manifest_sequence_number = 2);
+
+query TIII
+SELECT json_keys(to_json(data_file.partition)), typeof(data_file.partition.retired) IN ('VARCHAR', 'INTEGER'),
+       data_file.partition.retired, data_file.partition.id
+FROM read_avro(getvariable('void_manifest'));
+----
+[retired, id]	true	NULL	42
+
+statement ok
+COMMIT;
+
+# A void-only spec can outlive the last schema that contained its source.
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables',
+	'{"name":"void_only","schema":{"type":"struct","schema-id":0,"fields":[
+		{"id":2,"name":"id","required":false,"type":"long"},
+		{"id":3,"name":"spare","required":false,"type":"int"}]},
+	  "partition-spec":{"spec-id":0,"fields":[
+		{"source-id":1,"field-id":1000,"name":"retired","transform":"void"}]}}');
+----
+200
+
+# The mock publishes v2. Supply a legacy v1 LoadTable response to the writer that stages the drop.
+statement ok
+SET VARIABLE legacy = (
+	SELECT json_merge_patch(body::JSON, json_object('metadata', json_object(
+		'format-version', 1, 'schema', json_extract(body, '$.metadata.schemas[0]'),
+		'partition-spec', json_extract(body, '$.metadata."partition-specs"[0].fields'),
+		'default-sort-order-id', NULL, 'sort-orders', NULL)))
+	FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/void_only', NULL)
+);
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response',
+	json_object('method','GET','path','/v1/namespaces/default/tables/void_only','status',200,'body',getvariable('legacy')));
+----
+204
+
+statement ok writer
+BEGIN;
+
+query II writer
+SELECT metadata."format-version", metadata."default-sort-order-id" IS NULL
+FROM iceberg_load_table_response(my_datalake.default.void_only);
+----
+1	true
+
+statement ok writer
+ALTER TABLE my_datalake.default.void_only DROP COLUMN spare;
+
+query I
+SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL);
+----
+204
+
+# The writer's implicit unsorted order matches the catalog's default order 0.
+statement ok writer
+COMMIT;
+
+statement ok
+INSERT INTO my_datalake.default.void_only VALUES (7);
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE void_manifest = (SELECT manifest_path FROM iceberg_metadata(my_datalake.default.void_only));
+
+query TI
+SELECT typeof(data_file.partition.retired), data_file.partition.retired FROM read_avro(getvariable('void_manifest'));
+----
+INTEGER	NULL
+
+statement ok
+COMMIT;

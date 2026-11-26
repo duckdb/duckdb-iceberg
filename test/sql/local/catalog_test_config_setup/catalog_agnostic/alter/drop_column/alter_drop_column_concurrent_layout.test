@@ -1,0 +1,64 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/drop_column/alter_drop_column_concurrent_layout.test
+# description: A staged drop conflicts if another writer starts partitioning or sorting by the field
+# group: [drop_column]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+foreach layout PARTITIONED SORTED
+
+foreach dropped s s.a
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.drop_layout_conflict;
+
+statement ok
+CREATE TABLE my_datalake.default.drop_layout_conflict (id INTEGER, s STRUCT(a INTEGER, b INTEGER));
+
+statement ok writer
+BEGIN;
+
+statement ok writer
+ALTER TABLE my_datalake.default.drop_layout_conflict DROP COLUMN {dropped};
+
+statement ok
+ALTER TABLE my_datalake.default.drop_layout_conflict SET {layout} BY (s.a);
+
+statement error writer
+COMMIT;
+----
+Conflict_409
+
+statement ok
+INSERT INTO my_datalake.default.drop_layout_conflict VALUES (1, {'a': 2, 'b': 3});
+
+query III fresh
+SELECT id, s.a, s.b FROM my_datalake.default.drop_layout_conflict;
+----
+1	2	3
+
+# A single transaction can retire a layout and then drop its source.
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE my_datalake.default.drop_layout_conflict SET {layout} BY (id);
+
+statement ok
+ALTER TABLE my_datalake.default.drop_layout_conflict DROP COLUMN s;
+
+statement ok
+COMMIT;
+
+query I fresh
+SELECT * FROM my_datalake.default.drop_layout_conflict;
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.drop_layout_conflict;
+
+endloop
+
+endloop

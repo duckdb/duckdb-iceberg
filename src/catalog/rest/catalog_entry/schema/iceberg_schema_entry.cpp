@@ -591,6 +591,10 @@ static void VerifyReferencedFieldsKept(const IcebergTableMetadata &table_metadat
 	};
 
 	for (auto &partition_field : table_metadata.GetLatestPartitionSpec().GetFields()) {
+		// V1 partition evolution leaves a void field behind when a partition key is removed.
+		if (partition_field.transform.Type() == IcebergTransformType::VOID_TRANSFORM) {
+			continue;
+		}
 		verify_not_dropped(GetFieldPath(old_schema, partition_field.source_id),
 		                   StringUtil::Format("referenced by the current partition spec's field: '%s' (field id: %d)",
 		                                      partition_field.GetPartitionSpecFieldName(),
@@ -872,6 +876,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		}
 
 		IntroduceNewSchema(context, updated_table, transaction_data, new_schema);
+		transaction_data.drops_field = true;
 
 		return;
 	}
@@ -1221,6 +1226,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		}
 		parent.RemoveChild(child->name);
 		IntroduceNewSchema(context, updated_table, transaction_data, new_schema);
+		transaction_data.drops_field = true;
 		return;
 	}
 	default: {
@@ -1253,9 +1259,6 @@ pair<int32_t, int32_t> IcebergSchemaEntry::MoveColumn(ClientContext &context, Ic
 	auto current_schema_id = previous_schema_id;
 	ApplyTableUpdate(guard, table.table_info, irc_transaction, [&](IcebergTable &updated_table) {
 		auto &transaction_data = updated_table.GetOrCreateTransactionData(irc_transaction);
-		//! A move that restores an earlier order only sets the current schema, so the commit has to assert the schema
-		//! it replaces: otherwise it would undo a schema change another writer committed in the meantime
-		transaction_data.TableAddAssertCurrentSchemaId();
 		IntroduceNewSchema(context, updated_table, transaction_data, new_schema);
 		current_schema_id = updated_table.GetMetadata().GetCurrentSchemaId();
 	});

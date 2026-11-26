@@ -150,3 +150,46 @@ FROM (SELECT unnest(from_json(getvariable('current_schema')->'fields'->2->'type'
 ----
 key	5	true
 req	7	false
+
+# Returning to an existing nullable schema must still check for a concurrent identifier change.
+statement ok
+CREATE TABLE my_datalake.default.identifier_conflict (id INTEGER NOT NULL);
+
+statement ok
+ALTER TABLE my_datalake.default.identifier_conflict ALTER COLUMN id DROP NOT NULL;
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/identifier_conflict',
+	'{"requirements":[],"updates":[{"action":"set-current-schema","schema-id":0}]}');
+----
+200
+
+statement ok writer
+BEGIN;
+
+query I writer
+SELECT metadata."current-schema-id" FROM iceberg_load_table_response(my_datalake.default.identifier_conflict);
+----
+0
+
+statement ok writer
+ALTER TABLE my_datalake.default.identifier_conflict ALTER COLUMN id DROP NOT NULL;
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/identifier_conflict',
+	'{"requirements":[],"updates":[
+		{"action":"add-schema","schema":{"schema-id":2,"type":"struct","identifier-field-ids":[1],
+			"fields":[{"id":1,"name":"id","required":true,"type":"int"}]}},
+		{"action":"set-current-schema","schema-id":2}]}');
+----
+200
+
+statement error writer
+COMMIT;
+----
+assert-current-schema-id
+
+statement error fresh
+ALTER TABLE my_datalake.default.identifier_conflict ALTER COLUMN id DROP NOT NULL;
+----
+Can't drop NOT NULL on column 'id' as it is an identifier field
