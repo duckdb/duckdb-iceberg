@@ -2370,6 +2370,15 @@ TEST_CASE("Iceberg strict floating file bounds account for NaNs and missing metr
 		file.record_count = 2;
 		file.value_counts[field_id] = 2;
 		file.null_value_counts[field_id] = 0;
+		IcebergTableFilters not_null_filters;
+		not_null_filters.PushFilter(
+		    ColumnIndex(0),
+		    make_uniq<ExpressionFilter>(ExpressionFilter::CreateNullCheckExpression(
+		        make_uniq<BoundReferenceExpression>(type, 0ULL), ExpressionType::OPERATOR_IS_NOT_NULL)));
+		IcebergFilePruner not_null_pruner(*test.connection.context, metadata, schema, not_null_filters);
+		CHECK(not_null_pruner.FileMatchesFilter(manifest, entry) == Match::ROWS_MIGHT_MATCH);
+		CHECK(not_null_pruner.FileMatchesFilter(manifest, entry, true) == Match::ROWS_MUST_MATCH);
+
 		auto zero = Value(0).DefaultCastAs(type);
 		auto one = Value(1).DefaultCastAs(type);
 		auto two = Value(2).DefaultCastAs(type);
@@ -2523,6 +2532,36 @@ TEST_CASE("Iceberg NOT IN uses only provable exclusions", "[iceberg_metrics]") {
 	mixed.has_null = true;
 	CheckMetrics(context, negate(ExpressionFilter::CreateNullCheckExpression(ref(), ExpressionType::OPERATOR_IS_NULL)),
 	             mixed, Match::ROWS_MIGHT_MATCH);
+}
+
+TEST_CASE("Iceberg ignores an unreadable partition bound and still uses other pruning evidence", "[iceberg_metrics]") {
+	using Match = IcebergMetricsMatch;
+	PlanningTest test;
+	Query(test.connection, "CREATE TABLE lake.default.t (x INTEGER, y INTEGER) PARTITIONED BY (x, y)");
+	auto bound = test.Bind();
+	auto &base = bound->Cast<MultiFileBindData>().file_list->Cast<IcebergMultiFileList>().GetScanPlanner();
+	auto &metadata = base.GetMetadata();
+	auto &spec = metadata.GetLatestPartitionSpec();
+	auto schema = LogicalType::STRUCT({{"x", LogicalType::INTEGER}, {"y", LogicalType::INTEGER}});
+	auto filters = Filters(*test.connection.context, schema, "x = 42 AND y = 7");
+	IcebergFilePruner pruner(*test.connection.context, metadata, base.GetSchema(), filters);
+	IcebergManifest manifest(spec.spec_id, IcebergManifestContentType::DATA, 1);
+	auto entry = MetricsEntry();
+	auto &file = entry.data_file;
+	file.partition_info = {{spec.fields[0].partition_field_id, Value("not an integer")},
+	                       {spec.fields[1].partition_field_id, Value(7)}};
+
+	// With no usable evidence for x, the file can neither be skipped nor guaranteed to match.
+	CHECK(pruner.FileMatchesFilter(manifest, entry) == Match::ROWS_MIGHT_MATCH);
+	CHECK(pruner.FileMatchesFilter(manifest, entry, true) == Match::ROWS_MIGHT_MATCH);
+
+	file.partition_info[1].value = Value(8);
+	CHECK(pruner.FileMatchesFilter(manifest, entry) == Match::ROWS_CANNOT_MATCH);
+	file.partition_info[1].value = Value(7);
+	SetIntegerMetrics(file, spec.fields[0].source_id, 43, 43);
+	CHECK(pruner.FileMatchesFilter(manifest, entry) == Match::ROWS_CANNOT_MATCH);
+	SetIntegerMetrics(file, spec.fields[0].source_id, 42, 42);
+	CHECK(pruner.FileMatchesFilter(manifest, entry, true) == Match::ROWS_MUST_MATCH);
 }
 
 TEST_CASE("Iceberg strict floating identity partitions need no file metrics", "[iceberg_metrics]") {
