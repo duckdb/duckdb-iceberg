@@ -45,9 +45,18 @@ public:
 	                               optional_ptr<IcebergEqualityDeleteBounds> delete_bounds) const;
 	//! Built once per data file: every delete file considered for it is matched against the same values.
 	static partition_value_map_t PartitionValueMap(const IcebergDataFile &data_file);
+	//! Whether any row of a data file of partition spec `spec_id`, whose partition tuple is `partition_info`, can pass
+	//! the filters, judged by its partition values alone: the first test of FileMatchesFilter, for a file known only
+	//! by its tuple (a scan task's partition_values). No NaN counts: an identity value is exact, and no other
+	//! transform applies to a floating-point column.
+	bool PartitionMatchesFilter(int32_t spec_id, const vector<IcebergPartitionInfo> &partition_info,
+	                            const string &file_path) const;
 
 private:
 	bool FilePartitionMatchesFilter(const IcebergDataFile &data_file, const IcebergManifest &manifest_file,
+	                                bool evaluate_strict, vector<ColumnIndex> &covered_columns) const;
+	bool PartitionValuesMatchFilter(int32_t spec_id, const vector<IcebergPartitionInfo> &partition_info,
+	                                const unordered_map<int32_t, int64_t> &nan_value_counts, const string &file_path,
 	                                bool evaluate_strict, vector<ColumnIndex> &covered_columns) const;
 	void InitializeEqualityDeleteBounds(const IcebergDataFile &delete_file, IcebergEqualityDeleteBounds &bounds) const;
 	bool EqualityDeleteMatchesDataFile(const IcebergDataFile &delete_file, const IcebergDataFile &data_file,

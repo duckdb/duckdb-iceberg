@@ -208,10 +208,10 @@ string IcebergManifestEntryStatusTypeToString(IcebergManifestEntryStatusType typ
 	}
 }
 
-static optional<LogicalType> GetPartitionSourceType(const IcebergPartitionSpecField &field,
+static optional<LogicalType> GetPartitionSourceType(ClientContext &context, const IcebergPartitionSpecField &field,
                                                     const IcebergTableSchema &schema,
                                                     const IcebergTableMetadata &metadata) {
-	auto source_type = IcebergPartitionConstants::GetType(field.source_id, schema, metadata.GetSchemas());
+	auto source_type = IcebergPartitionConstants::GetType(context, field.source_id, schema, metadata.GetSchemas());
 	if (source_type) {
 		return *source_type;
 	}
@@ -222,35 +222,19 @@ static optional<LogicalType> GetPartitionSourceType(const IcebergPartitionSpecFi
 	return std::nullopt;
 }
 
-map<idx_t, LogicalType> IcebergDataFile::GetFieldIdToTypeMapping(const IcebergSnapshotScanInfo &snapshot_info,
+map<idx_t, LogicalType> IcebergDataFile::GetFieldIdToTypeMapping(ClientContext &context,
+                                                                 const IcebergSnapshotScanInfo &snapshot_info,
                                                                  const IcebergTableMetadata &metadata,
-                                                                 const unordered_set<int32_t> &partition_spec_ids) {
-	D_ASSERT(!partition_spec_ids.empty());
+                                                                 const IcebergPartitionSpec &spec) {
 	auto &schema = metadata.GetSchemaFromId(snapshot_info.schema_id);
 
 	map<idx_t, LogicalType> partition_field_id_to_type;
-	map<idx_t, LogicalType> void_field_types;
-	for (auto &spec_id : partition_spec_ids) {
-		auto partition_spec = metadata.FindPartitionSpecById(spec_id);
-		if (!partition_spec) {
-			throw InvalidConfigurationException("Manifest refers to partition spec %d, which is not in the table's "
-			                                    "partition-specs",
-			                                    spec_id);
-		}
-		auto &fields = partition_spec->GetFields();
-
-		for (auto &field : fields) {
-			auto type = GetPartitionSourceType(field, schema, metadata);
-			if (!type) {
-				continue;
-			}
-			auto &types = field.transform.Type() == IcebergTransformType::VOID_TRANSFORM ? void_field_types
-			                                                                             : partition_field_id_to_type;
-			types.emplace(field.partition_field_id, field.transform.GetBoundsType(*type));
+	for (auto &field : spec.GetFields()) {
+		auto type = GetPartitionSourceType(context, field, schema, metadata);
+		if (type) {
+			partition_field_id_to_type.emplace(field.partition_field_id, field.transform.GetBoundsType(*type));
 		}
 	}
-	// When reading both specs, only the old transform can contribute non-null values for that field id.
-	partition_field_id_to_type.insert(void_field_types.begin(), void_field_types.end());
 	return partition_field_id_to_type;
 }
 
@@ -267,14 +251,15 @@ LogicalType IcebergDataFile::PartitionStructType(const map<idx_t, LogicalType> &
 }
 
 const vector<IcebergExtendedPartitionInfo>
-IcebergDataFile::GetExtendedPartitionInfo(const IcebergTableMetadata &metadata, const IcebergTableSchema &target_schema,
+IcebergDataFile::GetExtendedPartitionInfo(ClientContext &context, const IcebergTableMetadata &metadata,
+                                          const IcebergTableSchema &target_schema,
                                           const IcebergPartitionSpec &spec) const {
 	// The manifest's spec defines the tuple. In v1 an evolved field can retain its ID and become void.
 	vector<IcebergExtendedPartitionInfo> ret;
 	ret.reserve(spec.fields.size());
 	unordered_map<uint64_t, idx_t> position_by_field_id;
 	for (auto &field : spec.fields) {
-		auto source_type = GetPartitionSourceType(field, target_schema, metadata);
+		auto source_type = GetPartitionSourceType(context, field, target_schema, metadata);
 		if (!source_type) {
 			throw InvalidConfigurationException(
 			    "Partition %s with field_id %llu in data_file %s with source_id %llu not found in any table schema",
@@ -719,7 +704,7 @@ idx_t WriteToFile(const IcebergTableMetadata &table_metadata, const IcebergManif
 	auto &data_file = first_entry.data_file;
 
 	auto &spec = table_metadata.GetPartitionSpecs().at(entry_metadata.partition_spec_id);
-	auto extended_partition_info = data_file.GetExtendedPartitionInfo(table_metadata, target_schema, spec);
+	auto extended_partition_info = data_file.GetExtendedPartitionInfo(context, table_metadata, target_schema, spec);
 	child_list_t<Value> partition;
 	// partition: struct(...)
 	children.emplace_back("partition", PartitionStructType(extended_partition_info));

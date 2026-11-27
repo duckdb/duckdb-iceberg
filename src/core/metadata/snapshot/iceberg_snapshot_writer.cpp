@@ -57,8 +57,8 @@ IcebergManifestListEntry IcebergSnapshotWriter::WriteManifestFile(const IcebergM
 		throw InternalException("Cannot write an empty Iceberg manifest");
 	}
 	auto metadata = GetWriteMetadata(source_metadata);
-	auto manifest =
-	    IcebergManifest::CreateFromEntries(*snapshot.sequence_number, table_metadata, metadata, entries, first_row_id);
+	auto manifest = IcebergManifest::CreateFromEntries(context, *snapshot.sequence_number, table_metadata, metadata,
+	                                                   entries, first_row_id);
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto path =
 	    fs.JoinPath(table_metadata.GetMetadataPath(fs), UUID::ToString(UUID::GenerateRandomUUID()) + "-m0.avro");
