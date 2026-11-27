@@ -403,6 +403,16 @@ BuildManifestSchema(const IcebergSnapshot &snapshot, const IcebergTableMetadata 
 	return schema;
 }
 
+static vector<MultiFileColumnDefinition> BuildManifestFilePathSchema() {
+	MultiFileColumnDefinition status("status", LogicalType::INTEGER);
+	status.identifier = Value::INTEGER(STATUS);
+	MultiFileColumnDefinition data_file("data_file", LogicalType::STRUCT({{"file_path", LogicalType::VARCHAR}}));
+	data_file.identifier = Value::INTEGER(DATA_FILE);
+	data_file.children.emplace_back("file_path", LogicalType::VARCHAR);
+	data_file.children.back().identifier = Value::INTEGER(FILE_PATH);
+	return {std::move(status), std::move(data_file)};
+}
+
 } // namespace manifest_file
 
 bool IcebergAvroMultiFileReader::Bind(MultiFileOptions &options, MultiFileList &files,
@@ -414,7 +424,6 @@ bool IcebergAvroMultiFileReader::Bind(MultiFileOptions &options, MultiFileList &
 	auto &scan_info = *iceberg_avro_list.info;
 	auto &type = scan_info.type;
 	auto &metadata = scan_info.metadata;
-	auto &snapshot = *scan_info.snapshot_info.snapshot;
 
 	// Build the expected schema with field IDs
 	vector<MultiFileColumnDefinition> schema;
@@ -422,8 +431,12 @@ bool IcebergAvroMultiFileReader::Bind(MultiFileOptions &options, MultiFileList &
 		schema = manifest_list::BuildManifestListSchema(metadata);
 	} else {
 		auto &manifest_file_scan = scan_info.Cast<IcebergManifestFileScanInfo>();
-		auto &partition_field_id_to_type = manifest_file_scan.partition_field_id_to_type;
-		schema = manifest_file::BuildManifestSchema(snapshot, metadata, partition_field_id_to_type);
+		if (manifest_file_scan.project_file_paths) {
+			schema = manifest_file::BuildManifestFilePathSchema();
+		} else {
+			schema = manifest_file::BuildManifestSchema(*scan_info.snapshot_info.snapshot, metadata,
+			                                            manifest_file_scan.partition_field_id_to_type);
+		}
 	}
 
 	// Populate return_types and names from schema
@@ -510,7 +523,6 @@ ReaderInitializeType IcebergAvroMultiFileReader::InitializeReader(
 				                                                     avro_scan_info.metadata,
 				                                                     manifest_list_entry.GetFile().partition_spec_id));
 			}
-			manifest_list_entry.manifest_header = reader_data.reader->GetMetadata();
 			auto &header = *manifest_list_entry.manifest_metadata;
 			auto &descriptor = manifest_list_entry.GetFile();
 			if (header.content != descriptor.content ||
@@ -519,6 +531,10 @@ ReaderInitializeType IcebergAvroMultiFileReader::InitializeReader(
 				    "Manifest file '%s' header does not match its manifest-list descriptor", descriptor.manifest_path);
 			}
 			manifest_scan_info.manifest_parses++;
+			if (manifest_scan_info.project_file_paths) {
+				return result;
+			}
+			manifest_list_entry.manifest_header = reader_data.reader->GetMetadata();
 		}
 		for (auto &partition_spec : avro_scan_info.metadata.partition_specs) {
 			for (auto &spec_field : partition_spec.second.fields) {

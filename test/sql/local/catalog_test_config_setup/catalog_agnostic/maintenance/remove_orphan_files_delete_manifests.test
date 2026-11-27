@@ -1,0 +1,85 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/remove_orphan_files_delete_manifests.test
+# description: Cleanup retains delete manifests and files from snapshots off the main branch
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FILE_CLEANUP_SUPPORT true
+
+require-env METADATA_FILE_READ_SUPPORT true
+
+require-env FORMAT_V3_SUPPORT true
+
+require-env TIMETRAVEL_SUPPORT true
+
+include test/sql/init_requires
+
+statement ok
+CREATE MACRO cleanup_path(p) AS replace(p, chr(92), '/');
+
+loop v 2 4
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.orphan_delete_files;
+
+statement ok
+CREATE TABLE my_datalake.default.orphan_delete_files (id INT)
+WITH ('format-version' = '{v}', 'write.delete.mode' = 'merge-on-read');
+
+statement ok
+INSERT INTO my_datalake.default.orphan_delete_files VALUES (1), (2);
+
+statement ok
+SET VARIABLE before_delete = (SELECT snapshot_id FROM iceberg_snapshots(my_datalake.default.orphan_delete_files));
+
+statement ok
+DELETE FROM my_datalake.default.orphan_delete_files WHERE id = 1;
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE after_delete = (SELECT max_by(snapshot_id, sequence_number) FROM iceberg_snapshots(my_datalake.default.orphan_delete_files));
+
+# V2 uses a position-delete Parquet file and V3 stores the deletion vector in Puffin.
+statement ok
+SET VARIABLE delete_files = (
+	SELECT {'manifest': cleanup_path(manifest_path), 'file': cleanup_path(file_path)}
+	FROM iceberg_metadata(my_datalake.default.orphan_delete_files)
+	WHERE content = 'POSITION_DELETES' AND file_format = IF({v} = 2, 'parquet', 'puffin')
+);
+
+statement ok
+SET VARIABLE orphan = parse_dirpath(getvariable('delete_files').file) || '/untracked.parquet';
+
+statement ok
+COPY (SELECT 9 AS id) TO (getvariable('orphan')) (FORMAT PARQUET);
+
+statement ok
+COMMIT;
+
+statement ok
+FROM iceberg_rollback_to_snapshot('my_datalake.default.orphan_delete_files', getvariable('before_delete'));
+
+query TIIII
+SELECT error_code, list_contains(paths, cleanup_path(getvariable('orphan'))),
+	list_contains(paths, getvariable('delete_files').manifest), list_contains(paths, getvariable('delete_files').file),
+	deleted_file_count
+FROM (
+	SELECT error_code, list_transform(orphan_file_locations, lambda p: cleanup_path(p)) AS paths, deleted_file_count
+	FROM iceberg_remove_orphan_files('my_datalake.default.orphan_delete_files', dry_run => true,
+		older_than => TIMESTAMP '2999-01-01')
+);
+----
+SUCCESS	true	false	false	0
+
+query II
+SELECT (SELECT list(id ORDER BY id) FROM my_datalake.default.orphan_delete_files),
+	(SELECT list(id ORDER BY id) FROM my_datalake.default.orphan_delete_files AT (VERSION => getvariable('after_delete')));
+----
+[1, 2]	[2]
+
+statement ok
+DROP TABLE my_datalake.default.orphan_delete_files;
+
+endloop

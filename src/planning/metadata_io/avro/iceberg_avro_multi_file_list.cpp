@@ -18,12 +18,15 @@ IcebergManifestListScanInfo::IcebergManifestListScanInfo(const IcebergTableMetad
 IcebergManifestListScanInfo::~IcebergManifestListScanInfo() {
 }
 
-IcebergManifestFileScanInfo::IcebergManifestFileScanInfo(
-    ClientContext &context, const IcebergTableMetadata &metadata, const IcebergSnapshotScanInfo &snapshot_info,
-    vector<IcebergManifestListEntry> &manifest_files, const IcebergOptions &options, FileSystem &fs,
-    const string &iceberg_path, optional_ptr<ManifestEntryReadState> read_state, vector<idx_t> manifest_indexes_p)
+IcebergManifestFileScanInfo::IcebergManifestFileScanInfo(ClientContext &context, const IcebergTableMetadata &metadata,
+                                                         const IcebergSnapshotScanInfo &snapshot_info,
+                                                         vector<IcebergManifestListEntry> &manifest_files,
+                                                         const IcebergOptions &options, FileSystem &fs,
+                                                         const string &iceberg_path,
+                                                         optional_ptr<ManifestEntryReadState> read_state,
+                                                         vector<idx_t> manifest_indexes_p, bool project_file_paths)
     : IcebergAvroScanInfo(TYPE, metadata, snapshot_info), manifest_files(manifest_files), options(options), fs(fs),
-      iceberg_path(iceberg_path), read_state(read_state) {
+      iceberg_path(iceberg_path), project_file_paths(project_file_paths), read_state(read_state) {
 	if (manifest_indexes_p.empty()) {
 		manifest_indexes_p.reserve(manifest_files.size());
 		for (idx_t manifest_idx = 0; manifest_idx < manifest_files.size(); manifest_idx++) {
@@ -34,6 +37,9 @@ IcebergManifestFileScanInfo::IcebergManifestFileScanInfo(
 	manifest_locks.reserve(manifest_files.size());
 	for (idx_t manifest_idx = 0; manifest_idx < manifest_files.size(); manifest_idx++) {
 		manifest_locks.push_back(make_uniq<mutex>());
+	}
+	if (project_file_paths) {
+		return;
 	}
 	unordered_set<int32_t> partition_spec_ids;
 	for (auto manifest_idx : manifest_indexes) {

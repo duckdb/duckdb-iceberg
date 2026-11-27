@@ -147,8 +147,11 @@ bool IRCAPI::VerifyResponse(ClientContext &context, IcebergCatalog &catalog, IRC
 }
 
 bool IRCAPI::VerifySchemaExistence(ClientContext &context, IcebergCatalog &catalog, const string &schema) {
-	auto namespace_items = ParseSchemaName(schema);
+	return VerifySchemaExistence(context, catalog, ParseSchemaName(schema));
+}
 
+bool IRCAPI::VerifySchemaExistence(ClientContext &context, IcebergCatalog &catalog,
+                                   const vector<string> &namespace_items) {
 	auto url_builder = catalog.GetBaseUrl();
 	url_builder.AddPrefixComponents(catalog.prefix);
 	url_builder.AddPathComponent(IRCPathComponent::RegularComponent("namespaces"));

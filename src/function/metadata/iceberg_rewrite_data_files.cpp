@@ -16,9 +16,8 @@
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
-#include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
-#include "common/iceberg_utils.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
+#include "maintenance/maintenance_table_loader.hpp"
 #include "function/iceberg_functions.hpp"
 #include "maintenance/rewrite_data_files_operator.hpp"
 #include "maintenance/rewrite_data_files_planner.hpp"
@@ -28,19 +27,6 @@ namespace duckdb {
 namespace {
 
 constexpr int64_t MIN_TARGET_FILE_SIZE_BYTES = 100;
-
-static QualifiedName ParseRewriteTableName(ClientContext &context, string identifier) {
-	auto name = IcebergUtils::ParseTableName(identifier);
-	if (name.Path().size() == 3) {
-		return name;
-	}
-	//! The plan reloads the table by name when it runs, so keep the name it resolved to now
-	auto entry = IcebergUtils::GetTableEntry(context, identifier);
-	if (entry->Cast<InCatalogEntry>().catalog.GetCatalogType() != "iceberg") {
-		throw InvalidInputException("iceberg_rewrite_data_files: '%s' is not an Iceberg table", identifier);
-	}
-	return IcebergUtils::GetQualifiedTableName(*entry);
-}
 
 static int64_t ParseByteSizeNamedParameter(const Value &value, const char *parameter_name) {
 	if (value.type().id() == LogicalTypeId::VARCHAR) {
@@ -59,7 +45,8 @@ static int64_t ParseByteSizeNamedParameter(const Value &value, const char *param
 
 static RewriteDataFilesPlanInput ParseRewritePlanInput(ClientContext &context, TableFunctionBindInput &input) {
 	RewriteDataFilesPlanInput result;
-	result.table_name = ParseRewriteTableName(context, StringValue::Get(input.inputs[0]));
+	result.table_name =
+	    ResolveMaintenanceTableName(context, StringValue::Get(input.inputs[0]), "iceberg_rewrite_data_files");
 
 	for (auto &kv : input.named_parameters) {
 		auto opt = StringUtil::Lower(kv.first.GetIdentifierName());

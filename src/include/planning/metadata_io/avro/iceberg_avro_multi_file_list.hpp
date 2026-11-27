@@ -76,7 +76,8 @@ public:
 	                            const IcebergSnapshotScanInfo &snapshot_info,
 	                            vector<IcebergManifestListEntry> &manifest_files, const IcebergOptions &options,
 	                            FileSystem &fs, const string &iceberg_pat,
-	                            optional_ptr<ManifestEntryReadState> read_state, vector<idx_t> manifest_indexes);
+	                            optional_ptr<ManifestEntryReadState> read_state, vector<idx_t> manifest_indexes,
+	                            bool project_file_paths = false);
 	virtual ~IcebergManifestFileScanInfo();
 
 	idx_t GetManifestIndex(idx_t scan_index) const;
@@ -103,6 +104,7 @@ public:
 	const IcebergOptions &options;
 	FileSystem &fs;
 	string iceberg_path;
+	const bool project_file_paths;
 	//! partition_field_id -> semantic column type (e.g. INTEGER for DAY)
 	map<idx_t, LogicalType> partition_field_id_to_type;
 	//! Resolve a mixed-type field ID against the spec of the manifest that supplied its value.

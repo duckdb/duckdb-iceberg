@@ -9,6 +9,8 @@ namespace duckdb {
 class IcebergCatalog;
 struct IcebergTable;
 
+QualifiedName ResolveMaintenanceTableName(ClientContext &context, const string &identifier, const char *function_name);
+
 IcebergCatalog &GetMaintenanceIcebergCatalog(ClientContext &context, const QualifiedName &table_name,
                                              const string &function_name);
 

@@ -2,6 +2,8 @@
 
 #include "planning/metadata_io/base_manifest_reader.hpp"
 
+#include <functional>
+
 namespace duckdb {
 
 namespace manifest_file {
@@ -13,6 +15,9 @@ public:
 
 public:
 	void Read();
+	static void ReadPaths(vector<IcebergManifestListEntry> &manifest_files, const IcebergTableMetadata &metadata,
+	                      ClientContext &context, const IcebergFileSecret &file_secret,
+	                      const std::function<void(const string &)> &visit_path);
 
 private:
 	void ReadChunk(const IcebergManifestFileScanInfo &scan_info, const IcebergManifestMetadata &manifest,

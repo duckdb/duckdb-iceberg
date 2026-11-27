@@ -81,6 +81,49 @@ static T ReadRequiredField(const char *name, const ENTRY &entry) {
 	return entry.GetValueUnsafe();
 }
 
+static IcebergManifestEntryStatusType ReadEntryStatus(const Int32Entries::ValueEntry &entry) {
+	auto status = ReadRequiredField<int32_t>("status", entry);
+	if (status < 0 || status > static_cast<int32_t>(IcebergManifestEntryStatusType::DELETED)) {
+		throw InvalidConfigurationException("Invalid manifest entry status: %d", status);
+	}
+	return static_cast<IcebergManifestEntryStatusType>(status);
+}
+
+void ManifestReader::ReadPaths(vector<IcebergManifestListEntry> &manifest_files, const IcebergTableMetadata &metadata,
+                               ClientContext &context, const IcebergFileSecret &file_secret,
+                               const std::function<void(const string &)> &visit_path) {
+	const IcebergSnapshotScanInfo snapshot_info {nullptr, metadata.GetCurrentSchemaId()};
+	const IcebergOptions options;
+	auto scan_info = make_shared_ptr<IcebergManifestFileScanInfo>(
+	    context, metadata, snapshot_info, manifest_files, options, FileSystem::GetFileSystem(context),
+	    metadata.GetLocation(), nullptr, vector<idx_t> {}, true);
+	scan_info->file_secret = file_secret;
+	AvroScan scan("placeholder", context, std::move(scan_info));
+	ManifestReader reader(scan);
+	while (true) {
+		reader.ScanInternal();
+		if (reader.Finished()) {
+			return;
+		}
+		auto statuses = reader.chunk.data[0].Values<int32_t>();
+		auto files = reader.chunk.data[1].Values<VectorStructType<string_t>>();
+		for (idx_t row = 0; row < reader.chunk.size(); row++) {
+			auto status = ReadEntryStatus(statuses[row]);
+			auto file = files[row];
+			if (!file.IsValid()) {
+				throw InvalidConfigurationException("required field 'data_file' is NULL!");
+			}
+			auto path = ReadRequiredField<string_t>("file_path", file.GetChildValue<0>());
+			if (path.GetSize() == 0) {
+				throw InvalidConfigurationException("data_file field 'file_path' cannot be empty");
+			}
+			if (status != IcebergManifestEntryStatusType::DELETED) {
+				visit_path(path.GetString());
+			}
+		}
+	}
+}
+
 static int64_t ReadNonNegativeField(const char *name, const Int64Entries::ValueEntry &entry) {
 	auto value = ReadRequiredField<int64_t>(name, entry);
 	if (value < 0) {
@@ -300,11 +343,7 @@ void ManifestReader::ReadChunk(const IcebergManifestFileScanInfo &scan_info, con
 	for (idx_t i = 0; i < count; i++) {
 		IcebergManifestEntry entry;
 
-		auto status_value = ReadRequiredField<int32_t>("status", status_entries[i]);
-		if (status_value < 0 || status_value > 2) {
-			throw InvalidConfigurationException("Invalid manifest entry status: %d", status_value);
-		}
-		entry.status = static_cast<IcebergManifestEntryStatusType>(status_value);
+		entry.status = ReadEntryStatus(status_entries[i]);
 
 		auto &data_file = entry.data_file;
 		data_file.file_path = ReadRequiredField<string_t>("file_path", file_path_entries[i]).GetString();

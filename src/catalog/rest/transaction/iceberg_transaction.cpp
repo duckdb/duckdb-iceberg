@@ -62,6 +62,10 @@ const IcebergTable &IcebergTransactionTableState::GetInfo() const {
 	return const_cast<IcebergTransactionTableState &>(*this).GetInfo();
 }
 
+bool IcebergTransactionTableState::IsUnmodifiedCatalogTable() const {
+	return IsAlive() && catalog_table && !GetInfo().HasTransactionUpdates();
+}
+
 IcebergTable &IcebergTransactionTableState::GetOrCreateTransactionInfo(IcebergTransaction &transaction) {
 	if (transaction_table) {
 		return *transaction_table;
