@@ -14,6 +14,7 @@
 #include "catalog/rest/api/table_update.hpp"
 #include "catalog/rest/api/iceberg_create_table_request.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_metadata.hpp"
+#include "maintenance/rewrite_manifests.hpp"
 
 namespace duckdb {
 
@@ -68,6 +69,8 @@ public:
 	void TableRollbackToSnapshot(int64_t snapshot_id);
 	//! Detach main without removing historical snapshots or enumerating their files.
 	void TableReplaceContents(IcebergTableMetadata &metadata);
+	//! Stage a manifest rewrite (Spark rewrite_manifests semantics); a no-op plan stages nothing.
+	RewriteManifestsResult AddRewriteManifests(const RewriteManifestsSpec &spec);
 
 private:
 	void CacheExistingManifestList(lock_guard<mutex> &guard, const IcebergTableMetadata &metadata);
@@ -126,6 +129,8 @@ public:
 	bool rolls_back = false;
 	//! Set explicitly by maintenance; its committed-table plan cannot be combined with later row changes.
 	bool has_maintenance_rewrite = false;
+	//! Whether iceberg_rewrite_manifests staged a manifest rewrite for this table.
+	bool has_manifest_rewrite = false;
 	//! A MERGE chose its actions against the snapshot it read, so its commit can't be re-applied to a newer one.
 	bool contains_merge = false;
 	mutable mutex lock;
