@@ -228,32 +228,46 @@ static idx_t EstimateTaskRows(const Value &task, const TaskCodec::InputLayout &l
 	if (count.IsNull() || BigIntValue::Get(count) < 0) {
 		return 0;
 	}
-	auto rows = UnsafeNumericCast<idx_t>(BigIntValue::Get(count));
+	const auto data_rows = UnsafeNumericCast<idx_t>(BigIntValue::Get(count));
 	auto &path = fields[layout.columns[TaskCodec::FILE_PATH]];
 	auto &deletes = fields[layout.columns[TaskCodec::DELETE_FILES]];
 	if (path.IsNull() || deletes.IsNull()) {
-		return rows;
+		return data_rows;
 	}
 	//! Fields of TaskCodec::DeleteFileType(), which BindInput requires the delete files to have exactly
+	constexpr idx_t FILE_PATH = 0;
+	constexpr idx_t FILE_FORMAT = 1;
 	constexpr idx_t CONTENT = 2;
 	constexpr idx_t RECORD_COUNT = 4;
 	constexpr idx_t REFERENCED_DATA_FILE = 6;
 	auto &file_path = StringValue::Get(path);
-	for (auto &delete_file : ListValue::GetChildren(deletes)) {
+	auto &delete_files = ListValue::GetChildren(deletes);
+	unordered_set<string> counted_position_files;
+	auto rows = data_rows;
+	for (auto &delete_file : delete_files) {
 		if (delete_file.IsNull()) {
 			continue;
 		}
 		auto &delete_fields = StructValue::GetChildren(delete_file);
+		auto &delete_path = delete_fields[FILE_PATH];
+		auto &format = delete_fields[FILE_FORMAT];
 		auto &content = delete_fields[CONTENT];
 		auto &delete_count = delete_fields[RECORD_COUNT];
 		auto &referenced = delete_fields[REFERENCED_DATA_FILE];
-		if (content.IsNull() ||
+		if (delete_path.IsNull() || format.IsNull() || content.IsNull() ||
 		    IntegerValue::Get(content) != static_cast<int32_t>(IcebergManifestEntryContentType::POSITION_DELETES) ||
 		    delete_count.IsNull() || BigIntValue::Get(delete_count) < 0 || referenced.IsNull() ||
 		    StringValue::Get(referenced) != file_path) {
 			continue;
 		}
-		rows -= MinValue(rows, UnsafeNumericCast<idx_t>(BigIntValue::Get(delete_count)));
+		const auto deleted_rows = UnsafeNumericCast<idx_t>(BigIntValue::Get(delete_count));
+		if (StringUtil::CIEquals(StringValue::Get(format), "puffin")) {
+			// The vector includes all positional deletes for this file, including older files still in the task.
+			return data_rows - MinValue(data_rows, deleted_rows);
+		}
+		if (delete_files.size() == 1 || counted_position_files.insert(StringValue::Get(delete_path)).second) {
+			rows -= MinValue(rows, deleted_rows);
+		}
 	}
 	return rows;
 }

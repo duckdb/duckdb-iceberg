@@ -53,7 +53,7 @@ physical_plan	<REGEX>:[\s\S]*"name": "ICEBERG_SCAN_TASKS"[\s\S]*"Estimated Cardi
 
 # One task: its own count.
 statement ok
-set variable one_task = (select list(t) from cardinality_tasks t where file_path like '%1999%');
+set variable one_task = (select list(t) from cardinality_tasks t where ends_with(file_path, '_1999.parquet'));
 
 query II
 explain (format json) select * from iceberg_scan_tasks(getvariable('one_task'));
@@ -75,31 +75,61 @@ select count(*), sum(id) from iceberg_scan_tasks(getvariable('low_count_tasks'))
 ----
 200000	9999900000
 
+# A maximum below 21 would let the optimizer remove this LIMIT.
+query I
+select count(id) from (select id from iceberg_scan_tasks(getvariable('low_count_tasks')) limit 21);
+----
+21
+
 # Counts whose sum passes the largest BIGINT saturate there. Two of 2^63-1 and one of 2 sum to exactly 2^64, which
 # would wrap to 0 (planning only: the files do not hold these rows).
 statement ok
 set variable huge_count_tasks = (select list(t)
     from (select c.* replace (case when r.range < 2 then 9223372036854775807 else 2 end::bigint as record_count)
-          from cardinality_tasks c, range(3) r where c.file_path like '%1999%') t);
+          from cardinality_tasks c, range(3) r where ends_with(c.file_path, '_1999.parquet')) t);
 
 query II
 explain (format json) select * from iceberg_scan_tasks(getvariable('huge_count_tasks'));
 ----
 physical_plan	<REGEX>:[\s\S]*"name": "ICEBERG_SCAN_TASKS"[\s\S]*"Estimated Cardinality": "9223372036854775807"[\s\S]*
 
-# An empty list estimates no rows, and returns none.
+# NULL and a typed empty list both estimate and return zero rows.
 statement ok
-set variable no_tasks = (select list(t) from cardinality_tasks t where false);
+set variable null_tasks = (select list(t) from cardinality_tasks t where false);
+
+statement ok
+set variable empty_tasks = list_slice(getvariable('one_task'), 1, 0);
+
+foreach empty null_tasks empty_tasks
 
 query II
-explain (format json) select * from iceberg_scan_tasks(getvariable('no_tasks'));
+explain (format json) select * from iceberg_scan_tasks(getvariable('{empty}'));
 ----
 physical_plan	<REGEX>:[\s\S]*"name": "ICEBERG_SCAN_TASKS"[\s\S]*"Estimated Cardinality": "0"[\s\S]*
 
 query I
-select count(*) from iceberg_scan_tasks(getvariable('no_tasks'));
+select count(*) from iceberg_scan_tasks(getvariable('{empty}'));
 ----
 0
+
+endloop
+
+# Incomplete descriptors contribute only their usable counts during planning.
+statement ok
+set variable incomplete_tasks = (select [NULL, struct_update(t, record_count := NULL::bigint),
+    struct_update(t, record_count := -1::bigint), struct_update(t, file_path := NULL::varchar),
+    struct_update(t, delete_files := cast_to_type(NULL, t.delete_files)), t]
+    from cardinality_tasks t where ends_with(file_path, '_1999.parquet'));
+
+query II
+explain (format json) select * from iceberg_scan_tasks(getvariable('incomplete_tasks'));
+----
+physical_plan	<REGEX>:[\s\S]*"name": "ICEBERG_SCAN_TASKS"[\s\S]*"Estimated Cardinality": "300000"[\s\S]*
+
+statement error
+select id from iceberg_scan_tasks(getvariable('incomplete_tasks'));
+----
+non-NULL task structs
 
 # Deletes that name the task's file alone (a deletion vector, or a position delete file referencing one data file)
 # are taken off its count; a position delete file without a referenced data file and an equality delete file are
@@ -107,7 +137,7 @@ select count(*) from iceberg_scan_tasks(getvariable('no_tasks'));
 # Planning only: these delete files do not exist.
 statement ok
 set variable deleted_tasks = (select list(t order by file_path) from (select * replace (
-    case when file_path like '%1999%' then [
+    case when ends_with(file_path, '_1999.parquet') then [
         {'file_path': '{TEST_DIR}/dv.puffin', 'file_format': 'PUFFIN', 'content': 1, 'file_size_in_bytes': 100,
          'record_count': 30000, 'equality_ids': NULL, 'referenced_data_file': file_path, 'content_offset': 4,
          'content_size_in_bytes': 40},
@@ -130,6 +160,26 @@ query II
 explain (format json) select * from iceberg_scan_tasks(getvariable('deleted_tasks'));
 ----
 physical_plan	<REGEX>:[\s\S]*"name": "ICEBERG_SCAN_TASKS"[\s\S]*"Estimated Cardinality": "70000"[\s\S]*
+
+# Only the last descriptor has a usable count for a position delete scoped to this data file.
+# In particular, a vector for a different file cannot supersede this file's deletes.
+statement ok
+set variable partial_deletes = (
+    with input as (select getvariable('deleted_tasks')[2] as t),
+         pos as (select t, t.delete_files[1] as d from input)
+    select [struct_update(t, delete_files := [
+        NULL, struct_update(d, file_path := NULL::varchar), struct_update(d, file_format := NULL::varchar),
+        struct_update(d, content := NULL::integer), struct_update(d, record_count := NULL::bigint),
+        struct_update(d, record_count := -1::bigint), struct_update(d, referenced_data_file := NULL::varchar),
+        struct_update(d, content := 2, equality_ids := [1]),
+        struct_update(d, file_format := 'PUFFIN', referenced_data_file := t.file_path || '.other'),
+        struct_update(d, record_count := 7::bigint)
+    ])] from pos);
+
+query II
+explain (format json) select * from iceberg_scan_tasks(getvariable('partial_deletes'));
+----
+physical_plan	<REGEX>:[\s\S]*"name": "ICEBERG_SCAN_TASKS"[\s\S]*"Estimated Cardinality": "99993"[\s\S]*
 
 # A prepared statement binds the list it is executed with.
 statement ok
