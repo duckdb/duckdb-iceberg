@@ -220,7 +220,8 @@ static IcebergDataFile ConvertContentFile(const rest_api_objects::ContentFile &s
 			auto serialized_type = transform.GetSerializedType(column->type);
 			partition_value = IcebergColumnDefinition::ParsePrimitiveValue(serialized_type, partition);
 		}
-		result.partition_info.push_back(IcebergPartitionInfo {field.partition_field_id, partition_value});
+		result.partition_info.push_back(IcebergPartitionInfo {
+		    field.partition_field_id, IcebergValue::NormalizePartitionNaN(std::move(partition_value))});
 	}
 	return result;
 }

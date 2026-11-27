@@ -85,6 +85,8 @@ public:
 public:
 	//! Convert a decoded manifest partition value to its source column type.
 	static Value TransformPartitionValue(ClientContext &context, const Value &value, const LogicalType &type);
+	//! All NaN encodings identify the same Iceberg partition.
+	static Value NormalizePartitionNaN(Value value);
 	//! Pass 'bound' when deserializing a lower/upper bound: invalid UTF-8 string bounds are then repaired
 	//! where possible.
 	static DeserializeResult DeserializeValue(const string_t &blob, const LogicalType &target,
@@ -93,6 +95,9 @@ public:
 	                                      SerializeBound bound_type);
 	static SerializeResult SerializeValue(Value input_value, const LogicalType &column_type, SerializeBound bound_type,
 	                                      const IcebergMetricsConfig &metrics_config = IcebergMetricsConfig());
+	//! File metrics computed using SQL comparisons may have lost the sign of a zero extremum.
+	static SerializeResult SerializeFileBound(Value value, const LogicalType &type, SerializeBound bound,
+	                                          const IcebergMetricsConfig &metrics = IcebergMetricsConfig());
 	static string TruncateString(const string &input, idx_t max_length = MAX_STRING_UPPERBOUND_LENGTH);
 	// Computes a truncated, incremented upper bound for a string. Returns false
 	// (and leaves `result` untouched) when no valid bound can be produced, so the

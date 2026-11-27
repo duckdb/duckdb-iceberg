@@ -11,6 +11,7 @@
 #include "duckdb/planner/filter/table_filter_functions.hpp"
 #include "duckdb/storage/table/row_group_order_options.hpp"
 #include "duckdb/transaction/meta_transaction.hpp"
+#include "catalog/rest/api/iceberg_expression.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "core/deletes/iceberg_deletion_vector.hpp"
 #include "core/expression/iceberg_value.hpp"
@@ -911,6 +912,96 @@ TEST_CASE("Iceberg indexed candidates agree with exhaustive delete applicability
 					REQUIRE(indexed == exhaustive);
 				}
 			}
+		}
+	}
+}
+
+TEST_CASE("Iceberg deletes distinguish signed zeros in floating-point partitions", "[iceberg_planning]") {
+	PlanningTest test;
+	Query(test.connection, "CREATE TABLE lake.default.t (part DOUBLE)");
+	auto bound = test.Bind();
+	auto &base = bound->Cast<MultiFileBindData>().file_list->Cast<IcebergMultiFileList>().GetScanPlanner();
+	auto metadata = base.GetMetadata().Copy();
+	auto spec = PartitionSpec();
+	metadata.partition_specs.emplace(spec.spec_id, spec);
+	IcebergTableFilters filters;
+	IcebergFilePruner pruner(*test.connection.context, metadata, base.GetSchema(), filters);
+	IcebergManifest delete_manifest(spec.spec_id, IcebergManifestContentType::DELETE, 2);
+	IcebergManifest data_manifest(spec.spec_id, IcebergManifestContentType::DATA, 1);
+
+	auto applies = [&](const Value &delete_value, const Value &data_value) {
+		auto delete_entry = DeleteEntry(0, delete_value);
+		delete_entry.data_file.content = IcebergManifestEntryContentType::EQUALITY_DELETES;
+		auto data_entry = DeleteEntry(0, data_value);
+		data_entry.data_file.content = IcebergManifestEntryContentType::DATA;
+		IcebergEqualityDeleteBounds bounds;
+		return pruner.DeleteFileMatchesDataFile(delete_manifest, delete_entry, data_manifest, data_entry,
+		                                        IcebergFilePruner::PartitionValueMap(data_entry.data_file), &bounds);
+	};
+	for (auto type_id : {LogicalTypeId::FLOAT, LogicalTypeId::DOUBLE}) {
+		const LogicalType type(type_id);
+		INFO(type.ToString());
+		auto positive_zero = Value::DOUBLE(0.0).DefaultCastAs(type);
+		auto negative_zero = Value::DOUBLE(-0.0).DefaultCastAs(type);
+		auto nan = Value::DOUBLE(std::numeric_limits<double>::quiet_NaN()).DefaultCastAs(type);
+		auto negative_nan = Value::DOUBLE(-std::numeric_limits<double>::quiet_NaN()).DefaultCastAs(type);
+		REQUIRE_FALSE(applies(positive_zero, negative_zero));
+		REQUIRE_FALSE(applies(negative_zero, positive_zero));
+		REQUIRE(applies(positive_zero, positive_zero));
+		REQUIRE(applies(negative_zero, negative_zero));
+		REQUIRE(applies(nan, negative_nan));
+	}
+}
+
+TEST_CASE("Iceberg server predicates preserve SQL comparisons with either sign of zero", "[iceberg_planning]") {
+	auto json = [](const rest_api_objects::Predicate &predicate) {
+		JSONWriter writer;
+		writer.SetRoot(predicate.ToJSON(writer));
+		auto text = writer.ToString();
+		return JSONDocument::Parse(text.data(), text.size());
+	};
+	for (auto &type : vector<LogicalType> {LogicalType::FLOAT, LogicalType::DOUBLE}) {
+		for (auto number : {0.0, -0.0}) {
+			auto zero = Value::DOUBLE(number).DefaultCastAs(type);
+			CAPTURE(type.ToString(), zero.ToString());
+			for (auto op : {ExpressionType::COMPARE_EQUAL, ExpressionType::COMPARE_NOTEQUAL,
+			                ExpressionType::COMPARE_LESSTHAN, ExpressionType::COMPARE_LESSTHANOREQUALTO,
+			                ExpressionType::COMPARE_GREATERTHAN, ExpressionType::COMPARE_GREATERTHANOREQUALTO}) {
+				auto filter = ExpressionFilter::CreateComparisonFilter(op, zero);
+				INFO(filter->ToString("p"));
+				auto converted = IcebergExpression::TryConvertFilter(*filter->expr, "p");
+				REQUIRE(converted);
+				auto doc = json(*converted);
+				auto root = doc->GetRoot();
+				if (op == ExpressionType::COMPARE_EQUAL || op == ExpressionType::COMPARE_NOTEQUAL) {
+					REQUIRE(root.GetMember("type").GetString() ==
+					        (op == ExpressionType::COMPARE_EQUAL ? "in" : "not-in"));
+					vector<bool> signs;
+					root.GetMember("values").IterateArray([&](JSONValue value) {
+						REQUIRE(value.GetNumber() == 0);
+						signs.push_back(std::signbit(value.GetNumber()));
+					});
+					std::sort(signs.begin(), signs.end());
+					CHECK(signs == vector<bool> {false, true});
+				} else {
+					auto value = root.GetMember("value").GetNumber();
+					CHECK(value == 0);
+					CHECK(std::signbit(value) == (op == ExpressionType::COMPARE_LESSTHAN ||
+					                              op == ExpressionType::COMPARE_GREATERTHANOREQUALTO));
+				}
+			}
+			auto other = Value::DOUBLE(2.5).DefaultCastAs(type);
+			auto set = IcebergExpression::SetExpression("in", "p", {zero, other, zero});
+			REQUIRE(set);
+			auto doc = json(*set);
+			vector<string> members;
+			doc->GetRoot().GetMember("values").IterateArray(
+			    [&](JSONValue value) { members.push_back(Value::DOUBLE(value.GetNumber()).ToString()); });
+			std::sort(members.begin(), members.end());
+			CHECK(members == vector<string> {"-0.0", "0.0", "2.5"});
+			// Never send a partially converted set if a later literal is unsupported.
+			auto null_value = Value(type);
+			CHECK_FALSE(IcebergExpression::SetExpression("in", "p", {zero, null_value}));
 		}
 	}
 }
