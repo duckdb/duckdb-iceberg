@@ -238,11 +238,11 @@ IcebergMetricsMatch IcebergFilePruner::FileMatchesFilter(const IcebergManifest &
 		}
 		IcebergPredicateStats stats;
 
-		if (column.type.id() == LogicalTypeId::VARIANT) {
-			if (lower_bound.IsNull() || upper_bound.IsNull()) {
-				//! No evidence for this filter; the remaining filters can still rule the file out.
-				continue;
-			}
+		const bool is_variant = column.type.id() == LogicalTypeId::VARIANT;
+		if (!is_variant) {
+			stats =
+			    IcebergPredicateStats::DeserializeBounds(context, lower_bound, upper_bound, column_name, column.type);
+		} else if (!lower_bound.IsNull() && !upper_bound.IsNull()) {
 			//! A filter on an extracted field refers to that field, so compare against the field's bounds
 			vector<string> path;
 			bool path_supported = true;
@@ -272,18 +272,17 @@ IcebergMetricsMatch IcebergFilePruner::FileMatchesFilter(const IcebergManifest &
 			    IcebergVariantBoundsReader::RekeyBoundsVariant(upper_decoded, path, upper_variant)) {
 				stats.SetUpperBound(upper_variant);
 			}
-		} else {
-			stats =
-			    IcebergPredicateStats::DeserializeBounds(context, lower_bound, upper_bound, column_name, column.type);
 		}
 
 		if (column.type.id() == LogicalTypeId::GEOMETRY && !stats.geometry_stats) {
 			// A missing bbox is unknown, but the null counts can still prove that no geometry matches.
 			stats.geometry_stats = make_shared_ptr<BaseStatistics>(GeometryStats::CreateUnknown(column.type));
 		}
-		// The VARIANT column's null count cannot tell us whether an extracted path is missing or null.
-		if (column.type.id() != LogicalTypeId::VARIANT || !column_index.HasChildren()) {
-			ApplyNullCounts(data_file, column_id, stats, parents);
+		ApplyNullCounts(data_file, column_id, stats, parents);
+		if (is_variant) {
+			// Iceberg excludes encoded VARIANT nulls from the column's null count. DuckDB reads them as SQL
+			// NULL, and a missing path also yields NULL. An entirely NULL column still has no non-NULL paths.
+			stats.has_null = true;
 		}
 
 		auto nan_counts_it = data_file.nan_value_counts.find(column_id);

@@ -24,7 +24,9 @@ create table my_datalake.default.variant_path_null (id INTEGER, v VARIANT) with 
 # The file has no null VARIANT values and has bounds on the path 'a'.
 statement ok
 insert into my_datalake.default.variant_path_null values
-    (1, {'a': 1}::VARIANT), (2, {'b': 2}::VARIANT), (3, {'a': 3}::VARIANT);
+    (1, {'a': 1, 'o': {'b': 7}}::VARIANT),
+    (2, {'o': {'c': 8}}::VARIANT),
+    (3, {'a': 3, 'o': {'b': NULL::INT}}::VARIANT);
 
 query I
 select id from my_datalake.default.variant_path_null where variant_extract(v, 'a') is null;
@@ -36,6 +38,27 @@ select id from my_datalake.default.variant_path_null where variant_extract(v, 'a
 ----
 1
 3
+
+# The first file has a missing and an explicitly null leaf. In the second,
+# the root can be NULL and the parent object can be null or missing.
+statement ok
+insert into my_datalake.default.variant_path_null values
+    (4, NULL), (5, {'o': NULL::INT}::VARIANT), (6, {'x': 6}::VARIANT), (7, {'o': {'b': 9}}::VARIANT);
+
+query I
+select id from my_datalake.default.variant_path_null where v.o.b is null order by id;
+----
+2
+3
+4
+5
+6
+
+query I
+select id from my_datalake.default.variant_path_null where v.o.b is not null order by id;
+----
+1
+7
 
 statement ok
 drop table my_datalake.default.variant_path_null;
