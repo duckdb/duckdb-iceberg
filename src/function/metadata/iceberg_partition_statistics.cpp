@@ -2,6 +2,7 @@
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
+#include "duckdb/common/multi_file/multi_file_states.hpp"
 #include "duckdb/common/open_file_info.hpp"
 #include "duckdb/execution/execution_context.hpp"
 #include "duckdb/main/client_context.hpp"
@@ -66,9 +67,8 @@ struct IcebergPartitionStatisticsBindData : public TableFunctionData {
 	IcebergFileSecret file_secret;
 	shared_ptr<const IcebergTableMetadata> metadata;
 	vector<IcebergPartitionStructField> partition_fields;
-	LogicalType partition_type;
-	vector<string> names;
-	vector<LogicalType> types;
+	//! Iceberg IDs and fallback names of the columns read from Parquet, in output order
+	vector<pair<int32_t, string>> file_columns;
 };
 
 //! The nested Parquet scan of one statistics file
@@ -77,8 +77,8 @@ struct IcebergPartitionStatisticsFileScan {
 	unique_ptr<FunctionData> bind_data;
 	unique_ptr<GlobalTableFunctionState> global_state;
 	unique_ptr<LocalTableFunctionState> local_state;
-	//! The file's column names, by position in the chunk
-	vector<string> names;
+	vector<optional_idx> column_indexes;
+	vector<optional_idx> partition_indexes;
 	DataChunk chunk;
 };
 
@@ -98,21 +98,6 @@ struct IcebergPartitionStatisticsGlobalState : public GlobalTableFunctionState {
 	idx_t chunk_offset = 0;
 };
 
-//! A path without a scheme and not starting at the root is relative to the table location; a full path is moved
-//! under the table location only with allow_moved_paths
-static string ResolveStatisticsPath(const string &table_location, const IcebergOptions &options, FileSystem &fs,
-                                    const string &path) {
-	const bool full_path =
-	    FileSystem::IsRemoteFile(path) || StringUtil::StartsWith(path, "/") || fs.IsPathAbsolute(path);
-	if (!full_path) {
-		return fs.JoinPath(table_location, path);
-	}
-	if (options.allow_moved_paths) {
-		return IcebergUtils::GetFullPath(table_location, path, fs);
-	}
-	return path;
-}
-
 static TableFunction GetParquetScanFunction(ClientContext &context) {
 	auto &instance = DatabaseInstance::GetDatabase(context);
 	auto &system_catalog = Catalog::GetSystemCatalog(instance);
@@ -130,6 +115,22 @@ static TableFunction GetParquetScanFunction(ClientContext &context) {
 	function.table_scan_progress = nullptr;
 	function.get_bind_info = nullptr;
 	return function;
+}
+
+//! Parquet field IDs survive renames. Older writers may omit IDs, in which case use the column's name.
+static optional_idx FindColumn(const vector<MultiFileColumnDefinition> &columns, int64_t id, const string &name) {
+	optional_idx by_name;
+	for (idx_t i = 0; i < columns.size(); i++) {
+		auto &column = columns[i];
+		if (!column.identifier.IsNull()) {
+			if (column.GetIdentifierFieldId() == id) {
+				return i;
+			}
+		} else if (StringUtil::CIEquals(column.name.GetIdentifierName(), name)) {
+			by_name = i;
+		}
+	}
+	return by_name;
 }
 
 static unique_ptr<IcebergPartitionStatisticsFileScan> OpenFileScan(ExecutionContext &execution_context,
@@ -159,7 +160,17 @@ static unique_ptr<IcebergPartitionStatisticsFileScan> OpenFileScan(ExecutionCont
 	vector<LogicalType> return_types;
 	vector<Identifier> return_names;
 	scan->bind_data = scan->function.bind(context, bind_input, return_types, return_names);
-	scan->names = IdentifiersToStrings(return_names);
+	const auto &columns = scan->bind_data->Cast<MultiFileBindData>().initial_reader->GetColumns();
+	for (auto &field : bind_data.file_columns) {
+		scan->column_indexes.push_back(FindColumn(columns, field.first, field.second));
+	}
+	if (!bind_data.partition_fields.empty() && scan->column_indexes[0].IsValid()) {
+		auto &partition = columns[scan->column_indexes[0].GetIndex()];
+		for (auto &field : bind_data.partition_fields) {
+			scan->partition_indexes.push_back(
+			    FindColumn(partition.children, field.field.get().partition_field_id, field.name));
+		}
+	}
 
 	vector<column_t> column_ids;
 	for (idx_t i = 0; i < return_types.size(); i++) {
@@ -172,31 +183,15 @@ static unique_ptr<IcebergPartitionStatisticsFileScan> OpenFileScan(ExecutionCont
 	return scan;
 }
 
-static optional_idx FindColumn(const vector<string> &names, const string &name) {
-	for (idx_t i = 0; i < names.size(); i++) {
-		if (StringUtil::CIEquals(names[i], name)) {
-			return i;
-		}
-	}
-	return optional_idx();
-}
-
-//! The file's partition struct as the table's unified partition struct: fields are matched by name, a field the
-//! file does not have (added by a later partition spec) is NULL
-static Value UnifiedPartitionValue(const Value &file_partition, const vector<IcebergPartitionStructField> &fields) {
+//! A field absent from an older partition struct is NULL in the unified struct.
+static Value UnifiedPartitionValue(const Value &file_partition, const vector<IcebergPartitionStructField> &fields,
+                                   const vector<optional_idx> &indexes) {
 	child_list_t<Value> children;
-	auto &file_type = file_partition.type();
-	for (auto &field : fields) {
+	for (idx_t i = 0; i < fields.size(); i++) {
+		auto &field = fields[i];
 		Value value(field.type);
-		if (!file_partition.IsNull() && file_type.id() == LogicalTypeId::STRUCT) {
-			auto &file_children = StructValue::GetChildren(file_partition);
-			for (idx_t i = 0; i < file_children.size(); i++) {
-				if (StructType::GetChildName(file_type, i) != field.name || file_children[i].IsNull()) {
-					continue;
-				}
-				value = file_children[i].DefaultCastAs(field.type);
-				break;
-			}
+		if (!file_partition.IsNull() && file_partition.type().id() == LogicalTypeId::STRUCT && indexes[i].IsValid()) {
+			value = StructValue::GetChildren(file_partition)[indexes[i].GetIndex()].DefaultCastAs(field.type);
 		}
 		children.emplace_back(field.name, std::move(value));
 	}
@@ -230,7 +225,7 @@ static unique_ptr<FunctionData> IcebergPartitionStatisticsBind(ClientContext &co
 			if (snapshot_id && file.snapshot_id != *snapshot_id) {
 				continue;
 			}
-			auto path = ResolveStatisticsPath(resolved.table_location, options, fs, file.path);
+			auto path = resolved.ResolveStatisticsPath(file.path, options, fs);
 			if (!StringUtil::EndsWith(StringUtil::Lower(path), ".parquet")) {
 				throw NotImplementedException("Partition statistics file '%s' is not a Parquet file", path);
 			}
@@ -255,38 +250,27 @@ static unique_ptr<FunctionData> IcebergPartitionStatisticsBind(ClientContext &co
 	return_types.emplace_back(LogicalType::VARCHAR);
 	names.emplace_back("file_size_in_bytes");
 	return_types.emplace_back(LogicalType::BIGINT);
-	//! Unpartitioned tables have no 'partition', as in iceberg_partitions
+	auto add_file_column = [&](int32_t id, const char *name, const LogicalType &type) {
+		bind_data->file_columns.emplace_back(id, name);
+		names.emplace_back(name);
+		return_types.emplace_back(type);
+	};
+	//! The field IDs defined by Iceberg's partition statistics file schema
 	if (!bind_data->partition_fields.empty()) {
-		bind_data->partition_type = IcebergPartitionStruct::GetType(bind_data->partition_fields);
-		names.emplace_back("partition");
-		return_types.emplace_back(bind_data->partition_type);
+		add_file_column(1, "partition", IcebergPartitionStruct::GetType(bind_data->partition_fields));
 	}
-	names.emplace_back("spec_id");
-	return_types.emplace_back(LogicalType::INTEGER);
-	names.emplace_back("data_record_count");
-	return_types.emplace_back(LogicalType::BIGINT);
-	names.emplace_back("data_file_count");
-	return_types.emplace_back(LogicalType::INTEGER);
-	names.emplace_back("total_data_file_size_in_bytes");
-	return_types.emplace_back(LogicalType::BIGINT);
-	names.emplace_back("position_delete_record_count");
-	return_types.emplace_back(LogicalType::BIGINT);
-	names.emplace_back("position_delete_file_count");
-	return_types.emplace_back(LogicalType::INTEGER);
-	names.emplace_back("equality_delete_record_count");
-	return_types.emplace_back(LogicalType::BIGINT);
-	names.emplace_back("equality_delete_file_count");
-	return_types.emplace_back(LogicalType::INTEGER);
-	names.emplace_back("total_record_count");
-	return_types.emplace_back(LogicalType::BIGINT);
-	names.emplace_back("last_updated_at");
-	return_types.emplace_back(LogicalType::TIMESTAMP_MS);
-	names.emplace_back("last_updated_snapshot_id");
-	return_types.emplace_back(LogicalType::BIGINT);
-	names.emplace_back("dv_count");
-	return_types.emplace_back(LogicalType::INTEGER);
-	bind_data->names = IdentifiersToStrings(names);
-	bind_data->types = return_types;
+	add_file_column(2, "spec_id", LogicalType::INTEGER);
+	add_file_column(3, "data_record_count", LogicalType::BIGINT);
+	add_file_column(4, "data_file_count", LogicalType::INTEGER);
+	add_file_column(5, "total_data_file_size_in_bytes", LogicalType::BIGINT);
+	add_file_column(6, "position_delete_record_count", LogicalType::BIGINT);
+	add_file_column(7, "position_delete_file_count", LogicalType::INTEGER);
+	add_file_column(8, "equality_delete_record_count", LogicalType::BIGINT);
+	add_file_column(9, "equality_delete_file_count", LogicalType::INTEGER);
+	add_file_column(10, "total_record_count", LogicalType::BIGINT);
+	add_file_column(11, "last_updated_at", LogicalType::TIMESTAMP_MS);
+	add_file_column(12, "last_updated_snapshot_id", LogicalType::BIGINT);
+	add_file_column(13, "dv_count", LogicalType::INTEGER);
 	return std::move(bind_data);
 }
 
@@ -325,18 +309,19 @@ static void IcebergPartitionStatisticsFunction(ClientContext &context, TableFunc
 		output.data[col++].SetValue(out, Value::BIGINT(file.snapshot_id));
 		output.data[col++].SetValue(out, Value(file.path));
 		output.data[col++].SetValue(out, Value::BIGINT(file.file_size_in_bytes));
+		idx_t file_col = 0;
 		if (!bind_data.partition_fields.empty()) {
-			auto partition_column = FindColumn(scan.names, "partition");
+			auto partition_column = scan.column_indexes[file_col++];
 			Value partition(LogicalType::SQLNULL);
 			if (partition_column.IsValid()) {
 				partition = scan.chunk.data[partition_column.GetIndex()].GetValue(row);
 			}
-			output.data[col++].SetValue(out, UnifiedPartitionValue(partition, bind_data.partition_fields));
+			output.data[col++].SetValue(
+			    out, UnifiedPartitionValue(partition, bind_data.partition_fields, scan.partition_indexes));
 		}
-		//! The remaining output columns carry the file's column of the same name; a column the file lacks is NULL
-		for (; col < bind_data.names.size(); col++) {
-			auto &type = bind_data.types[col];
-			auto file_column = FindColumn(scan.names, bind_data.names[col]);
+		for (; file_col < scan.column_indexes.size(); file_col++, col++) {
+			auto &type = output.data[col].GetType();
+			auto file_column = scan.column_indexes[file_col];
 			if (!file_column.IsValid()) {
 				output.data[col].SetValue(out, Value(type));
 				continue;

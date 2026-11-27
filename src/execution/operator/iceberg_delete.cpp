@@ -335,8 +335,8 @@ IcebergPuffinBlobMetadata DeletionVectorMetadata(const IcebergDeleteFileInfo &fi
 	metadata.fields.push_back(MultiFileReader::DELETE_POS_FIELD_ID);
 	metadata.snapshot_id = -1;
 	metadata.sequence_number = -1;
-	metadata.properties = case_insensitive_map_t<string> {{"referenced-data-file", file.data_file_path},
-	                                                      {"cardinality", std::to_string(file.delete_count)}};
+	metadata.properties = unordered_map<string, string> {{"referenced-data-file", file.data_file_path},
+	                                                     {"cardinality", std::to_string(file.delete_count)}};
 	return metadata;
 }
 

@@ -1,0 +1,64 @@
+# name: test/sql/local/iceberg_scans/iceberg_partition_statistics_evolution.test
+# description: Partition statistics use Iceberg field IDs across spec evolution and Parquet chunks
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+SET threads = 1;
+
+# An older file calls field 1000 "place". The current spec calls it "area" and reuses "place" for field 1001.
+statement ok
+COPY (SELECT {'place': i::VARCHAR} AS partition, 1 AS spec_id, i AS records,
+             1 AS data_file_count, i + 1 AS total_data_file_size_in_bytes,
+             CASE WHEN i % 2 = 1 THEN 1700000000000::BIGINT END AS last_updated_at
+      FROM range(4097) r(i) ORDER BY partition)
+TO '{TEST_DIR}/metadata' (FORMAT PARQUET, PER_THREAD_OUTPUT, FILENAME_PATTERN 'old-spec-{i}', ROW_GROUP_SIZE 2048,
+	FIELD_IDS {partition: {__duckdb_field_id: 1, place: 1000}, spec_id: 2, records: 3,
+	           data_file_count: 4, total_data_file_size_in_bytes: 5, last_updated_at: 11});
+
+statement ok
+COPY (
+	SELECT json_merge_patch(content::JSON, json_object(
+		'location', '/old/warehouse', 'default-spec-id', 2, 'last-partition-id', 1001,
+		'partition-specs', [json_object('spec-id', 1, 'fields', [
+			{'source-id':2, 'field-id':1000, 'name':'place', 'transform':'identity'}]),
+			json_object('spec-id', 2, 'fields', [
+			{'source-id':2, 'field-id':1000, 'name':'area', 'transform':'identity'},
+			{'source-id':1, 'field-id':1001, 'name':'place', 'transform':'identity'}])],
+		'partition-statistics', [json_object('snapshot-id', 1001,
+			'statistics-path', '/old/warehouse/metadata/old-spec-0.parquet',
+			'file-size-in-bytes', (SELECT size FROM read_blob('{TEST_DIR}/metadata/old-spec-0.parquet')))]))
+	FROM read_text('data/persistent/table_partition_statistics/metadata/v1.metadata.json')
+) TO '{TEST_DIR}/metadata/v1.metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+# This copy has moved from its registered location. Both ways of opening it must use the new root.
+foreach input {TEST_DIR} {TEST_DIR}/metadata/v1.metadata.json
+
+query IIIIII
+SELECT count(*), count(DISTINCT partition.area), count(partition.place),
+       count(*) FILTER (WHERE partition.area = data_record_count::VARCHAR AND spec_id = 1),
+       sum(data_record_count), count(last_updated_at)
+FROM iceberg_partition_statistics('{input}', version => 1, allow_moved_paths => true);
+----
+4097	4097	0	4097	8390656	2048
+
+endloop
+
+# An unsupported file for another snapshot must not prevent a filtered lookup.
+statement ok
+COPY (SELECT replace(content, 'old-spec-0.parquet', 'old-spec-0.orc')
+	FROM read_text('{TEST_DIR}/metadata/v1.metadata.json'))
+TO '{TEST_DIR}/unsupported.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+query I
+SELECT count(*) FROM iceberg_partition_statistics('{TEST_DIR}/unsupported.json', snapshot_from_id => 1002);
+----
+0
+
+statement error
+SELECT * FROM iceberg_partition_statistics('{TEST_DIR}/unsupported.json');
+----
+is not a Parquet file

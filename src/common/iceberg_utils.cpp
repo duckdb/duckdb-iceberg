@@ -1,4 +1,5 @@
 #include "common/iceberg_utils.hpp"
+#include "duckdb/common/path.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 
 #include "duckdb.hpp"
@@ -311,9 +312,26 @@ IcebergResolvedMetadata IcebergUtils::ResolveTableMetadata(ClientContext &contex
 	auto caching_fs = make_shared_ptr<CachingFileSystemWrapper>(fs, *context.db);
 	auto metadata_path = IcebergTableMetadata::GetMetaDataPath(context, table_location, fs, options);
 	auto table_metadata = IcebergTableMetadata::Parse(metadata_path, *caching_fs, options.metadata_compression_codec);
-	return IcebergResolvedMetadata(
-	    std::move(table_location),
-	    make_shared_ptr<const IcebergTableMetadata>(IcebergTableMetadata::FromTableMetadata(table_metadata)));
+	auto metadata =
+	    make_shared_ptr<const IcebergTableMetadata>(IcebergTableMetadata::FromTableMetadata(table_metadata));
+	if (table_location == metadata_path) {
+		table_location = metadata->GetLocation();
+		if (options.allow_moved_paths) {
+			auto parent = Path::FromString(metadata_path).Parent();
+			if (fs.ExtractName(parent.ToString()) == "metadata") {
+				table_location = parent.Parent().ToString();
+			}
+		}
+	}
+	return IcebergResolvedMetadata(std::move(table_location), std::move(metadata));
+}
+
+string IcebergResolvedMetadata::ResolveStatisticsPath(const string &path, const IcebergOptions &options,
+                                                      FileSystem &fs) const {
+	if (!FileSystem::IsRemoteFile(path) && !StringUtil::StartsWith(path, "/") && !fs.IsPathAbsolute(path)) {
+		return fs.JoinPath(table_location, path);
+	}
+	return options.allow_moved_paths ? IcebergUtils::GetFullPath(table_location, path, fs) : path;
 }
 
 // Function to decompress a gz file content string

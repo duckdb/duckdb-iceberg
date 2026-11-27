@@ -41,21 +41,6 @@ struct IcebergTableStatsGlobalState : public GlobalTableFunctionState {
 	idx_t offset = 0;
 };
 
-//! A path without a scheme and not starting at the root is relative to the table location; a full path is moved
-//! under the table location only with allow_moved_paths
-static string ResolveStatisticsPath(const string &table_location, const IcebergOptions &options, FileSystem &fs,
-                                    const string &path) {
-	const bool full_path =
-	    FileSystem::IsRemoteFile(path) || StringUtil::StartsWith(path, "/") || fs.IsPathAbsolute(path);
-	if (!full_path) {
-		return fs.JoinPath(table_location, path);
-	}
-	if (options.allow_moved_paths) {
-		return IcebergUtils::GetFullPath(table_location, path, fs);
-	}
-	return path;
-}
-
 static Value FieldIdsValue(const vector<int32_t> &field_ids) {
 	vector<Value> values;
 	values.reserve(field_ids.size());
@@ -99,13 +84,62 @@ static Value PropertiesValue(const unordered_map<string, string> &properties) {
 }
 
 static bool BlobMatches(const IcebergStatisticsBlob &registered, const IcebergPuffinBlobMetadata &in_file) {
-	return registered.type == in_file.type && registered.snapshot_id == in_file.snapshot_id &&
-	       registered.sequence_number == in_file.sequence_number && registered.fields == in_file.fields;
+	if (registered.type != in_file.type || registered.snapshot_id != in_file.snapshot_id ||
+	    registered.sequence_number != in_file.sequence_number || registered.fields != in_file.fields) {
+		return false;
+	}
+	// Iceberg permits the registration to contain a subset of the Puffin blob's properties.
+	for (const auto &property : registered.properties) {
+		if (!in_file.properties) {
+			return false;
+		}
+		auto it = in_file.properties->find(property.first);
+		if (it == in_file.properties->end() || it->second != property.second) {
+			return false;
+		}
+	}
+	return true;
+}
+
+//! Assign a distinct footer entry to each registration. If a prior registration with fewer properties
+//! took the only suitable entry, find a chain of reassignments ending at a free entry.
+static bool MatchBlob(idx_t index, const vector<IcebergStatisticsBlob> &registered,
+                      const vector<IcebergPuffinBlobMetadata> &footer, vector<optional_idx> &owners) {
+	if (index < footer.size() && !owners[index].IsValid() && BlobMatches(registered[index], footer[index])) {
+		owners[index] = index;
+		return true;
+	}
+	const auto root = footer.size();
+	vector<idx_t> pending {root};
+	vector<optional_idx> parent(footer.size());
+	for (idx_t next = 0; next < pending.size(); next++) {
+		auto from = pending[next];
+		auto &blob = registered[from == root ? index : owners[from].GetIndex()];
+		for (idx_t i = 0; i < footer.size(); i++) {
+			if (parent[i].IsValid() || !BlobMatches(blob, footer[i])) {
+				continue;
+			}
+			parent[i] = from;
+			if (owners[i].IsValid()) {
+				pending.push_back(i);
+				continue;
+			}
+			auto slot = i;
+			while (from != root) {
+				owners[slot] = owners[from];
+				slot = from;
+				from = parent[slot].GetIndex();
+			}
+			owners[slot] = index;
+			return true;
+		}
+	}
+	return false;
 }
 
 //! The file's footer must describe the blobs the table metadata registered for it
-static void VerifyStatisticsFile(FileSystem &fs, const IcebergFileSecret &file_secret,
-                                 const IcebergStatisticsFile &file, const string &path) {
+static vector<IcebergStatisticsBlob> ReadStatisticsBlobs(FileSystem &fs, const IcebergFileSecret &file_secret,
+                                                         const IcebergStatisticsFile &file, const string &path) {
 	auto open_file = OpenFileInfo(path);
 	file_secret.Apply(open_file);
 	auto handle = fs.OpenFile(open_file, FileFlags::FILE_FLAGS_READ);
@@ -115,20 +149,22 @@ static void VerifyStatisticsFile(FileSystem &fs, const IcebergFileSecret &file_s
 		throw InvalidConfigurationException("Statistics file of snapshot %lld: %s", file.snapshot_id, *error);
 	}
 	auto &blobs_in_file = std::get<IcebergPuffinFileFooter>(footer_result).file_metadata.blobs;
-	for (auto &blob : file.blobs) {
-		bool found = false;
-		for (auto &in_file : blobs_in_file) {
-			if (BlobMatches(blob, in_file)) {
-				found = true;
-				break;
-			}
-		}
-		if (!found) {
-			throw InvalidConfigurationException("Statistics file '%s' has no blob of type '%s' for snapshot %lld, "
-			                                    "sequence number %lld, which the table metadata registers",
+	vector<optional_idx> owners(blobs_in_file.size());
+	for (idx_t i = 0; i < file.blobs.size(); i++) {
+		if (!MatchBlob(i, file.blobs, blobs_in_file, owners)) {
+			auto &blob = file.blobs[i];
+			throw InvalidConfigurationException("Statistics file '%s' has no distinct footer entry matching "
+			                                    "registered blob '%s' for snapshot %lld, sequence number %lld",
 			                                    path, blob.type, blob.snapshot_id, blob.sequence_number);
 		}
 	}
+	auto result = file.blobs;
+	for (idx_t i = 0; i < owners.size(); i++) {
+		if (owners[i].IsValid() && blobs_in_file[i].properties) {
+			result[owners[i].GetIndex()].properties = std::move(*blobs_in_file[i].properties);
+		}
+	}
+	return result;
 }
 
 static unique_ptr<FunctionData> IcebergTableStatsBind(ClientContext &context, TableFunctionBindInput &input,
@@ -154,9 +190,8 @@ static unique_ptr<FunctionData> IcebergTableStatsBind(ClientContext &context, Ta
 		if (snapshot_id && file.snapshot_id != *snapshot_id) {
 			continue;
 		}
-		auto path = ResolveStatisticsPath(resolved.table_location, options, fs, file.path);
-		VerifyStatisticsFile(fs, resolved.file_secret, file, path);
-		for (auto &blob : file.blobs) {
+		auto path = resolved.ResolveStatisticsPath(file.path, options, fs);
+		for (auto &blob : ReadStatisticsBlobs(fs, resolved.file_secret, file, path)) {
 			IcebergTableStatsEntry entry;
 			entry.statistics_snapshot_id = file.snapshot_id;
 			entry.statistics_path = path;

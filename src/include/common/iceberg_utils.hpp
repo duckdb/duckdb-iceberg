@@ -26,6 +26,8 @@ struct IcebergResolvedMetadata {
 	      file_secret(std::move(file_secret_p)) {
 	}
 
+	string ResolveStatisticsPath(const string &path, const IcebergOptions &options, FileSystem &fs) const;
+
 	string table_location;
 	shared_ptr<const IcebergTableMetadata> metadata;
 	IcebergFileSecret file_secret;

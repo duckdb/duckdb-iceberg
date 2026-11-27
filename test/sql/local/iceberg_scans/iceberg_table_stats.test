@@ -32,6 +32,14 @@ FROM iceberg_table_stats('data/persistent/table_statistics', snapshot_from_id =>
 ----
 1001	42
 
+# A timestamp between the snapshots selects the first file, including with an explicit metadata path.
+query II
+SELECT statistics_snapshot_id, ndv
+FROM iceberg_table_stats('data/persistent/table_statistics/metadata/v1.metadata.json',
+                         snapshot_from_timestamp => TIMESTAMP '2023-11-14 22:13:20.500');
+----
+1001	42
+
 # The footer of the file must match the registered sizes
 statement error
 SELECT * FROM iceberg_table_stats('data/persistent/table_statistics_bad_footer');

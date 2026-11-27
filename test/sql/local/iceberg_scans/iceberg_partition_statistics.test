@@ -44,6 +44,15 @@ ORDER BY ALL;
 eu
 us
 
+query II
+SELECT partition.region, data_record_count
+FROM iceberg_partition_statistics('data/persistent/table_partition_statistics/metadata/v1.metadata.json',
+                                  snapshot_from_timestamp => TIMESTAMP '2023-11-14 22:13:20.500')
+ORDER BY ALL;
+----
+eu	10
+us	20
+
 query IIIIIIIIIIIIIIII
 SELECT *
 FROM iceberg_partition_statistics('data/persistent/table_partition_statistics', snapshot_from_id => 1001)
