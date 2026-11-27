@@ -15,7 +15,6 @@
 
 namespace duckdb {
 
-class IcebergMultiFileList;
 class IcebergTableSchemaVersion;
 class LogicalDelete;
 class LogicalUpdate;
@@ -45,9 +44,6 @@ public:
 
 	//! The filename and file_row_number columns of the build side
 	vector<idx_t> match_row_id_indexes;
-	//! The file list of the build-side scan. It has loaded the delete files of every matched data file, which are
-	//! removed together with that data file.
-	optional_ptr<IcebergMultiFileList> match_file_list;
 	//! The probe-side scan, if it is a plain table scan: it gets a runtime filter on the matched files
 	optional_ptr<PhysicalTableScan> keep_scan;
 	ProjectionIndex keep_scan_filename_index;
