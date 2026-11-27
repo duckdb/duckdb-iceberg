@@ -8,6 +8,8 @@
 #include "planning/pruning/iceberg_predicate.hpp"
 #include "storage/statistics/iceberg_variant_statistics.hpp"
 
+#include <cmath>
+
 namespace duckdb {
 
 namespace {
@@ -89,6 +91,17 @@ bool IsNaN(const Value &value) {
 }
 
 } // namespace
+
+bool IcebergFilePruner::PartitionValuesMatch(const Value &left, const Value &right) {
+	if (!Value::NotDistinctFrom(left, right)) {
+		return false;
+	}
+	if (left.IsNull() || !left.type().IsFloating() || !right.type().IsFloating()) {
+		return true;
+	}
+	auto left_number = left.GetValue<double>();
+	return left_number != 0.0 || std::signbit(left_number) == std::signbit(right.GetValue<double>());
+}
 
 bool IcebergFilePruner::PartitionValuesMatchFilter(int32_t spec_id, const vector<IcebergPartitionInfo> &partition_info,
                                                    const unordered_map<int32_t, int64_t> &nan_value_counts,
@@ -569,7 +582,7 @@ bool IcebergFilePruner::DeleteFileMatchesDataFile(const IcebergManifest &delete_
 			if (!delete_value || !data_value) {
 				return false;
 			}
-			if (!Value::NotDistinctFrom(*delete_value, *data_value)) {
+			if (!PartitionValuesMatch(*delete_value, *data_value)) {
 				return false;
 			}
 		}

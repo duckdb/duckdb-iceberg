@@ -24,6 +24,7 @@
 #include "duckdb/common/json_document.hpp"
 #include "re2/re2.h"
 
+#include <cmath>
 #include <optional>
 
 namespace duckdb {
@@ -403,6 +404,17 @@ static Value SerializeUUIDBound(const Value &uuid) {
 	return Value::BLOB(bytes, sizeof(bytes));
 }
 
+static bool PartitionBoundLessThan(const Value &left, const Value &right) {
+	if (left.type().IsFloating()) {
+		auto l = left.GetValue<double>();
+		auto r = right.GetValue<double>();
+		if (l == 0 && r == 0) {
+			return std::signbit(l) && !std::signbit(r);
+		}
+	}
+	return left < right;
+}
+
 void ManifestPartitions::Create(ClientContext &context, const IcebergTableMetadata &metadata,
                                 const IcebergTableSchema &target_schema, const IcebergPartitionSpec &partition_spec,
                                 const vector<IcebergManifestEntry> &manifest_entries) {
@@ -431,22 +443,11 @@ void ManifestPartitions::Create(ClientContext &context, const IcebergTableMetada
 
 	for (auto &entry : manifest_entries) {
 		auto &data_file = entry.data_file;
-		auto data_extended_partition_info = data_file.GetExtendedPartitionInfo(context, metadata, target_schema);
+		auto data_extended_partition_info =
+		    data_file.GetExtendedPartitionInfo(context, metadata, target_schema, partition_spec);
 		for (idx_t i = 0; i < num_fields; i++) {
-			auto &spec_field = partition_spec.fields[i];
-
-			// Find the partition info entry matching this field's partition_field_id
-			IcebergExtendedPartitionInfo extended_partition_info;
-			bool partition_info_exists = false;
-			for (auto &pi : data_extended_partition_info) {
-				if (pi.field_id == spec_field.partition_field_id) {
-					extended_partition_info = pi;
-					partition_info_exists = true;
-					break;
-				}
-			}
-
-			if (!partition_info_exists || extended_partition_info.value.IsNull()) {
+			auto &extended_partition_info = data_extended_partition_info[i];
+			if (extended_partition_info.value.IsNull()) {
 				field_summary[i].contains_null = true;
 				continue;
 			}
@@ -472,10 +473,10 @@ void ManifestPartitions::Create(ClientContext &context, const IcebergTableMetada
 				signed_max_values[i] = typed_value;
 				initialized[i] = true;
 			} else {
-				if (typed_value < min_values[i]) {
+				if (PartitionBoundLessThan(typed_value, min_values[i])) {
 					min_values[i] = typed_value;
 				}
-				if (typed_value > max_values[i]) {
+				if (PartitionBoundLessThan(max_values[i], typed_value)) {
 					max_values[i] = typed_value;
 				}
 				if (typed_value.type().id() == LogicalTypeId::UUID) {
@@ -511,26 +512,6 @@ void ManifestPartitions::Create(ClientContext &context, const IcebergTableMetada
 			field_summary[i].upper_bound = Value(LogicalType::BLOB);
 			continue;
 		}
-		auto &spec_field = partition_spec.fields[i];
-		// Find one IcebergPartitionInfo entry to get the type info
-		IcebergExtendedPartitionInfo extended_partition_info;
-		bool have_extended_partition_info = false;
-		for (auto &entry : manifest_entries) {
-			auto &data_file = entry.data_file;
-			auto data_extended_partition_info = data_file.GetExtendedPartitionInfo(context, metadata, target_schema);
-			for (auto &pi : data_extended_partition_info) {
-				if (pi.field_id == spec_field.partition_field_id && !pi.value.IsNull()) {
-					extended_partition_info = pi;
-					have_extended_partition_info = true;
-					break;
-				}
-			}
-			if (have_extended_partition_info) {
-				break;
-			}
-		}
-		D_ASSERT(have_extended_partition_info);
-		auto serialized_type = extended_partition_info.transform.GetSerializedType(extended_partition_info.source_type);
 		// min/max_values already in their partition result value types. We cast those to varchar to serialize them
 		// again unless they are blob (binary or fixed[L]), which already hold the serialized bytes.
 		auto &value_type = min_values[i].type();

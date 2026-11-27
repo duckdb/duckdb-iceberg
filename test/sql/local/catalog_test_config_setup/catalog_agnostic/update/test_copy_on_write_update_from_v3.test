@@ -1,0 +1,71 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/update/test_copy_on_write_update_from_v3.test
+# description: UPDATE FROM retires only the rewritten target file's deletion vector when the source also supplies file metadata
+# group: [update]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+USE my_datalake.default;
+
+statement ok
+DROP TABLE IF EXISTS cow_update_target;
+
+statement ok
+CREATE TABLE cow_update_target (id INTEGER, source_file VARCHAR, source_pos BIGINT)
+WITH ('format-version' = '3', 'write.update.mode' = 'copy-on-write');
+
+statement ok
+INSERT INTO cow_update_target VALUES (1, NULL, NULL), (2, NULL, NULL), (3, NULL, NULL);
+
+statement ok
+INSERT INTO cow_update_target VALUES (-2, NULL, NULL), (-1, NULL, NULL);
+
+# The target files have separate deletion vectors in the same Puffin file.
+statement ok
+DELETE FROM cow_update_target WHERE id IN (1, -2);
+
+query II
+SELECT count(*), count(DISTINCT file_path) FROM iceberg_metadata(cow_update_target)
+WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+2	1
+
+statement ok
+DROP TABLE IF EXISTS cow_update_source;
+
+statement ok
+CREATE TABLE cow_update_source (id INTEGER);
+
+# The larger source can be the first scan of the join. Both scans project filename and file_row_number.
+statement ok
+INSERT INTO cow_update_source SELECT i FROM range(2, 1026) r(i);
+
+query I
+UPDATE cow_update_target AS t SET source_file = s.filename, source_pos = s.file_row_number
+FROM cow_update_source AS s WHERE t.id = s.id;
+----
+2
+
+query IIII
+SELECT t.id, t.source_file IS NOT DISTINCT FROM s.filename AND t.source_pos IS NOT DISTINCT FROM s.file_row_number,
+       t._row_id, t._last_updated_sequence_number
+FROM cow_update_target t LEFT JOIN cow_update_source s USING (id) ORDER BY t.id;
+----
+-1	true	4	2
+2	true	1	4
+3	true	2	4
+
+query I
+SELECT count(*) FROM iceberg_metadata(cow_update_target) WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+1
+
+statement ok
+DROP TABLE cow_update_source;
+
+statement ok
+DROP TABLE cow_update_target;

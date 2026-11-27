@@ -11,17 +11,13 @@ DROP SCHEMA IF EXISTS my_datalake.myschema123;
 statement ok
 CREATE SCHEMA IF NOT EXISTS my_datalake.myschema123;
 
-query I
-CALL remove_iceberg_schema_properties(my_datalake.myschema123, ['namespace_id']);
-----
-1
-
-query II
-FROM iceberg_schema_properties(my_datalake.myschema123) WHERE key != 'location' ORDER BY ALL;
-----
+# Catalogs supply different properties when a namespace is created.
+statement ok
+CREATE TABLE initial_properties AS FROM iceberg_schema_properties(my_datalake.myschema123);
 
 query I
-CALL set_iceberg_schema_properties(my_datalake.myschema123,
+SELECT success - (SELECT count(*) FROM initial_properties)
+FROM set_iceberg_schema_properties(my_datalake.myschema123,
     {
     'myprop1' : '1',
     'myprop2' : '2',
@@ -29,44 +25,51 @@ CALL set_iceberg_schema_properties(my_datalake.myschema123,
     }
 );
 ----
-4
+3
 
 query II
-FROM iceberg_schema_properties(my_datalake.myschema123) WHERE key != 'location' ORDER BY ALL;
+FROM iceberg_schema_properties(my_datalake.myschema123)
+EXCEPT FROM initial_properties ORDER BY ALL;
 ----
 myprop1	1
 myprop2	2
 myprop3	3
 
 query I
-CALL remove_iceberg_schema_properties(my_datalake.myschema123, ['myprop2']);
+SELECT success - (SELECT count(*) FROM initial_properties)
+FROM remove_iceberg_schema_properties(my_datalake.myschema123, ['myprop2']);
 ----
-3
+2
 
 query II
-FROM iceberg_schema_properties(my_datalake.myschema123) WHERE key != 'location' ORDER BY ALL;
+FROM iceberg_schema_properties(my_datalake.myschema123)
+EXCEPT FROM initial_properties ORDER BY ALL;
 ----
 myprop1	1
 myprop3	3
 
 
 query I
-CALL remove_iceberg_schema_properties(my_datalake.myschema123, ['non_exisiting_prop']);
-----
-3
-
-query I
-CALL set_iceberg_schema_properties(my_datalake.myschema123, {'myprop2': '2', 'myprop4': '4'});
-----
-5
-
-query I
-CALL remove_iceberg_schema_properties(my_datalake.myschema123, ['myprop1', 'myprop3', 'myprop4']);
+SELECT success - (SELECT count(*) FROM initial_properties)
+FROM remove_iceberg_schema_properties(my_datalake.myschema123, ['non_exisiting_prop']);
 ----
 2
 
+query I
+SELECT success - (SELECT count(*) FROM initial_properties)
+FROM set_iceberg_schema_properties(my_datalake.myschema123, {'myprop2': '2', 'myprop4': '4'});
+----
+4
+
+query I
+SELECT success - (SELECT count(*) FROM initial_properties)
+FROM remove_iceberg_schema_properties(my_datalake.myschema123, ['myprop1', 'myprop3', 'myprop4']);
+----
+1
+
 query II
-FROM iceberg_schema_properties(my_datalake.myschema123) WHERE key != 'location' ORDER BY ALL;
+FROM iceberg_schema_properties(my_datalake.myschema123)
+EXCEPT FROM initial_properties ORDER BY ALL;
 ----
 myprop2	2
 

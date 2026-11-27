@@ -101,14 +101,22 @@ Delete-index cases compare indexed and exhaustive applicability, cover null/NaN
 and composite partitions, original paths and Puffin offsets, and drive concurrent
 views. A gated filesystem holds a lazy manifest read until an overlapping caller
 has registered, checking atomic publication, retained index ownership, and shared
-I/O/cancellation errors. The delete file cases hold the claiming worker in the open
-of one delete file and check that a waiting worker or an async thread reads the
+I/O/cancellation errors. Further cases hold delete manifest opens until two
+overlap, to check that waiting threads and async threads run a load's read tasks,
+and fail a read on a waiting thread, to check that the error reaches both callers.
+Query interrupts stop queued manifest reads and leave no completed indexes or
+cached manifests. The delete file cases hold the claiming worker in the open of
+one delete file and check that a waiting worker or an async thread reads the
 others, and that a failed read reaches both. The equality-delete view cases require
 equality-delete writes:
 
 ```sh
 ./build/reldebug/test/unittest_iceberg_planning
 ```
+
+`test/sql/local/native_catalog/delete_files_read_tasks.test` combines several delete
+manifests with shared position and equality delete files, checking cold and cached
+reads with and without async threads.
 
 Parsed-manifest cases check shared entry addresses, list-specific inheritance,
 copy-on-write rewrites, key compatibility, eviction, interleaved misses and
