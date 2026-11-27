@@ -25,7 +25,6 @@ public:
 	static Value ParsePrimitiveValue(const LogicalType &type,
 	                                 const rest_api_objects::PrimitiveTypeValue &primitive_value);
 	bool IsIcebergPrimitiveType() const;
-	bool IsSinkCheckedListElement() const;
 
 	ColumnDefinition GetColumnDefinition() const;
 	MultiFileColumnDefinition GetMultiFileColumnDefinition() const;

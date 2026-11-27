@@ -1250,7 +1250,7 @@ IcebergCopyToFile &IcebergInsert::PlanCopyForInsert(ClientContext &context, Phys
 	                                                   nullptr, 1, std::move(copy_input.ctas_info))
 	                          .Cast<IcebergCopyToFile>();
 
-	physical_copy.ApplyCopyOptions(copy_options, copy_input.schema);
+	physical_copy.ApplyCopyOptions(copy_options);
 	if (plan) {
 		physical_copy.children.push_back(*plan);
 	}

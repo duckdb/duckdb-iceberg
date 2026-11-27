@@ -16,7 +16,6 @@ namespace duckdb {
 
 class IcebergTableSchemaVersion;
 struct IcebergCopyOptions;
-class IcebergTableSchema;
 
 class IcebergCopyToFile : public PhysicalCopyToFile {
 public:
@@ -30,8 +29,7 @@ public:
 
 	//! Apply CopyOptions for Iceberg Tables. Called by the planner, and again from
 	//! GetGlobalSinkState for a CTAS, once the table it writes to actually exists.
-	void ApplyCopyOptions(IcebergCopyOptions &copy_options, const IcebergTableSchema &schema);
-	SinkResultType Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const override;
+	void ApplyCopyOptions(IcebergCopyOptions &copy_options);
 
 	//! The table this copy created, for a CTAS. Until GetGlobalSinkState has run this is NULL
 	//! Read by the IcebergInsert above this operator, which has no table entry of its own.
@@ -48,13 +46,6 @@ private:
 	void EnsureTableCreated(ClientContext &context) const;
 
 private:
-	struct RequiredList {
-		idx_t column;
-		vector<idx_t> struct_path;
-		string name;
-	};
-	vector<RequiredList> required_lists;
-
 	//! Only set for CREATE TABLE AS; the other write paths target a table that already exists.
 	//! Carries both what to create and, via its `schema`, the namespace to create it in.
 	unique_ptr<BoundCreateTableInfo> ctas_info;

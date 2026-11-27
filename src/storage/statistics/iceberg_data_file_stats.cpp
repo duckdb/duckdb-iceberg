@@ -129,13 +129,13 @@ void IcebergDataFileStats::PopulateFromReturnStats(ClientContext &context, Icebe
 		auto &column_info = *column_info_p;
 		auto stats = IcebergColumnStats::ParseColumnStats(column_info.type, col_stats, context);
 
-		//! Map descendants include placeholders for empty maps in their leaf null counts.
-		//! The map's own container counts distinguish empty maps from null maps.
-		const bool is_map_leaf = stats.column_size_bytes && HasMapParent(column_names, ic_schema);
-		if (!is_map_leaf && column_info.required && stats.null_count && *stats.null_count > 0 &&
-		    !column_info.IsSinkCheckedListElement()) {
-			auto normalized_col_name = StringUtil::Join(column_names, ".");
-			throw ConstraintException("NOT NULL constraint failed: %s.%s", table_name, normalized_col_name);
+		// A null or empty ancestor contributes a Parquet leaf null without creating an Iceberg field value.
+		if (column_info.required && stats.null_count && *stats.null_count > stats.parent_null_count.value_or(0)) {
+			// Older Parquet writers cannot distinguish empty maps from maps containing a null value.
+			if (stats.parent_null_count || !stats.column_size_bytes || !HasMapParent(column_names, ic_schema)) {
+				auto normalized_col_name = StringUtil::Join(column_names, ".");
+				throw ConstraintException("NOT NULL constraint failed: %s.%s", table_name, normalized_col_name);
+			}
 		}
 
 		auto metrics = GetColumnMetricsConfig(table_metadata, default_metrics, StringUtil::Join(column_names, "."));
