@@ -27,6 +27,10 @@ struct IcebergFileScanTask : public IcebergDataFileDescriptor {
 	}
 
 	unordered_map<int32_t, Value> partition_constants;
+	//! The data file's partition tuple as the planner read it: one value per field of the file's own partition spec,
+	//! by partition field id, under every transform. A file written in the planning transaction holds the textual
+	//! values its writer reported until it is committed.
+	vector<IcebergPartitionInfo> partition_values;
 	vector<IcebergDeleteFile> delete_files;
 };
 

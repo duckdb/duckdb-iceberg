@@ -75,9 +75,10 @@ struct IcebergPartition {
 
 struct IcebergDataFile {
 public:
-	static map<idx_t, LogicalType> GetFieldIdToTypeMapping(const IcebergSnapshotScanInfo &snapshot_info,
+	static map<idx_t, LogicalType> GetFieldIdToTypeMapping(ClientContext &context,
+	                                                       const IcebergSnapshotScanInfo &snapshot_info,
 	                                                       const IcebergTableMetadata &metadata,
-	                                                       const unordered_set<int32_t> &partition_spec_ids);
+	                                                       const IcebergPartitionSpec &spec);
 	static LogicalType PartitionStructType(const map<idx_t, LogicalType> &partition_field_id_to_type);
 	static LogicalType GetType(const IcebergTableMetadata &metadata, const LogicalType &partition_type);
 	// Get extended partition info. A data_file struct stores partition info as
@@ -85,8 +86,10 @@ public:
 	// extended partition info returns extra information about these partitions
 	// like source column id, source type, transform, and partition value.
 	// Resolve source types in target_schema, falling back to historical schemas for dropped columns.
-	const vector<IcebergExtendedPartitionInfo> GetExtendedPartitionInfo(const IcebergTableMetadata &metadata,
-	                                                                    const IcebergTableSchema &target_schema) const;
+	const vector<IcebergExtendedPartitionInfo> GetExtendedPartitionInfo(ClientContext &context,
+	                                                                    const IcebergTableMetadata &metadata,
+	                                                                    const IcebergTableSchema &target_schema,
+	                                                                    const IcebergPartitionSpec &spec) const;
 
 public:
 	void SetFirstRowId(optional<int64_t> first_row_id);

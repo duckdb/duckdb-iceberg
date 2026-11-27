@@ -9,17 +9,17 @@ include test/sql/init_requires
 require json
 
 statement ok
-CREATE TABLE my_datalake.default.invalid_scan_plan_metadata (id INTEGER);
+CREATE TABLE my_datalake.default.invalid_scan_plan_metadata (id INTEGER, p DOUBLE) PARTITIONED BY (p);
 
 statement ok
-INSERT INTO my_datalake.default.invalid_scan_plan_metadata VALUES (1), (2);
+INSERT INTO my_datalake.default.invalid_scan_plan_metadata VALUES (1, '-0.0'), (2, '-0.0');
 
 statement ok
 BEGIN;
 
 statement ok
 SET VARIABLE planned_file = (
-	SELECT json_object('spec-id', 0, 'partition', []::JSON[], 'content', 'data',
+	SELECT json_object('spec-id', 0, 'partition', ['-0.0'::DOUBLE], 'content', 'data',
 		'file-path', file_path, 'file-format', 'parquet', 'file-size-in-bytes', 100, 'record-count', record_count)
 	FROM iceberg_metadata(my_datalake.default.invalid_scan_plan_metadata)
 	WHERE status = 'ADDED'
@@ -125,6 +125,12 @@ query I
 SELECT list(id ORDER BY id) FROM planned_catalog.default.invalid_scan_plan_metadata;
 ----
 [1, 2]
+
+# The identity partition constant decoded from the server's JSON retains the sign bit.
+query I
+SELECT signbit(partition_constants."2"::DOUBLE) FROM iceberg_scan_plan('planned_catalog.default.invalid_scan_plan_metadata');
+----
+true
 
 query I
 SELECT count(*) > 0 FROM duckdb_logs()

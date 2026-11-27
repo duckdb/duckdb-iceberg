@@ -1,0 +1,97 @@
+# name: test/sql/local/native_catalog/uuid_partition_bounds.test
+# description: Java UUID extrema in manifest summaries must not prune matching identity partitions
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+CREATE TEMP TABLE uuid_rows (id INTEGER, u UUID);
+
+statement ok
+INSERT INTO uuid_rows VALUES
+	(1, '00000000-0000-0000-0000-000000000001'),
+	(2, '00000000-0000-0000-8000-000000000002'),
+	(3, '00000000-0000-0001-0000-000000000003'),
+	(4, '00000000-0000-0001-8000-000000000004'),
+	(5, '80000000-0000-0000-0000-000000000005');
+
+# Each insert produces a single manifest. Java compares signed 64-bit halves:
+# the extrema of rows 1..5 are (5,3), of rows 1..4 are (2,3), and of rows 1..2 are (2,1).
+foreach n 5 4 2
+
+statement ok
+CREATE TABLE my_datalake.default.uuid_bounds (id INTEGER, u UUID) PARTITIONED BY (u) WITH ('format-version'=2);
+
+statement ok
+INSERT INTO my_datalake.default.uuid_bounds SELECT * FROM uuid_rows WHERE id <= {n};
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE uuid_metadata = (
+	SELECT metadata::JSON FROM iceberg_load_table_response(my_datalake.default.uuid_bounds)
+);
+
+statement ok
+SET VARIABLE uuid_snapshot = getvariable('uuid_metadata')->'$.snapshots[0]';
+
+statement ok
+SET VARIABLE uuid_lo = (SELECT u FROM uuid_rows WHERE id = IF({n}=5,5,2));
+
+statement ok
+SET VARIABLE uuid_hi = (SELECT u FROM uuid_rows WHERE id = IF({n}=2,1,3));
+
+statement ok
+COPY (
+	SELECT manifest_path, manifest_length, partition_spec_id, content, sequence_number, min_sequence_number,
+		added_snapshot_id, [{contains_null: false,
+		lower_bound: unhex(replace(getvariable('uuid_lo')::VARCHAR, '-', '')),
+		upper_bound: unhex(replace(getvariable('uuid_hi')::VARCHAR, '-', ''))}] AS partitions
+	FROM read_avro(getvariable('uuid_snapshot')->>'manifest-list')
+) TO '{TEST_DIR}/signed_uuid_{n}.avro' (FORMAT AVRO, FIELD_IDS {
+	manifest_path: 500, manifest_length: 501, partition_spec_id: 502, content: 517, sequence_number: 515,
+	min_sequence_number: 516, added_snapshot_id: 503,
+	partitions: {__duckdb_field_id: 507, list: {__duckdb_field_id: 508, contains_null: 509, lower_bound: 510, upper_bound: 511}}
+});
+
+statement ok
+COPY (SELECT json_merge_patch(getvariable('uuid_metadata'), json_object('snapshots',
+	[json_merge_patch(getvariable('uuid_snapshot'), json_object('manifest-list','{TEST_DIR}/signed_uuid_{n}.avro'))])))
+TO '{TEST_DIR}/signed_uuid_{n}.metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+query I
+SELECT count(id) = {n} FROM iceberg_scan('{TEST_DIR}/signed_uuid_{n}.metadata.json');
+----
+true
+
+query II
+SELECT lower_bound::UUID = getvariable('uuid_lo'), upper_bound::UUID = getvariable('uuid_hi')
+FROM iceberg_partition_stats('{TEST_DIR}/signed_uuid_{n}.metadata.json');
+----
+true	true
+
+loop i 1 6
+
+statement ok
+SET VARIABLE needle = (SELECT u FROM uuid_rows WHERE id={i});
+
+query I
+SELECT count(*) = IF({i} <= {n}, 1, 0) FROM iceberg_scan('{TEST_DIR}/signed_uuid_{n}.metadata.json')
+WHERE u = getvariable('needle');
+----
+true
+
+endloop
+
+statement ok
+COMMIT;
+
+statement ok
+DROP TABLE my_datalake.default.uuid_bounds;
+
+endloop

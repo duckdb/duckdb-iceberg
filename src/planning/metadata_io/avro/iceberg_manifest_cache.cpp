@@ -99,6 +99,15 @@ string ManifestCacheKey(const IcebergManifestFileScanInfo &scan, idx_t manifest_
 	for (auto &field : scan.partition_field_id_to_type) {
 		KeyPart(key, std::to_string(field.first));
 		KeyPart(key, field.second.ToString());
+		if (field.second.id() == LogicalTypeId::VARIANT) {
+			for (auto &spec : scan.partition_types_by_spec) {
+				auto type = spec.second.find(field.first);
+				if (type != spec.second.end()) {
+					KeyPart(key, std::to_string(spec.first));
+					KeyPart(key, type->second.ToString());
+				}
+			}
+		}
 	}
 	KeyPart(key, "specs");
 	// All specs affect v1 header resolution and whether DATE-to-INTEGER day casts are enabled.

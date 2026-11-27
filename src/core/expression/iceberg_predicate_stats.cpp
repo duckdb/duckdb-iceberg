@@ -2,6 +2,7 @@
 
 #include "core/expression/iceberg_value.hpp"
 #include "duckdb/common/types/geometry.hpp"
+#include "duckdb/common/types/uuid.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
@@ -159,6 +160,34 @@ IcebergPredicateStats IcebergPredicateStats::DeserializeBounds(ClientContext &co
 		}
 	}
 	return result;
+}
+
+IcebergPredicateStats IcebergPredicateStats::DeserializeBoundsForPruning(ClientContext &context, const Value &lower,
+                                                                         const Value &upper, const string &name,
+                                                                         const LogicalType &type) {
+	auto stats = DeserializeBounds(context, lower, upper, name, type);
+	if (type.id() != LogicalTypeId::UUID) {
+		return stats;
+	}
+	// Writers may compare UUIDs as two signed longs (Iceberg Java) or as unsigned bytes (DuckDB).
+	// A single endpoint, or a signed interval that wraps around the high word, gives no usable bounds.
+	if (!stats.lower_bound || !stats.upper_bound) {
+		return {};
+	}
+	auto lo = BaseUUID::ToUHugeint(stats.lower_bound->GetValueUnsafe<hugeint_t>());
+	auto hi = BaseUUID::ToUHugeint(stats.upper_bound->GetValueUnsafe<hugeint_t>());
+	if (lo.upper > hi.upper) {
+		return {};
+	}
+	if (lo.upper != hi.upper || lo.lower > hi.lower) {
+		// Both orders stay within these high words. At either end, signed low-word extrema
+		// can exclude real values in unsigned order, even if the two endpoints look ordered.
+		lo.lower = 0;
+		hi.lower = NumericLimits<uint64_t>::Maximum();
+		stats.SetLowerBound(Value::UUID(BaseUUID::FromUHugeint(lo)));
+		stats.SetUpperBound(Value::UUID(BaseUUID::FromUHugeint(hi)));
+	}
+	return stats;
 }
 
 } // namespace duckdb

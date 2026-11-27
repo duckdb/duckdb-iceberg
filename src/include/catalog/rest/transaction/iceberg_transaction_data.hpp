@@ -107,6 +107,8 @@ public:
 
 	//! Each data-changing statement creates an alter; the actions of one MERGE share an alter.
 	vector<reference<IcebergAddSnapshot>> alters;
+	//! A pending V3 snapshot assigns lineage at commit, including to retained files from before an upgrade.
+	bool has_pending_v3_snapshot = false;
 	//! Snapshot this transaction is based on (the tip when the manifest list was first cached).
 	//! Drives the delete commit-retry safety check.
 	optional<int64_t> base_snapshot_id;
@@ -116,6 +118,8 @@ public:
 
 	//! If we perform an update that relies on the current schema id staying unchanged
 	bool assert_schema_id = false;
+	//! A dropped field must still be unused by the default partition spec and sort order at commit.
+	bool drops_field = false;
 	//! Whether this transaction explicitly requires the table to be newly created.
 	bool has_assert_create = false;
 	//! Whether this transaction rolls main back (TableRollbackToSnapshot)

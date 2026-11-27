@@ -1,0 +1,193 @@
+# name: test/sql/local/scan_tasks_count_star.test
+# description: iceberg_scan_tasks answers COUNT(*) from the record counts of its tasks, without opening their data files
+# group: [local]
+
+include test/sql/init_requires
+
+require json
+
+# The v2 metadata file plans one data file with ids 1 through 4.
+# Stored plans can reorder fields and omit the optional row_filter.
+statement ok
+create temp table tasks as select record_count, * exclude (record_count, row_filter)
+from iceberg_scan_plan('data/persistent/equality_deletes/warehouse/mydb/mytable', version='2');
+
+# A task whose data file does not exist and says it holds 7 rows: COUNT(*) is the task's record count, so no file is opened.
+statement ok
+create temp table missing_file_tasks as
+select * replace('{TEST_DIR}/no_such_file.parquet' as file_path, 7::bigint as record_count) from tasks;
+
+statement ok
+set variable missing_file_task_list = (select list(t) from missing_file_tasks t);
+
+query I
+select count(*) from iceberg_scan_tasks(getvariable('missing_file_task_list'));
+----
+7
+
+# The reader accepts mixed-case Parquet names. These tasks still qualify for a metadata-only count.
+statement ok
+set variable mixed_case_format = (select [struct_update(t, file_format := 'ParQuEt')] from missing_file_tasks t);
+
+query I
+select count(*) from iceberg_scan_tasks(getvariable('mixed_case_format'));
+----
+7
+
+statement ok
+set variable null_format = (select [t, struct_update(t, file_format := NULL::varchar)] from tasks t);
+
+statement error
+select count(*) from iceberg_scan_tasks(getvariable('null_format'));
+----
+input column 'file_format' cannot be NULL
+
+# Any column the query reads needs the file.
+statement error
+select max(id) from iceberg_scan_tasks(getvariable('missing_file_task_list'));
+----
+<REGEX>:.*no_such_file.*
+
+# The counts of several tasks add up.
+statement ok
+set variable two_missing_file_task_list = (select list(t) from (select * from missing_file_tasks union all select * replace(3::bigint as record_count) from missing_file_tasks) t);
+
+query I
+select count(*) from iceberg_scan_tasks(getvariable('two_missing_file_task_list'));
+----
+10
+
+# A row filter on a task can drop rows, so its record count is not the number of rows it returns: the file is read.
+statement ok
+set variable filtered_task_list = (select list(t) from (select * replace(7::bigint as record_count), 'id > 2' row_filter from tasks) t);
+
+query I
+select count(*) from iceberg_scan_tasks(getvariable('filtered_task_list'));
+----
+2
+
+# The unfiltered copy claims 7 rows. A predicate on the second copy makes both read the file, yielding 4 + 2.
+statement ok
+set variable mixed_filters = (select [
+    struct_update(t, record_count := 7::bigint, row_filter := NULL::varchar),
+    struct_update(t, row_filter := 'id > 2')
+] from tasks t);
+
+query I
+select count(*) from iceberg_scan_tasks(getvariable('mixed_filters'));
+----
+6
+
+# A filter in the query is applied to the rows of the file as well.
+statement ok
+set variable count_task_list = (select list(t) from tasks t);
+
+query I
+select count(*) from iceberg_scan_tasks(getvariable('count_task_list')) where id > 2;
+----
+2
+
+query I
+select count(*) from iceberg_scan_tasks(getvariable('count_task_list'));
+----
+4
+
+# Counting a supported file can skip metadata decoding. Reading a column still requires its metadata.
+statement ok
+set variable missing_metadata = (select [struct_update(t, metadata := NULL::variant)] from tasks t);
+
+query I
+select count(*) from iceberg_scan_tasks(getvariable('missing_metadata'));
+----
+4
+
+statement error
+select count(id) from iceberg_scan_tasks(getvariable('missing_metadata'));
+----
+metadata and schema_id cannot be NULL
+
+# Counting a column or its distinct values is not COUNT(*): it needs the file.
+statement error
+select count(id) from iceberg_scan_tasks(getvariable('missing_file_task_list'));
+----
+<REGEX>:.*no_such_file.*
+
+statement error
+select count(distinct id) from iceberg_scan_tasks(getvariable('missing_file_task_list'));
+----
+<REGEX>:.*no_such_file.*
+
+# A task without a record count is an error, as it is when the task is scanned.
+statement ok
+set variable null_count_task_list = (select list(t) from (select * replace(NULL::bigint as record_count) from tasks) t);
+
+statement error
+select count(*) from iceberg_scan_tasks(getvariable('null_count_task_list'));
+----
+<REGEX>:.*record_count.*cannot be NULL.*
+
+# A valid first task cannot hide a malformed second task.
+statement error
+select count(*) from iceberg_scan_tasks(list_append(getvariable('count_task_list'), NULL));
+----
+non-NULL task structs
+
+statement ok
+set variable null_deletes = (select [
+    t, struct_update(t, delete_files := cast_to_type(NULL, t.delete_files))
+] from tasks t);
+
+statement error
+select count(*) from iceberg_scan_tasks(getvariable('null_deletes'));
+----
+input column 'delete_files' cannot be NULL
+
+# A negative record count is an error, as it is when the task is scanned.
+statement ok
+set variable negative_count_task_list = (select list(t) from (select * replace(-1::bigint as record_count) from missing_file_tasks) t);
+
+statement error
+select count(*) from iceberg_scan_tasks(getvariable('negative_count_task_list'));
+----
+<REGEX>:.*negative.*
+
+# The largest representable total can still be answered with every data file missing.
+statement ok
+set variable max_count_tasks = (select [
+    struct_update(t, record_count := 9223372036854775806::bigint),
+    struct_update(t, record_count := 1::bigint),
+    struct_update(t, record_count := 0::bigint)
+] from missing_file_tasks t);
+
+query I
+select count(*) from iceberg_scan_tasks(getvariable('max_count_tasks'));
+----
+9223372036854775807
+
+# One row beyond that limit forces a scan of both copies of the four-row file.
+statement ok
+set variable overflow_tasks = (select [
+    struct_update(t, record_count := 9223372036854775807::bigint),
+    struct_update(t, record_count := 1::bigint)
+] from tasks t);
+
+query I
+select count(*) from iceberg_scan_tasks(getvariable('overflow_tasks'));
+----
+8
+
+# Three BIGINT maxima would wrap back into the signed range if summed in an unsigned integer.
+statement ok
+set variable huge_count_task_list = (select list(struct_update(t, record_count := 9223372036854775807::bigint))
+ from missing_file_tasks t, range(3));
+
+statement error
+select count(*) from iceberg_scan_tasks(getvariable('huge_count_task_list'));
+----
+<REGEX>:.*no_such_file.*
+
+# COUNT(*) next to another aggregate is not answered from the record counts.
+statement error
+select count(*), max(id) from iceberg_scan_tasks(getvariable('missing_file_task_list'));
+----
+<REGEX>:.*no_such_file.*
