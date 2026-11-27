@@ -28,6 +28,7 @@ struct IcebergColumnStats {
 	optional<string> min;
 	optional<string> max;
 	optional<idx_t> null_count;
+	optional<idx_t> parent_null_count;
 	optional<idx_t> num_values;
 	optional<idx_t> column_size_bytes;
 	optional<bool> contains_nan;

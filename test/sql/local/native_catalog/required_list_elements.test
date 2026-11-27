@@ -1,0 +1,108 @@
+# name: test/sql/local/native_catalog/required_list_elements.test
+# description: Empty lists have no elements that can violate a nested NOT NULL constraint
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables',
+	'{"name":"required_list_elements","schema":{"type":"struct","schema-id":0,"fields":[
+		{"id":1,"name":"label","required":false,"type":{"type":"struct","fields":[
+			{"id":2,"name":"controls","required":true,"type":{"type":"list","element-id":3,"element-required":true,"element":"string"}}
+		]}},
+		{"id":4,"name":"tags","required":true,"type":{"type":"list","element-id":5,"element-required":true,"element":"string"}}
+	]}}');
+----
+200
+
+statement ok
+INSERT INTO my_datalake.default.required_list_elements VALUES
+	(struct_pack(controls := []::VARCHAR[]), []::VARCHAR[]),
+	(struct_pack(controls := ['x']), ['y']), (NULL, []::VARCHAR[]);
+
+query II
+SELECT label.controls, tags FROM my_datalake.default.required_list_elements ORDER BY len(label.controls) NULLS LAST;
+----
+[]	[]
+[x]	[y]
+NULL	[]
+
+statement error
+INSERT INTO my_datalake.default.required_list_elements VALUES
+	(struct_pack(controls := ['valid']), ['ok']), (struct_pack(controls := [NULL]::VARCHAR[]), ['ok']);
+----
+NOT NULL constraint failed: required_list_elements.label.controls.element
+
+statement error
+INSERT INTO my_datalake.default.required_list_elements VALUES (struct_pack(controls := NULL::VARCHAR[]), ['ok']);
+----
+NOT NULL constraint failed: required_list_elements.label.controls
+
+statement error
+INSERT INTO my_datalake.default.required_list_elements VALUES (NULL, [NULL]::VARCHAR[]);
+----
+NOT NULL constraint failed: required_list_elements.tags.element
+
+statement error
+UPDATE my_datalake.default.required_list_elements SET tags = [NULL]::VARCHAR[] WHERE tags = ['y'];
+----
+NOT NULL constraint failed: required_list_elements.tags.element
+
+statement error
+MERGE INTO my_datalake.default.required_list_elements AS t
+USING (SELECT [NULL]::VARCHAR[] AS tags) AS s ON false
+WHEN NOT MATCHED THEN INSERT (label, tags) VALUES (NULL, s.tags);
+----
+NOT NULL constraint failed: required_list_elements.tags.element
+
+statement error
+INSERT INTO my_datalake.default.required_list_elements
+SELECT NULL, CASE WHEN i = 3000 THEN [NULL] ELSE [] END::VARCHAR[] FROM range(5000) t(i);
+----
+NOT NULL constraint failed: required_list_elements.tags.element
+
+query II
+SELECT label.controls, tags FROM my_datalake.default.required_list_elements ORDER BY len(label.controls) NULLS LAST;
+----
+[]	[]
+[x]	[y]
+NULL	[]
+
+statement ok
+DROP TABLE my_datalake.default.required_list_elements;
+
+# Empty and absent ancestors can occur at several levels. Constraints still apply when manifest metrics are disabled.
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables',
+	'{"name":"required_nested","properties":{"write.metadata.metrics.default":"none"},"schema":{"type":"struct","schema-id":0,"fields":[
+		{"id":1,"name":"groups","required":false,"type":{"type":"list","element-id":3,"element-required":false,"element":{"type":"struct","fields":[
+			{"id":4,"name":"ids","required":true,"type":{"type":"list","element-id":5,"element-required":true,"element":"int"}}
+		]}}},
+		{"id":2,"name":"labels","required":false,"type":{"type":"map","key-id":6,"key":"string","value-id":7,"value-required":true,"value":"string"}}
+	]}}');
+----
+200
+
+statement ok
+INSERT INTO my_datalake.default.required_nested VALUES
+	(NULL, NULL), ([], MAP()), ([NULL, {'ids': []}, {'ids': [1, 2]}], MAP {'k': 'v'});
+
+statement error
+INSERT INTO my_datalake.default.required_nested VALUES ([NULL, {'ids': [1, NULL]}], MAP());
+----
+NOT NULL constraint failed: required_nested.groups.element.ids.element
+
+statement error
+INSERT INTO my_datalake.default.required_nested VALUES ([], MAP {'k': NULL});
+----
+NOT NULL constraint failed: required_nested.labels.value
+
+query I
+SELECT count(*) FROM my_datalake.default.required_nested;
+----
+3
+
+statement ok
+DROP TABLE my_datalake.default.required_nested;
