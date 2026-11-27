@@ -32,7 +32,6 @@
 #include "common/iceberg_geography_type.hpp"
 #include "core/metadata/schema/iceberg_field_mapping.hpp"
 #include "iceberg_options.hpp"
-#include "duckdb/common/exception/http_exception.hpp"
 #include "duckdb/logging/logger.hpp"
 
 namespace duckdb {
@@ -183,6 +182,7 @@ void IcebergSchemaEntry::DropEntry(ClientContext &context, DropInfo &info, bool 
 		if (delete_entry) {
 			transaction.InvalidateViewEntry(view_key);
 		} else {
+			transaction.VerifyCanAddRequest(IcebergTransaction::RequestType::VIEW);
 			IcebergTransaction::DeletedViewInfo info;
 			info.namespace_items = namespace_items;
 			info.view_name = entry_name;
@@ -234,8 +234,8 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateView(CatalogTransaction tra
 	auto &context = transaction.GetContext();
 
 	if (info.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT) {
-		throw NotImplementedException(
-		    "CREATE OR REPLACE not supported in DuckDB-Iceberg. Please use separate Drop and Create Statements");
+		throw NotImplementedException("CREATE OR REPLACE not supported for Iceberg views. Run DROP VIEW and CREATE "
+		                              "VIEW in separate transactions");
 	}
 
 	auto existing_entry = GetEntry(transaction, CatalogType::TABLE_ENTRY, info.GetViewName());
@@ -275,6 +275,7 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateView(CatalogTransaction tra
 
 	// Track the view in the transaction
 	auto &iceberg_transaction = GetICTransaction(transaction);
+	iceberg_transaction.VerifyCanAddRequest(IcebergTransaction::RequestType::VIEW);
 	auto view_key = IcebergTable::GetTableKey(catalog.Cast<IcebergCatalog>(), namespace_items,
 	                                          info.GetViewName().GetIdentifierName());
 
@@ -285,11 +286,7 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateView(CatalogTransaction tra
 		view_info->sql = view_info->query->ToString();
 	}
 
-	iceberg_transaction.created_views.erase(view_key);
 	iceberg_transaction.created_views.emplace(view_key, std::move(view_info));
-
-	// A DROP followed by CREATE can replace an entry already bound in this transaction.
-	iceberg_transaction.InvalidateViewEntry(view_key);
 
 	// Return a pointer to an owned entry (avoid dangling pointer)
 	return tables.GetViewEntry(transaction.GetContext(), info.GetViewName().GetIdentifierName());
@@ -1340,26 +1337,5 @@ IcebergTableSet &IcebergSchemaEntry::GetCatalogSet(CatalogType type) {
 		throw InternalException("Type not supported for GetCatalogSet");
 	}
 }
-
-void IcebergSchemaEntry::LoadProperties(ClientContext &context) {
-	if (schema_info.properties_loaded) {
-		// not needed
-		return;
-	}
-	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
-
-	auto get_namespace_result = IRCAPI::GetNamespace(context, ic_catalog, *this);
-	if (get_namespace_result.error_) {
-		throw HTTPException(StringUtil::Format("GetNamespace endpoint returned response code %s with message \"%s\"",
-		                                       EnumUtil::ToString(get_namespace_result.status_),
-		                                       get_namespace_result.error_->_error.message));
-	}
-
-	if (auto &properties = get_namespace_result.result_->properties) {
-		schema_info.properties = *properties;
-	}
-	schema_info.properties_loaded = true;
-	// TODO: eventually set up caching for this response?
-};
 
 } // namespace duckdb

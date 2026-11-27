@@ -1,0 +1,196 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_namespace_transaction_atomicity.test
+# description: Reject namespace and table changes that require separate catalog requests
+# group: [transactions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+set ignore_error_messages
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.namespace_atomicity;
+
+statement ok
+DROP SCHEMA IF EXISTS my_datalake.namespace_atomicity;
+
+statement ok
+DROP SCHEMA IF EXISTS my_datalake.namespace_atomicity_new;
+
+statement ok
+CREATE SCHEMA my_datalake.namespace_atomicity;
+
+statement ok
+CREATE TABLE my_datalake.default.namespace_atomicity AS SELECT 1 AS id;
+
+# The namespace is empty. Both operations would succeed separately.
+statement ok writer
+BEGIN;
+
+statement ok writer
+INSERT INTO my_datalake.default.namespace_atomicity VALUES (2);
+
+statement error writer
+DROP SCHEMA my_datalake.namespace_atomicity;
+----
+cannot commit this transaction atomically
+
+statement ok writer
+ROLLBACK;
+
+query I
+SELECT id FROM my_datalake.default.namespace_atomicity;
+----
+1
+
+# The same restriction applies with the namespace operation first, for each table request type.
+foreach operation insert rename drop create
+
+statement ok writer
+BEGIN;
+
+statement ok writer
+DROP SCHEMA my_datalake.namespace_atomicity;
+
+onlyif operation=insert
+statement error writer
+INSERT INTO my_datalake.default.namespace_atomicity VALUES (3);
+----
+cannot commit this transaction atomically
+
+onlyif operation=rename
+statement error writer
+ALTER TABLE my_datalake.default.namespace_atomicity RENAME TO namespace_atomicity_renamed;
+----
+cannot commit this transaction atomically
+
+onlyif operation=drop
+statement error writer
+DROP TABLE my_datalake.default.namespace_atomicity;
+----
+cannot commit this transaction atomically
+
+onlyif operation=create
+statement error writer
+CREATE TABLE my_datalake.default.namespace_atomicity_created (id INTEGER);
+----
+cannot commit this transaction atomically
+
+statement ok writer
+ROLLBACK;
+
+endloop
+
+# A table in a pending namespace also needs a separate request.
+statement ok writer
+BEGIN;
+
+statement ok writer
+CREATE SCHEMA my_datalake.namespace_atomicity_new;
+
+statement error writer
+CREATE TABLE my_datalake.namespace_atomicity_new.child AS SELECT 1 AS id;
+----
+cannot commit this transaction atomically
+
+statement ok writer
+ROLLBACK;
+
+# A table create already staged in an existing namespace also excludes a namespace create.
+statement ok writer
+BEGIN;
+
+statement ok writer
+CREATE TABLE my_datalake.namespace_atomicity.child (id INTEGER);
+
+statement error writer
+CREATE SCHEMA my_datalake.namespace_atomicity_new;
+----
+cannot commit this transaction atomically
+
+statement ok writer
+ROLLBACK;
+
+statement error
+SELECT * FROM my_datalake.namespace_atomicity.child;
+----
+does not exist
+
+# Each namespace create or drop also needs its own request.
+statement ok writer
+BEGIN;
+
+statement ok writer
+CREATE SCHEMA my_datalake.namespace_atomicity_new;
+
+statement error writer
+DROP SCHEMA my_datalake.namespace_atomicity;
+----
+cannot commit this transaction atomically
+
+statement ok writer
+ROLLBACK;
+
+# IF EXISTS and IF NOT EXISTS see the pending namespace change.
+statement ok writer
+BEGIN;
+
+statement ok writer
+CREATE SCHEMA my_datalake.namespace_atomicity_new;
+
+statement error writer
+DROP SCHEMA IF EXISTS my_datalake.namespace_atomicity_new;
+----
+cannot commit this transaction atomically
+
+statement ok writer
+ROLLBACK;
+
+statement ok writer
+BEGIN;
+
+statement ok writer
+DROP SCHEMA my_datalake.namespace_atomicity;
+
+statement error writer
+CREATE SCHEMA IF NOT EXISTS my_datalake.namespace_atomicity;
+----
+cannot commit this transaction atomically
+
+statement ok writer
+ROLLBACK;
+
+# A successful plain create proves that the rejected transaction never published the new namespace.
+statement ok
+CREATE SCHEMA my_datalake.namespace_atomicity_new;
+
+statement ok
+DROP SCHEMA my_datalake.namespace_atomicity_new;
+
+# Existing/missing schema IF clauses are no-ops and can accompany a real table write.
+statement ok
+BEGIN;
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.namespace_atomicity;
+
+statement ok
+INSERT INTO my_datalake.default.namespace_atomicity VALUES (4);
+
+statement ok
+DROP SCHEMA IF EXISTS my_datalake.namespace_atomicity_missing;
+
+statement ok
+COMMIT;
+
+query I
+SELECT id FROM my_datalake.default.namespace_atomicity ORDER BY id;
+----
+1
+4
+
+statement ok
+DROP SCHEMA my_datalake.namespace_atomicity;
+
+statement ok
+DROP TABLE my_datalake.default.namespace_atomicity;
