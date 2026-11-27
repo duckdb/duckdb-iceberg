@@ -458,7 +458,7 @@ static IcebergMetricsMatch MatchComparison(const Value &constant, ExpressionType
 		return IcebergMetricsMatch::ROWS_CANNOT_MATCH;
 	}
 	if (comparison_type == ExpressionType::COMPARE_NOTEQUAL) {
-		//! Assumes equal bounds with no NULLs mean every row holds that value, as the spec requires of bounds
+		//! Assumes equal bounds with no NULLs mean every row holds that value
 		return StrictMatchBoundsConstant(constant, ExpressionType::COMPARE_EQUAL, stats, transform)
 		           ? IcebergMetricsMatch::ROWS_CANNOT_MATCH
 		           : IcebergMetricsMatch::ROWS_MIGHT_MATCH;
@@ -592,7 +592,6 @@ static IcebergMetricsMatch MatchBoundsExpression(ClientContext &context, const u
 			return IcebergMetricsMatch::ROWS_CANNOT_MATCH;
 		}
 		case ExpressionType::OPERATOR_NOT: {
-			//! x NOT IN (a, b) is x != a AND x != b
 			if (bound_operator_expr.GetChildren().size() != 1 ||
 			    bound_operator_expr.GetChildren()[0]->GetExpressionType() != ExpressionType::COMPARE_IN) {
 				return IcebergMetricsMatch::ROWS_MIGHT_MATCH;
