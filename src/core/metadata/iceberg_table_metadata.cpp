@@ -299,13 +299,48 @@ string IcebergTableMetadata::GuessTableVersion(const string &meta_path, FileSyst
 	    version_format);
 }
 
+//! The number matched by the glob's wildcard, before any '-'
+static optional<int64_t> ParseMetadataVersion(const string &path, const string &glob) {
+	auto wildcard = glob.find('*');
+	if (wildcard == string::npos) {
+		return optional<int64_t>();
+	}
+	auto prefix = glob.substr(0, wildcard);
+	auto suffix = glob.substr(wildcard + 1);
+	auto file_name = StringUtil::GetFileName(path);
+	if (file_name.size() < prefix.size() + suffix.size() || !StringUtil::StartsWith(file_name, prefix) ||
+	    !StringUtil::EndsWith(file_name, suffix)) {
+		return optional<int64_t>();
+	}
+	auto version = file_name.substr(prefix.size(), file_name.size() - prefix.size() - suffix.size());
+	version = version.substr(0, version.find('-'));
+	for (auto c : version) {
+		if (!StringUtil::CharacterIsDigit(c)) {
+			return optional<int64_t>();
+		}
+	}
+	int64_t result;
+	if (!TryCast::Operation<string_t, int64_t>(string_t(version), result, true)) {
+		return optional<int64_t>();
+	}
+	return result;
+}
+
+//! Orders metadata files from oldest to newest: by version, with files that have no version first, then by path.
+static bool IsOlderMetadata(const OpenFileInfo &a, const OpenFileInfo &b, const string &glob) {
+	auto a_version = ParseMetadataVersion(a.path, glob);
+	auto b_version = ParseMetadataVersion(b.path, glob);
+	if (a_version != b_version) {
+		return a_version < b_version;
+	}
+	return a.path < b.path;
+}
+
 string IcebergTableMetadata::PickTableVersion(vector<OpenFileInfo> &found_metadata, string &version_pattern,
                                               string &glob) {
-	// TODO: Different "table_version" strings could customize this
-	// For now: just sort the versions and take the largest
 	if (!found_metadata.empty()) {
 		std::sort(found_metadata.begin(), found_metadata.end(),
-		          [](const OpenFileInfo &a, const OpenFileInfo &b) { return a.path < b.path; });
+		          [&](const OpenFileInfo &a, const OpenFileInfo &b) { return IsOlderMetadata(a, b, glob); });
 		return found_metadata.back().path;
 	} else {
 		return string();

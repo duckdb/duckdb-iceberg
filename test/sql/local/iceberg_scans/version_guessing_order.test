@@ -1,0 +1,55 @@
+# name: test/sql/local/iceberg_scans/version_guessing_order.test
+# description: version guessing picks the metadata file with the highest version number, not the last name as a string
+# group: [iceberg_scans]
+
+# The metadata files are renamed copies of hive_partitioned_table v3 and v4, and lineitem_iceberg_gz v1 and v2
+
+include test/sql/init_requires
+
+statement ok
+SET unsafe_enable_version_guessing = true;
+
+statement ok
+CALL enable_logging('FileSystem');
+
+# Which of the given metadata files a read opened. It matches the end of the path, because the parsed log drops
+# the backslashes of a Windows path
+statement ok
+CREATE TEMP MACRO opened_metadata(files) AS TABLE
+SELECT file FROM (SELECT unnest(files) AS file)
+WHERE EXISTS (FROM duckdb_logs_parsed('FileSystem') WHERE op = 'OPEN' AND ends_with(path, file));
+
+# 'v10' is newer than 'v9', although 'v9' sorts last as a string
+statement ok
+SELECT * FROM iceberg_snapshots('{WORKING_DIRECTORY}/data/persistent/metadata_version/hadoop_names');
+
+query I
+FROM opened_metadata(['v9.metadata.json', 'v10.metadata.json']);
+----
+v10.metadata.json
+
+statement ok
+CALL truncate_duckdb_logs();
+
+# '100000-<uuid>' is newer than '99999-<uuid>'
+statement ok
+SELECT * FROM iceberg_snapshots('{WORKING_DIRECTORY}/data/persistent/metadata_version/catalog_names');
+
+query I
+FROM opened_metadata([
+	'99999-6f1c2a3e-4b5d-4e6f-8a7b-9c0d1e2f3a4b.metadata.json',
+	'100000-0a1b2c3d-4e5f-4a6b-8c7d-8e9f0a1b2c3d.metadata.json'
+]);
+----
+100000-0a1b2c3d-4e5f-4a6b-8c7d-8e9f0a1b2c3d.metadata.json
+
+statement ok
+CALL truncate_duckdb_logs();
+
+statement ok
+SELECT * FROM iceberg_snapshots('{WORKING_DIRECTORY}/data/persistent/metadata_version/gzip_names', metadata_compression_codec = 'gzip');
+
+query I
+FROM opened_metadata(['v9.gz.metadata.json', 'v10.gz.metadata.json']);
+----
+v10.gz.metadata.json
