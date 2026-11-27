@@ -588,6 +588,12 @@ void IcebergTableSet::ReplaceDefinition(ClientContext &context, IcebergTable &ta
 			metadata.table_properties[property.first] = property.second;
 		}
 		transaction_data.TableSetProperties(properties);
+		auto comment = properties.find("comment");
+		if (comment != properties.end()) {
+			for (auto &version : table_info.schema_versions) {
+				version.second->comment = Value(comment->second);
+			}
+		}
 	}
 }
 

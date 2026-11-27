@@ -1,0 +1,116 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_or_replace_definition.test
+# description: Replacement resets partitioning and sorting and preserves or explicitly upgrades the format version
+# group: [create]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+CREATE TABLE my_datalake.default.cor_definition (id INTEGER, part VARCHAR)
+PARTITIONED BY (part) SORTED BY (id) WITH ('format-version' = 2);
+
+statement ok
+INSERT INTO my_datalake.default.cor_definition VALUES (1, 'old');
+
+# A late validation error must discard the schema, format upgrade, and properties together.
+statement ok
+SET VARIABLE cor_definition_before = (
+    SELECT metadata_location FROM iceberg_load_table_response(my_datalake.default.cor_definition)
+);
+
+foreach clause PARTITIONED SORTED
+
+statement error
+CREATE OR REPLACE TABLE my_datalake.default.cor_definition (invalid BOOLEAN)
+{clause} BY (bucket(4, invalid)) WITH ('format-version' = 3, 'custom' = 'must not persist');
+----
+the bucket[4] transform doesn't accept BOOLEAN columns
+
+query I
+SELECT metadata_location = getvariable('cor_definition_before')
+FROM iceberg_load_table_response(my_datalake.default.cor_definition);
+----
+true
+
+query IT
+SELECT * FROM my_datalake.default.cor_definition;
+----
+1	old
+
+endloop
+
+# Replacement supplies a new partition/sort definition, using the retained field IDs.
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_definition (part VARCHAR, id INTEGER)
+PARTITIONED BY (id) SORTED BY (part);
+
+query I
+SELECT spec.fields[1]."source-id"::INTEGER FROM iceberg_load_table_response(my_datalake.default.cor_definition),
+unnest(metadata."partition-specs"::VARIANT[]) t(spec)
+WHERE spec."spec-id"::INTEGER = metadata."default-spec-id"::INTEGER;
+----
+1
+
+query I
+SELECT sort_order.fields[1]."source-id"::INTEGER FROM iceberg_load_table_response(my_datalake.default.cor_definition),
+unnest(metadata."sort-orders"::VARIANT[]) t(sort_order)
+WHERE sort_order."order-id"::INTEGER = metadata."default-sort-order-id"::INTEGER;
+----
+2
+
+statement ok
+SET iceberg_default_format_version = 3;
+
+# Omitting PARTITIONED/SORTED BY resets both; the session default does not upgrade an existing table.
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_definition (id INTEGER);
+
+query III
+SELECT metadata."format-version", metadata."default-sort-order-id", len(spec.fields::VARIANT[])
+FROM iceberg_load_table_response(my_datalake.default.cor_definition),
+unnest(metadata."partition-specs"::VARIANT[]) t(spec)
+WHERE spec."spec-id"::INTEGER = metadata."default-spec-id"::INTEGER;
+----
+2	0	0
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_definition (id INTEGER DEFAULT 7)
+WITH ('FORMAT-VERSION' = 3);
+
+statement ok
+INSERT INTO my_datalake.default.cor_definition DEFAULT VALUES;
+
+query II
+SELECT id, _row_id IS NOT NULL FROM my_datalake.default.cor_definition;
+----
+7	true
+
+statement ok
+SET iceberg_default_format_version = 2;
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_definition (id INTEGER DEFAULT 8);
+
+statement ok
+INSERT INTO my_datalake.default.cor_definition DEFAULT VALUES;
+
+query II
+SELECT id, _row_id IS NOT NULL FROM my_datalake.default.cor_definition;
+----
+8	true
+
+statement error
+CREATE OR REPLACE TABLE my_datalake.default.cor_definition (id INTEGER) WITH ('format-version' = 2);
+----
+cannot be downgraded
+
+query I
+SELECT id FROM my_datalake.default.cor_definition;
+----
+8
+
+statement ok
+DROP TABLE my_datalake.default.cor_definition;

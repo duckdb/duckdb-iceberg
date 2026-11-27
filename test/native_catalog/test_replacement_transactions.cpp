@@ -331,7 +331,7 @@ TEST_CASE("Replacement and subsequent insertion do not open old manifests", "[ic
 	REQUIRE(Scalar(test.connection, "SELECT count(*) FROM iceberg_snapshots(lake.default.t)") == Value::BIGINT(2));
 }
 
-TEST_CASE("Snapshotless replacement succeeds and SQL replacement remains unsupported", "[iceberg_replacement]") {
+TEST_CASE("Snapshotless replacement succeeds", "[iceberg_replacement]") {
 	ReplacementTest test(2, false);
 	Query(test.connection, "BEGIN");
 	// Older metadata may omit refs entirely.
@@ -342,10 +342,6 @@ TEST_CASE("Snapshotless replacement succeeds and SQL replacement remains unsuppo
 	Query(test.connection, "INSERT INTO lake.default.t VALUES (7)");
 	REQUIRE(Scalar(test.connection, "SELECT parent_id IS NULL FROM iceberg_snapshots(lake.default.t)") ==
 	        Value::BOOLEAN(true));
-	auto replace = test.connection.Query("CREATE OR REPLACE TABLE lake.default.t (changed VARCHAR)");
-	REQUIRE(replace->HasError());
-	REQUIRE_THAT(replace->GetError(), Catch::Contains("CREATE OR REPLACE not supported"));
-	REQUIRE(Scalar(test.connection, "SELECT id FROM lake.default.t") == Value::INTEGER(7));
 }
 
 TEST_CASE("DELETE keeps its existing retry behavior when replacement leaves no snapshot", "[iceberg_replacement]") {

@@ -74,6 +74,7 @@ class CatalogProfile:
     supports_v3_tables: bool = True
     supports_row_lineage: bool = True
     allows_cleanup: bool = True
+    supports_snapshot_refs: bool = True
 
     @property
     def duckdb_catalog_init_sql(self) -> str:
@@ -107,6 +108,8 @@ class CatalogProfile:
             capabilities.add("row_lineage")
         if self.allows_cleanup:
             capabilities.add("allows_cleanup")
+        if self.supports_snapshot_refs:
+            capabilities.add("snapshot_refs")
         return frozenset(capabilities)
 
 
@@ -254,6 +257,8 @@ REST_CATALOG_PROFILES = {
         },
         supports_v3_tables=False,
         supports_row_lineage=False,
+        # Nessie branches and tags version the catalog, not an individual Iceberg table.
+        supports_snapshot_refs=False,
     ),
 }
 

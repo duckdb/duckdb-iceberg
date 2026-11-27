@@ -1,0 +1,106 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_or_replace_ctas.test
+# description: Replacement CTAS handles self-reference, nested field identities, layouts, rollback and failed queries
+# group: [create]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+# A missing target follows normal CTAS creation.
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_ctas AS SELECT 1 retired, 1 id,
+    {'x': 10, 'y': 'old'} detail, [1, 2] tags;
+
+statement ok
+ALTER TABLE my_datalake.default.cor_ctas DROP COLUMN retired;
+
+statement ok
+ALTER TABLE my_datalake.default.cor_ctas SET ('write.parquet.compression-codec' = 'gzip');
+
+statement ok
+SET VARIABLE cor_ctas_identity = (
+    SELECT {uuid: metadata."table-uuid"::VARCHAR, location: metadata.location::VARCHAR}
+    FROM iceberg_load_table_response(my_datalake.default.cor_ctas)
+);
+
+# The write plan must use the retained field IDs, including nested fields and a reordered schema.
+# Reading this same table must still use its original schema and snapshot.
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_ctas PARTITIONED BY (id) SORTED BY (detail.x) AS
+SELECT tags, {'y': detail.y, 'x': detail.x::BIGINT + 1, 'z': 30} detail, id + 10 id, 99 added
+FROM my_datalake.default.cor_ctas;
+
+query IITII
+SELECT id, detail.x, detail.y, tags[2], added FROM my_datalake.default.cor_ctas;
+----
+11	11	old	2	99
+
+query II
+SELECT metadata."table-uuid"::VARCHAR = getvariable('cor_ctas_identity').uuid,
+       metadata.location::VARCHAR = getvariable('cor_ctas_identity').location
+FROM iceberg_load_table_response(my_datalake.default.cor_ctas);
+----
+true	true
+
+query T
+SELECT value FROM iceberg_table_properties(my_datalake.default.cor_ctas) WHERE key = 'write.parquet.compression-codec';
+----
+gzip
+
+query IT
+SELECT parent_id IS NULL, operation FROM iceberg_snapshots(my_datalake.default.cor_ctas)
+ORDER BY sequence_number DESC LIMIT 1;
+----
+true	append
+
+statement ok writer
+BEGIN;
+
+statement ok writer
+CREATE OR REPLACE TABLE my_datalake.default.cor_ctas AS SELECT 42 replacement;
+
+statement ok writer
+INSERT INTO my_datalake.default.cor_ctas VALUES (43);
+
+query I writer
+SELECT replacement FROM my_datalake.default.cor_ctas ORDER BY replacement;
+----
+42
+43
+
+query I
+SELECT id FROM my_datalake.default.cor_ctas;
+----
+11
+
+statement ok writer
+ROLLBACK;
+
+query I
+SELECT id FROM my_datalake.default.cor_ctas;
+----
+11
+
+# A query failure must roll back an already prepared replacement.
+statement error
+CREATE OR REPLACE TABLE my_datalake.default.cor_ctas AS SELECT error('replacement source failed')::INTEGER replacement;
+----
+replacement source failed
+
+query I
+SELECT id FROM my_datalake.default.cor_ctas;
+----
+11
+
+statement error
+CREATE OR REPLACE TABLE my_datalake.default.cor_ctas_failed AS SELECT error('replacement source failed')::INTEGER replacement;
+----
+replacement source failed
+
+statement error
+SELECT * FROM my_datalake.default.cor_ctas_failed;
+----
+does not exist
+
+statement ok
+DROP TABLE my_datalake.default.cor_ctas;

@@ -114,6 +114,44 @@
   ],
   "skip_tests": [
     {
+      "reason": "DuckDB core issue: list math validates the entire Parquet child vector before excluding NULL parent lists, so a NULL list raises an element-NULL error. Reproduces with ordinary CREATE TABLE and plain read_parquet, without replacement or Iceberg.",
+      "paths": [
+        "test/sql/function/list/list_cosine_similarity.test",
+        "test/sql/function/list/list_distance.test",
+        "test/sql/function/list/list_inner_product.test"
+      ]
+    },
+    {
+      "reason": "Iceberg widens UINTEGER to BIGINT, so DOUBLE comparisons cannot use the lossless native UINTEGER cast-elimination rule asserted by this EXPLAIN test",
+      "paths": [
+        "test/sql/optimizer/expression/test_float_identity.test"
+      ]
+    },
+    {
+      "reason": "Asserts exactly eight scanned rows for a native self-join, Iceberg/Parquet filter pushdown scans seven rows while returning the same join result",
+      "paths": [
+        "test/sql/pragma/profiling/test_custom_profiling_rows_scanned.test"
+      ]
+    },
+    {
+      "reason": "Expects native stats(x) min/max to include NaN, Iceberg bounds exclude NaN and these scans expose unknown min/max statistics",
+      "paths": [
+        "test/sql/storage/nan_min_statistics.test"
+      ]
+    },
+    {
+      "reason": "Expects an unaccessed table dropped by another connection to remain discoverable until a commit-time conflict, the REST catalog reports the table missing at lookup and the test also requires native rowid",
+      "paths": [
+        "test/sql/transactions/conflict_drop_then_delete.test"
+      ]
+    },
+    {
+      "reason": "Creates a new table and appends to another in the same transaction, the extension currently excludes staged table creates from atomic multi-table commits",
+      "paths": [
+        "test/sql/transactions/conflict_rename_append.test"
+      ]
+    },
+    {
       "reason": "Iceberg views do not enforce DuckDB table/view dependency tracking",
       "paths": [
         "test/sql/catalog/view/test_view_schema_change_with_dependencies.test",
@@ -563,7 +601,8 @@
       "reason": "Parquet writer / round trip - Iceberg storage type/typeof differences",
       "paths": [
         "test/sql/copy/parquet/writer/writer_round_trip.test_slow",
-        "test/sql/create/create_table_compression.test"
+        "test/sql/create/create_table_compression.test",
+        "test/sql/copy/parquet/writer/parquet_write_signed.test"
       ]
     },
     {
@@ -817,7 +856,9 @@
         "test/sql/order/hugeint_order_by_extremes.test",
         "test/sql/types/bignum/test_int_varchar_bignum_compatibility.test",
         "test/sql/types/hugeint/hugeint_multiply.test",
-        "test/sql/types/hugeint/test_hugeint_to_floating_rounding.test"
+        "test/sql/types/hugeint/test_hugeint_to_floating_rounding.test",
+        "test/sql/optimizer/expression/test_move_constants.test",
+        "test/sql/optimizer/expression/test_move_constants_overflow.test"
       ]
     },
     {
@@ -830,7 +871,8 @@
       "reason": "Iceberg widens TINYINT/SMALLINT columns to INTEGER, so arithmetic does not overflow at the native 8-bit or 16-bit bounds",
       "paths": [
         "test/sql/function/numeric/test_unary.test",
-        "test/sql/overflow/table_overflow.test"
+        "test/sql/overflow/table_overflow.test",
+        "test/sql/optimizer/expression/test_negation_limits.test"
       ]
     },
     {
@@ -1418,7 +1460,9 @@
         "test/sql/function/string/test_right.test",
         "test/sql/pivot/pivot_in_boolean.test",
         "test/sql/alter/rename_table/test_rename_table_case.test",
-        "test/sql/subquery/lateral/pg_lateral.test"
+        "test/sql/subquery/lateral/pg_lateral.test",
+        "test/sql/binder/separate_schema_tables.test",
+        "test/sql/transactions/delete_and_drop_in_same_transaction.test"
       ]
     },
     {
@@ -1494,7 +1538,8 @@
         "test/sql/binder/test_implicit_struct_pack.test",
         "test/sql/catalog/function/attached_macro.test",
         "test/sql/parser/unquoted_underscore_digit_identifiers.test",
-        "test/sql/sql_export/dml_statements.test"
+        "test/sql/sql_export/dml_statements.test",
+        "test/sql/cte/test_issue_5673.test"
       ]
     },
     {

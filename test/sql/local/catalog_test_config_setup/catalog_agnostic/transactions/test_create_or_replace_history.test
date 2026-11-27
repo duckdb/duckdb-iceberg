@@ -1,0 +1,172 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/transactions/test_create_or_replace_history.test
+# description: Historical reads survive replacement and exclude its pending rows
+# group: [transactions]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env TIMETRAVEL_SUPPORT
+
+require-env SNAPSHOT_HISTORY_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cor_history;
+
+statement ok
+CREATE TABLE my_datalake.default.cor_history AS SELECT 1 a;
+
+statement ok
+SET VARIABLE cor_snapshot = (SELECT snapshot_id FROM iceberg_snapshots(my_datalake.default.cor_history));
+
+statement ok
+SET VARIABLE cor_timestamp = (SELECT timestamp_ms FROM iceberg_snapshots(my_datalake.default.cor_history));
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_history (b VARCHAR);
+
+query I
+SELECT count(*) FROM my_datalake.default.cor_history;
+----
+0
+
+query I
+SELECT a FROM my_datalake.default.cor_history AT (VERSION => getvariable('cor_snapshot'));
+----
+1
+
+query I
+SELECT a FROM my_datalake.default.cor_history AT (TIMESTAMP => getvariable('cor_timestamp'));
+----
+1
+
+statement ok
+INSERT INTO my_datalake.default.cor_history VALUES ('new');
+
+query I
+SELECT b FROM my_datalake.default.cor_history;
+----
+new
+
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.cor_history);
+----
+1
+
+query I
+SELECT a FROM my_datalake.default.cor_history AT (VERSION => getvariable('cor_snapshot'));
+----
+1
+
+statement ok
+COMMIT;
+
+# Only the later INSERT publishes a snapshot; the bare replacement detaches main.
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.cor_history);
+----
+2
+
+query I
+SELECT parent_id IS NULL FROM iceberg_snapshots(my_datalake.default.cor_history) ORDER BY sequence_number DESC LIMIT 1;
+----
+true
+
+query I
+SELECT a FROM my_datalake.default.cor_history AT (VERSION => getvariable('cor_snapshot'));
+----
+1
+
+# Bare replacement publishes no new snapshot and retains the existing history.
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_history (c INTEGER);
+
+# Iceberg's Java serializer also uses -1 for a table with no current snapshot.
+query III
+SELECT coalesce(metadata."current-snapshot-id"::BIGINT, -1) = -1,
+       len(metadata.snapshots::VARIANT[]), metadata.refs.main IS NULL
+FROM iceberg_load_table_response(my_datalake.default.cor_history);
+----
+true	2	true
+
+query I
+SELECT a FROM my_datalake.default.cor_history AT (VERSION => getvariable('cor_snapshot'));
+----
+1
+
+# A zero-row replacement CTAS publishes one parentless append snapshot.
+statement ok
+BEGIN;
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_history AS SELECT 7 b WHERE false;
+
+# A later empty INSERT must not add another snapshot.
+statement ok
+INSERT INTO my_datalake.default.cor_history SELECT 8 WHERE false;
+
+statement ok
+COMMIT;
+
+query I
+SELECT count(*) FROM my_datalake.default.cor_history;
+----
+0
+
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.cor_history);
+----
+3
+
+query IT
+SELECT parent_id IS NULL, operation FROM iceberg_snapshots(my_datalake.default.cor_history)
+ORDER BY sequence_number DESC LIMIT 1;
+----
+true	append
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_history AS SELECT 9 b;
+
+statement ok
+INSERT INTO my_datalake.default.cor_history VALUES (10);
+
+statement ok
+COMMIT;
+
+query I
+SELECT b FROM my_datalake.default.cor_history ORDER BY b;
+----
+9
+10
+
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.cor_history);
+----
+5
+
+query I
+SELECT child.parent_id = parent.snapshot_id
+FROM iceberg_snapshots(my_datalake.default.cor_history) child, iceberg_snapshots(my_datalake.default.cor_history) parent
+WHERE child.sequence_number = 5 AND parent.sequence_number = 4;
+----
+true
+
+# Ancestry-based rollback cannot cross the replacement boundary.
+statement error
+CALL iceberg_rollback_to_snapshot('my_datalake.default.cor_history', getvariable('cor_snapshot'));
+----
+not an ancestor
+
+query I
+SELECT a FROM my_datalake.default.cor_history AT (VERSION => getvariable('cor_snapshot'));
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.cor_history;

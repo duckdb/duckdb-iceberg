@@ -84,10 +84,15 @@ ROLLBACK
 statement ok con3
 ROLLBACK
 
-statement error con3
-create or replace table my_datalake.default.duid (a int);
+# Outside of a transaction the existing table is replaced. Empty CTAS also
+# publishes the snapshot required by catalogs that cannot remove main (Nessie).
+statement ok con3
+create or replace table my_datalake.default.duid as select 1 a where false;
+
+query I con3
+select count(*) from my_datalake.default.duid;
 ----
-<REGEX>:.*Not implemented Error.*CREATE OR REPLACE not supported in DuckDB-Iceberg. Please use separate Drop and Create Statements.*
+0
 
 statement error con1
 create or replace schema my_datalake.new_schema;

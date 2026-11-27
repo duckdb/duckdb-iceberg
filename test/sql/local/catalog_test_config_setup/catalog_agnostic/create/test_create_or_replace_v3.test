@@ -1,0 +1,141 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/create/test_create_or_replace_v3.test
+# description: Replacement planning uses the existing format version and handles case-insensitive overrides
+# group: [create]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+require-env VARIANT_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cor_v3;
+
+statement ok
+SET iceberg_default_format_version = 2;
+
+statement ok
+CREATE TABLE my_datalake.default.cor_v3 WITH ('format-version' = 3) AS SELECT 1::VARIANT v;
+
+# The default applies to new tables, not to replacement of an existing v3 table.
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_v3 AS SELECT v::INTEGER + 1 AS id, v FROM my_datalake.default.cor_v3;
+
+query II
+SELECT id, v::INTEGER FROM my_datalake.default.cor_v3;
+----
+2	1
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_v3 AS SELECT 3::VARIANT v;
+
+query I
+SELECT v::INTEGER FROM my_datalake.default.cor_v3;
+----
+3
+
+query I
+SELECT metadata."format-version" FROM iceberg_load_table_response(my_datalake.default.cor_v3);
+----
+3
+
+statement error
+CREATE OR REPLACE TABLE my_datalake.default.cor_v3 WITH ('FORMAT-VERSION' = 2) AS SELECT 4 id;
+----
+<REGEX>:.*cannot be downgraded.*
+
+query I
+SELECT v::INTEGER FROM my_datalake.default.cor_v3;
+----
+3
+
+statement ok
+DROP TABLE my_datalake.default.cor_v3;
+
+# Case-insensitive overrides work for both new-table planning and replacement planning.
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_v3 WITH ('FORMAT-VERSION' = 3) AS SELECT 4::VARIANT v;
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_v3 WITH ('FORMAT-VERSION' = 3) AS SELECT 5::VARIANT v;
+
+query I
+SELECT v::INTEGER FROM my_datalake.default.cor_v3;
+----
+5
+
+query I
+SELECT count(*) FROM iceberg_table_properties(my_datalake.default.cor_v3) WHERE lower(key) = 'format-version';
+----
+0
+
+statement ok
+DROP TABLE my_datalake.default.cor_v3;
+
+statement ok
+CREATE TABLE my_datalake.default.cor_v3 (id INTEGER) WITH ('format-version' = 2);
+
+statement ok
+SET iceberg_default_format_version = 3;
+
+# A v3 session default must not upgrade an existing v2 table implicitly.
+statement error
+CREATE OR REPLACE TABLE my_datalake.default.cor_v3 AS SELECT 6::VARIANT v;
+----
+<REGEX>:.*requires Iceberg format-version 3.*table uses 2.*
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_v3 AS SELECT 6 id;
+
+query I
+SELECT metadata."format-version" FROM iceberg_load_table_response(my_datalake.default.cor_v3);
+----
+2
+
+statement ok
+CREATE OR REPLACE TABLE my_datalake.default.cor_v3 WITH ('FORMAT-VERSION' = 3) AS SELECT 7::VARIANT v;
+
+query II
+SELECT v::INTEGER, _row_id IS NOT NULL FROM my_datalake.default.cor_v3;
+----
+7	true
+
+query I
+SELECT count(*) FROM iceberg_table_properties(my_datalake.default.cor_v3) WHERE lower(key) = 'format-version';
+----
+0
+
+statement ok
+SET iceberg_default_format_version = 2;
+
+# Invalid VARIANT partition/sort sources must not publish the replacement schema.
+statement ok
+SET VARIABLE cor_v3_before_invalid = (
+    SELECT metadata_location FROM iceberg_load_table_response(my_datalake.default.cor_v3)
+);
+
+foreach clause PARTITIONED SORTED
+
+statement error
+CREATE OR REPLACE TABLE my_datalake.default.cor_v3
+{clause} BY (new_value) AS SELECT 8::VARIANT new_value;
+----
+<REGEX>:.*the identity transform doesn't accept VARIANT columns.*
+
+query I
+SELECT metadata_location = getvariable('cor_v3_before_invalid')
+FROM iceberg_load_table_response(my_datalake.default.cor_v3);
+----
+true
+
+query I
+SELECT v::INTEGER FROM my_datalake.default.cor_v3;
+----
+7
+
+endloop
+
+statement ok
+DROP TABLE my_datalake.default.cor_v3;
