@@ -512,7 +512,7 @@ static IcebergMetricsMatch MatchBoundsExpression(ClientContext &context, const u
 				return IcebergMetricsMatch::ROWS_MIGHT_MATCH;
 			}
 			//! As Java's StrictEvalVisitor: IS NULL holds for every row when the column holds only NULLs, IS NOT NULL
-			//! when it holds none. Partition values never report the former, so only null counts can prove it.
+			//! when it holds none. A live partition value or the file's null counts can prove either case.
 			if (expr.GetExpressionType() == ExpressionType::OPERATOR_IS_NULL) {
 				if (!MatchBoundsIsNullFilter(stats)) {
 					return IcebergMetricsMatch::ROWS_CANNOT_MATCH;
