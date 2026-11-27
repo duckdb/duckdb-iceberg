@@ -1948,12 +1948,6 @@
       ]
     },
     {
-      "reason": "Empty VARIANT object key is rewritten to element1 during the Iceberg round-trip",
-      "paths": [
-        "test/sql/storage/types/variant/variant_shredding_empty_keys.test"
-      ]
-    },
-    {
       "reason": "EXPORT DATABASE consumes unloaded table placeholder columns and fails binding column __",
       "paths": [
         "test/sql/export/export_temp_tables.test"
