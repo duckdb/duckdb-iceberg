@@ -1,0 +1,181 @@
+# name: test/sql/local/scan_tasks_v1_partition_field_ids.test
+# description: V1 specs can assign different partition types to the same field ID
+# group: [local]
+
+include test/sql/init_requires
+
+require json
+
+# V1 assigns partition field IDs by position when the spec omits them. Field 1000
+# changes from price to label to qty to day(event_date). Field 1001 is grp throughout.
+statement ok
+CREATE TABLE v1_files(file_id INTEGER, spec INTEGER, price DOUBLE, qty BIGINT, label VARCHAR, grp INTEGER, event_day DATE);
+
+statement ok
+INSERT INTO v1_files VALUES (1, 0, 1.5, NULL, NULL, 10, NULL), (2, 0, 2.5, NULL, NULL, 20, NULL),
+                            (3, 2, NULL, 9007199254740993, NULL, 30, NULL), (4, 1, NULL, NULL, 'west', 40, NULL),
+                            (5, 3, NULL, NULL, NULL, 50, DATE '1969-12-31'), (6, 0, NULL, NULL, NULL, 60, NULL);
+
+# Identity columns omitted by the writer must still come from the file's own manifest.
+loop i 1 7
+
+statement ok
+COPY (SELECT file_id AS id, event_day AS event_date FROM v1_files, range(3) WHERE file_id = {i})
+TO '{TEST_DIR}/v1_file_{i}.parquet' (FORMAT PARQUET, FIELD_IDS {id: 1, event_date: 6});
+
+endloop
+
+# Spark may encode the day transform as an Avro date rather than an int.
+foreach spec,field 0,price 1,label 2,qty 3,event_day
+
+statement ok
+COPY (
+	SELECT 1 AS status, 1::BIGINT AS snapshot_id,
+	       {file_path: filename, file_format: 'PARQUET', partition: {{field}: {field}, grp: grp},
+	        record_count: 3::BIGINT, file_size_in_bytes: size::BIGINT, block_size_in_bytes: 1024::BIGINT} AS data_file
+	FROM v1_files JOIN read_blob('{TEST_DIR}/v1_file_*.parquet') ON filename = '{TEST_DIR}/v1_file_' || file_id || '.parquet'
+	WHERE spec = {spec}
+) TO '{TEST_DIR}/v1_spec_{spec}.avro' (FORMAT AVRO,
+	METADATA {'schema-id': '0', 'partition-spec-id': '{spec}', 'format-version': '1'},
+	FIELD_IDS {status: 0, snapshot_id: 1, data_file: {__duckdb_field_id: 2, file_path: 100, file_format: 101,
+	           partition: {__duckdb_field_id: 102, {field}: 1000, grp: 1001},
+	           record_count: 103, file_size_in_bytes: 104, block_size_in_bytes: 105}});
+
+endloop
+
+statement ok
+CREATE MACRO v1_field(field_name, source_id) AS
+    {'name': field_name, 'source-id': source_id, 'transform': 'identity'};
+
+foreach snapshot 1 2
+
+statement ok
+COPY (
+	SELECT filename AS manifest_path, size::BIGINT AS manifest_length,
+	       regexp_extract(filename, 'v1_spec_([0-3])[.]avro$', 1)::INTEGER AS partition_spec_id, 1::BIGINT AS added_snapshot_id
+	FROM read_blob('{TEST_DIR}/v1_spec_*.avro')
+	WHERE {snapshot} = 2 OR partition_spec_id = 0
+) TO '{TEST_DIR}/v1_list_{snapshot}.avro' (FORMAT AVRO,
+	FIELD_IDS {manifest_path: 500, manifest_length: 501, partition_spec_id: 502, added_snapshot_id: 503});
+
+endloop
+
+statement ok
+COPY (
+	SELECT to_json({'format-version': 1, 'table-uuid': 'd8689b2d-a412-49de-8646-a945da5a0ed3',
+	  location: '{TEST_DIR}', 'last-updated-ms': 2, 'last-column-id': 6,
+	  schema: {'type': 'struct', 'schema-id': 0, fields: [
+	    {id: 1, name: 'id', required: false, type: 'int'}, {id: 2, name: 'price', required: false, type: 'double'},
+	    {id: 3, name: 'qty', required: false, type: 'long'}, {id: 4, name: 'label', required: false, type: 'string'},
+	    {id: 5, name: 'grp', required: false, type: 'int'}, {id: 6, name: 'event_date', required: false, type: 'date'}]},
+	  'partition-spec': [struct_update(v1_field('event_day', 6), transform := 'day'), v1_field('grp', 5)], 'default-spec-id': 3,
+	  'partition-specs': [{'spec-id': 0, fields: [v1_field('price', 2), v1_field('grp', 5)]},
+	                      {'spec-id': 1, fields: [v1_field('label', 4), v1_field('grp', 5)]},
+	                      {'spec-id': 2, fields: [v1_field('qty', 3), v1_field('grp', 5)]},
+	                      {'spec-id': 3, fields: [struct_update(v1_field('event_day', 6), transform := 'day'), v1_field('grp', 5)]}],
+	  'last-partition-id': 1001, 'default-sort-order-id': 0, 'sort-orders': [{'order-id': 0, fields: []}],
+	  'current-snapshot-id': 2,
+	  snapshots: [{'snapshot-id': 1, 'schema-id': 0, 'timestamp-ms': 1, 'manifest-list': '{TEST_DIR}/v1_list_1.avro', summary: {operation: 'append'}},
+	              {'snapshot-id': 2, 'schema-id': 0, 'timestamp-ms': 2, 'manifest-list': '{TEST_DIR}/v1_list_2.avro', summary: {operation: 'append'}}]})
+) TO '{TEST_DIR}/v1_reused.metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+foreach snapshot 1 2
+
+query I
+SELECT count(*) FROM iceberg_scan('{TEST_DIR}/v1_reused.metadata.json', snapshot_from_id := {snapshot}) WHERE price = 1.5;
+----
+3
+
+statement ok
+SET VARIABLE v1_tasks = (SELECT list(t) FROM iceberg_scan_plan('{TEST_DIR}/v1_reused.metadata.json', snapshot_from_id := {snapshot}) t);
+
+query I
+SELECT count(*) FROM iceberg_scan_tasks(getvariable('v1_tasks')) WHERE price = 1.5;
+----
+3
+
+# An omitted field means its value is unknown for pruning. A present NULL would reject the matching files.
+query T
+SELECT DISTINCT typeof(t.partition_values) FROM unnest(getvariable('v1_tasks')) u(t);
+----
+STRUCT("1001" INTEGER)
+
+endloop
+
+query IRITI
+SELECT DISTINCT id, price, qty, label, grp FROM iceberg_scan_tasks(getvariable('v1_tasks')) ORDER BY id;
+----
+1	1.5	NULL	NULL	10
+2	2.5	NULL	NULL	20
+3	NULL	9007199254740993	NULL	30
+4	NULL	NULL	west	40
+5	NULL	NULL	NULL	50
+6	NULL	NULL	NULL	60
+
+query I
+SELECT count(*) FROM iceberg_scan('{TEST_DIR}/v1_reused.metadata.json') WHERE event_date = DATE '1969-12-31';
+----
+3
+
+statement ok
+CALL enable_logging('Iceberg');
+
+query I
+SELECT count(*) FROM iceberg_scan_tasks(getvariable('v1_tasks')) WHERE grp = 40 AND label = 'west';
+----
+3
+
+query I
+SELECT count(*) FROM duckdb_logs() WHERE message = 'Iceberg scan tasks filter pushdown kept 1 of 6 data files';
+----
+1
+
+statement ok
+CALL disable_logging();
+
+# Older snapshots list paths directly. Only the manifest header identifies the spec.
+statement ok
+COPY (
+	SELECT json_merge_patch(content::JSON, to_json({'default-sort-order-id': NULL, 'last-partition-id': NULL,
+	  'current-snapshot-id': 3, snapshots: [{'snapshot-id': 3, 'timestamp-ms': 3, 'schema-id': 0,
+	    manifests: ['{TEST_DIR}/v1_spec_0.avro', '{TEST_DIR}/v1_spec_1.avro', '{TEST_DIR}/v1_spec_2.avro', '{TEST_DIR}/v1_spec_3.avro'],
+	    summary: {operation: 'append'}}]}))
+	FROM read_text('{TEST_DIR}/v1_reused.metadata.json')
+) TO '{TEST_DIR}/v1_inline.metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+foreach attempt 1 2
+
+query I
+SELECT count(*) FROM iceberg_scan('{TEST_DIR}/v1_inline.metadata.json') WHERE label = 'west';
+----
+3
+
+statement ok
+SET VARIABLE v1_inline_tasks = (SELECT list(t) FROM iceberg_scan_plan('{TEST_DIR}/v1_inline.metadata.json') t);
+
+query III
+SELECT count(*) FILTER (WHERE price = 1.5), count(*) FILTER (WHERE label = 'west'), count(*) FILTER (WHERE qty = 9007199254740993)
+FROM iceberg_scan_tasks(getvariable('v1_inline_tasks'));
+----
+3	3	3
+
+endloop
+
+# A day partition replaced by void still has one usable type. Its old integer day must remain available for pruning.
+statement ok
+COPY (
+	SELECT json_merge_patch(content::JSON, to_json({'default-spec-id': 4,
+	  'partition-spec': [struct_update(v1_field('event_day', 6), transform := 'void'), v1_field('grp', 5)],
+	  'partition-specs': [
+	    {'spec-id': 3, fields: [struct_update(v1_field('event_day', 6), transform := 'day'), v1_field('grp', 5)]},
+	    {'spec-id': 4, fields: [struct_update(v1_field('event_day', 6), transform := 'void'), v1_field('grp', 5)]}],
+	  snapshots: [{'snapshot-id': 3, 'timestamp-ms': 3, 'schema-id': 0, manifests: ['{TEST_DIR}/v1_spec_3.avro'],
+	               summary: {operation: 'append'}}]}))
+	FROM read_text('{TEST_DIR}/v1_inline.metadata.json')
+) TO '{TEST_DIR}/v1_void.metadata.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+query TII
+SELECT typeof(partition_values."1000"), partition_values."1000", partition_values."1001"
+FROM iceberg_scan_plan('{TEST_DIR}/v1_void.metadata.json');
+----
+INTEGER	-1	50

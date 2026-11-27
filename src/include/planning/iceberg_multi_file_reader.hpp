@@ -14,6 +14,7 @@
 #include "duckdb/common/list.hpp"
 #include "duckdb/common/mutex.hpp"
 #include "duckdb/common/unordered_map.hpp"
+#include "duckdb/common/unordered_set.hpp"
 #include "duckdb/planner/filter/constant_filter.hpp"
 #include "duckdb/planner/filter/null_filter.hpp"
 #include "duckdb/planner/table_filter.hpp"
@@ -32,16 +33,22 @@ struct IcebergEqualityDeleteReadColumn {
 };
 
 struct IcebergEqualityDeleteReadState {
-	explicit IcebergEqualityDeleteReadState(vector<IcebergEqualityDeleteReadColumn> columns_p)
+	IcebergEqualityDeleteReadState(vector<IcebergEqualityDeleteReadColumn> columns_p,
+	                               const unordered_set<int32_t> &local_ids,
+	                               const unordered_map<int32_t, Value> &partition_constants)
 	    : columns(std::move(columns_p)) {
 		for (idx_t i = 0; i < columns.size(); i++) {
-			field_indexes.emplace(columns[i].field_id, i);
+			auto field_id = columns[i].field_id;
+			if (local_ids.count(field_id) || partition_constants.count(field_id)) {
+				field_indexes.emplace(field_id, i);
+			}
 			types.push_back(columns[i].type);
 		}
 	}
 
 	vector<IcebergEqualityDeleteReadColumn> columns;
 	vector<LogicalType> types;
+	//! Indexes of keys supplied by the data file or an identity partition, including explicit NULLs.
 	unordered_map<int32_t, idx_t> field_indexes;
 	unique_ptr<Expression> expression;
 	shared_ptr<const IcebergEqualityDeleteFastFilter> fast_filter;
@@ -75,8 +82,7 @@ public:
 
 	IcebergEqualityDeleteFastFilter::BuildResult
 	GetOrCreateEqualityDeleteFastFilter(const vector<reference<const IcebergEqualityDeleteFile>> &delete_files,
-	                                    const IcebergEqualityDeleteReadState &read_state,
-	                                    const set<int32_t> &local_field_ids, ClientContext &context,
+	                                    const IcebergEqualityDeleteReadState &read_state, ClientContext &context,
 	                                    Allocator &allocator);
 
 private:
@@ -95,6 +101,7 @@ public:
 
 public:
 	static unique_ptr<MultiFileReader> CreateInstance(const BoundTableFunction &table);
+	static bool SupportsDataFileFormat(const string &file_format);
 	static OpenFileInfo FileInfo(const IcebergDataFileDescriptor &file);
 	static vector<PartitionStatistics> IcebergGetPartitionStats(ClientContext &context, GetPartitionStatsInput &input);
 
@@ -144,7 +151,6 @@ protected:
 private:
 	static unique_ptr<Expression>
 	CreateEqualityDeleteExpression(const vector<reference<const IcebergEqualityDeleteFile>> &delete_files,
-	                               const vector<MultiFileColumnDefinition> &local_columns,
 	                               const IcebergEqualityDeleteReadState &read_state,
 	                               const vector<bool> &accelerated_files);
 	static vector<IcebergEqualityDeleteReadColumn>
@@ -159,7 +165,7 @@ private:
 	//! 'scan_columns' is this file's copy of the table columns (see InitializeTaskReader), so setting a default on
 	//! a nested field only affects this file
 	static void ApplyPartitionDefaults(const unordered_map<int32_t, Value> &constants,
-	                                   const MultiFileReaderData &reader_data,
+	                                   const unordered_set<int32_t> &local_ids,
 	                                   vector<MultiFileColumnDefinition> &scan_columns,
 	                                   const vector<ColumnIndex> &scan_column_ids,
 	                                   const IcebergTableMetadataSchemas &schemas);

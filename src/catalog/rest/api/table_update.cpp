@@ -141,6 +141,20 @@ void AssertDefaultSpecIdRequirement::CreateRequirement(DatabaseInstance &db, Cli
 	req.assert_default_spec_id->default_spec_id = default_spec_id;
 }
 
+AssertDefaultSortOrderIdRequirement::AssertDefaultSortOrderIdRequirement(int32_t default_sort_order_id)
+    : IcebergTableRequirement(IcebergTableRequirementType::ASSERT_DEFAULT_SORT_ORDER_ID),
+      default_sort_order_id(default_sort_order_id) {
+}
+
+void AssertDefaultSortOrderIdRequirement::CreateRequirement(DatabaseInstance &db, ClientContext &context,
+                                                            IcebergCommitState &commit_state) {
+	commit_state.table_change.requirements.push_back(rest_api_objects::TableRequirement());
+	auto &req = commit_state.table_change.requirements.back();
+	req.assert_default_sort_order_id = rest_api_objects::AssertDefaultSortOrderId();
+	req.assert_default_sort_order_id->type = "assert-default-sort-order-id";
+	req.assert_default_sort_order_id->default_sort_order_id = default_sort_order_id;
+}
+
 UpgradeFormatVersion::UpgradeFormatVersion(int32_t format_version)
     : IcebergTableUpdate(IcebergTableUpdateType::UPGRADE_FORMAT_VERSION), format_version(format_version) {
 }

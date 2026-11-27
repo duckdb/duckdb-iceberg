@@ -39,6 +39,7 @@ vector<TableFunctionSet> IcebergFunctions::GetTableFunctions(ExtensionLoader &lo
 	for (auto &function_set : GetIcebergBranchTagFunctions()) {
 		functions.push_back(std::move(function_set));
 	}
+	functions.push_back(GetIcebergMoveColumnFunction());
 	functions.push_back(GetIcebergViewMetadataFunction());
 
 	return functions;

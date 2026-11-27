@@ -842,7 +842,9 @@ string IcebergTableMetadata::ToJSON() const {
 	root_obj.Add("current-schema-id", writer.CreateSignedInteger(current_schema_id));
 	root_obj.Add("partition-specs", PartitionsToJSON(writer));
 	root_obj.Add("default-spec-id", writer.CreateSignedInteger(default_spec_id));
-	root_obj.Add("last-partition-id", writer.CreateSignedInteger(last_partition_field_id.GetIndex()));
+	if (iceberg_version >= 2 || HasLastPartitionId()) {
+		root_obj.Add("last-partition-id", writer.CreateSignedInteger(GetLastPartitionFieldId()));
+	}
 	root_obj.Add("properties", TablePropertiesToJSON(writer));
 	if (current_snapshot_id) {
 		root_obj.Add("current-snapshot-id", writer.CreateSignedInteger(*current_snapshot_id));
@@ -853,7 +855,9 @@ string IcebergTableMetadata::ToJSON() const {
 	}
 	root_obj.Add("snapshot-log", SnapshotLogToJSON(writer));
 	root_obj.Add("sort-orders", SortOrdersToJSON(writer));
-	root_obj.Add("default-sort-order-id", writer.CreateSignedInteger(default_sort_order_id.GetIndex()));
+	if (iceberg_version >= 2 || HasSortOrder()) {
+		root_obj.Add("default-sort-order-id", writer.CreateSignedInteger(default_sort_order_id.GetIndex()));
+	}
 	if (iceberg_version >= 3) {
 		// Required since v3 (row lineage)
 		root_obj.Add("next-row-id", writer.CreateSignedInteger(next_row_id ? *next_row_id : 0));

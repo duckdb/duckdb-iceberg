@@ -90,31 +90,28 @@ Schema with name "concurrent_schema" already exists
 statement ok
 DROP SCHEMA my_datalake.concurrent_schema;
 
-# a table created in the schema in the same transaction is committed
+# con1 cannot publish a table together with its pending namespace create, even if con2 creates the namespace.
 statement ok con1
 begin
 
 statement ok con1
 CREATE SCHEMA IF NOT EXISTS my_datalake.concurrent_schema;
 
-statement ok con1
-CREATE TABLE my_datalake.concurrent_schema.my_table AS SELECT range id FROM range(3);
-
 statement ok con2
 CREATE SCHEMA other_datalake.concurrent_schema;
 
-statement ok con1
-commit
-
-query I con2
-SELECT * FROM other_datalake.concurrent_schema.my_table ORDER BY id;
+statement error con1
+CREATE TABLE my_datalake.concurrent_schema.my_table AS SELECT range id FROM range(3);
 ----
-0
-1
-2
+cannot commit this transaction atomically
 
-statement ok con2
-DROP TABLE other_datalake.concurrent_schema.my_table;
+statement ok con1
+rollback
+
+statement error con2
+SELECT * FROM other_datalake.concurrent_schema.my_table;
+----
+does not exist
 
 statement ok con2
 DROP SCHEMA other_datalake.concurrent_schema;

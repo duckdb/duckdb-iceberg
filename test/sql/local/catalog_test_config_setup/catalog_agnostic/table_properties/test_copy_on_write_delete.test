@@ -175,6 +175,76 @@ SELECT sum(record_count) FROM iceberg_metadata(my_datalake.default.cow_delete_mi
 ----
 2
 
+# the position delete file of a replaced data file is removed with it, while the one of a data file that is not
+# rewritten stays live
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cow_delete_position_deletes;
+
+statement ok
+CREATE TABLE my_datalake.default.cow_delete_position_deletes (id INTEGER, v VARCHAR) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.cow_delete_position_deletes VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+statement ok
+INSERT INTO my_datalake.default.cow_delete_position_deletes VALUES (4, 'd'), (5, 'e'), (6, 'f');
+
+query I
+DELETE FROM my_datalake.default.cow_delete_position_deletes WHERE id IN (1, 4);
+----
+2
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.cow_delete_position_deletes)
+WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+2
+
+statement ok
+ALTER TABLE my_datalake.default.cow_delete_position_deletes SET ('write.delete.mode' = 'copy-on-write');
+
+# Only a scan planned by DuckDB knows that a V2 position delete file belongs to one data file (its file_path
+# bounds): a server-side scan plan carries no bounds or referenced data file for it, so the copy-on-write DELETE
+# keeps the delete file, which is valid. Plan these DELETEs client-side on every catalog.
+
+statement ok
+SET VARIABLE cow_delete_server_side_planning = current_setting('iceberg_use_server_side_scan_planning');
+
+statement ok
+SET iceberg_use_server_side_scan_planning = false;
+
+query I
+DELETE FROM my_datalake.default.cow_delete_position_deletes WHERE id = 2;
+----
+1
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.cow_delete_position_deletes)
+WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+1
+
+query I
+DELETE FROM my_datalake.default.cow_delete_position_deletes WHERE id = 5;
+----
+1
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.cow_delete_position_deletes)
+WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+0
+
+statement ok
+SET iceberg_use_server_side_scan_planning = getvariable('cow_delete_server_side_planning');
+
+query II
+SELECT id, v FROM my_datalake.default.cow_delete_position_deletes ORDER BY id;
+----
+3	c
+6	f
+
 # a partitioned table: only the matched partition's file is rewritten, and its rows stay in that partition
 
 statement ok

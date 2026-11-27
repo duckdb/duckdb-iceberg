@@ -16,20 +16,7 @@ ORDER BY ALL;
 DATA	DATA	1
 DELETE	POSITION_DELETES	1
 
-# Puffin verification remains enabled by default, and the error explains the compatibility setting.
-statement error
-SELECT id, source
-FROM iceberg_scan(
-    '__WORKING_DIRECTORY__/data/persistent/legacy_bare_deletion_vector/warehouse/default/legacy_bare_deletion_vector'
-)
-ORDER BY id;
-----
-<REGEX>:.*Older versions of DuckDB wrote deletion vector files as bare blobs.*SET iceberg_unsafe_skip_puffin_verification = true.*
-
-# Skipping only the Puffin container verification permits the valid DV blob to be read.
-statement ok
-SET iceberg_unsafe_skip_puffin_verification = true;
-
+# Puffin footer verification is skipped by default, so the valid DV blob is read by offset and length.
 query II
 SELECT id, source
 FROM iceberg_scan(
@@ -39,6 +26,19 @@ ORDER BY id;
 ----
 1	legacy
 3	legacy
+
+# Opting into strict verification rejects the bare-blob file, and the error explains the compatibility setting.
+statement ok
+SET iceberg_unsafe_skip_puffin_verification = false;
+
+statement error
+SELECT id, source
+FROM iceberg_scan(
+    '__WORKING_DIRECTORY__/data/persistent/legacy_bare_deletion_vector/warehouse/default/legacy_bare_deletion_vector'
+)
+ORDER BY id;
+----
+<REGEX>:.*Older versions of DuckDB wrote deletion vector files as bare blobs.*SET iceberg_unsafe_skip_puffin_verification = true.*
 
 statement ok
 RESET iceberg_unsafe_skip_puffin_verification;

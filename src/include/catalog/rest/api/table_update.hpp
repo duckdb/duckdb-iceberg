@@ -99,6 +99,15 @@ struct AssertDefaultSpecIdRequirement : public IcebergTableRequirement {
 	int32_t default_spec_id;
 };
 
+struct AssertDefaultSortOrderIdRequirement : public IcebergTableRequirement {
+	static constexpr const IcebergTableRequirementType TYPE = IcebergTableRequirementType::ASSERT_DEFAULT_SORT_ORDER_ID;
+
+	explicit AssertDefaultSortOrderIdRequirement(int32_t default_sort_order_id);
+	void CreateRequirement(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) override;
+
+	int32_t default_sort_order_id;
+};
+
 struct AssignUUIDUpdate : public IcebergTableUpdate {
 	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::ASSIGN_UUID;
 

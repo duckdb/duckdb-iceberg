@@ -60,7 +60,9 @@ bool TryStepDate(const Value &value, Value &result) {
 }
 
 template <class T, bool INCREMENT>
-bool TryStepUnscaledDecimal(const Value &value, uint8_t width, uint8_t scale, Value &result) {
+bool TryStepUnscaledDecimal(const Value &value, Value &result) {
+	auto width = DecimalType::GetWidth(value.type());
+	auto scale = DecimalType::GetScale(value.type());
 	auto unscaled = static_cast<hugeint_t>(value.GetValueUnsafe<T>());
 	auto stepped = INCREMENT ? unscaled + hugeint_t(1) : unscaled - hugeint_t(1);
 	auto limit = Hugeint::POWERS_OF_TEN[width];
@@ -74,17 +76,15 @@ bool TryStepUnscaledDecimal(const Value &value, uint8_t width, uint8_t scale, Va
 //! One unscaled unit at the value's own scale, as Java's ProjectionUtil.truncateDecimalStrict does.
 template <bool INCREMENT>
 bool TryStepDecimal(const Value &value, Value &result) {
-	auto width = DecimalType::GetWidth(value.type());
-	auto scale = DecimalType::GetScale(value.type());
 	switch (value.type().InternalType()) {
 	case PhysicalType::INT16:
-		return TryStepUnscaledDecimal<int16_t, INCREMENT>(value, width, scale, result);
+		return TryStepUnscaledDecimal<int16_t, INCREMENT>(value, result);
 	case PhysicalType::INT32:
-		return TryStepUnscaledDecimal<int32_t, INCREMENT>(value, width, scale, result);
+		return TryStepUnscaledDecimal<int32_t, INCREMENT>(value, result);
 	case PhysicalType::INT64:
-		return TryStepUnscaledDecimal<int64_t, INCREMENT>(value, width, scale, result);
+		return TryStepUnscaledDecimal<int64_t, INCREMENT>(value, result);
 	case PhysicalType::INT128:
-		return TryStepUnscaledDecimal<hugeint_t, INCREMENT>(value, width, scale, result);
+		return TryStepUnscaledDecimal<hugeint_t, INCREMENT>(value, result);
 	default:
 		return false;
 	}

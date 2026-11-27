@@ -10,6 +10,14 @@
 
 namespace duckdb {
 
+static bool IsFloatingZero(const Value &value) {
+	return value.type().IsFloating() && !value.IsNull() && value.GetValue<double>() == 0;
+}
+
+static Value SignedZero(const LogicalType &type, bool negative) {
+	return Value::DOUBLE(negative ? -0.0 : 0.0).DefaultCastAs(type);
+}
+
 // Keep emitting legacy term/value operands so filters also work with catalogs
 // that predate the value-expression representation.
 rest_api_objects::Term IcebergExpression::ReferenceExpression(const string &column_name) {
@@ -24,13 +32,26 @@ IcebergExpression::LiteralExpression(const string &type, const string &column_na
 	if (value.IsNull()) {
 		return nullptr;
 	}
+	// Java compares UUID halves as signed longs. Even equality can lose matching files
+	// when the server searches bounds from a writer that used unsigned byte order.
+	if (value.type().id() == LogicalTypeId::UUID) {
+		return UnaryExpression("not-null", column_name);
+	}
+	// Iceberg orders -0 before +0. SQL comparisons place them at the same point.
+	auto literal = value;
+	if (IsFloatingZero(value)) {
+		if (type == "eq" || type == "not-eq") {
+			return SetExpression(type == "eq" ? "in" : "not-in", column_name, {value});
+		}
+		literal = SignedZero(value.type(), type == "lt" || type == "gt-eq");
+	}
 	auto result = make_uniq<rest_api_objects::Predicate>();
 	result->comparison_predicate.emplace();
 	result->comparison_predicate->type.value = type;
 	result->comparison_predicate->term = ReferenceExpression(column_name);
 	try {
 		result->comparison_predicate->value.emplace();
-		result->comparison_predicate->value->primitive_type_value = IcebergTypeHelper::PrimitiveTypeFromValue(value);
+		result->comparison_predicate->value->primitive_type_value = IcebergTypeHelper::PrimitiveTypeFromValue(literal);
 	} catch (...) {
 		return nullptr;
 	}
@@ -48,6 +69,9 @@ unique_ptr<rest_api_objects::Predicate> IcebergExpression::UnaryExpression(const
 
 unique_ptr<rest_api_objects::Predicate> IcebergExpression::SetExpression(const string &type, const string &column_name,
                                                                          const vector<reference<const Value>> &values) {
+	if (!values.empty() && values.front().get().type().id() == LogicalTypeId::UUID) {
+		return UnaryExpression("not-null", column_name);
+	}
 	auto result = make_uniq<rest_api_objects::Predicate>();
 	result->set_predicate.emplace();
 	result->set_predicate->type.value = type;
@@ -55,14 +79,24 @@ unique_ptr<rest_api_objects::Predicate> IcebergExpression::SetExpression(const s
 	result->set_predicate->values.literals_one_of_1.emplace();
 	auto &literals = result->set_predicate->values.literals_one_of_1->value;
 	literals.reserve(values.size());
-	for (auto &value : values) {
-		try {
-			rest_api_objects::Literal literal;
-			literal.primitive_type_value = IcebergTypeHelper::PrimitiveTypeFromValue(value.get());
-			literals.push_back(std::move(literal));
-		} catch (...) {
-			return nullptr;
+	try {
+		bool added_zero = false;
+		for (auto &entry : values) {
+			auto &value = entry.get();
+			if (IsFloatingZero(value)) {
+				if (!added_zero) {
+					for (bool negative : {true, false}) {
+						literals.emplace_back().primitive_type_value =
+						    IcebergTypeHelper::PrimitiveTypeFromValue(SignedZero(value.type(), negative));
+					}
+					added_zero = true;
+				}
+			} else {
+				literals.emplace_back().primitive_type_value = IcebergTypeHelper::PrimitiveTypeFromValue(value);
+			}
 		}
+	} catch (...) {
+		return nullptr;
 	}
 	return result;
 }

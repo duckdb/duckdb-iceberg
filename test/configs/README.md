@@ -135,8 +135,7 @@ only where support is verified. Remove the declaration when support is absent.
 Keep `skip_tests` for known bugs, unexplained failures, hardcoded fixture paths,
 and unavailable generated data. These are not evidence of absent capabilities.
 For example, the S3 Tables UNKNOWN skips describe acceptance behavior that
-differs from test expectations, and Gravitino's namespace-property skips assume
-an existing `namespace_id`. Neither justifies declaring the feature unsupported.
+differs from test expectations.
 The existing server-planning bug exceptions also remain explicit skips.
 
 Capability gates apply to whole files. Split tests when unrelated assertions

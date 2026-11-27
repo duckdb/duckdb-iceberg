@@ -310,7 +310,8 @@ optional<IcebergFileScanTask> IcebergScanPlanner::GetScanTask(idx_t file_id) con
 		entry.emplace(data_manifest_entries[file_id]);
 		task = IcebergFileScanTask(CreateDataFileDescriptor(*entry));
 		task.partition_constants = IcebergPartitionConstants::Resolve(
-		    task.partition_spec_id, entry->entry.data_file.partition_info, GetMetadata(), GetSchema());
+		    context, task.partition_spec_id, entry->entry.data_file.partition_info, GetMetadata(), GetSchema());
+		task.partition_values = entry->entry.data_file.partition_info;
 		scan_tasks++;
 	}
 	// Delete manifest I/O must run without the shared planning lock.

@@ -1,0 +1,81 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/sorting/identity/identity_floating_point_order.test
+# description: Iceberg floating-point sort order distinguishes signed zeros and places signed NaNs beyond the infinities
+# group: [identity]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+SET threads = 1;
+
+foreach type FLOAT DOUBLE
+
+# The secondary key interleaves the two zero signs. It should break ties only within each sign.
+# Bit 15 is a payload bit for both widths. Same-sign NaNs with different payloads also tie.
+statement ok
+CREATE OR REPLACE TEMP VIEW floating_sort_input AS
+SELECT id, val::{type} AS p FROM (VALUES
+	(3, '0.0'), (4, '-0.0'), (2, '-0.0'), (1, '0.0'),
+	(5, 'NaN'), (6, '-NaN'), (7, 'Infinity'), (8, '-Infinity'),
+	(9, '1.5'), (10, '-1.5'), (11, NULL)
+) v(id, val)
+UNION ALL SELECT 12, set_bit('NaN'::{type}::BIT, 15, 1)::{type}
+UNION ALL SELECT 13, set_bit('-NaN'::{type}::BIT, 15, 1)::{type};
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.floating_sort;
+
+statement ok
+CREATE TABLE my_datalake.default.floating_sort (id INT, p {type});
+
+statement ok
+ALTER TABLE my_datalake.default.floating_sort SET SORTED BY (p ASC NULLS LAST, id ASC);
+
+statement ok
+INSERT INTO my_datalake.default.floating_sort SELECT id, p FROM floating_sort_input;
+
+query II
+SELECT list(id ORDER BY file_row_number), bool_and(signbit(w.p) IS NOT DISTINCT FROM signbit(i.p))
+FROM my_datalake.default.floating_sort w JOIN floating_sort_input i USING (id)
+GROUP BY filename;
+----
+[6, 13, 8, 10, 2, 4, 1, 3, 9, 7, 5, 12, 11]	true
+
+# Repeated zeros exercise Parquet dictionary encoding. Odd ids carry -0 and must occupy the first half of the file.
+statement ok
+INSERT INTO my_datalake.default.floating_sort
+SELECT i + 100, CASE WHEN i % 2 = 1 THEN '-0.0'::{type} ELSE '0.0'::{type} END FROM range(4096) r(i);
+
+query III
+SELECT count(*), bool_and(signbit(p) = (id % 2 = 1)), bool_and(signbit(p) = (file_row_number < 2048))
+FROM my_datalake.default.floating_sort WHERE id >= 100 GROUP BY filename;
+----
+4096	true	true
+
+statement ok
+DROP TABLE my_datalake.default.floating_sort;
+
+# Partitioned COPY sorts each output file separately. Use a nested key in the opposite direction.
+statement ok
+CREATE TABLE my_datalake.default.floating_sort (part INT, id INT, s STRUCT(p {type}))
+PARTITIONED BY (part);
+
+statement ok
+ALTER TABLE my_datalake.default.floating_sort SET SORTED BY (s.p DESC NULLS FIRST, id ASC);
+
+statement ok
+INSERT INTO my_datalake.default.floating_sort
+SELECT part, id, {'p': p} FROM floating_sort_input CROSS JOIN (VALUES (1), (2)) v(part);
+
+query II
+SELECT part, list(id ORDER BY file_row_number) FROM my_datalake.default.floating_sort
+GROUP BY part, filename ORDER BY part;
+----
+1	[11, 5, 12, 7, 9, 1, 3, 2, 4, 10, 8, 6, 13]
+2	[11, 5, 12, 7, 9, 1, 3, 2, 4, 10, 8, 6, 13]
+
+statement ok
+DROP TABLE my_datalake.default.floating_sort;
+
+endloop

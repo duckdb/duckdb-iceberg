@@ -1,7 +1,6 @@
 
 #pragma once
 
-#include "iceberg_schema_information.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
 #include "duckdb/common/enums/on_entry_not_found.hpp"
 
@@ -38,6 +37,11 @@ public:
 	optional_ptr<CatalogEntry> CreateCollation(CatalogTransaction transaction, CreateCollationInfo &info) override;
 	optional_ptr<CatalogEntry> CreateType(CatalogTransaction transaction, CreateTypeInfo &info) override;
 	void Alter(CatalogTransaction transaction, AlterInfo &info) override;
+	//! Move a column or struct field of 'table' among its siblings (iceberg_move_column). Returns the schema id that
+	//! was current before the move and the one that is current after it
+	pair<int32_t, int32_t> MoveColumn(ClientContext &context, IcebergTableSchemaVersion &table,
+	                                  const vector<Identifier> &column_path, IcebergColumnMove move,
+	                                  const vector<Identifier> &reference_path);
 	void Scan(ClientContext &context, CatalogType type, const std::function<void(CatalogEntry &)> &callback) override;
 	void Scan(CatalogType type, const std::function<void(CatalogEntry &)> &callback) override;
 	void DropEntry(ClientContext &context, DropInfo &info) override;
@@ -48,10 +52,6 @@ public:
 	bool DoesExist() const {
 		return exists;
 	}
-	string GetSchemaKey() const {
-		return this->catalog.GetName() + "." + this->name;
-	};
-	void LoadProperties(ClientContext &context);
 
 private:
 	IcebergTableSet &GetCatalogSet(CatalogType type);
@@ -61,10 +61,11 @@ private:
 
 public:
 	IcebergTableSet tables;
-	IcebergSchemaInformation schema_info;
 };
 
+//! 'is_alter' is false when the schema is that of a replacement of the table (CREATE OR REPLACE): an ALTER is verified
+//! against the table's partition spec, sort order and identifier fields, and moves the schema-dependent properties
 void IntroduceNewSchema(ClientContext &context, IcebergTable &updated_table, IcebergTransactionData &transaction_data,
-                        shared_ptr<IcebergTableSchema> new_schema, bool update_schema_properties = true);
+                        shared_ptr<IcebergTableSchema> new_schema, bool is_alter = true);
 
 } // namespace duckdb

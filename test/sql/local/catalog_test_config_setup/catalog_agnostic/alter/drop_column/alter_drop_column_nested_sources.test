@@ -1,0 +1,103 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/drop_column/alter_drop_column_nested_sources.test
+# description: A struct field that the partition spec or the sort order reads can't be dropped, nor the struct that holds it
+# group: [drop_column]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.drop_nested_sources;
+
+statement ok
+CREATE TABLE my_datalake.default.drop_nested_sources (
+	id BIGINT,
+	s STRUCT(a INTEGER, b INTEGER),
+	t STRUCT(c INTEGER, d INTEGER),
+	u STRUCT(n STRUCT(e INTEGER, f INTEGER), g INTEGER)
+);
+
+statement ok
+INSERT INTO my_datalake.default.drop_nested_sources VALUES
+	(1, {'a': 10, 'b': 11}, {'c': 20, 'd': 21}, {'n': {'e': 30, 'f': 31}, 'g': 32});
+
+statement ok
+ALTER TABLE my_datalake.default.drop_nested_sources SET PARTITIONED BY (s.a, u.n.e);
+
+statement ok
+ALTER TABLE my_datalake.default.drop_nested_sources SET SORTED BY (t.c);
+
+# The partition spec reads s.a and u.n.e
+
+statement error
+ALTER TABLE my_datalake.default.drop_nested_sources DROP COLUMN s.a;
+----
+Can't drop column 's.a' as it is referenced by the current partition spec's field: 's.a' (field id: 1000)
+
+statement error
+ALTER TABLE my_datalake.default.drop_nested_sources DROP COLUMN s;
+----
+Can't drop column 's' as it holds 's.a', which is referenced by the current partition spec's field: 's.a' (field id: 1000)
+
+statement error
+ALTER TABLE my_datalake.default.drop_nested_sources DROP COLUMN u.n;
+----
+Can't drop column 'u.n' as it holds 'u.n.e', which is referenced by the current partition spec's field: 'u.n.e' (field id: 1001)
+
+statement error
+ALTER TABLE my_datalake.default.drop_nested_sources DROP COLUMN u;
+----
+Can't drop column 'u' as it holds 'u.n.e', which is referenced by the current partition spec's field: 'u.n.e' (field id: 1001)
+
+# The sort order reads t.c
+
+statement error
+ALTER TABLE my_datalake.default.drop_nested_sources DROP COLUMN t.c;
+----
+Can't drop column 't.c' as it is referenced by sort order 1 (transform: identity, direction: asc, null_order: nulls-last)
+
+statement error
+ALTER TABLE my_datalake.default.drop_nested_sources DROP COLUMN t;
+----
+Can't drop column 't' as it holds 't.c', which is referenced by sort order 1 (transform: identity, direction: asc, null_order: nulls-last)
+
+# The fields next to them can be dropped
+
+statement ok
+ALTER TABLE my_datalake.default.drop_nested_sources DROP COLUMN s.b;
+
+statement ok
+ALTER TABLE my_datalake.default.drop_nested_sources DROP COLUMN t.d;
+
+statement ok
+ALTER TABLE my_datalake.default.drop_nested_sources DROP COLUMN u.n.f;
+
+statement ok
+ALTER TABLE my_datalake.default.drop_nested_sources DROP COLUMN u.g;
+
+query IIII
+SELECT * FROM my_datalake.default.drop_nested_sources;
+----
+1	{'a': 10}	{'c': 20}	{'n': {'e': 30}}
+
+# Once the partition spec and the sort order no longer read them, the structs can be dropped
+
+statement ok
+ALTER TABLE my_datalake.default.drop_nested_sources SET PARTITIONED BY (id);
+
+statement ok
+ALTER TABLE my_datalake.default.drop_nested_sources RESET SORTED BY;
+
+statement ok
+ALTER TABLE my_datalake.default.drop_nested_sources DROP COLUMN s;
+
+statement ok
+ALTER TABLE my_datalake.default.drop_nested_sources DROP COLUMN t;
+
+statement ok
+ALTER TABLE my_datalake.default.drop_nested_sources DROP COLUMN u;
+
+query I
+SELECT * FROM my_datalake.default.drop_nested_sources;
+----
+1
