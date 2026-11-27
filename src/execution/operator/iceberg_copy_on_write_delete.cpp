@@ -19,6 +19,7 @@
 #include "duckdb/parser/tableref/emptytableref.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
@@ -35,6 +36,7 @@
 #include "duckdb/planner/table_filter_set.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
+#include "catalog/rest/transaction/iceberg_transaction_data.hpp"
 #include "execution/operator/iceberg_delete.hpp"
 #include "execution/operator/iceberg_file_rewrite.hpp"
 #include "core/deletes/iceberg_delete_data.hpp"
@@ -48,9 +50,9 @@ namespace {
 //! SPEC: when removing a data file, writers must also remove any deletion vector that applies to it. Like a
 //! merge-on-read DELETE replacing a vector, this also removes the file-scoped position delete files; partition-scoped
 //! ones may still apply to other data files and stay.
-void AddReplacedFile(IcebergFileRewriteInput &result, const string &file, const IcebergMultiFileList &match_file_list) {
+void AddReplacedFile(IcebergFileRewriteInput &result, const string &file, const IcebergMultiFileList &target_files) {
 	result.replaced_files.emplace_back(file);
-	auto existing_deletes = match_file_list.GetExistingPositionalDeleteData(file);
+	auto existing_deletes = target_files.GetExistingPositionalDeleteData(file);
 	if (existing_deletes) {
 		for (auto &delete_file : existing_deletes->source_files) {
 			result.replaced_files.push_back(delete_file);
@@ -61,9 +63,9 @@ void AddReplacedFile(IcebergFileRewriteInput &result, const string &file, const 
 class CopyOnWriteUpdateRewrite : public IcebergFileRewrite {
 public:
 	CopyOnWriteUpdateRewrite(PhysicalPlan &physical_plan, IcebergTable &table,
-	                         IcebergCopyOnWriteDeleteFilter &delete_filter)
+	                         IcebergCopyOnWriteDeleteFilter &delete_filter, const IcebergMultiFileList &target_files)
 	    : IcebergFileRewrite(physical_plan, {LogicalType::BIGINT}, 1, IcebergWriteOperation::COPY_ON_WRITE_DELETE),
-	      table(table), delete_filter(delete_filter) {
+	      table(table), delete_filter(delete_filter), target_files(target_files) {
 	}
 
 	unique_ptr<GlobalSinkState> GetGlobalSinkState(ClientContext &context) const override {
@@ -72,7 +74,7 @@ public:
 
 	SourceResultType GetDataInternal(ExecutionContext &context, DataChunk &chunk,
 	                                 OperatorSourceInput &input) const override {
-		chunk.data[0].Append(Value::BIGINT(NumericCast<int64_t>(delete_filter.GetDeletes().deleted_count)));
+		chunk.data[0].Append(Value::BIGINT(NumericCast<int64_t>(delete_filter.GetResultCount())));
 		chunk.SetChildCardinality(1);
 		return SourceResultType::FINISHED;
 	}
@@ -85,31 +87,38 @@ protected:
 		IcebergFileRewriteInput result(state.added_data_files ? IcebergSnapshotOperationType::OVERWRITE
 		                                                      : IcebergSnapshotOperationType::DELETE);
 		auto &rows_by_file = delete_filter.GetDeletes().rows_by_file;
-		//! The binder takes filename and file_row_number from the target scan. If the optimizer
-		//! eliminated that scan, the sink cannot have received a matching row.
-		if (!rows_by_file.empty() && !delete_filter.match_file_list) {
-			throw InternalException("Copy-on-write UPDATE: matched rows without an Iceberg scan of the matching rows");
-		}
 		for (auto &entry : rows_by_file) {
-			AddReplacedFile(result, entry.first, *delete_filter.match_file_list);
+			AddReplacedFile(result, entry.first, target_files);
 		}
 		return result;
+	}
+
+	void StageRewrite(IcebergTransactionData &transaction_data, const IcebergFileRewriteGlobalState &state,
+	                  IcebergSnapshotOperationType operation, vector<IcebergManifestEntry> &&new_entries,
+	                  IcebergManifestDeletes &&replaced_files) const override {
+		//! A MERGE's rewrite joins the snapshot its actions stage
+		bool merge_action = delete_filter.merge_rows != nullptr;
+		if (operation == IcebergSnapshotOperationType::DELETE) {
+			transaction_data.AddDeleteSnapshot(partitioned_manifest_entry_map_t(), std::move(replaced_files),
+			                                   merge_action);
+		} else {
+			transaction_data.AddSnapshot(operation, std::move(new_entries), std::move(replaced_files), merge_action);
+		}
 	}
 
 private:
 	IcebergTable &table;
 	IcebergCopyOnWriteDeleteFilter &delete_filter;
+	const IcebergMultiFileList &target_files;
 };
 
 class CopyOnWriteDeleteRewrite : public IcebergFileRewrite {
 public:
 	CopyOnWriteDeleteRewrite(PhysicalPlan &physical_plan, IcebergTable &table,
-	                         IcebergCopyOnWriteRowCounter &touched_rows,
-	                         optional_ptr<IcebergMultiFileList> match_file_list,
+	                         IcebergCopyOnWriteRowCounter &touched_rows, const IcebergMultiFileList &target_files,
 	                         unique_ptr<LogicalOperator> logical_plan)
 	    : IcebergFileRewrite(physical_plan, {LogicalType::BIGINT}, 1, IcebergWriteOperation::COPY_ON_WRITE_DELETE),
-	      table(table), touched_rows(touched_rows), match_file_list(match_file_list),
-	      logical_plan(std::move(logical_plan)) {
+	      table(table), touched_rows(touched_rows), target_files(target_files), logical_plan(std::move(logical_plan)) {
 	}
 
 	unique_ptr<GlobalSinkState> GetGlobalSinkState(ClientContext &context) const override {
@@ -131,14 +140,8 @@ protected:
 		//! are rebuilt for each commit attempt, including those of files inserted in this transaction.
 		IcebergFileRewriteInput result(state.added_data_files ? IcebergSnapshotOperationType::OVERWRITE
 		                                                      : IcebergSnapshotOperationType::DELETE);
-		auto &files = touched_rows.GetFiles();
-		//! The DELETE binder takes filename and file_row_number from the target scan. If the optimizer
-		//! eliminated that scan, no file can have been touched.
-		if (!files.empty() && !match_file_list) {
-			throw InternalException("Copy-on-write DELETE: matched rows without an Iceberg scan of the matching rows");
-		}
-		for (auto &file : files) {
-			AddReplacedFile(result, file, *match_file_list);
+		for (auto &file : touched_rows.GetFiles()) {
+			AddReplacedFile(result, file, target_files);
 		}
 		return result;
 	}
@@ -161,9 +164,10 @@ private:
 	IcebergTable &table;
 	//! The rows of the touched files (the join with dict's output), which also records the files
 	IcebergCopyOnWriteRowCounter &touched_rows;
-	//! The file list of the DELETE's scan. It has loaded the delete files of every matched data file, which are
-	//! removed together with that data file. Null if the optimizer removed the scan because no rows can match.
-	optional_ptr<IcebergMultiFileList> match_file_list;
+	//! The file list of the keep scan, which reads every touched file. It has loaded their delete files, which are
+	//! removed together with them. Not the DELETE's own scan: in a DELETE ... USING, the scan that a matched row's
+	//! filename comes from can be the source's.
+	const IcebergMultiFileList &target_files;
 	//! Owns the logical plan the rewritten rows were planned from
 	unique_ptr<LogicalOperator> logical_plan;
 };
@@ -174,6 +178,8 @@ public:
 	IcebergCopyOnWriteDeletes deletes;
 	//! For an UPDATE: the new version of every matched row
 	unique_ptr<ColumnDataCollection> updated_rows;
+	//! For a MERGE: the row count it reported
+	idx_t merged_count = 0;
 };
 
 class CopyOnWriteDeleteLocalState : public LocalSinkState {
@@ -243,8 +249,6 @@ public:
 	//! The filename and file_row_number columns of match_plan, and their types
 	vector<idx_t> row_id_indexes;
 	vector<LogicalType> row_id_types;
-	//! The file list of the DELETE's scan, set when planned; null if the optimizer removed the scan
-	optional_ptr<IcebergMultiFileList> match_file_list;
 
 public:
 	PhysicalOperator &CreatePlan(ClientContext &context, PhysicalPlanGenerator &planner) override {
@@ -256,12 +260,6 @@ public:
 		auto &projection =
 		    planner.Make<PhysicalProjection>(row_id_types, std::move(select_list), match.estimated_cardinality);
 		projection.children.push_back(match);
-		//! The optimizer can remove the scan when no rows match.
-		auto match_scan = IcebergDelete::FindIcebergScan(match);
-		if (match_scan) {
-			auto &bind_data = match_scan->bind_data->Cast<MultiFileBindData>();
-			match_file_list = bind_data.file_list->Cast<IcebergMultiFileList>();
-		}
 		return projection;
 	}
 
@@ -468,6 +466,8 @@ PhysicalOperator &IcebergCopyOnWriteDelete::PlanDelete(ClientContext &context, P
 	//! as the last two columns
 	auto binder = Binder::CreateBinder(context);
 	auto keep = BindKeepScan(*binder, table, with_row_lineage);
+	auto &keep_get = keep->children[0]->Cast<LogicalGet>();
+	auto &target_files = keep_get.bind_data->Cast<MultiFileBindData>().file_list->Cast<IcebergMultiFileList>();
 	auto keep_index = keep->Cast<LogicalProjection>().table_index;
 	auto column_count = keep->Cast<LogicalProjection>().expressions.size() - 2;
 	vector<LogicalType> column_types;
@@ -599,10 +599,10 @@ PhysicalOperator &IcebergCopyOnWriteDelete::PlanDelete(ClientContext &context, P
 	}
 
 	//! Use the same replacement-file writer and snapshot staging as maintenance rewrites.
-	auto &rewrite = planner
-	                    .Make<CopyOnWriteDeleteRewrite>(table.table_info, *touched_rows_ref.counter,
-	                                                    matches_ref.match_file_list, std::move(plan))
-	                    .Cast<CopyOnWriteDeleteRewrite>();
+	auto &rewrite =
+	    planner
+	        .Make<CopyOnWriteDeleteRewrite>(table.table_info, *touched_rows_ref.counter, target_files, std::move(plan))
+	        .Cast<CopyOnWriteDeleteRewrite>();
 	rewrite.PlanCopy(context, planner, metadata, kept_rows.get(), optional_idx(),
 	                 with_row_lineage ? IcebergInsertVirtualColumns::WRITE_ROW_ID_AND_SEQUENCE_NUMBER
 	                                  : IcebergInsertVirtualColumns::NONE);
@@ -626,10 +626,15 @@ IcebergCopyOnWriteDeleteFilter::IcebergCopyOnWriteDeleteFilter(PhysicalPlan &phy
 PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner,
                                                              LogicalUpdate &op, IcebergTableSchemaVersion &table) {
 	//! Build side: the UPDATE's own scan. An Iceberg UPDATE is bound as a delete and an insert, so its expressions
-	//! give the new value of every table column, followed in the scan's output by filename and file_row_number.
+	//! give the new value of every table column, followed in the scan's output by filename and file_row_number and,
+	//! on V3, _row_id (see IcebergTableSchemaVersion::GetRowIdColumns).
 	auto &match_plan = planner.CreatePlan(*op.children[0]);
+	const bool with_row_lineage = table.table_info.GetMetadata().iceberg_version >= 3;
 	auto match_column_count = match_plan.GetTypes().size();
-	vector<idx_t> match_row_id_indexes {match_column_count - 2, match_column_count - 1};
+	const idx_t lineage_column_count = with_row_lineage ? 1 : 0;
+	D_ASSERT(match_column_count >= 2 + lineage_column_count);
+	vector<idx_t> match_row_id_indexes {match_column_count - lineage_column_count - 2,
+	                                    match_column_count - lineage_column_count - 1};
 
 	auto &columns = table.table_info.GetMetadata().GetLatestSchema().columns;
 	if (op.columns.size() != columns.size()) {
@@ -650,25 +655,47 @@ PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanUpdate(ClientContext &cont
 		}
 		update_expressions.push_back(std::move(expression));
 	}
+	if (with_row_lineage) {
+		//! SPEC: an updated row keeps its _row_id, and its _last_updated_sequence_number is written as NULL, so it
+		//! inherits the sequence number of the snapshot that commits the update. A row inserted earlier in this
+		//! transaction has no _row_id yet; it gets one at commit, as with a merge-on-read UPDATE.
+		auto row_id_index = match_column_count - 1;
+		update_expressions.push_back(
+		    make_uniq<BoundReferenceExpression>(match_plan.GetTypes()[row_id_index], row_id_index));
+		update_expressions.push_back(make_uniq<BoundConstantExpression>(Value(LogicalType::BIGINT)));
+	}
 	return PlanRewrite(context, planner, table, match_plan, std::move(match_row_id_indexes),
 	                   std::move(update_expressions));
+}
+
+PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanMerge(ClientContext &context, PhysicalPlanGenerator &planner,
+                                                            IcebergTableSchemaVersion &table,
+                                                            PhysicalOperator &merge_plan,
+                                                            shared_ptr<IcebergCopyOnWriteMergeRows> merge_rows) {
+	//! Build side: the MERGE. Its pipelines, including those of its actions, complete before it emits its row count,
+	//! so by the time this operator finalizes, every action has handed over the rows it removed.
+	return PlanRewrite(context, planner, table, merge_plan, {}, {}, std::move(merge_rows));
 }
 
 PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanRewrite(ClientContext &context, PhysicalPlanGenerator &planner,
                                                               IcebergTableSchemaVersion &table,
                                                               PhysicalOperator &match_plan,
                                                               vector<idx_t> match_row_id_indexes,
-                                                              vector<unique_ptr<Expression>> update_expressions) {
+                                                              vector<unique_ptr<Expression>> update_expressions,
+                                                              shared_ptr<IcebergCopyOnWriteMergeRows> merge_rows) {
 	auto &metadata = table.table_info.GetMetadata();
-	//! A V3 DELETE carries each kept row's _row_id and _last_updated_sequence_number into the new files.
+	//! A V3 rewrite carries each kept row's _row_id and _last_updated_sequence_number into the new files.
 	//! Rows inserted in this transaction carry NULL until the commit assigns their lineage.
 	const bool with_row_lineage = metadata.iceberg_version >= 3;
-	D_ASSERT(!with_row_lineage || update_expressions.empty());
 
 	//! Probe side: the whole table again, so the rows of each matched file that survive can be rewritten. It is
 	//! planned here, after optimization, like PhysicalPlanGenerator::Plan does for a full statement.
 	auto binder = Binder::CreateBinder(context);
 	auto keep_logical_plan = BindKeepScan(*binder, table, with_row_lineage);
+	//! The keep scan reads the deletes for every matched target file. A joined UPDATE or DELETE can also
+	//! project filename and file_row_number from a different table on the match side.
+	auto &keep_get = keep_logical_plan->children[0]->Cast<LogicalGet>();
+	auto &target_files = keep_get.bind_data->Cast<MultiFileBindData>().file_list->Cast<IcebergMultiFileList>();
 	ColumnBindingResolver resolver;
 	resolver.VisitOperator(*keep_logical_plan);
 	keep_logical_plan->ResolveOperatorTypes();
@@ -677,7 +704,8 @@ PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanRewrite(ClientContext &con
 	auto keep_types = keep_plan.GetTypes();
 	D_ASSERT(keep_types.size() > 2);
 	vector<LogicalType> output_types(keep_types.begin(), keep_types.end() - 2);
-	//! The updated rows are emitted in the same chunks as the kept ones
+	//! The updated rows are emitted in the same chunks as the kept ones, so on V3 they end with the lineage columns too
+	D_ASSERT(update_expressions.empty() || update_expressions.size() == output_types.size());
 	for (idx_t i = 0; i < update_expressions.size(); i++) {
 		if (update_expressions[i]->GetReturnType() != output_types[i]) {
 			update_expressions[i] =
@@ -691,14 +719,9 @@ PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanRewrite(ClientContext &con
 	                   .Cast<IcebergCopyOnWriteDeleteFilter>();
 	filter.keep_logical_plan = std::move(keep_logical_plan);
 	filter.update_expressions = std::move(update_expressions);
+	filter.merge_rows = merge_rows;
 	auto &transaction_data = table.table_info.transaction_data;
 	filter.require_assigned_lineage = transaction_data && transaction_data->has_pending_v3_snapshot;
-	//! The optimizer can remove the scan when no rows match.
-	auto match_scan = IcebergDelete::FindIcebergScan(match_plan);
-	if (match_scan) {
-		auto &bind_data = match_scan->bind_data->Cast<MultiFileBindData>();
-		filter.match_file_list = bind_data.file_list->Cast<IcebergMultiFileList>();
-	}
 
 	auto keep_scan = FindTableScan(keep_plan);
 	if (keep_scan) {
@@ -717,7 +740,8 @@ PhysicalOperator &IcebergCopyOnWriteDeleteFilter::PlanRewrite(ClientContext &con
 	}
 
 	//! Use the same replacement-file writer and snapshot staging as maintenance rewrites.
-	auto &rewrite = planner.Make<CopyOnWriteUpdateRewrite>(table.table_info, filter).Cast<CopyOnWriteUpdateRewrite>();
+	auto &rewrite =
+	    planner.Make<CopyOnWriteUpdateRewrite>(table.table_info, filter, target_files).Cast<CopyOnWriteUpdateRewrite>();
 	rewrite.PlanCopy(context, planner, metadata, filter, optional_idx(),
 	                 with_row_lineage ? IcebergInsertVirtualColumns::WRITE_ROW_ID_AND_SEQUENCE_NUMBER
 	                                  : IcebergInsertVirtualColumns::NONE);
@@ -746,6 +770,16 @@ unique_ptr<LocalSinkState> IcebergCopyOnWriteDeleteFilter::GetLocalSinkState(Exe
 
 SinkResultType IcebergCopyOnWriteDeleteFilter::Sink(ExecutionContext &context, DataChunk &chunk,
                                                     OperatorSinkInput &input) const {
+	if (merge_rows) {
+		//! The MERGE emits only its row count; the rows it removed reach merge_rows directly
+		auto &global_state = input.global_state.Cast<CopyOnWriteDeleteGlobalState>();
+		lock_guard<mutex> guard(global_state.lock);
+		for (idx_t i = 0; i < chunk.size(); i++) {
+			global_state.merged_count += NumericCast<idx_t>(chunk.GetValue(0, i).GetValue<int64_t>());
+		}
+		return SinkResultType::NEED_MORE_INPUT;
+	}
+
 	auto &local_state = input.local_state.Cast<CopyOnWriteDeleteLocalState>();
 
 	UnifiedVectorFormat file_name_data;
@@ -804,6 +838,21 @@ SinkCombineResultType IcebergCopyOnWriteDeleteFilter::Combine(ExecutionContext &
 SinkFinalizeType IcebergCopyOnWriteDeleteFilter::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                                           OperatorSinkFinalizeInput &input) const {
 	auto &global_state = input.global_state.Cast<CopyOnWriteDeleteGlobalState>();
+	if (merge_rows) {
+		lock_guard<mutex> guard(merge_rows->lock);
+		for (auto &entry : merge_rows->deletes.rows_by_file) {
+			auto &deleted = global_state.deletes.rows_by_file[entry.first];
+			for (auto row_number : entry.second) {
+				if (!deleted.insert(NumericCast<int64_t>(row_number)).second) {
+					throw NotImplementedException(
+					    "The same row was updated multiple times - this is not (yet) supported in Iceberg. Eliminate "
+					    "duplicate matches prior to running the MERGE");
+				}
+			}
+			global_state.deletes.deleted_count += entry.second.size();
+		}
+		merge_rows->deletes.rows_by_file.clear();
+	}
 	PushKeepScanFilter(global_state.deletes);
 	return SinkFinalizeType::READY;
 }
@@ -837,6 +886,13 @@ const IcebergCopyOnWriteDeletes &IcebergCopyOnWriteDeleteFilter::GetDeletes() co
 		throw InternalException("Copy-on-write DELETE: the matched rows were read before they were collected");
 	}
 	return sink_state->Cast<CopyOnWriteDeleteGlobalState>().deletes;
+}
+
+idx_t IcebergCopyOnWriteDeleteFilter::GetResultCount() const {
+	if (merge_rows) {
+		return sink_state->Cast<CopyOnWriteDeleteGlobalState>().merged_count;
+	}
+	return GetDeletes().deleted_count;
 }
 
 //===--------------------------------------------------------------------===//
@@ -903,8 +959,10 @@ OperatorResultType IcebergCopyOnWriteDeleteFilter::Execute(ExecutionContext &con
 	if (require_assigned_lineage && kept &&
 	    (VectorOperations::HasNull(chunk.data[column_count - 2]) ||
 	     VectorOperations::HasNull(chunk.data[column_count - 1]))) {
-		throw InvalidInputException("Copy-on-write DELETE cannot preserve uncommitted row lineage. "
-		                            "Commit the earlier changes to this table before running the DELETE.");
+		auto statement = update_expressions.empty() ? "DELETE" : "UPDATE";
+		throw InvalidInputException("Copy-on-write %s cannot preserve uncommitted row lineage. "
+		                            "Commit the earlier changes to this table before running the %s.",
+		                            statement, statement);
 	}
 	return OperatorResultType::NEED_MORE_INPUT;
 }
@@ -946,6 +1004,9 @@ vector<const_reference<PhysicalOperator>> IcebergCopyOnWriteDeleteFilter::GetSou
 }
 
 string IcebergCopyOnWriteDeleteFilter::GetName() const {
+	if (merge_rows) {
+		return "ICEBERG_COPY_ON_WRITE_MERGE";
+	}
 	return update_expressions.empty() ? "ICEBERG_COPY_ON_WRITE_DELETE" : "ICEBERG_COPY_ON_WRITE_UPDATE";
 }
 

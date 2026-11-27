@@ -372,11 +372,12 @@ void IcebergTransactionData::TableAddSchema(int32_t schema_id) {
 	auto &schema = table_info.GetMetadata().GetSchemaFromId(schema_id);
 	auto add_schema_update = make_uniq<AddSchemaUpdate>(schema.Copy(), table_info.GetMetadata().last_column_id);
 	updates.push_back(std::move(add_schema_update));
-	assert_schema_id = true;
 	TableSetCurrentSchema(schema_id);
 }
 
 void IcebergTransactionData::TableSetCurrentSchema(int32_t schema_id) {
+	// Reusing a historical schema can also overwrite a concurrent schema or identifier change.
+	assert_schema_id = true;
 	// Later specs and sort orders are validated against the schema current at this point in the transaction.
 	updates.push_back(make_uniq<SetCurrentSchema>(schema_id));
 }

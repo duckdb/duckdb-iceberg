@@ -19,7 +19,7 @@ IcebergManifestListScanInfo::~IcebergManifestListScanInfo() {
 }
 
 IcebergManifestFileScanInfo::IcebergManifestFileScanInfo(
-    const IcebergTableMetadata &metadata, const IcebergSnapshotScanInfo &snapshot_info,
+    ClientContext &context, const IcebergTableMetadata &metadata, const IcebergSnapshotScanInfo &snapshot_info,
     vector<IcebergManifestListEntry> &manifest_files, const IcebergOptions &options, FileSystem &fs,
     const string &iceberg_path, optional_ptr<ManifestEntryReadState> read_state, vector<idx_t> manifest_indexes_p)
     : IcebergAvroScanInfo(TYPE, metadata, snapshot_info), manifest_files(manifest_files), options(options), fs(fs),
@@ -44,15 +44,39 @@ IcebergManifestFileScanInfo::IcebergManifestFileScanInfo(
 		auto &manifest = manifest_list_entry.GetFile();
 		partition_spec_ids.insert(manifest.partition_spec_id);
 	}
-	//! The schema of a manifest is affected by the 'partition_spec_id' of the 'manifest_file',
-	//! because the 'partition' struct has a field for every partition field in that partition spec.
-
-	//! Since we are now reading *all* manifests in one reader, we have to merge these schemas,
-	//! and to do that we create a map of all relevant partition fields
-	partition_field_id_to_type = IcebergDataFile::GetFieldIdToTypeMapping(snapshot_info, metadata, partition_spec_ids);
+	// V1 snapshots can list paths directly. These have no spec ID until we read the manifest header.
+	if (snapshot_info.snapshot && !snapshot_info.snapshot->manifests.empty()) {
+		for (auto &spec : metadata.partition_specs) {
+			partition_spec_ids.insert(spec.first);
+		}
+	}
+	for (auto spec_id : partition_spec_ids) {
+		auto spec = metadata.FindPartitionSpecById(spec_id);
+		if (!spec) {
+			throw InvalidConfigurationException(
+			    "Manifest refers to partition spec %d, which is not in the table's partition-specs", spec_id);
+		}
+		auto types = IcebergDataFile::GetFieldIdToTypeMapping(context, snapshot_info, metadata, *spec);
+		for (auto &field : types) {
+			auto entry = partition_field_id_to_type.emplace(field);
+			if (!entry.second && entry.first->second != field.second) {
+				entry.first->second = LogicalType::VARIANT();
+			}
+		}
+		partition_types_by_spec.emplace(spec_id, std::move(types));
+	}
 }
 
 IcebergManifestFileScanInfo::~IcebergManifestFileScanInfo() {
+}
+
+void IcebergManifestFileScanInfo::SetManifestMetadata(idx_t manifest_index, IcebergManifestMetadata header) {
+	auto &manifest = manifest_files[manifest_index];
+	if (snapshot_info.snapshot && !snapshot_info.snapshot->manifests.empty()) {
+		// LoadManifestFiles used the default spec as a placeholder for this bare path.
+		manifest.GetManifest().partition_spec_id = header.partition_spec_id;
+	}
+	manifest.manifest_metadata.emplace(std::move(header));
 }
 
 idx_t IcebergManifestFileScanInfo::GetManifestIndex(idx_t scan_index) const {

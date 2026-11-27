@@ -220,7 +220,8 @@ static IcebergDataFile ConvertContentFile(const rest_api_objects::ContentFile &s
 			auto serialized_type = transform.GetSerializedType(column->type);
 			partition_value = IcebergColumnDefinition::ParsePrimitiveValue(serialized_type, partition);
 		}
-		result.partition_info.push_back(IcebergPartitionInfo {field.partition_field_id, partition_value});
+		result.partition_info.push_back(IcebergPartitionInfo {
+		    field.partition_field_id, IcebergValue::NormalizePartitionNaN(std::move(partition_value))});
 	}
 	return result;
 }
@@ -392,7 +393,7 @@ static void WaitForPoll(ClientContext &context, idx_t delay_ms) {
 	}
 }
 
-static vector<IcebergManifestListEntry> MakeManifests(const IcebergTableMetadata &metadata,
+static vector<IcebergManifestListEntry> MakeManifests(ClientContext &context, const IcebergTableMetadata &metadata,
                                                       vector<PlannedContentFile> &&files,
                                                       IcebergManifestContentType content,
                                                       sequence_number_t sequence_number) {
@@ -409,7 +410,7 @@ static vector<IcebergManifestListEntry> MakeManifests(const IcebergTableMetadata
 	vector<IcebergManifestListEntry> result;
 	for (auto &entry : by_spec) {
 		auto manifest_metadata = IcebergManifestMetadata::FromTableMetadata(metadata, content, entry.first);
-		auto manifest = IcebergManifestListEntry::CreateForScan(sequence_number, metadata, manifest_metadata,
+		auto manifest = IcebergManifestListEntry::CreateForScan(context, sequence_number, metadata, manifest_metadata,
 		                                                        std::move(entry.second));
 		// These entries came from a filtered server plan, not a real manifest. Its
 		// ordering cannot provide row-ID inheritance; only per-file IDs are valid.
@@ -512,9 +513,9 @@ bool IcebergServerSideScanPlanning::Plan(ClientContext &context, IcebergTable &t
 			data_files.push_back(std::move(task.data_file));
 		}
 
-		result.data_manifests =
-		    MakeManifests(table_info.GetMetadata(), std::move(data_files), IcebergManifestContentType::DATA, 0);
-		result.delete_manifests = MakeManifests(table_info.GetMetadata(), std::move(accumulator.delete_files),
+		result.data_manifests = MakeManifests(context, table_info.GetMetadata(), std::move(data_files),
+		                                      IcebergManifestContentType::DATA, 0);
+		result.delete_manifests = MakeManifests(context, table_info.GetMetadata(), std::move(accumulator.delete_files),
 		                                        IcebergManifestContentType::DELETE, 1);
 		return true;
 	} catch (...) {

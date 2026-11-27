@@ -55,6 +55,39 @@ SELECT ts FROM java_timestamptz_ns WHERE id = 1;
 ----
 2026-10-09 12:00:00.123456789+02
 
+# An externally typed task can supply local wall time or text with the session offset.
+# Both forms must select the same instant and prune the file just one nanosecond away.
+statement ok
+CALL enable_logging('Iceberg');
+
+foreach supplied_type TIMESTAMP_NS VARCHAR
+
+statement ok
+SET VARIABLE ts_tasks = (
+	SELECT list(struct_update(t, partition_values := {'1000': t.partition_values."1000"::{supplied_type}}))
+	FROM iceberg_scan_plan('{WORKING_DIRECTORY}/data/persistent/partition_timestamptz_ns/metadata/v2.metadata.json') t
+);
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT id FROM iceberg_scan_tasks(getvariable('ts_tasks'))
+WHERE ts = '2026-10-09 10:00:00.123456789+00'::TIMESTAMPTZ_NS;
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message = 'Iceberg scan tasks filter pushdown kept 1 of 5 data files';
+----
+1
+
+endloop
+
+statement ok
+CALL disable_logging();
+
 # Read partition values directly from the Java-written manifest as well.
 statement ok
 SET VARIABLE java_tsns_manifest = (

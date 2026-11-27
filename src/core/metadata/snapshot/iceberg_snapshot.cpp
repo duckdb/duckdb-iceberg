@@ -47,10 +47,13 @@ rest_api_objects::Snapshot IcebergSnapshot::ToRESTObject() const {
 
 	res.snapshot_id = snapshot_id;
 	res.timestamp_ms = timestamp_ms.value;
-	if (manifest_list.empty()) {
-		throw InvalidConfigurationException("Writing snapshots without a manifest list is not supported");
+	if (!manifest_list.empty()) {
+		res.manifest_list = manifest_list;
+	} else if (!manifests.empty()) {
+		res.manifests = manifests;
+	} else {
+		throw InvalidConfigurationException("Snapshot must contain either 'manifest-list' or 'manifests'");
 	}
-	res.manifest_list = manifest_list;
 
 	res.summary.operation = OperationTypeToString(operation);
 	res.summary.additional_properties = metrics.ToString();
