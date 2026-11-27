@@ -341,19 +341,19 @@ statement ok
 commit;
 
 # The skips of each filter, in loop order, in both modes: the tasks skip what iceberg_scan's planner skips by partition
-# value. Neither skips by a bucket under OR.
+# value. Under OR, a file is skipped when no side matches its bucket: bucket(4, 3) and bucket(4, 7) are both 3.
 query TIII
 select mode, n, table_skips, task_skips from transform_skips order by mode, n;
 ----
 false	0	9	9
 false	1	10	10
 false	2	6	6
-false	3	0	0
+false	3	6	6
 false	4	9	9
 true	0	9	9
 true	1	10	10
 true	2	6	6
-true	3	0	0
+true	3	6	6
 true	4	9	9
 
 # ---- tasks sent with a schema newer than their plan's, after a type promotion that wrote no snapshot --------------

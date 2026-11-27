@@ -1,0 +1,198 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_not_equal_not_in_pruning.test
+# description: != and NOT IN skip a data file, delete file or manifest only when every row holds an excluded value
+# group: [filtering]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SCAN_PLANNING_MODE client
+
+include test/sql/init_requires
+
+statement ok
+SET threads=1;
+
+statement ok
+CALL enable_logging('Iceberg');
+
+statement ok
+CREATE TEMP MACRO skipped_data_files() AS
+	(SELECT count(*) FROM duckdb_logs() WHERE type = 'Iceberg'
+	 AND message.contains('Iceberg Filter Pushdown, skipped ''data_file'':'));
+
+statement ok
+CREATE TEMP MACRO skipped_manifests() AS
+	(SELECT count(*) FROM duckdb_logs() WHERE type = 'Iceberg'
+	 AND message.contains('Iceberg Filter Pushdown, skipped ''manifest_file'':'));
+
+# Rows 1 and 2 are equal, so their files hold a single value per column. The values include pre-1970 dates and
+# timestamps, a negative decimal, -0.0, NaN and NULLs.
+statement ok
+CREATE TEMP TABLE expected (id INTEGER, d DATE, ts TIMESTAMP, dec DECIMAL(10, 2), s VARCHAR, x DOUBLE);
+
+statement ok
+INSERT INTO expected VALUES
+	(1, '1969-12-31', '1969-12-31 23:00:00', -1.05, 'aa', -0.0),
+	(2, '1969-12-31', '1969-12-31 23:00:00', -1.05, 'aa', -0.0),
+	(3, '1970-01-01', '1970-01-01 00:00:00', 1.05, 'ab', 0.0),
+	(4, '2024-03-15', '2024-03-15 10:30:00', 10.00, 'bb', 'NaN'),
+	(5, '2024-03-16', '2024-03-15 10:45:00', 19.99, 'bc', 1.5),
+	(6, NULL, NULL, NULL, NULL, NULL),
+	(7, '1900-01-01', '1900-01-01 00:00:00', -100.00, 'zz', 'Infinity');
+
+foreach spec d day(d) month(d) year(d) ts day(ts) hour(ts) month(ts) dec truncate(1,dec) truncate(10,dec) s truncate(1,s) x
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.not_equal_pruning;
+
+statement ok
+CREATE TABLE my_datalake.default.not_equal_pruning (id INTEGER, d DATE, ts TIMESTAMP, dec DECIMAL(10, 2), s VARCHAR, x DOUBLE)
+PARTITIONED BY ({spec});
+
+statement ok
+INSERT INTO my_datalake.default.not_equal_pruning SELECT * FROM expected;
+
+foreach pred d!='1969-12-31' d!='2024-03-15' not(d)in('1969-12-31','1970-01-01') ts!='1969-12-31T23:00:00' ts!='2024-03-15T10:30:00' not(ts)in('1969-12-31T23:00:00') dec!=(-1.05) dec!=10.00 not(dec)in(-1.05,1.05) s!='aa' not(s)in('aa','ab') x!=0.0 x!=(-0.0) x!='NaN' not(x)in('NaN','Infinity') (x!=1.5)or(id=6) (d!='1969-12-31')or(s!='aa')
+
+query I
+SELECT count(*) FROM (
+	(SELECT * FROM my_datalake.default.not_equal_pruning WHERE {pred} EXCEPT ALL SELECT * FROM expected WHERE {pred})
+	UNION ALL
+	(SELECT * FROM expected WHERE {pred} EXCEPT ALL SELECT * FROM my_datalake.default.not_equal_pruning WHERE {pred})
+);
+----
+0
+
+endloop
+
+endloop
+
+# Where a file holds one value, != and NOT IN skip it
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.not_equal_pruning;
+
+statement ok
+CREATE TABLE my_datalake.default.not_equal_pruning (id INTEGER, d DATE, ts TIMESTAMP, dec DECIMAL(10, 2), s VARCHAR, x DOUBLE)
+PARTITIONED BY (d);
+
+statement ok
+INSERT INTO my_datalake.default.not_equal_pruning SELECT * FROM expected;
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.not_equal_pruning WHERE d != '1969-12-31';
+----
+[3, 4, 5, 7]
+
+# The NULL partition is skipped as before, and now the '1969-12-31' partition too
+query I
+SELECT skipped_data_files();
+----
+2
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.not_equal_pruning WHERE d NOT IN ('1969-12-31', '1970-01-01');
+----
+[4, 5, 7]
+
+query I
+SELECT skipped_data_files();
+----
+3
+
+# The same by column bounds: s isn't a partition column, but each file holds one value of it
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.not_equal_pruning WHERE s != 'aa';
+----
+[3, 4, 5, 7]
+
+query I
+SELECT skipped_data_files();
+----
+2
+
+# A file whose bounds may hide NaN rows is read: rows 4 (NaN) and 3 (0.0) are in different files
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.not_equal_pruning WHERE x != 0.0;
+----
+[4, 5, 7]
+
+# Manifests and delete files. Each insert writes its own manifest, and the delete writes a delete file for p = 42.
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.not_equal_pruning;
+
+statement ok
+CREATE TABLE my_datalake.default.not_equal_pruning (p INTEGER, v INTEGER) PARTITIONED BY (p)
+WITH ('commit.manifest-merge.enabled' = 'false');
+
+statement ok
+INSERT INTO my_datalake.default.not_equal_pruning VALUES (42, 1), (42, 2);
+
+statement ok
+INSERT INTO my_datalake.default.not_equal_pruning VALUES (1337, 3), (1337, 4);
+
+statement ok
+DELETE FROM my_datalake.default.not_equal_pruning WHERE v = 1;
+
+query II
+SELECT manifest_content, count(DISTINCT manifest_path)
+FROM iceberg_metadata(my_datalake.default.not_equal_pruning)
+WHERE status <> 'DELETED'
+GROUP BY manifest_content
+ORDER BY manifest_content;
+----
+DATA	2
+DELETE	1
+
+# The data manifest and the delete manifest of p = 42 are skipped
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(v ORDER BY v) FROM my_datalake.default.not_equal_pruning WHERE p != 42;
+----
+[3, 4]
+
+query I
+SELECT skipped_manifests();
+----
+2
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(v ORDER BY v) FROM my_datalake.default.not_equal_pruning WHERE p NOT IN (42, 7);
+----
+[3, 4]
+
+query I
+SELECT skipped_manifests();
+----
+2
+
+# The delete file still applies where p = 42 is read
+query I
+SELECT list(v ORDER BY v) FROM my_datalake.default.not_equal_pruning WHERE p != 1337;
+----
+[2]
+
+query I
+SELECT list(v ORDER BY v) FROM my_datalake.default.not_equal_pruning WHERE p NOT IN (1337);
+----
+[2]
+
+statement ok
+DROP TABLE my_datalake.default.not_equal_pruning;
