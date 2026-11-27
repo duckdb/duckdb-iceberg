@@ -3,7 +3,8 @@
 
 namespace duckdb {
 
-optional_ptr<const LogicalType> IcebergPartitionConstants::GetType(int32_t field_id, const IcebergTableSchema &schema,
+optional_ptr<const LogicalType> IcebergPartitionConstants::GetType(ClientContext &context, int32_t field_id,
+                                                                   const IcebergTableSchema &schema,
                                                                    const IcebergTableMetadataSchemas &schemas) {
 	auto column = schema.TryGetColumnByFieldId(field_id);
 	if (column) {
@@ -23,7 +24,7 @@ optional_ptr<const LogicalType> IcebergPartitionConstants::GetType(int32_t field
 			return;
 		}
 		LogicalType widest_type;
-		if (LogicalType::DefaultTryGetMaxLogicalTypeUnchecked(*source_type, historical_type, widest_type) &&
+		if (LogicalType::TryGetMaxLogicalTypeUnchecked(context, *source_type, historical_type, widest_type) &&
 		    widest_type == historical_type) {
 			source_type = historical_type;
 		}
@@ -31,7 +32,7 @@ optional_ptr<const LogicalType> IcebergPartitionConstants::GetType(int32_t field
 	return source_type;
 }
 
-unordered_map<int32_t, Value> IcebergPartitionConstants::Resolve(int32_t spec_id,
+unordered_map<int32_t, Value> IcebergPartitionConstants::Resolve(ClientContext &context, int32_t spec_id,
                                                                  const vector<IcebergPartitionInfo> &partition_values,
                                                                  const IcebergTableMetadata &metadata,
                                                                  const IcebergTableSchema &schema) {
@@ -45,14 +46,15 @@ unordered_map<int32_t, Value> IcebergPartitionConstants::Resolve(int32_t spec_id
 		if (field.transform != IcebergTransformType::IDENTITY || constants.count(field.source_id)) {
 			continue;
 		}
-		auto type = GetType(field.source_id, schema, metadata.GetSchemas());
+		auto type = GetType(context, field.source_id, schema, metadata.GetSchemas());
 		if (!type) {
 			continue;
 		}
 		for (auto &partition : partition_values) {
 			if (partition.field_id == field.partition_field_id) {
-				auto value = partition.value.IsNull() ? Value(*type)
-				                                      : IcebergValue::TransformPartitionValue(partition.value, *type);
+				auto value = partition.value.IsNull()
+				                 ? Value(*type)
+				                 : IcebergValue::TransformPartitionValue(context, partition.value, *type);
 				constants.emplace(field.source_id, std::move(value));
 				break;
 			}

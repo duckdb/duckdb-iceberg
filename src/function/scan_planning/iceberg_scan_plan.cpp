@@ -26,6 +26,8 @@ struct IcebergScanPlanBindData : public TableFunctionData {
 	IcebergOptions options;
 	bool produce_sequence_number = false;
 	LogicalType partition_type;
+	//! The partition field id of each field of the partition_values column (IcebergScanTaskCodec::PartitionValueIds)
+	vector<uint64_t> partition_value_ids;
 	Value row_filter = Value(LogicalType::VARCHAR);
 	unique_ptr<Expression> filter_expression;
 };
@@ -156,7 +158,7 @@ static unique_ptr<FunctionData> IcebergScanPlanBind(ClientContext &context, Tabl
 	map<uint64_t, LogicalType> sources;
 	for (const auto &spec : metadata.partition_specs) {
 		for (const auto &field : spec.second.fields) {
-			auto type = IcebergPartitionConstants::GetType(field.source_id, schema, metadata.GetSchemas());
+			auto type = IcebergPartitionConstants::GetType(context, field.source_id, schema, metadata.GetSchemas());
 			if (field.transform == IcebergTransformType::IDENTITY && type) {
 				sources.emplace(field.source_id, *type);
 			}
@@ -167,8 +169,11 @@ static unique_ptr<FunctionData> IcebergScanPlanBind(ClientContext &context, Tabl
 		constants.emplace_back(std::to_string(source.first), source.second);
 	}
 	ret->partition_type = LogicalType::STRUCT(std::move(constants));
+	auto partition_values_type = IcebergScanTaskCodec::PartitionValuesType(context, metadata, schema);
+	ret->partition_value_ids = IcebergScanTaskCodec::PartitionValueIds(partition_values_type);
 
-	for (auto &column : IcebergScanTaskCodec::Columns(ret->partition_type, IcebergScanTaskCodec::SchemaType(schema))) {
+	for (auto &column : IcebergScanTaskCodec::Columns(ret->partition_type, IcebergScanTaskCodec::SchemaType(schema),
+	                                                  partition_values_type)) {
 		names.emplace_back(column.first);
 		return_types.push_back(column.second);
 	}
@@ -193,7 +198,7 @@ static void IcebergScanPlanFunction(ClientContext &context, TableFunctionInput &
 		if (!bind.produce_sequence_number) {
 			task->sequence_number = nullopt;
 		}
-		IcebergScanTaskCodec::WriteTask(*task, output, count);
+		IcebergScanTaskCodec::WriteTask(context, *task, bind.partition_value_ids, output, count);
 	}
 	output.data[IcebergScanTaskCodec::ROW_FILTER].Reference(bind.row_filter, count_t(count));
 	auto snapshot = bind.scan_info->snapshot_info.snapshot;
