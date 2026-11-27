@@ -33,7 +33,7 @@ COPY (
 statement ok
 CREATE MACRO table_metadata(blobs) AS (
 	SELECT json_merge_patch(content::JSON, json_object('statistics', [json_object(
-		'snapshot-id', 1001, 'statistics-path', '{WORKING_DIRECTORY}/{TEST_DIR}/blobs.puffin',
+		'snapshot-id', 1001, 'statistics-path', '{TEMP_DIR_ABSOLUTE}/blobs.puffin',
 		'file-size-in-bytes', (SELECT size FROM read_blob('{TEST_DIR}/blobs.puffin')),
 		'file-footer-size-in-bytes', octet_length(getvariable('footer')) + 16,
 		'blob-metadata', blobs)]))
