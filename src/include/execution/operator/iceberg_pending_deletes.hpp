@@ -19,7 +19,7 @@ struct IcebergPendingDeletes {
 
 //! The rows the UPDATE and DELETE actions of a copy-on-write MERGE remove. The actions add them instead of writing
 //! delete files, and the rewrite that runs after the MERGE drops them from the files it rewrites.
-struct IcebergCopyOnWriteMergeRows {
+struct IcebergMergeRemovedPositions {
 	mutex lock;
 	IcebergPendingDeletes deletes;
 

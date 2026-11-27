@@ -235,7 +235,7 @@ PhysicalOperator &IcebergCatalog::PlanUpdate(ClientContext &context, PhysicalPla
 			table_entry.table_info.VerifyWriteEncryptionSupported();
 			table_entry.PrepareIcebergScanFromEntry(context);
 			auto &updated_table_entry = *updated_table.schema_versions[table_metadata.GetLatestSchema().schema_id];
-			return IcebergCopyOnWriteDelete::PlanUpdate(context, planner, op, updated_table_entry);
+			return IcebergCopyOnWrite::PlanUpdate(context, planner, op, updated_table_entry);
 		}
 	}
 	return Catalog::PlanUpdate(context, planner, op);

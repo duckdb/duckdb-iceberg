@@ -55,10 +55,10 @@ namespace {
 //! The body of the `raw` CTE: the DELETE's own scan, reduced to the (filename, file_row_number) of each row it matches.
 //! DELETE ... USING can match a row more than once; the anti join does not need the pairs to be distinct. The DELETE's
 //! plan is already optimized and resolved, so it is planned as is rather than as a child of this tree.
-class LogicalCopyOnWriteDeleteMatches : public LogicalExtensionOperator {
+class LogicalCopyOnWriteMatches : public LogicalExtensionOperator {
 public:
-	LogicalCopyOnWriteDeleteMatches(LogicalOperator &match_plan, vector<idx_t> row_id_indexes,
-	                                vector<LogicalType> row_id_types, vector<unique_ptr<Expression>> values)
+	LogicalCopyOnWriteMatches(LogicalOperator &match_plan, vector<idx_t> row_id_indexes,
+	                          vector<LogicalType> row_id_types, vector<unique_ptr<Expression>> values)
 	    : match_plan(match_plan), row_id_indexes(std::move(row_id_indexes)), row_id_types(std::move(row_id_types)),
 	      values(std::move(values)) {
 		types = GetRawTypes();
@@ -96,7 +96,7 @@ public:
 	}
 
 	string GetExtensionName() const override {
-		return "iceberg_copy_on_write_delete_matches";
+		return "iceberg_copy_on_write_matches";
 	}
 
 protected:
@@ -107,14 +107,14 @@ protected:
 
 class LogicalCopyOnWriteMergePositions : public LogicalExtensionOperator {
 public:
-	LogicalCopyOnWriteMergePositions(PhysicalOperator &merge_plan, shared_ptr<IcebergCopyOnWriteMergeRows> merge_rows,
+	LogicalCopyOnWriteMergePositions(PhysicalOperator &merge_plan, shared_ptr<IcebergMergeRemovedPositions> merge_rows,
 	                                 shared_ptr<IcebergCopyOnWriteMergeResult> result)
 	    : merge_plan(merge_plan), merge_rows(std::move(merge_rows)), result(std::move(result)) {
 		types = {LogicalType::VARCHAR, LogicalType::BIGINT};
 	}
 
 	PhysicalOperator &merge_plan;
-	shared_ptr<IcebergCopyOnWriteMergeRows> merge_rows;
+	shared_ptr<IcebergMergeRemovedPositions> merge_rows;
 	shared_ptr<IcebergCopyOnWriteMergeResult> result;
 
 public:
@@ -281,18 +281,18 @@ protected:
 };
 
 //! Plans a copy-on-write DELETE (values empty) or UPDATE (values: the new version of each matched row, evaluated on
-//! match_plan's output), see IcebergCopyOnWriteDelete
+//! match_plan's output), see IcebergCopyOnWrite
 PhysicalOperator &PlanJoinRewrite(ClientContext &context, PhysicalPlanGenerator &planner,
                                   IcebergTableSchemaVersion &table, LogicalOperator &match_plan,
                                   vector<idx_t> row_id_indexes, vector<LogicalType> row_id_types,
                                   vector<unique_ptr<Expression>> values,
                                   optional_ptr<PhysicalOperator> merge_plan = nullptr,
-                                  shared_ptr<IcebergCopyOnWriteMergeRows> merge_rows = nullptr);
+                                  shared_ptr<IcebergMergeRemovedPositions> merge_rows = nullptr);
 
 } // namespace
 
-PhysicalOperator &IcebergCopyOnWriteDelete::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner,
-                                                       LogicalDelete &op, IcebergTableSchemaVersion &table) {
+PhysicalOperator &IcebergCopyOnWrite::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner,
+                                                 LogicalDelete &op, IcebergTableSchemaVersion &table) {
 	//! The DELETE's own scan emits the filename and file_row_number of every matching row
 	vector<idx_t> row_id_indexes;
 	vector<LogicalType> row_id_types;
@@ -305,8 +305,8 @@ PhysicalOperator &IcebergCopyOnWriteDelete::PlanDelete(ClientContext &context, P
 	                       {});
 }
 
-PhysicalOperator &IcebergCopyOnWriteDelete::PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner,
-                                                       LogicalUpdate &op, IcebergTableSchemaVersion &table) {
+PhysicalOperator &IcebergCopyOnWrite::PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner,
+                                                 LogicalUpdate &op, IcebergTableSchemaVersion &table) {
 	//! An Iceberg UPDATE is bound as a delete and an insert, so its expressions give the new value of every table
 	//! column, followed in the scan's output by filename and file_row_number and, on V3, _row_id (see
 	//! IcebergTableSchemaVersion::GetRowIdColumns).
@@ -350,10 +350,10 @@ PhysicalOperator &IcebergCopyOnWriteDelete::PlanUpdate(ClientContext &context, P
 	                       std::move(values));
 }
 
-PhysicalOperator &IcebergCopyOnWriteDelete::PlanMerge(ClientContext &context, PhysicalPlanGenerator &planner,
-                                                      LogicalMergeInto &op, PhysicalOperator &merge_plan,
-                                                      IcebergTableSchemaVersion &table,
-                                                      shared_ptr<IcebergCopyOnWriteMergeRows> merge_rows) {
+PhysicalOperator &IcebergCopyOnWrite::PlanMerge(ClientContext &context, PhysicalPlanGenerator &planner,
+                                                LogicalMergeInto &op, PhysicalOperator &merge_plan,
+                                                IcebergTableSchemaVersion &table,
+                                                shared_ptr<IcebergMergeRemovedPositions> merge_rows) {
 	//! raw: the positions the MERGE's UPDATE and DELETE actions removed, once it has run
 	return PlanJoinRewrite(context, planner, table, op, {}, {LogicalType::VARCHAR, LogicalType::BIGINT}, {}, merge_plan,
 	                       std::move(merge_rows));
@@ -365,7 +365,7 @@ PhysicalOperator &PlanJoinRewrite(ClientContext &context, PhysicalPlanGenerator 
                                   IcebergTableSchemaVersion &table, LogicalOperator &match_plan,
                                   vector<idx_t> row_id_indexes, vector<LogicalType> row_id_types,
                                   vector<unique_ptr<Expression>> values, optional_ptr<PhysicalOperator> merge_plan,
-                                  shared_ptr<IcebergCopyOnWriteMergeRows> merge_rows) {
+                                  shared_ptr<IcebergMergeRemovedPositions> merge_rows) {
 	auto &metadata = table.table_info.GetMetadata();
 	//! A V3 rewrite carries each kept row's _row_id and _last_updated_sequence_number into the new files.
 	//! Rows inserted in this transaction carry NULL until the commit assigns their lineage.
@@ -402,8 +402,8 @@ PhysicalOperator &PlanJoinRewrite(ClientContext &context, PhysicalPlanGenerator 
 		merge_result = make_shared_ptr<IcebergCopyOnWriteMergeResult>();
 		matches = make_uniq<LogicalCopyOnWriteMergePositions>(*merge_plan, std::move(merge_rows), merge_result);
 	} else {
-		matches = make_uniq<LogicalCopyOnWriteDeleteMatches>(match_plan, std::move(row_id_indexes), row_id_types,
-		                                                     std::move(values));
+		matches = make_uniq<LogicalCopyOnWriteMatches>(match_plan, std::move(row_id_indexes), row_id_types,
+		                                               std::move(values));
 	}
 	auto raw_types = matches->types;
 	vector<Identifier> raw_names {"filename", "file_row_number"};

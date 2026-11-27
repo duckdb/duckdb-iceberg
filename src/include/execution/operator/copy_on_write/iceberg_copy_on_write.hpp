@@ -49,7 +49,7 @@ class PhysicalTableScan;
 //! A copy-on-write UPDATE is planned the same way, with the new version of each matched row in `raw`, and writes the
 //! kept rows UNION ALL those new versions. Every live row of a touched file is then written exactly once, unless an
 //! UPDATE ... FROM matched a row more than once, which the rewrite detects as more rows written than touched.
-struct IcebergCopyOnWriteDelete {
+struct IcebergCopyOnWrite {
 	static PhysicalOperator &PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
 	                                    IcebergTableSchemaVersion &table);
 	static PhysicalOperator &PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
@@ -58,7 +58,7 @@ struct IcebergCopyOnWriteDelete {
 	//! merge_rows), and it writes only the kept rows; the MERGE writes its new rows itself.
 	static PhysicalOperator &PlanMerge(ClientContext &context, PhysicalPlanGenerator &planner, LogicalMergeInto &op,
 	                                   PhysicalOperator &merge_plan, IcebergTableSchemaVersion &table,
-	                                   shared_ptr<IcebergCopyOnWriteMergeRows> merge_rows);
+	                                   shared_ptr<IcebergMergeRemovedPositions> merge_rows);
 };
 
 } // namespace duckdb

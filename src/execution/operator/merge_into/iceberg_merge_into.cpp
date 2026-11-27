@@ -27,7 +27,7 @@ PhysicalOperator &IcebergCatalog::PlanCopyOnWriteMergeInto(ClientContext &contex
 		irc_transaction.planning_merge_into = false;
 		throw;
 	}
-	auto merge_rows = make_shared_ptr<IcebergCopyOnWriteMergeRows>();
+	auto merge_rows = make_shared_ptr<IcebergMergeRemovedPositions>();
 	for (auto &action : merge->Cast<PhysicalMergeInto>().actions) {
 		switch (action->action_type) {
 		case MergeActionType::MERGE_INSERT:
@@ -47,7 +47,7 @@ PhysicalOperator &IcebergCatalog::PlanCopyOnWriteMergeInto(ClientContext &contex
 			break;
 		}
 	}
-	return IcebergCopyOnWriteDelete::PlanMerge(context, planner, op, *merge, table, std::move(merge_rows));
+	return IcebergCopyOnWrite::PlanMerge(context, planner, op, *merge, table, std::move(merge_rows));
 }
 
 PhysicalOperator &IcebergCatalog::PlanMergeInto(ClientContext &context, PhysicalPlanGenerator &planner,

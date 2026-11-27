@@ -143,7 +143,7 @@ string IcebergCopyOnWriteLineageCheck::GetName() const {
 //===--------------------------------------------------------------------===//
 IcebergCopyOnWriteMergePositions::IcebergCopyOnWriteMergePositions(PhysicalPlan &physical_plan,
                                                                    PhysicalOperator &merge_plan,
-                                                                   shared_ptr<IcebergCopyOnWriteMergeRows> merge_rows,
+                                                                   shared_ptr<IcebergMergeRemovedPositions> merge_rows,
                                                                    shared_ptr<IcebergCopyOnWriteMergeResult> result)
     : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, {LogicalType::VARCHAR, LogicalType::BIGINT},
                        merge_plan.estimated_cardinality),

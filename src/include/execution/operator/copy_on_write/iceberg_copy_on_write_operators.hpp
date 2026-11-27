@@ -81,10 +81,10 @@ struct IcebergCopyOnWriteMergeResult {
 class IcebergCopyOnWriteMergePositions : public PhysicalOperator {
 public:
 	IcebergCopyOnWriteMergePositions(PhysicalPlan &physical_plan, PhysicalOperator &merge_plan,
-	                                 shared_ptr<IcebergCopyOnWriteMergeRows> merge_rows,
+	                                 shared_ptr<IcebergMergeRemovedPositions> merge_rows,
 	                                 shared_ptr<IcebergCopyOnWriteMergeResult> result);
 
-	shared_ptr<IcebergCopyOnWriteMergeRows> merge_rows;
+	shared_ptr<IcebergMergeRemovedPositions> merge_rows;
 	shared_ptr<IcebergCopyOnWriteMergeResult> result;
 
 public:
