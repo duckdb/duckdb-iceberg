@@ -198,6 +198,15 @@ static void CreateTableRequirements(DatabaseInstance &db, ClientContext &context
 		AssertCurrentSchemaIdRequirement requirement(transaction_data.initial_schema_id);
 		requirement.CreateRequirement(db, context, commit_state);
 	}
+	if (!has_assert_create && transaction_data.drops_field) {
+		AssertDefaultSpecIdRequirement spec(transaction_data.initial_default_spec_id);
+		spec.CreateRequirement(db, context, commit_state);
+		// V1 metadata can omit the default sort order, which means unsorted.
+		auto initial_order = transaction_data.initial_default_sort_order_id;
+		AssertDefaultSortOrderIdRequirement order(
+		    initial_order.IsValid() ? NumericCast<int32_t>(initial_order.GetIndex()) : UNSORTED_SORT_ORDER_ID);
+		order.CreateRequirement(db, context, commit_state);
+	}
 	if (!has_assert_create && commit_state.table_info.HasTransactionUpdates()) {
 		auto uuid_requirement = AssertTableUUIDRequirement(transaction_data.initial_table_uuid);
 		uuid_requirement.CreateRequirement(db, context, commit_state);
