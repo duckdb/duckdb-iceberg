@@ -6,6 +6,7 @@
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/vector.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
+#include "duckdb/common/unordered_map.hpp"
 #include "rest_catalog/objects/snapshot_reference.hpp"
 
 namespace duckdb {
@@ -32,7 +33,7 @@ public:
 	JSONMutableValue ToJSON(JSONWriter &writer) const;
 
 public:
-	case_insensitive_map_t<SnapshotReference> additional_properties;
+	unordered_map<string, SnapshotReference> additional_properties;
 };
 
 } // namespace rest_api_objects

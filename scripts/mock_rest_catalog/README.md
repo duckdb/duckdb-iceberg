@@ -90,6 +90,9 @@ a fresh catalog.
 Metadata-only snapshot expiration uses `remove-snapshots`. Both backends remove
 the selected snapshots, discard dangling references, and trim timestamp history
 through the last removed entry. Existing metadata and data files remain intact.
+`set-snapshot-ref` accepts any branch or tag; only `main` moves
+`current-snapshot-id` and the snapshot log. `remove-snapshot-ref` drops a ref
+and is a no-op for an absent one.
 Run the Python model regressions with `python3 -m unittest scripts.mock_rest_catalog.test_model`.
 
 V3 creation initializes `next-row-id` to zero. Upgrading a v2 table does the same

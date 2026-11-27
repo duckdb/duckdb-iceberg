@@ -13,6 +13,7 @@
 #include "core/metadata/manifest/iceberg_manifest_list.hpp"
 #include "core/metadata/snapshot/iceberg_snapshot.hpp"
 #include "core/metadata/sort/iceberg_sort_order.hpp"
+#include "rest_catalog/objects/snapshot_reference.hpp"
 
 namespace duckdb {
 
@@ -61,8 +62,10 @@ struct AssertRefSnapshotId : public IcebergTableRequirement {
 	static constexpr const IcebergTableRequirementType TYPE = IcebergTableRequirementType::ASSERT_REF_SNAPSHOT_ID;
 
 	explicit AssertRefSnapshotId(optional<int64_t> snapshot_id);
+	AssertRefSnapshotId(string ref, optional<int64_t> snapshot_id);
 	void CreateRequirement(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state);
 
+	string ref;
 	optional<int64_t> snapshot_id;
 };
 
@@ -211,10 +214,12 @@ struct SetSnapshotRef : public IcebergTableUpdate {
 	static constexpr const IcebergTableUpdateType TYPE = IcebergTableUpdateType::SET_SNAPSHOT_REF;
 
 	explicit SetSnapshotRef(int64_t snapshot_id, string ref_name = "main");
+	SetSnapshotRef(string ref_name, const rest_api_objects::SnapshotReference &reference);
 	void CreateUpdate(DatabaseInstance &db, ClientContext &context, IcebergCommitState &commit_state) const override;
 
 	int64_t snapshot_id;
 	string ref_name;
+	unique_ptr<rest_api_objects::SnapshotReference> reference;
 };
 
 struct RemoveSnapshotRef : public IcebergTableUpdate {

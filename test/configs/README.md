@@ -60,6 +60,7 @@ certification was performed.
 | `TIMESTAMP_NS_DEFAULT_SUPPORT` | Preserve defaults on nanosecond timestamps without a time zone. |
 | `TIMESTAMPTZ_NS_DEFAULT_SUPPORT` | Preserve defaults on nanosecond timestamps with a time zone. Kept separate because Polaris currently has only the former default-type exception. |
 | `TIMETRAVEL_SUPPORT` | Resolve historical snapshots for version/timestamp reads, historical scan plans, and rollback. |
+| `BRANCH_TAG_SUPPORT` | Accept commits that set or remove branches and tags other than `main`. Declared for the mocks and the standard fixtures; omitted for the other configurations pending validation. |
 | `SNAPSHOT_HISTORY_SUPPORT` | Expose the committed snapshot history and its operation/summary metadata. Used by snapshot inspection tests that do not perform time-travel reads. |
 | `METADATA_LOG_SUPPORT` | Return metadata-log entries needed to reconstruct table state at transaction start. Distinct from the snapshot list. |
 | `METADATA_FILE_READ_SUPPORT` | Allow the client to read metadata JSON files using the configured storage credentials, including historical files. |
