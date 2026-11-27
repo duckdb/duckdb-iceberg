@@ -32,6 +32,15 @@ SET VARIABLE catalog_response = (
 	SELECT body::JSON FROM iceberg_test_catalog_request('GET', '/v1/namespaces/default/tables/orphan_cow', NULL)
 );
 
+# Stage the first snapshot without publishing it to main, as in Spark write-audit-publish.
+statement ok
+COPY (SELECT json_merge_patch(getvariable('catalog_response')->'metadata',
+	'{"current-snapshot-id":null,"refs":null,"snapshot-log":[]}')::VARCHAR)
+TO '{TEMP_DIR_ABSOLUTE}/staged.metadata.json' (FORMAT CSV, HEADER false, DELIMITER '\t', QUOTE '', ESCAPE '');
+
+statement ok
+COPY (SELECT 99 AS id) TO (getvariable('old_file') || '.stray') (FORMAT PARQUET);
+
 # Write zero-count manifest lists with absolute and relative manifest paths.
 foreach path_kind absolute relative
 
@@ -60,6 +69,21 @@ SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response', json
 	'method', 'GET', 'path', '/v1/namespaces/default/tables/orphan_cow', 'status', 200,
 	'body', json_merge_patch(getvariable('catalog_response'), metadata_updates)
 )::VARCHAR);
+
+# The catalog can omit an unreferenced snapshot from its response. Its files are still reachable.
+query I
+FROM orphan_load_response(json_object('metadata-location', '{TEMP_DIR_ABSOLUTE}/staged.metadata.json',
+	'metadata', '{"current-snapshot-id":null,"refs":null,"snapshot-log":[],"snapshots":[]}'::JSON));
+----
+204
+
+query TI
+SELECT error_code, list_transform(orphan_file_locations, lambda p: parse_filename(p))
+	= [parse_filename(getvariable('old_file')) || '.stray']
+FROM iceberg_remove_orphan_files('my_datalake.default.orphan_cow', dry_run => true,
+	location => parse_dirpath(getvariable('old_file')), older_than => TIMESTAMP '2999-01-01');
+----
+SUCCESS	true
 
 # Zero counts still protect retained files, and both levels of manifest paths must be absolute.
 foreach path_kind absolute relative list

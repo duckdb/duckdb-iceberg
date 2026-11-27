@@ -608,6 +608,8 @@ TEST_CASE("Orphan cleanup compares storage references conservatively", "[iceberg
 TEST_CASE("Orphan cleanup compares scan boundaries using literal paths", "[iceberg_cache][orphan_cleanup]") {
 	const auto *s3 = "s3://bucket/table";
 	CHECK(HasOrphanPathPrefix("s3://bucket/table//metadata/v1.json", s3));
+	CHECK(HasOrphanPathPrefix(s3, "s3://bucket/table/"));
+	CHECK_FALSE(HasOrphanPathPrefix(s3, "s3://bucket/table//"));
 	CHECK_FALSE(HasOrphanPathPrefix("s3a://bucket/table/data/a.parquet", s3));
 	CHECK_FALSE(HasOrphanPathPrefix("gs://bucket/table/data/a.parquet", s3));
 	CHECK_FALSE(HasOrphanPathPrefix("s3://bucket/table-other/data/a.parquet", s3));
@@ -676,6 +678,7 @@ TEST_CASE("Physical orphan cleanup deletes only the unreferenced aged file, once
 	string write_sql;
 	string expected_code = "SUCCESS";
 	string expected_error;
+	bool keep_orphan = false;
 	SECTION("No concurrent write") {
 #ifndef _WIN32
 		const time_t seconds = GENERATE(-1, 0, 1);
@@ -700,6 +703,13 @@ TEST_CASE("Physical orphan cleanup deletes only the unreferenced aged file, once
 	SECTION("GC is disabled during the scan") {
 		write_sql = "ALTER TABLE lake.default.t SET ('gc.enabled' = 'false')";
 		expected_code = "GC_DISABLED";
+	}
+	SECTION("A refreshed metadata directory protects its version hint through another local name") {
+		auto new_metadata = std::filesystem::path(test.root) / "new-metadata";
+		std::filesystem::create_directory(new_metadata);
+		std::filesystem::create_hard_link(orphan, new_metadata / "version-hint.text");
+		write_sql = "ALTER TABLE lake.default.t SET ('write.metadata.path' = '" + new_metadata.string() + "')";
+		keep_orphan = true;
 	}
 	SECTION("A new table is registered under the same name") {
 		write_sql = "DROP TABLE lake.default.t; CREATE TABLE lake.default.t AS SELECT 3 AS id";
@@ -727,8 +737,9 @@ TEST_CASE("Physical orphan cleanup deletes only the unreferenced aged file, once
 	}
 	REQUIRE_FALSE(result->HasError());
 	REQUIRE(result->Collection().GetValue(0, 0).ToString() == expected_code);
-	if (expected_code != "SUCCESS") {
+	if (expected_code != "SUCCESS" || keep_orphan) {
 		REQUIRE(result->Collection().GetValue(1, 0).GetValue<int64_t>() == 0);
+		REQUIRE(result->Collection().GetValue(2, 0).GetValue<int64_t>() == 0);
 		REQUIRE(fs->FileExists(orphan));
 		return;
 	}
@@ -743,6 +754,38 @@ TEST_CASE("Physical orphan cleanup deletes only the unreferenced aged file, once
 	if (committed) {
 		REQUIRE(rows->Collection().GetValue(0, 1).GetValue<int32_t>() == 2);
 	}
+}
+
+TEST_CASE("An unreadable retained manifest prevents orphan deletion", "[iceberg_cache][orphan_cleanup]") {
+	LoadTableCacheTest test;
+	test.Query("COMMIT");
+	test.Query("SELECT status FROM iceberg_test_catalog_request('DELETE', '/__test/response', NULL)");
+	test.Query("BEGIN");
+	auto paths = test.Query("SELECT manifest_path, file_path FROM iceberg_metadata(lake.default.t)");
+	auto fs = FileSystem::CreateLocal();
+	auto manifest = fs->ExpandPath(paths->Collection().GetValue(0, 0).ToString());
+	auto live = fs->ExpandPath(paths->Collection().GetValue(1, 0).ToString());
+	auto orphan = (std::filesystem::path(live).parent_path() / "unreferenced.parquet").string();
+	std::filesystem::copy_file(live, orphan);
+	auto old = std::filesystem::file_time_type::clock::now() - std::chrono::hours(24 * 7);
+	std::filesystem::last_write_time(live, old);
+	std::filesystem::last_write_time(orphan, old);
+	std::filesystem::rename(manifest, manifest + ".unavailable");
+	test.Query("COMMIT");
+
+	const char *cleanup = "SELECT error_code, deleted_file_count FROM iceberg_remove_orphan_files('lake.default.t')";
+	auto failed = test.connection.Query(cleanup);
+	REQUIRE(failed->HasError());
+	CHECK_THAT(failed->GetError(), Catch::Matchers::Contains(std::filesystem::path(manifest).filename().string()));
+	CHECK(fs->FileExists(live));
+	CHECK(fs->FileExists(orphan));
+
+	std::filesystem::rename(manifest + ".unavailable", manifest);
+	auto retry = test.Query(cleanup);
+	CHECK(retry->Collection().GetValue(0, 0).ToString() == "SUCCESS");
+	CHECK(retry->Collection().GetValue(1, 0).GetValue<int64_t>() == 1);
+	CHECK_FALSE(fs->FileExists(orphan));
+	CHECK(test.Query("SELECT id FROM lake.default.t")->Collection().GetValue(0, 0).GetValue<int32_t>() == 1);
 }
 
 TEST_CASE("Orphan cleanup propagates interrupts and allocation failures", "[iceberg_cache][orphan_cleanup]") {

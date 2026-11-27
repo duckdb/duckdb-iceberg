@@ -117,7 +117,7 @@ private:
 		}
 	}
 
-	void CollectSnapshots(const IcebergTableMetadata &metadata) {
+	void CollectSnapshots(const IcebergTableMetadata &metadata, const vector<rest_api_objects::Snapshot> &snapshots) {
 		unordered_set<string> manifest_lists;
 		unordered_set<string> manifest_keys;
 		auto already_collected = [&](const IcebergManifestListEntry &manifest_file) {
@@ -133,11 +133,16 @@ private:
 			AddReference(file.manifest_path, "manifest");
 			return false;
 		};
-		for (const auto &snapshot_entry : metadata.snapshots) {
-			const auto &snapshot = snapshot_entry.second;
-			if (snapshot.manifests.empty() && !manifest_lists.insert(snapshot.manifest_list).second) {
+		for (const auto &entry : snapshots) {
+			if (entry.manifest_list) {
+				if (!manifest_lists.insert(*entry.manifest_list).second) {
+					continue;
+				}
+			} else if (metadata.iceberg_version == 1 && entry.manifests && entry.manifests->empty()) {
+				// An explicit empty v1 inline list contributes no files. Other retained snapshots still do.
 				continue;
 			}
+			const auto &snapshot = *metadata.GetSnapshotById(entry.snapshot_id);
 			vector<IcebergManifestListEntry> manifest_files;
 			IcebergManifestList::LoadManifestFiles({snapshot, metadata.GetCurrentSchemaId()}, metadata, context,
 			                                       manifest_files, file_secret);
@@ -290,7 +295,9 @@ const char *ReferencedFileCollector::CollectFromMetadataFile(const string &path,
 	CollectMetadataFiles(contents);
 	if (scan_manifests) {
 		ProtectMetadataDirectory(JoinOrphanPath(fs, table_location, "metadata"));
-		CollectSnapshots(metadata);
+		if (contents.snapshots) {
+			CollectSnapshots(metadata, *contents.snapshots);
+		}
 	}
 	return nullptr;
 }
@@ -497,10 +504,12 @@ RemoveOrphanFilesResult ExecuteRemoveOrphanFiles(ClientContext &context, const R
 	for (const auto *candidate : delete_order) {
 		context.InterruptCheck();
 		const auto &path = candidate->first;
-		if (references.Contains(paths.ReferenceKey(path))) {
+		const auto &file = candidate->second;
+		if (references.Contains(paths.ReferenceKey(path)) ||
+		    (file.local_identity && references.ContainsLocalFile(*file.local_identity))) {
 			continue;
 		}
-		if (candidate->second == 1 && DeleteListedFile(fs, path)) {
+		if (file.observations == 1 && DeleteListedFile(fs, path)) {
 			result.file_locations.push_back(path);
 		} else {
 			result.failed_file_locations.push_back(path);

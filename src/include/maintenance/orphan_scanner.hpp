@@ -2,6 +2,8 @@
 
 #include "duckdb/catalog/catalog_transaction.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/optional.hpp"
+#include "duckdb/common/pair.hpp"
 #include "duckdb/common/string.hpp"
 #include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/common/unordered_map.hpp"
@@ -59,7 +61,7 @@ struct OrphanFileReferences {
 	}
 
 	void AddLocalFile(FileSystem &fs, const string &path);
-	bool ContainsLocalFile(const FileMetadata &metadata, const string &path) const;
+	bool ContainsLocalFile(const pair<idx_t, idx_t> &identity) const;
 
 private:
 	string ReferenceAlias(const string &key) const;
@@ -72,10 +74,16 @@ private:
 	unordered_map<idx_t, unordered_set<idx_t>> local_file_ids;
 };
 
+struct OrphanDeleteCandidate {
+	idx_t observations = 0;
+	//! Keep the identity from the listing so refreshed references can protect local aliases.
+	optional<pair<idx_t, idx_t>> local_identity;
+};
+
 struct OrphanScanResult {
 	vector<string> candidates;
 	//! Delete only candidates observed exactly once in the listing.
-	unordered_map<string, idx_t> delete_candidates;
+	unordered_map<string, OrphanDeleteCandidate> delete_candidates;
 	int64_t scanned_count = 0;
 };
 

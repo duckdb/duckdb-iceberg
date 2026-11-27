@@ -566,11 +566,7 @@ void OrphanFileReferences::AddLocalFile(FileSystem &fs, const string &path) {
 	}
 }
 
-bool OrphanFileReferences::ContainsLocalFile(const FileMetadata &metadata, const string &path) const {
-	if (local_file_ids.empty()) {
-		return false;
-	}
-	auto identity = GetLocalFileIdentity(metadata, path);
+bool OrphanFileReferences::ContainsLocalFile(const pair<idx_t, idx_t> &identity) const {
 	auto volume = local_file_ids.find(identity.first);
 	return volume != local_file_ids.end() && volume->second.count(identity.second);
 }
@@ -641,6 +637,10 @@ bool HasParentDirectoryReference(const string &path) {
 }
 
 bool HasOrphanPathPrefix(const string &path, const string &prefix) {
+	if (!IsLocalOrphanPath(prefix)) {
+		// Compare the actual LIST prefixes. A single trailing delimiter is optional.
+		return StringUtil::StartsWith(DirectoryPrefix(path), DirectoryPrefix(prefix));
+	}
 	return HasNormalizedPathPrefix(NormalizeOrphanPath(path), NormalizeOrphanPath(prefix));
 }
 
@@ -730,7 +730,7 @@ private:
 			                     ? result.delete_candidates.find(info.path)
 			                     : result.delete_candidates.find(scheme + info.path.substr(scheme_length));
 			if (candidate != result.delete_candidates.end()) {
-				candidate->second++;
+				candidate->second.observations++;
 			}
 		}
 	}
@@ -785,8 +785,10 @@ private:
 			return;
 		}
 		timestamp_t last_modified(0);
+		optional<pair<idx_t, idx_t>> local_identity;
 		if (metadata) {
-			if (input.referenced_files.ContainsLocalFile(*metadata, path)) {
+			local_identity = GetLocalFileIdentity(*metadata, path);
+			if (input.referenced_files.ContainsLocalFile(*local_identity)) {
 				return;
 			}
 			last_modified = metadata->last_modification_time;
@@ -797,10 +799,11 @@ private:
 			return;
 		}
 		if (input.for_deletion) {
-			auto &observations = result.delete_candidates[path];
+			auto &candidate = result.delete_candidates[path];
 			if (metadata) {
 				// Local entries have no listing to replay.
-				observations++;
+				candidate.observations++;
+				candidate.local_identity = local_identity;
 			}
 		} else {
 			result.candidates.push_back(path);

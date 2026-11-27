@@ -1,0 +1,78 @@
+# name: test/sql/local/native_catalog/remove_orphan_files_v1.test
+# description: A v1 snapshot can store an empty list of manifest paths inline
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+COPY (SELECT 7 AS id) TO '{TEMP_DIR_ABSOLUTE}/data'
+	(FORMAT PARQUET, PER_THREAD_OUTPUT true, FILENAME_PATTERN 'stray-{i}');
+
+statement ok
+COPY (SELECT 1 AS id, 'A' AS category, 10 AS amount) TO '{TEMP_DIR_ABSOLUTE}/data/live.parquet'
+	(FORMAT PARQUET, FIELD_IDS {id: 1, category: 2, amount: 3});
+
+statement ok
+COPY (
+	SELECT 1 AS status, 2::BIGINT AS snapshot_id,
+		{file_path: filename, file_format: 'PARQUET', partition: {category: 'A'}, record_count: 1::BIGINT,
+		 file_size_in_bytes: size::BIGINT, block_size_in_bytes: 1024::BIGINT} AS data_file
+	FROM read_blob('{TEMP_DIR_ABSOLUTE}/data/live.parquet')
+) TO '{TEMP_DIR_ABSOLUTE}/live-manifest.avro' (FORMAT AVRO,
+	METADATA {'schema-id': '0', 'partition-spec-id': '0', 'format-version': '1'},
+	FIELD_IDS {status: 0, snapshot_id: 1, data_file: {__duckdb_field_id: 2, file_path: 100, file_format: 101,
+		partition: {__duckdb_field_id: 102, category: 1000}, record_count: 103, file_size_in_bytes: 104, block_size_in_bytes: 105}});
+
+statement ok
+SET VARIABLE v1_base = (
+	SELECT json_merge_patch(content::JSON, json_object('location', '{TEMP_DIR_ABSOLUTE}', 'current-snapshot-id', 2))
+	FROM read_text('data/persistent/iceberg_v1_deprecated/default/legacy_v1/metadata/v1.metadata.json')
+);
+
+foreach manifests missing empty
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE v1_metadata = json_merge_patch(getvariable('v1_base'), json_object('snapshots', json_array(
+	json_merge_patch('{"snapshot-id":1,"timestamp-ms":1,"summary":{"operation":"delete"}}',
+		IF('{manifests}' = 'empty', '{"manifests":[]}', '{}')::JSON),
+	json_object('snapshot-id', 2, 'parent-snapshot-id', 1, 'timestamp-ms', 2, 'summary', {'operation': 'append'},
+		'manifests', ['{TEMP_DIR_ABSOLUTE}/live-manifest.avro'])
+)));
+
+statement ok
+COPY (SELECT getvariable('v1_metadata')::VARCHAR) TO '{TEMP_DIR_ABSOLUTE}/{manifests}.metadata.json'
+	(FORMAT CSV, HEADER false, DELIMITER '\t', QUOTE '', ESCAPE '');
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/__test/response', json_object(
+	'method', 'GET', 'path', '/v1/namespaces/default/tables/orphan_v1', 'status', 200,
+	'body', json_object('metadata-location', '{TEMP_DIR_ABSOLUTE}/{manifests}.metadata.json',
+		'metadata', getvariable('v1_metadata')))::VARCHAR);
+----
+204
+
+onlyif manifests=missing
+statement error
+FROM iceberg_remove_orphan_files('my_datalake.default.orphan_v1', dry_run => true);
+----
+Snapshot must contain either 'manifest-list' or 'manifests'
+
+onlyif manifests=empty
+query TII
+SELECT error_code, list_sort(list_transform(orphan_file_locations, lambda p: parse_filename(p))), deleted_file_count
+FROM iceberg_remove_orphan_files('my_datalake.default.orphan_v1', dry_run => true,
+	location => '{TEMP_DIR_ABSOLUTE}/data', older_than => TIMESTAMP '2999-01-01');
+----
+SUCCESS	[stray-0.parquet]	0
+
+statement ok
+ROLLBACK;
+
+endloop
