@@ -1413,8 +1413,8 @@ TEST_CASE("Iceberg delete manifest read failure on a waiting thread reaches the 
 	REQUIRE_THROWS_AS(store.GetDeleteIndexes({0}), InternalException);
 	REQUIRE_THROWS_AS(store.GetDeleteIndexes({1}), InternalException);
 	auto descriptors = store.DeleteManifests();
-	IcebergManifestFileScanInfo info(context.metadata, context.snapshot, descriptors, context.options, fs, context.path,
-	                                 nullptr, {0, 1});
+	IcebergManifestFileScanInfo info(context.context, context.metadata, context.snapshot, descriptors, context.options,
+	                                 fs, context.path, nullptr, {0, 1});
 	auto &cache = ObjectCache::GetObjectCache(context.context);
 	for (idx_t i = 0; i < 2; i++) {
 		REQUIRE_FALSE(cache.GetWithTypePrefix<IcebergParsedManifest>(ManifestCacheKey(info, i)));
@@ -2683,6 +2683,61 @@ TEST_CASE("Iceberg strict partition metrics cannot cover a sibling struct predic
 	REQUIRE(pruner.FileMatchesFilter(manifest, entry, true) == IcebergMetricsMatch::ROWS_MIGHT_MATCH);
 	entry.data_file.partition_info[0].value = Value(11);
 	REQUIRE(pruner.FileMatchesFilter(manifest, entry, true) == IcebergMetricsMatch::ROWS_CANNOT_MATCH);
+}
+
+TEST_CASE("Iceberg VARIANT null counts exclude encoded nulls and missing paths", "[iceberg_metrics]") {
+	using Match = IcebergMetricsMatch;
+	PlanningTest test;
+	Query(test.connection, "CREATE TABLE lake.default.t (v VARIANT) WITH ('format-version'=3)");
+	// A file containing {'a': 7}, {} and an encoded VARIANT null can report these bounds and zero physical nulls.
+	auto bounds = test.connection.Query(R"(
+		SELECT p.metadata || p.value FROM (
+			SELECT variant_to_parquet_variant({"$['a']": 7}::VARIANT)::STRUCT(metadata BLOB, value BLOB) AS p
+		)
+	)");
+	REQUIRE_FALSE(bounds->HasError());
+	auto bound_value = bounds->Collection().GetValue(0, 0);
+	auto bound = test.Bind();
+	auto &base = bound->Cast<MultiFileBindData>().file_list->Cast<IcebergMultiFileList>().GetScanPlanner();
+	auto field_id = base.GetSchema().columns[0]->id;
+	IcebergManifest manifest(0, IcebergManifestContentType::DATA, 1);
+	ColumnIndex path(0, {ColumnIndex("a")});
+	path.SetPushdownExtractType(LogicalType::VARIANT());
+	for (auto &index : {ColumnIndex(0), path}) {
+		INFO(index.GetName("v"));
+		auto entry = MetricsEntry();
+		auto &file = entry.data_file;
+		file.record_count = 3;
+		file.value_counts[field_id] = 3;
+		file.null_value_counts[field_id] = 0;
+		file.lower_bounds[field_id] = bound_value;
+		file.upper_bounds[field_id] = bound_value;
+		auto check = [&](ExpressionType op, Match expected) {
+			IcebergTableFilters filters;
+			auto expr = ExpressionFilter::CreateNullCheckExpression(
+			    make_uniq<BoundReferenceExpression>(LogicalType::VARIANT(), 0ULL), op);
+			INFO(expr->ToString());
+			filters.PushFilter(index, make_uniq<ExpressionFilter>(std::move(expr)));
+			IcebergFilePruner pruner(*test.connection.context, base.GetMetadata(), base.GetSchema(), filters);
+			CHECK(pruner.FileMatchesFilter(manifest, entry, true) == expected);
+			CHECK(pruner.FileMatchesFilter(manifest, entry) ==
+			      (expected == Match::ROWS_MUST_MATCH ? Match::ROWS_MIGHT_MATCH : expected));
+		};
+		check(ExpressionType::OPERATOR_IS_NULL, Match::ROWS_MIGHT_MATCH);
+		check(ExpressionType::OPERATOR_IS_NOT_NULL, Match::ROWS_MIGHT_MATCH);
+
+		// Both the upper bound and the null count are optional.
+		file.upper_bounds.clear();
+		file.null_value_counts.clear();
+		check(ExpressionType::OPERATOR_IS_NULL, Match::ROWS_MIGHT_MATCH);
+		check(ExpressionType::OPERATOR_IS_NOT_NULL, Match::ROWS_MIGHT_MATCH);
+
+		// If every VARIANT is physically NULL, every extracted path is NULL too, even without bounds.
+		file.lower_bounds.clear();
+		file.null_value_counts[field_id] = file.record_count;
+		check(ExpressionType::OPERATOR_IS_NULL, Match::ROWS_MUST_MATCH);
+		check(ExpressionType::OPERATOR_IS_NOT_NULL, Match::ROWS_CANNOT_MATCH);
+	}
 }
 
 TEST_CASE("Iceberg missing variant metrics do not hide another column's non-match", "[iceberg_metrics]") {
