@@ -16,12 +16,16 @@
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
+#include "duckdb/planner/operator/logical_projection.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "common/iceberg_utils.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "function/iceberg_functions.hpp"
 #include "maintenance/rewrite_data_files_operator.hpp"
 #include "maintenance/rewrite_data_files_planner.hpp"
+#include "planning/iceberg_multi_file_reader.hpp"
+
+#include <cmath>
 
 namespace duckdb {
 
@@ -55,6 +59,23 @@ static int64_t ParseByteSizeNamedParameter(const Value &value, const char *param
 		return static_cast<int64_t>(parsed_value);
 	}
 	return value.DefaultCastAs(LogicalType::BIGINT).GetValue<int64_t>();
+}
+
+//! A count bound as BIGINT would round a fractional argument (e.g. -0.4 becomes 0), so the original value is checked
+//! for a finite whole number before it is narrowed.
+static int64_t ParseWholeNumberNamedParameter(const Value &value, const char *parameter_name) {
+	auto &type = value.type();
+	if (type.IsIntegral()) {
+		return value.DefaultCastAs(LogicalType::BIGINT).GetValue<int64_t>();
+	}
+	if (type.IsNumeric()) {
+		auto as_double = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+		if (std::isfinite(as_double) && std::floor(as_double) == as_double) {
+			return value.DefaultCastAs(LogicalType::BIGINT).GetValue<int64_t>();
+		}
+	}
+	throw InvalidInputException("iceberg_rewrite_data_files: '%s' must be a whole number, got %s", parameter_name,
+	                            value.ToString());
 }
 
 static RewriteDataFilesPlanInput ParseRewritePlanInput(ClientContext &context, TableFunctionBindInput &input) {
@@ -102,6 +123,28 @@ static RewriteDataFilesPlanInput ParseRewritePlanInput(ClientContext &context, T
 				                            value);
 			}
 			result.max_files_to_rewrite = value;
+		} else if (opt == "delete_file_threshold") {
+			if (val.IsNull()) {
+				throw InvalidInputException("iceberg_rewrite_data_files: 'delete_file_threshold' cannot be NULL");
+			}
+			auto value = ParseWholeNumberNamedParameter(val, "delete_file_threshold");
+			if (value < 0) {
+				throw InvalidInputException(
+				    "iceberg_rewrite_data_files: 'delete_file_threshold' must be >= 0, got %lld", value);
+			}
+			result.delete_file_threshold = value;
+		} else if (opt == "delete_ratio_threshold") {
+			if (val.IsNull()) {
+				throw InvalidInputException("iceberg_rewrite_data_files: 'delete_ratio_threshold' cannot be NULL");
+			}
+			auto value = val.GetValue<double>();
+			//! Also rejects NaN.
+			if (!(value > 0 && value <= 1)) {
+				throw InvalidInputException(
+				    "iceberg_rewrite_data_files: 'delete_ratio_threshold' must be > 0 and <= 1, got %s",
+				    val.ToString());
+			}
+			result.delete_ratio_threshold = value;
 		} else if (opt == "rewrite_all") {
 			result.rewrite_all = BooleanValue::Get(val);
 		} else if (opt == "output_spec_id") {
@@ -179,6 +222,31 @@ static void FilterCandidateFiles(LogicalOperator &copy, const vector<RewriteCand
 	parent.get().children[0] = std::move(filter);
 }
 
+//! SPEC: a rewrite of a V3 table copies each row's _row_id and _last_updated_sequence_number into the new files.
+//! Append both after the table columns, where the writer expects them; the scan fills in inherited values.
+static void ProjectRowLineage(LogicalOperator &copy) {
+	if (copy.children.size() != 1 || copy.children[0]->type != LogicalOperatorType::LOGICAL_PROJECTION ||
+	    copy.children[0]->children.size() != 1 ||
+	    copy.children[0]->children[0]->type != LogicalOperatorType::LOGICAL_GET) {
+		throw InternalException("iceberg_rewrite_data_files: expected the COPY to read a projection over a scan");
+	}
+	auto &projection = copy.children[0]->Cast<LogicalProjection>();
+	auto &get = projection.children[0]->Cast<LogicalGet>();
+	for (auto virtual_column :
+	     {COLUMN_IDENTIFIER_ROW_ID, IcebergMultiFileReader::COLUMN_IDENTIFIER_LAST_SEQUENCE_NUMBER}) {
+		auto entry = get.virtual_columns.find(virtual_column);
+		if (entry == get.virtual_columns.end()) {
+			throw InternalException("iceberg_rewrite_data_files: the table scan does not expose virtual column %d",
+			                        static_cast<int64_t>(virtual_column));
+		}
+		auto &column_ids = get.GetMutableColumnIds();
+		column_ids.emplace_back(virtual_column);
+		ColumnBinding binding(get.table_index, ProjectionIndex(column_ids.size() - 1));
+		projection.expressions.push_back(
+		    make_uniq<BoundColumnRefExpression>(entry->second.name, entry->second.type, binding));
+	}
+}
+
 //! Bind a LogicalCopyToFile over the candidate scan. The logical COPY is not
 //! executed as-is: CreatePlan peels it off and rebuilds a PhysicalCopyToFile via
 //! IcebergInsert::PlanCopyForInsert (partitioned IcebergCopyOptions). Binding
@@ -206,6 +274,9 @@ static unique_ptr<LogicalOperator> BindCandidateCopy(Binder &binder, const Rewri
 
 	auto copy_binder = Binder::CreateBinder(binder.context, &binder);
 	auto bound_copy = copy_binder->Bind(copy_statement);
+	if (metadata.iceberg_version >= 3) {
+		ProjectRowLineage(*bound_copy.plan);
+	}
 	FilterCandidateFiles(*bound_copy.plan, plan.selected_candidates);
 	return std::move(bound_copy.plan);
 }
@@ -243,6 +314,8 @@ TableFunctionSet IcebergFunctions::GetIcebergRewriteDataFilesFunction() {
 		    .Add("max_file_size_bytes", LogicalType::ANY)
 		    .Add("min_input_files", LogicalType::BIGINT)
 		    .Add("max_files_to_rewrite", LogicalType::BIGINT)
+		    .Add("delete_file_threshold", LogicalType::ANY)
+		    .Add("delete_ratio_threshold", LogicalType::DOUBLE)
 		    .Add("rewrite_all", LogicalType::BOOLEAN)
 		    .Add("output_spec_id", LogicalType::INTEGER);
 	});

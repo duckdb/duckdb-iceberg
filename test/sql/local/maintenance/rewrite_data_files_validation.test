@@ -70,6 +70,74 @@ SELECT * FROM iceberg_rewrite_data_files('a.b.c', output_spec_id => NULL);
 'output_spec_id' cannot be NULL
 
 statement error
+SELECT * FROM iceberg_rewrite_data_files('a.b.c', delete_file_threshold => -1);
+----
+'delete_file_threshold' must be >= 0, got -1
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files('a.b.c', delete_file_threshold => NULL);
+----
+'delete_file_threshold' cannot be NULL
+
+# A fractional count is refused before it is narrowed: -0.4 must not round to 0 and select every file.
+statement error
+SELECT * FROM iceberg_rewrite_data_files('a.b.c', delete_file_threshold => -0.4);
+----
+'delete_file_threshold' must be a whole number, got -0.4
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files('a.b.c', delete_file_threshold => 0.4);
+----
+'delete_file_threshold' must be a whole number, got 0.4
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files('a.b.c', delete_file_threshold => 'nan'::DOUBLE);
+----
+'delete_file_threshold' must be a whole number, got nan
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files('a.b.c', delete_file_threshold => '2');
+----
+'delete_file_threshold' must be a whole number, got 2
+
+# A whole-valued DOUBLE is accepted
+statement error
+SELECT * FROM iceberg_rewrite_data_files('cat.sch.tbl', delete_file_threshold => 2.0);
+----
+Catalog "cat" does not exist
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files('a.b.c', delete_ratio_threshold => 0);
+----
+'delete_ratio_threshold' must be > 0 and <= 1, got 0.0
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files('a.b.c', delete_ratio_threshold => -0.5);
+----
+'delete_ratio_threshold' must be > 0 and <= 1, got -0.5
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files('a.b.c', delete_ratio_threshold => 1.5);
+----
+'delete_ratio_threshold' must be > 0 and <= 1, got 1.5
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files('a.b.c', delete_ratio_threshold => 'nan'::DOUBLE);
+----
+'delete_ratio_threshold' must be > 0 and <= 1, got nan
+
+statement error
+SELECT * FROM iceberg_rewrite_data_files('a.b.c', delete_ratio_threshold => NULL);
+----
+'delete_ratio_threshold' cannot be NULL
+
+# Both bounds are accepted
+statement error
+SELECT * FROM iceberg_rewrite_data_files('cat.sch.tbl', delete_file_threshold => 0, delete_ratio_threshold => 1);
+----
+Catalog "cat" does not exist
+
+statement error
 SELECT * FROM iceberg_rewrite_data_files('a.b.c', min_file_size_bytes => -1);
 ----
 'min_file_size_bytes' must be >= 0 bytes

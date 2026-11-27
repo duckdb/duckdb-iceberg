@@ -18,6 +18,8 @@
 #include "planning/pruning/iceberg_file_pruner.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
+#include "duckdb/logging/logger.hpp"
+#include "iceberg_logging.hpp"
 
 #include <algorithm>
 #include <map>
@@ -89,6 +91,11 @@ bool BucketQualifies(const RewriteBucket &bucket, const RewriteDataFilesPlanInpu
 	if (bucket.eligible_count == 1 && bucket.eligible_bytes > input.max_file_size_bytes.value()) {
 		return true;
 	}
+	//! BinPackRewriteFilePlanner.filterFileGroups: a group with a file that has too many deletes or too high a
+	//! delete ratio is rewritten whatever its file count.
+	if (bucket.too_many_deletes) {
+		return true;
+	}
 	//! Spark SizeBasedFileRewriter: rewrite when the group has enough files,
 	//! or at least two files whose total size already meets the target.
 	if (bucket.eligible_count >= input.min_input_files) {
@@ -98,12 +105,14 @@ bool BucketQualifies(const RewriteBucket &bucket, const RewriteDataFilesPlanInpu
 	return bucket.eligible_count >= 2 && bucket.eligible_bytes > target_file_size_bytes;
 }
 
-void ConsiderCandidate(RewriteBucket &bucket, RewriteCandidate cand, const RewriteDataFilesPlanInput &input) {
-	//! Match Spark: rewrite undersized or oversized files; leave the band alone.
-	if (!input.rewrite_all && cand.file_size_in_bytes >= input.min_file_size_bytes.value() &&
+void ConsiderCandidate(RewriteBucket &bucket, RewriteCandidate cand, const RewriteDataFilesPlanInput &input,
+                       bool too_many_deletes) {
+	//! Match Spark: rewrite undersized or oversized files, and files with too many deletes; leave the rest alone.
+	if (!input.rewrite_all && !too_many_deletes && cand.file_size_in_bytes >= input.min_file_size_bytes.value() &&
 	    cand.file_size_in_bytes <= input.max_file_size_bytes.value()) {
 		return;
 	}
+	bucket.too_many_deletes = bucket.too_many_deletes || too_many_deletes;
 	bucket.eligible_count++;
 	bucket.eligible_bytes += cand.file_size_in_bytes;
 	if (input.max_files_to_rewrite &&
@@ -213,8 +222,145 @@ optional<RewriteCandidate> TryMakeRewriteCandidate(const IcebergManifestEntry &e
 	return cand;
 }
 
+//! The delete files the scan applies to each data file, like the deletes of an Iceberg Java FileScanTask.
+class RewriteDeleteIndex {
+public:
+	RewriteDeleteIndex(ClientContext &context, const IcebergTableMetadata &metadata,
+	                   const vector<IcebergManifestListEntry> &manifest_files)
+	    : pruner(context, metadata, metadata.GetLatestSchema(), no_filters) {
+		for (const auto &list_entry : manifest_files) {
+			if (list_entry.GetFile().content == IcebergManifestContentType::DATA) {
+				continue;
+			}
+			auto &manifest = list_entry.GetManifest();
+			for (const auto &entry : list_entry.GetManifestEntries()) {
+				auto &delete_file = entry.data_file;
+				if (entry.status == IcebergManifestEntryStatusType::DELETED ||
+				    (delete_file.content != IcebergManifestEntryContentType::POSITION_DELETES &&
+				     delete_file.content != IcebergManifestEntryContentType::EQUALITY_DELETES)) {
+					continue;
+				}
+				auto index = deletes.size();
+				//! Only the equality matcher reads the bounds state
+				auto equality_bounds = delete_file.content == IcebergManifestEntryContentType::EQUALITY_DELETES
+				                           ? make_uniq<IcebergEqualityDeleteBounds>()
+				                           : nullptr;
+				deletes.push_back({manifest, entry, std::move(equality_bounds)});
+				auto referenced_data_file = delete_file.SingleReferencedDataFile();
+				if (referenced_data_file) {
+					by_referenced_path[*referenced_data_file].push_back(index);
+				} else {
+					unreferenced.push_back(index);
+				}
+			}
+		}
+	}
+
+	//! BinPackRewriteFilePlanner: tooManyDeletes || tooHighDeleteRatio.
+	bool TooManyDeletes(const IcebergManifest &data_manifest, const IcebergManifestEntry &data_entry,
+	                    const RewriteDataFilesPlanInput &input) const {
+		//! Every file has at least zero deletes
+		if (input.delete_file_threshold == 0) {
+			return true;
+		}
+		auto &data_file = data_entry.data_file;
+		auto partition_values = IcebergFilePruner::PartitionValueMap(data_file);
+		vector<idx_t> matched;
+		bool has_deletion_vector = false;
+		auto match_delete = [&](idx_t index) {
+			candidate_checks++;
+			auto &candidate = deletes[index];
+			//! DeleteFileIndex.findPosPartitionDeletes looks up partition-scoped position deletes by spec id and
+			//! partition, so for selection they count only towards data files of their own spec, unpartitioned
+			//! included (spec: "both spec and partition values"). Global equality deletes still cross specs.
+			//! The scan and the cleanup below keep their wider match, so a rewrite never drops a delete a read
+			//! still applies.
+			if (candidate.entry.data_file.content == IcebergManifestEntryContentType::POSITION_DELETES &&
+			    !candidate.entry.data_file.SingleReferencedDataFile() &&
+			    candidate.manifest.partition_spec_id != data_manifest.partition_spec_id) {
+				return;
+			}
+			if (!pruner.DeleteFileMatchesDataFile(candidate.manifest, candidate.entry, data_manifest, data_entry,
+			                                      partition_values, candidate.equality_bounds.get())) {
+				return;
+			}
+			matched.push_back(index);
+			has_deletion_vector = has_deletion_vector || candidate.entry.data_file.IsDeletionVector();
+		};
+		auto referenced = by_referenced_path.find(data_file.file_path);
+		if (referenced != by_referenced_path.end()) {
+			for (auto index : referenced->second) {
+				match_delete(index);
+			}
+		}
+		//! No file can have more applicable deletes than the table has, so a higher delete_file_threshold (the default)
+		//! leaves only the ratio, which counts file-scoped deletes alone: those are all in the referenced bucket. A
+		//! partition-scoped delete never counts towards the ratio, even next to a deletion vector.
+		if (input.delete_file_threshold <= NumericCast<int64_t>(deletes.size())) {
+			for (auto index : unreferenced) {
+				match_delete(index);
+			}
+		}
+
+		int64_t delete_file_count = 0;
+		int64_t file_scoped_deleted_rows = 0;
+		for (auto index : matched) {
+			auto &delete_file = deletes[index].entry.data_file;
+			//! DeleteFileIndex.forDataFile: a deletion vector supersedes every position delete file of its data file,
+			//! file- and partition-scoped alike, so only the vector and the equality deletes apply.
+			if (has_deletion_vector && delete_file.content == IcebergManifestEntryContentType::POSITION_DELETES &&
+			    !delete_file.IsDeletionVector()) {
+				continue;
+			}
+			delete_file_count++;
+			//! ContentFileUtil.isFileScoped: only deletion vectors and position delete files that reference one
+			//! data file count towards the ratio. Capped at the file's rows, so the sum cannot overflow.
+			if (delete_file.content == IcebergManifestEntryContentType::POSITION_DELETES &&
+			    delete_file.SingleReferencedDataFile() && delete_file.record_count > 0 &&
+			    file_scoped_deleted_rows < data_file.record_count) {
+				file_scoped_deleted_rows +=
+				    MinValue(delete_file.record_count, data_file.record_count - file_scoped_deleted_rows);
+			}
+		}
+		if (delete_file_count >= input.delete_file_threshold) {
+			return true;
+		}
+		if (delete_file_count == 0 || data_file.record_count <= 0) {
+			return false;
+		}
+		auto delete_ratio = static_cast<double>(file_scoped_deleted_rows) / static_cast<double>(data_file.record_count);
+		return delete_ratio >= input.delete_ratio_threshold;
+	}
+
+	//! How many delete files were checked against a data file, for the planning log
+	idx_t CandidateChecks() const {
+		return candidate_checks;
+	}
+
+private:
+	struct DeleteCandidate {
+		const IcebergManifest &manifest;
+		const IcebergManifestEntry &entry;
+		unique_ptr<IcebergEqualityDeleteBounds> equality_bounds;
+	};
+
+	mutable idx_t candidate_checks = 0;
+
+	IcebergTableFilters no_filters;
+	IcebergFilePruner pruner;
+	vector<DeleteCandidate> deletes;
+	unordered_map<string, vector<idx_t>> by_referenced_path;
+	vector<idx_t> unreferenced;
+};
+
+bool TooManyDeletes(optional_ptr<const RewriteDeleteIndex> delete_index, const IcebergManifest &data_manifest,
+                    const IcebergManifestEntry &data_entry, const RewriteDataFilesPlanInput &input) {
+	return delete_index && delete_index->TooManyDeletes(data_manifest, data_entry, input);
+}
+
 void CollectUnpartitionedCandidates(RewriteBucket &bucket, const vector<IcebergManifestListEntry> &manifest_files,
-                                    const RewriteDataFilesPlanInput &input, int64_t target_file_size_bytes) {
+                                    const RewriteDataFilesPlanInput &input, int64_t target_file_size_bytes,
+                                    optional_ptr<const RewriteDeleteIndex> delete_index) {
 	for (const auto &list_entry : manifest_files) {
 		if (list_entry.GetFile().content != IcebergManifestContentType::DATA) {
 			continue;
@@ -222,12 +368,13 @@ void CollectUnpartitionedCandidates(RewriteBucket &bucket, const vector<IcebergM
 		if (UnpartitionedCollectionComplete(bucket, input, target_file_size_bytes)) {
 			continue;
 		}
+		auto &manifest = list_entry.GetManifest();
 		for (const auto &entry : list_entry.GetManifestEntries()) {
 			auto cand = TryMakeRewriteCandidate(entry);
 			if (!cand) {
 				continue;
 			}
-			ConsiderCandidate(bucket, std::move(*cand), input);
+			ConsiderCandidate(bucket, std::move(*cand), input, TooManyDeletes(delete_index, manifest, entry, input));
 			if (UnpartitionedCollectionComplete(bucket, input, target_file_size_bytes)) {
 				break;
 			}
@@ -263,24 +410,27 @@ string PartitionBucketKey(const vector<IcebergPartitionInfo> &partition_info) {
 
 void CollectPartitionedCandidates(std::map<string, RewriteBucket> &per_partition, RewriteBucket &other_specs,
                                   const vector<IcebergManifestListEntry> &manifest_files,
-                                  const RewriteDataFilesPlanInput &input, int32_t output_spec_id) {
+                                  const RewriteDataFilesPlanInput &input, int32_t output_spec_id,
+                                  optional_ptr<const RewriteDeleteIndex> delete_index) {
 	for (const auto &list_entry : manifest_files) {
 		if (list_entry.GetFile().content != IcebergManifestContentType::DATA) {
 			continue;
 		}
 		//! Spark keeps output-spec files in per-partition buckets and groups every other spec together.
 		const auto on_output_spec = list_entry.GetFile().partition_spec_id == output_spec_id;
+		auto &manifest = list_entry.GetManifest();
 		for (const auto &entry : list_entry.GetManifestEntries()) {
 			auto cand = TryMakeRewriteCandidate(entry);
 			if (!cand) {
 				continue;
 			}
+			auto too_many_deletes = TooManyDeletes(delete_index, manifest, entry, input);
 			if (!on_output_spec) {
-				ConsiderCandidate(other_specs, std::move(*cand), input);
+				ConsiderCandidate(other_specs, std::move(*cand), input, too_many_deletes);
 				continue;
 			}
 			auto &bucket = per_partition[PartitionBucketKey(cand->partition_info)];
-			ConsiderCandidate(bucket, std::move(*cand), input);
+			ConsiderCandidate(bucket, std::move(*cand), input, too_many_deletes);
 		}
 	}
 }
@@ -354,8 +504,7 @@ bool DeleteFileFullyApplied(const IcebergTableMetadata &metadata, const IcebergM
                             const IcebergManifestEntry &delete_entry, const LiveDataFiles &live_data,
                             const unordered_set<string> &rewritten_paths) {
 	auto &delete_file = delete_entry.data_file;
-	//! InvalidateFile(path) addresses an ordinary file. An offset identifies a deletion-vector blob.
-	if (delete_file.content_offset || delete_file.file_path.empty()) {
+	if (delete_file.file_path.empty()) {
 		return false;
 	}
 	const bool has_reference = delete_file.referenced_data_file && !delete_file.referenced_data_file->empty();
@@ -365,11 +514,18 @@ bool DeleteFileFullyApplied(const IcebergTableMetadata &metadata, const IcebergM
 	if (delete_file.content != IcebergManifestEntryContentType::POSITION_DELETES) {
 		return false;
 	}
-	if (has_reference) {
-		if (rewritten_paths.count(*delete_file.referenced_data_file) == 0) {
+	//! A deletion vector is one blob of a Puffin file that other data files' vectors may share. Its offset
+	//! identifies it, and the spec requires it to reference its data file.
+	if (delete_file.content_offset && !has_reference) {
+		return false;
+	}
+	//! A position delete is file-scoped by referenced_data_file or by equal file_path bounds.
+	auto single_referenced = delete_file.SingleReferencedDataFile();
+	if (single_referenced) {
+		if (rewritten_paths.count(*single_referenced) == 0) {
 			return false;
 		}
-		auto live = live_data.find(*delete_file.referenced_data_file);
+		auto live = live_data.find(*single_referenced);
 		//! A reference identifies the file, but a stale delete may no longer apply to it.
 		return live != live_data.end() &&
 		       PositionDeleteApplies(metadata, delete_manifest, delete_entry, *live->second.first,
@@ -406,9 +562,9 @@ void CollectFullyAppliedDeleteFiles(RewritePlan &plan, const IcebergTableMetadat
 
 	auto live_data = CollectLiveDataFiles(manifest_files);
 
-	unordered_set<string> blocked_paths;
-	vector<string> removable_paths;
-	unordered_set<string> seen_removable;
+	unordered_set<IcebergFileIdentity, IcebergFileIdentityHash> blocked_files;
+	vector<IcebergFileIdentity> removable_files;
+	unordered_set<IcebergFileIdentity, IcebergFileIdentityHash> seen_removable;
 	for (const auto &list_entry : manifest_files) {
 		auto &manifest = list_entry.GetManifest();
 		for (const auto &entry : list_entry.GetManifestEntries()) {
@@ -420,20 +576,21 @@ void CollectFullyAppliedDeleteFiles(RewritePlan &plan, const IcebergTableMetadat
 			    delete_file.content != IcebergManifestEntryContentType::EQUALITY_DELETES) {
 				continue;
 			}
+			IcebergFileIdentity identity(delete_file.file_path, delete_file.content_offset);
 			if (!DeleteFileFullyApplied(metadata, manifest, entry, live_data, rewritten_paths)) {
-				blocked_paths.insert(delete_file.file_path);
+				blocked_files.insert(identity);
 				continue;
 			}
-			if (seen_removable.insert(delete_file.file_path).second) {
-				removable_paths.push_back(delete_file.file_path);
+			if (seen_removable.insert(identity).second) {
+				removable_files.push_back(identity);
 			}
 		}
 	}
-	for (auto &path : removable_paths) {
-		if (blocked_paths.count(path)) {
+	for (auto &file : removable_files) {
+		if (blocked_files.count(file)) {
 			continue;
 		}
-		plan.delete_files_to_remove.push_back(path);
+		plan.delete_files_to_remove.push_back(file);
 	}
 }
 
@@ -559,10 +716,6 @@ RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input)
 	plan.table_info = std::move(table_info_ptr);
 	table_info.VerifyWriteEncryptionSupported();
 
-	if (table_metadata.iceberg_version >= 3) {
-		throw NotImplementedException("iceberg_rewrite_data_files does not yet support V3 tables");
-	}
-
 	//! Reject an unknown or historical output spec before reading manifests.
 	auto output_spec_id = ResolveOutputSpecId(input, table_metadata);
 
@@ -596,20 +749,31 @@ RewritePlan PlanRewrite(ClientContext &context, RewriteDataFilesPlanInput input)
 		return plan;
 	}
 
+	//! rewrite_all selects every file, so it doesn't need the deletes of each.
+	unique_ptr<RewriteDeleteIndex> delete_index;
+	if (!input.rewrite_all) {
+		delete_index = make_uniq<RewriteDeleteIndex>(context, table_metadata, manifest_files);
+	}
+
 	const bool unpartitioned = !table_metadata.HasPartitionSpec();
 	if (unpartitioned) {
 		//! All files share the same output partition, including files written before partitioning was removed.
 		//! Apply size/count gating and the rewrite cap to that single group.
 		RewriteBucket bucket;
-		CollectUnpartitionedCandidates(bucket, manifest_files, input, plan.target_file_size_bytes);
+		CollectUnpartitionedCandidates(bucket, manifest_files, input, plan.target_file_size_bytes, delete_index.get());
 		SelectCandidates(plan, input, bucket);
 	} else {
 		//! Files already on the output spec keep per-partition gating. Every other spec shares one group,
 		//! then the existing COPY rewrites both with the current spec (which partitions output files).
 		RewriteBucket other_specs;
 		std::map<string, RewriteBucket> per_partition;
-		CollectPartitionedCandidates(per_partition, other_specs, manifest_files, input, output_spec_id);
+		CollectPartitionedCandidates(per_partition, other_specs, manifest_files, input, output_spec_id,
+		                             delete_index.get());
 		SelectCandidates(plan, input, per_partition, other_specs);
+	}
+	if (delete_index) {
+		DUCKDB_LOG(context, IcebergLogType, "iceberg_rewrite_data_files: delete_candidate_checks=%llu",
+		           delete_index->CandidateChecks());
 	}
 
 	CollectFullyAppliedDeleteFiles(plan, table_metadata, manifest_files);

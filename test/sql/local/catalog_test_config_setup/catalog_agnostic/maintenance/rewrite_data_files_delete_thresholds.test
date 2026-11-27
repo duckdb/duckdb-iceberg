@@ -1,0 +1,294 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/maintenance/rewrite_data_files_delete_thresholds.test
+# description: iceberg_rewrite_data_files selects files by their deletes (delete_ratio_threshold, delete_file_threshold)
+# group: [maintenance]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+drop table if exists my_datalake.default.rewrite_delete_ratio;
+
+statement ok
+create table my_datalake.default.rewrite_delete_ratio (id INTEGER) with ('format-version' = 2);
+
+# One data file with 10 rows. Alone it is below min_input_files, so size alone never rewrites it.
+statement ok
+insert into my_datalake.default.rewrite_delete_ratio select range from range(10);
+
+# 2 of 10 rows deleted: below the default ratio of 0.3
+statement ok
+delete from my_datalake.default.rewrite_delete_ratio where id < 2;
+
+query IIIII
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_delete_ratio');
+----
+0	0	0	0	0
+
+# 6 of 10 rows deleted now, over two delete files
+statement ok
+delete from my_datalake.default.rewrite_delete_ratio where id < 6;
+
+query I
+select count(*) from iceberg_metadata('my_datalake.default.rewrite_delete_ratio')
+where content = 'POSITION_DELETES' and status <> 'DELETED';
+----
+2
+
+# A ratio of 1.0 needs every row deleted
+query IIIII
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_delete_ratio', delete_ratio_threshold := 1.0);
+----
+0	0	0	0	0
+
+# 0.6 is below 0.7
+query IIIII
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_delete_ratio', delete_ratio_threshold := 0.7);
+----
+0	0	0	0	0
+
+statement ok
+begin;
+
+query IIIII
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_delete_ratio', delete_ratio_threshold := 0.5);
+----
+1	1	<REGEX>:[1-9][0-9]*	0	2
+
+statement ok
+rollback;
+
+# The default ratio of 0.3 rewrites the lone file even though min_input_files is not met,
+# and removes the delete files that applied only to it.
+query IIIII
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_delete_ratio');
+----
+1	1	<REGEX>:[1-9][0-9]*	0	2
+
+query I
+select list(id order by id) from my_datalake.default.rewrite_delete_ratio;
+----
+[6, 7, 8, 9]
+
+query II
+select content, count(*) from iceberg_metadata('my_datalake.default.rewrite_delete_ratio')
+where status <> 'DELETED' group by content;
+----
+DATA	1
+
+query I
+select sum(record_count) from iceberg_metadata('my_datalake.default.rewrite_delete_ratio')
+where content = 'DATA' and status <> 'DELETED';
+----
+4
+
+# Nothing is left to rewrite
+query IIIII
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_delete_ratio');
+----
+0	0	0	0	0
+
+statement ok
+drop table if exists my_datalake.default.rewrite_delete_ratio;
+
+# delete_file_threshold counts the delete files that apply to a data file
+
+statement ok
+drop table if exists my_datalake.default.rewrite_delete_file_count;
+
+statement ok
+create table my_datalake.default.rewrite_delete_file_count (id INTEGER) with ('format-version' = 2);
+
+statement ok
+insert into my_datalake.default.rewrite_delete_file_count select range from range(20);
+
+statement ok
+delete from my_datalake.default.rewrite_delete_file_count where id = 0;
+
+statement ok
+delete from my_datalake.default.rewrite_delete_file_count where id = 1;
+
+statement ok
+delete from my_datalake.default.rewrite_delete_file_count where id = 2;
+
+query I
+select count(*) from iceberg_metadata('my_datalake.default.rewrite_delete_file_count')
+where content = 'POSITION_DELETES' and status <> 'DELETED';
+----
+3
+
+# 3 of 20 rows is below the default ratio, and the file threshold is off by default
+query IIIII
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_delete_file_count');
+----
+0	0	0	0	0
+
+query IIIII
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_delete_file_count', delete_file_threshold := 4);
+----
+0	0	0	0	0
+
+query IIIII
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_delete_file_count', delete_file_threshold := 3);
+----
+1	1	<REGEX>:[1-9][0-9]*	0	3
+
+query II
+select count(*), sum(id) from my_datalake.default.rewrite_delete_file_count;
+----
+17	187
+
+query I
+select count(*) from iceberg_metadata('my_datalake.default.rewrite_delete_file_count')
+where content = 'POSITION_DELETES' and status <> 'DELETED';
+----
+0
+
+statement ok
+drop table if exists my_datalake.default.rewrite_delete_file_count;
+
+# A delete-triggered file is selected even inside the size band; its neighbours without deletes are not
+
+statement ok
+drop table if exists my_datalake.default.rewrite_delete_in_band;
+
+statement ok
+create table my_datalake.default.rewrite_delete_in_band (id INTEGER) with ('format-version' = 2);
+
+statement ok
+insert into my_datalake.default.rewrite_delete_in_band select range from range(10);
+
+statement ok
+insert into my_datalake.default.rewrite_delete_in_band select range from range(10, 20);
+
+statement ok
+delete from my_datalake.default.rewrite_delete_in_band where id < 6;
+
+# With min_file_size_bytes 0 both small files are inside the size band
+query IIIII
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_delete_in_band',
+	min_file_size_bytes := 0, delete_ratio_threshold := 1.0);
+----
+0	0	0	0	0
+
+query IIIII
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_delete_in_band', min_file_size_bytes := 0);
+----
+1	1	<REGEX>:[1-9][0-9]*	0	1
+
+query II
+select count(*), sum(id) from my_datalake.default.rewrite_delete_in_band;
+----
+14	175
+
+query I
+select count(*) from iceberg_metadata('my_datalake.default.rewrite_delete_in_band')
+where content = 'DATA' and status <> 'DELETED';
+----
+2
+
+statement ok
+drop table if exists my_datalake.default.rewrite_delete_in_band;
+
+# Per partition: a delete-triggered file rewrites its group whatever the file count; other partitions are left alone
+
+statement ok
+drop table if exists my_datalake.default.rewrite_delete_partitioned;
+
+statement ok
+create table my_datalake.default.rewrite_delete_partitioned (id INTEGER, p VARCHAR)
+partitioned by (p) with ('format-version' = 2);
+
+statement ok
+insert into my_datalake.default.rewrite_delete_partitioned select range, 'a' from range(10);
+
+statement ok
+insert into my_datalake.default.rewrite_delete_partitioned select range, 'a' from range(10, 20);
+
+statement ok
+insert into my_datalake.default.rewrite_delete_partitioned select range, 'b' from range(10);
+
+statement ok
+insert into my_datalake.default.rewrite_delete_partitioned select range, 'b' from range(10, 20);
+
+statement ok
+delete from my_datalake.default.rewrite_delete_partitioned where p = 'a' and id < 5;
+
+# Both undersized files of partition a are rewritten together; partition b has 2 files, below min_input_files
+query IIIII
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_delete_partitioned');
+----
+2	1	<REGEX>:[1-9][0-9]*	0	1
+
+query III
+select p, count(*), sum(id) from my_datalake.default.rewrite_delete_partitioned group by p order by p;
+----
+a	15	180
+b	20	190
+
+query II
+select p, count(distinct filename) from my_datalake.default.rewrite_delete_partitioned group by p order by p;
+----
+a	1
+b	2
+
+statement ok
+drop table if exists my_datalake.default.rewrite_delete_partitioned;
+
+# An explicit delete_file_threshold of 0 selects even a clean, in-band file, as in Iceberg Java
+statement ok
+drop table if exists my_datalake.default.rewrite_delete_zero_threshold;
+
+statement ok
+create table my_datalake.default.rewrite_delete_zero_threshold (id INTEGER) with ('format-version' = 2);
+
+statement ok
+insert into my_datalake.default.rewrite_delete_zero_threshold select range from range(10);
+
+query IIIII
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_delete_zero_threshold', min_file_size_bytes := 0);
+----
+0	0	0	0	0
+
+statement ok
+begin;
+
+query IIIII
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_delete_zero_threshold', min_file_size_bytes := 0,
+	delete_file_threshold := 0);
+----
+1	1	<REGEX>:[1-9][0-9]*	0	0
+
+statement ok
+rollback;
+
+statement ok
+drop table if exists my_datalake.default.rewrite_delete_zero_threshold;
+
+# The default ratio is inclusive: exactly 3 of 10 rows deleted (0.3) qualifies
+statement ok
+drop table if exists my_datalake.default.rewrite_delete_ratio_boundary;
+
+statement ok
+create table my_datalake.default.rewrite_delete_ratio_boundary (id INTEGER) with ('format-version' = 2);
+
+statement ok
+insert into my_datalake.default.rewrite_delete_ratio_boundary select range from range(10);
+
+statement ok
+delete from my_datalake.default.rewrite_delete_ratio_boundary where id < 3;
+
+query IIIII
+call iceberg_rewrite_data_files('my_datalake.default.rewrite_delete_ratio_boundary', min_file_size_bytes := 0);
+----
+1	1	<REGEX>:[1-9][0-9]*	0	1
+
+query II
+select count(*), sum(id) from my_datalake.default.rewrite_delete_ratio_boundary;
+----
+7	42
+
+statement ok
+drop table if exists my_datalake.default.rewrite_delete_ratio_boundary;

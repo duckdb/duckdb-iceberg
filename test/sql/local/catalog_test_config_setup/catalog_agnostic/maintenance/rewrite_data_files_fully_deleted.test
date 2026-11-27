@@ -40,11 +40,18 @@ WHERE status <> 'DELETED' GROUP BY content;
 DATA	2
 POSITION_DELETES	2
 
-# A no-op must not count or remove deletes.
+# With the default delete_ratio_threshold, fully deleted files are selected even below min_input_files,
+# as Iceberg Java's BinPackRewriteFilePlanner does. Roll back so the checks below start from the same state.
+statement ok
+BEGIN;
+
 query IIIII
 CALL iceberg_rewrite_data_files('my_datalake.default.rewrite_fully_deleted');
 ----
-0	0	0	0	0
+2	0	<REGEX>:[1-9][0-9]*	0	2
+
+statement ok
+ROLLBACK;
 
 statement ok
 SET VARIABLE before_rewrite = (
