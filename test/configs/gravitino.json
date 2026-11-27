@@ -94,14 +94,6 @@
 			"paths": [
 				"test/sql/local/catalog_test_config_setup/catalog_interop/irc_catalog_read_deletes.test"
 			]
-		},
-		{
-			"reason": "Gravitino schemas don't carry a 'namespace_id'",
-			"paths": [
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/schema_properties/schema_properties_update.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/schema_properties/schema_properties_update_transaction.test",
-				"test/sql/local/catalog_test_config_setup/catalog_agnostic/schema_properties/schema_properties_update_concurrent_transactions.test"
-			]
 		}
 	]
 }

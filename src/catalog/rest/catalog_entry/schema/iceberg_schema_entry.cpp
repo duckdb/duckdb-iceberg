@@ -32,7 +32,6 @@
 #include "common/iceberg_geography_type.hpp"
 #include "core/metadata/schema/iceberg_field_mapping.hpp"
 #include "iceberg_options.hpp"
-#include "duckdb/common/exception/http_exception.hpp"
 #include "duckdb/logging/logger.hpp"
 
 namespace duckdb {
@@ -183,6 +182,7 @@ void IcebergSchemaEntry::DropEntry(ClientContext &context, DropInfo &info, bool 
 		if (delete_entry) {
 			transaction.InvalidateViewEntry(view_key);
 		} else {
+			transaction.VerifyCanAddRequest(IcebergTransaction::RequestType::VIEW);
 			IcebergTransaction::DeletedViewInfo info;
 			info.namespace_items = namespace_items;
 			info.view_name = entry_name;
@@ -234,8 +234,8 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateView(CatalogTransaction tra
 	auto &context = transaction.GetContext();
 
 	if (info.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT) {
-		throw NotImplementedException(
-		    "CREATE OR REPLACE not supported in DuckDB-Iceberg. Please use separate Drop and Create Statements");
+		throw NotImplementedException("CREATE OR REPLACE not supported for Iceberg views. Run DROP VIEW and CREATE "
+		                              "VIEW in separate transactions");
 	}
 
 	auto existing_entry = GetEntry(transaction, CatalogType::TABLE_ENTRY, info.GetViewName());
@@ -275,6 +275,7 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateView(CatalogTransaction tra
 
 	// Track the view in the transaction
 	auto &iceberg_transaction = GetICTransaction(transaction);
+	iceberg_transaction.VerifyCanAddRequest(IcebergTransaction::RequestType::VIEW);
 	auto view_key = IcebergTable::GetTableKey(catalog.Cast<IcebergCatalog>(), namespace_items,
 	                                          info.GetViewName().GetIdentifierName());
 
@@ -285,11 +286,7 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateView(CatalogTransaction tra
 		view_info->sql = view_info->query->ToString();
 	}
 
-	iceberg_transaction.created_views.erase(view_key);
 	iceberg_transaction.created_views.emplace(view_key, std::move(view_info));
-
-	// A DROP followed by CREATE can replace an entry already bound in this transaction.
-	iceberg_transaction.InvalidateViewEntry(view_key);
 
 	// Return a pointer to an owned entry (avoid dangling pointer)
 	return tables.GetViewEntry(transaction.GetContext(), info.GetViewName().GetIdentifierName());
@@ -435,19 +432,6 @@ FindCurrentSortOrderFieldBySourceId(const IcebergTableMetadata &table_metadata, 
 	return nullptr;
 }
 
-static void ThrowIfColumnReferencedBySortOrder(const IcebergTableMetadata &table_metadata, idx_t column_id,
-                                               const string &column_name, const string &action) {
-	int32_t sort_order_id;
-	auto sort_order_field = FindCurrentSortOrderFieldBySourceId(table_metadata, column_id, sort_order_id);
-	if (!sort_order_field) {
-		return;
-	}
-	throw CatalogException(
-	    "Can't %s column '%s' as it is referenced by sort order %d (transform: %s, direction: %s, null_order: %s)",
-	    action, column_name, sort_order_id, sort_order_field->transform.RawType(), sort_order_field->direction,
-	    sort_order_field->null_order);
-}
-
 //! Table properties that configure a single column. The key ends with the column's full name: the field names on
 //! the path to it joined with '.' (e.g. 's.sf', 'l.element', 'm.key'), the name used to look the setting up on write.
 static constexpr const char *PER_COLUMN_PROPERTY_PREFIXES[] = {
@@ -562,9 +546,88 @@ static void UpdateNameMapping(ClientContext &context, IcebergTable &updated_tabl
 	updated_table.GetMetadataMutable().mappings = std::move(updated_mappings);
 }
 
+//! The fields on the way to the field with this id, outermost first. Empty if the schema has no such field.
+static vector<reference<const IcebergColumnDefinition>> GetFieldPath(const IcebergTableSchema &schema, idx_t field_id) {
+	vector<reference<const IcebergColumnDefinition>> path;
+	auto column_index = schema.TryGetColumnIndexByFieldId(field_id);
+	if (!column_index) {
+		return path;
+	}
+	reference<const IcebergColumnDefinition> column = *schema.columns[column_index->GetPrimaryIndex()];
+	path.push_back(column);
+	for (auto &child_index : column_index->GetChildIndexes()) {
+		column = *column.get().GetChild(child_index.GetPrimaryIndex());
+		path.push_back(column);
+	}
+	return path;
+}
+
+//! The current partition spec, the current sort order and the identifier fields name fields of the schema, so a schema
+//! change that drops one of these fields, or makes an identifier field optional, is refused. The fields are looked up
+//! by id in both schemas, which covers a field that is dropped or made optional through the struct that holds it.
+static void VerifyReferencedFieldsKept(const IcebergTableMetadata &table_metadata, const IcebergTableSchema &old_schema,
+                                       const IcebergTableSchema &new_schema) {
+	//! 'changed' is the column that the statement names, 'field' the field in it that the table relies on
+	auto refuse = [&](const string &action, const IcebergColumnDefinition &changed,
+	                  const IcebergColumnDefinition &field, const string &reason) {
+		auto changed_name = old_schema.GetFullColumnName(static_cast<idx_t>(changed.id));
+		if (changed.id == field.id) {
+			throw CatalogException("Can't %s column '%s' as it is %s", action, changed_name, reason);
+		}
+		throw CatalogException("Can't %s column '%s' as it holds '%s', which is %s", action, changed_name,
+		                       old_schema.GetFullColumnName(static_cast<idx_t>(field.id)), reason);
+	};
+	//! 'path' leads to a field that the table relies on. The column that the statement drops is the outermost field
+	//! on it that is gone.
+	auto verify_not_dropped = [&](const vector<reference<const IcebergColumnDefinition>> &path, const string &reason) {
+		for (auto &column : path) {
+			if (!new_schema.TryGetColumnByFieldId(static_cast<idx_t>(column.get().id))) {
+				refuse("drop", column, path.back(), reason);
+			}
+		}
+	};
+
+	for (auto &partition_field : table_metadata.GetLatestPartitionSpec().GetFields()) {
+		// V1 partition evolution leaves a void field behind when a partition key is removed.
+		if (partition_field.transform.Type() == IcebergTransformType::VOID_TRANSFORM) {
+			continue;
+		}
+		verify_not_dropped(GetFieldPath(old_schema, partition_field.source_id),
+		                   StringUtil::Format("referenced by the current partition spec's field: '%s' (field id: %d)",
+		                                      partition_field.GetPartitionSpecFieldName(),
+		                                      partition_field.partition_field_id));
+	}
+	if (table_metadata.HasSortOrder()) {
+		auto &sort_order = table_metadata.GetLatestSortOrder();
+		for (auto &sort_field : sort_order.fields) {
+			verify_not_dropped(
+			    GetFieldPath(old_schema, static_cast<idx_t>(sort_field.source_id)),
+			    StringUtil::Format("referenced by sort order %d (transform: %s, direction: %s, null_order: %s)",
+			                       sort_order.sort_order_id, sort_field.transform.RawType(), sort_field.direction,
+			                       sort_field.null_order));
+		}
+	}
+	for (auto identifier_field_id : old_schema.identifier_field_ids) {
+		const string reason = "an identifier field";
+		auto path = GetFieldPath(old_schema, static_cast<idx_t>(identifier_field_id));
+		verify_not_dropped(path, reason);
+		//! An identifier field is required, and so is every struct that holds it
+		for (auto &column : path) {
+			auto new_column = new_schema.TryGetColumnByFieldId(static_cast<idx_t>(column.get().id));
+			if (column.get().required && !new_column->required) {
+				refuse("drop NOT NULL on", column, path.back(), reason);
+			}
+		}
+	}
+}
+
 void IntroduceNewSchema(ClientContext &context, IcebergTable &updated_table, IcebergTransactionData &transaction_data,
-                        shared_ptr<IcebergTableSchema> new_schema, bool update_schema_properties) {
+                        shared_ptr<IcebergTableSchema> new_schema, bool is_alter) {
 	auto &old_schema = updated_table.GetMetadataMutable().GetLatestSchema();
+	//! A replacement brings its own partition spec and sort order, ALTER keeps the ones the table has
+	if (is_alter) {
+		VerifyReferencedFieldsKept(updated_table.GetMetadataMutable(), old_schema, *new_schema);
+	}
 	auto &schemas = updated_table.GetMetadataMutable().GetSchemasMutable();
 	auto new_schema_id = static_cast<int32_t>(updated_table.GetMaxSchemaId() + 1);
 	new_schema->schema_id = new_schema_id;
@@ -578,7 +641,7 @@ void IntroduceNewSchema(ClientContext &context, IcebergTable &updated_table, Ice
 	updated_table.GetMetadataMutable().SetCurrentSchemaId(result_schema.schema_id);
 
 	//! ALTER maintains schema-dependent properties, replacement preserves them unless explicitly supplied.
-	if (update_schema_properties) {
+	if (is_alter) {
 		UpdatePerColumnProperties(updated_table, transaction_data, old_schema, result_schema);
 		UpdateNameMapping(context, updated_table, transaction_data, old_schema, result_schema);
 	}
@@ -804,23 +867,13 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 			return;
 		}
 
-		auto &partition_spec = updated_table.GetMetadataMutable().GetLatestPartitionSpec();
-		auto partition_field = partition_spec.TryGetFieldBySourceId(column_id.GetIndex());
-		if (partition_field) {
-			throw CatalogException(
-			    "Can't drop column '%s' as it is referenced by the current partition spec's field: '%s' (field id: %d)",
-			    to_remove_column.GetIdentifierName(), partition_field->GetPartitionSpecFieldName(),
-			    partition_field->partition_field_id);
-		}
-		ThrowIfColumnReferencedBySortOrder(updated_table.GetMetadataMutable(), column_id.GetIndex(),
-		                                   to_remove_column.GetIdentifierName(), "drop");
-
 		if (new_schema->columns.empty()) {
 			throw CatalogException("Cannot drop column: table '%s' only has one column remaining!",
 			                       table_entry.name.GetIdentifierName());
 		}
 
 		IntroduceNewSchema(context, updated_table, transaction_data, new_schema);
+		transaction_data.drops_field = true;
 
 		return;
 	}
@@ -1170,6 +1223,7 @@ void IcebergSchemaEntry::Alter(CatalogTransaction transaction, AlterInfo &info) 
 		}
 		parent.RemoveChild(child->name);
 		IntroduceNewSchema(context, updated_table, transaction_data, new_schema);
+		transaction_data.drops_field = true;
 		return;
 	}
 	default: {
@@ -1202,9 +1256,6 @@ pair<int32_t, int32_t> IcebergSchemaEntry::MoveColumn(ClientContext &context, Ic
 	auto current_schema_id = previous_schema_id;
 	ApplyTableUpdate(guard, table.table_info, irc_transaction, [&](IcebergTable &updated_table) {
 		auto &transaction_data = updated_table.GetOrCreateTransactionData(irc_transaction);
-		//! A move that restores an earlier order only sets the current schema, so the commit has to assert the schema
-		//! it replaces: otherwise it would undo a schema change another writer committed in the meantime
-		transaction_data.TableAddAssertCurrentSchemaId();
 		IntroduceNewSchema(context, updated_table, transaction_data, new_schema);
 		current_schema_id = updated_table.GetMetadata().GetCurrentSchemaId();
 	});
@@ -1286,26 +1337,5 @@ IcebergTableSet &IcebergSchemaEntry::GetCatalogSet(CatalogType type) {
 		throw InternalException("Type not supported for GetCatalogSet");
 	}
 }
-
-void IcebergSchemaEntry::LoadProperties(ClientContext &context) {
-	if (schema_info.properties_loaded) {
-		// not needed
-		return;
-	}
-	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
-
-	auto get_namespace_result = IRCAPI::GetNamespace(context, ic_catalog, *this);
-	if (get_namespace_result.error_) {
-		throw HTTPException(StringUtil::Format("GetNamespace endpoint returned response code %s with message \"%s\"",
-		                                       EnumUtil::ToString(get_namespace_result.status_),
-		                                       get_namespace_result.error_->_error.message));
-	}
-
-	if (auto &properties = get_namespace_result.result_->properties) {
-		schema_info.properties = *properties;
-	}
-	schema_info.properties_loaded = true;
-	// TODO: eventually set up caching for this response?
-};
 
 } // namespace duckdb

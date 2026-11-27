@@ -20,6 +20,7 @@
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/bound_result_modifier.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
+#include "duckdb/common/operator/string_cast.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/type_visitor.hpp"
 #include "duckdb/common/vector_operations/unary_executor.hpp"
@@ -146,10 +147,6 @@ static bool IsTopLevelColumnSourceId(const IcebergTableSchema &schema, idx_t sou
 	return column_index.ChildIndexCount() == 0;
 }
 
-static string GetColumnNameBySourceId(const IcebergTableSchema &schema, idx_t source_id) {
-	return schema.GetColumnByFieldId(source_id).name;
-}
-
 //! SPEC (Appendix A): `unknown` has no physical Parquet type and must be omitted from data files.
 static bool IsWrittenToDataFile(const LogicalType &type) {
 	return type.id() != LogicalTypeId::SQLNULL;
@@ -217,7 +214,7 @@ static Value GetWrittenFieldIdValue(const IcebergColumnDefinition &column) {
 
 //! Whether every partition value is a top-level written column, so the copy operator can partition on the
 //! columns themselves. Transforms, nested sources and columns absent from the data file (unknown) need a
-//! computed partition value instead.
+//! computed partition value instead. Floating-point identity fields need a key that distinguishes signed zeros.
 static bool CanWriteIdentityPartitionsDirectly(const IcebergPartitionSpec &spec, const IcebergTableSchema &schema) {
 	for (auto &field : spec.fields) {
 		if (field.transform.Type() == IcebergTransformType::VOID_TRANSFORM) {
@@ -229,7 +226,8 @@ static bool CanWriteIdentityPartitionsDirectly(const IcebergPartitionSpec &spec,
 		if (!IsTopLevelColumnSourceId(schema, field.source_id)) {
 			return false;
 		}
-		if (!IsWrittenToDataFile(schema.GetColumnByFieldId(field.source_id).type)) {
+		auto &type = schema.GetColumnByFieldId(field.source_id).type;
+		if (!IsWrittenToDataFile(type) || type.IsFloating()) {
 			return false;
 		}
 	}
@@ -262,47 +260,30 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 		auto table_current_schema_id = table_metadata.GetCurrentSchemaId();
 		auto &ic_schema = table_metadata.GetSchemaFromId(table_current_schema_id);
 
-		auto ic_partition_info = table_metadata.GetLatestPartitionSpec();
-
-		// Build a map from partition column name to its partition spec field
-		// To be used later to add partitioning info to the data file
-		case_insensitive_map_t<reference<const IcebergPartitionSpecField>> partition_colname_to_field;
-
-		// The copy operator reports a partition value under the name of the column it partitioned on: a computed
-		// column named after the partition field, or the written column itself when every field is the identity
-		// of a top-level column (see BuildWriteLayout).
-		if (!CanWriteIdentityPartitionsDirectly(ic_partition_info, ic_schema)) {
-			for (auto &partition_field : ic_partition_info.fields) {
-				partition_colname_to_field.emplace(partition_field.GetPartitionSpecFieldName(), partition_field);
-			}
-		} else {
-			for (auto &partition_field : ic_partition_info.fields) {
-				auto actual_col_name = GetColumnNameBySourceId(ic_schema, partition_field.source_id);
-				partition_colname_to_field.emplace(actual_col_name, partition_field);
+		const auto &spec = table_metadata.GetLatestPartitionSpec();
+		const bool direct = CanWriteIdentityPartitionsDirectly(spec, ic_schema);
+		case_insensitive_map_t<Value> copy_values;
+		if (!partition_values.IsNull()) {
+			for (auto &entry : MapValue::GetChildren(partition_values)) {
+				auto &pair = StructValue::GetChildren(entry);
+				copy_values.emplace(StringValue::Get(pair[0]), pair[1]);
 			}
 		}
-
-		if (!partition_values.IsNull()) {
-			// Populate partition_info from the partition values in the chunk
-			auto &partition_children = MapValue::GetChildren(partition_values);
-			for (auto &partition_val : partition_children) {
-				auto &struct_val = StructValue::GetChildren(partition_val);
-				auto &partition_name = StringValue::Get(struct_val[0]);
-
-				auto field_it = partition_colname_to_field.find(partition_name);
-				D_ASSERT(field_it != partition_colname_to_field.end());
-				auto &partition_field = field_it->second.get();
-				auto source_type = ic_schema.GetColumnTypeFromFieldId(partition_field.source_id);
-
-				IcebergPartitionInfo info;
-				info.field_id = partition_field.partition_field_id;
-				if (!struct_val[1].IsNull()) {
-					info.value = Value(StringValue::Get(struct_val[1]));
-				} else {
-					info.value = Value();
-				}
-				data_file.partition_info.push_back(std::move(info));
+		for (auto &field : spec.fields) {
+			// COPY omits void keys. Their slots in the Iceberg partition tuple are always null.
+			IcebergPartitionInfo info {field.partition_field_id, Value()};
+			if (field.transform.Type() != IcebergTransformType::VOID_TRANSFORM) {
+				// Direct identity partitions use the written column name. Computed keys use the partition label.
+				auto &name =
+				    direct ? ic_schema.GetColumnByFieldId(field.source_id).name : field.GetPartitionSpecFieldName();
+				auto &text = copy_values.at(name);
+				auto &source_type = ic_schema.GetColumnTypeFromFieldId(field.source_id);
+				// Decode COPY's text in the write schema. After FLOAT -> DOUBLE, for example, parsing "0.1"
+				// as DOUBLE would give a different value than widening the FLOAT that was written.
+				auto bounds_type = field.transform.GetBoundsType(source_type);
+				info.value = text.DefaultTryCastAs(bounds_type, nullptr, true).value_or(text);
 			}
+			data_file.partition_info.push_back(std::move(info));
 		}
 		// Partitioning alone does not imply sorted data. Only advertise the explicit sort order
 		// enforced by PlanCopyForInsert (PhysicalOrder or the partitioned copy writer).
@@ -495,6 +476,15 @@ static bool CastTimestampNsToTimestampFloor(Vector &source, Vector &result, idx_
 			return timestamp_t(input.value);
 		}
 		return timestamp_t(IcebergNanosToMicrosFloor(input.value));
+	});
+	return true;
+}
+
+template <class T>
+static bool CastFloatingPartitionKey(Vector &source, Vector &result, idx_t count, CastParameters &) {
+	auto &heap = StringVector::GetStringHeap(result);
+	UnaryExecutor::Execute<T, string_t>(source, result, count, [&](T value) {
+		return Value::IsNan(value) ? string_t("nan") : StringCast::Operation(value, heap);
 	});
 	return true;
 }
@@ -715,6 +705,23 @@ static OrderByNullType GetDuckDBNullOrder(const string &null_order) {
 	throw NotImplementedException("Unsupported Iceberg null order '%s'", null_order);
 }
 
+template <class FLOAT, class UINT>
+static bool CastFloatingSortKey(Vector &source, Vector &result, idx_t count, CastParameters &) {
+	static_assert(sizeof(FLOAT) == sizeof(UINT), "Floating-point sort keys must match the input width");
+	UnaryExecutor::Execute<FLOAT, UINT>(source, result, count, [](FLOAT value) {
+		constexpr auto sign_bit = UINT(1) << (sizeof(UINT) * 8 - 1);
+		auto bits = Load<UINT>(const_data_ptr_cast(&value));
+		bool negative = (bits & sign_bit) != 0;
+		if (Value::IsNan(value)) {
+			// NaNs of each sign tie, beyond their respective infinity.
+			return negative ? NumericLimits<UINT>::Minimum() : NumericLimits<UINT>::Maximum();
+		}
+		// Reverse the negative bit patterns and move nonnegative ones above them, putting -0 just before +0.
+		return negative ? ~bits : (bits ^ sign_bit);
+	});
+	return true;
+}
+
 static void GenerateSortOrderExpressions(ClientContext &context, const IcebergCopyInput &copy_input,
                                          IcebergCopyOptions &result) {
 	if (!copy_input.table_metadata.HasSortOrder()) {
@@ -726,6 +733,13 @@ static void GenerateSortOrderExpressions(ClientContext &context, const IcebergCo
 	}
 	for (auto &field : sort_order.fields) {
 		auto expr = GetTransformExpression(context, copy_input, field.source_id, field.transform, "sorting");
+		if (expr->GetReturnType().id() == LogicalTypeId::FLOAT) {
+			expr = BoundCastExpression::Create(std::move(expr), LogicalType::UINTEGER,
+			                                   BoundCastInfo(CastFloatingSortKey<float, uint32_t>));
+		} else if (expr->GetReturnType().id() == LogicalTypeId::DOUBLE) {
+			expr = BoundCastExpression::Create(std::move(expr), LogicalType::UBIGINT,
+			                                   BoundCastInfo(CastFloatingSortKey<double, uint64_t>));
+		}
 		result.order_columns.emplace_back(GetDuckDBOrderType(field.direction), GetDuckDBNullOrder(field.null_order),
 		                                  std::move(expr));
 	}
@@ -889,6 +903,15 @@ static IcebergWriteLayout BuildWriteLayout(ClientContext &context, const Iceberg
 		write_column.name = field.GetPartitionSpecFieldName();
 		write_column.source =
 		    GetTransformExpression(context, copy_input, field.source_id, field.transform, "partitioning");
+		if (write_column.source->GetReturnType().IsFloating()) {
+			// COPY groups floating keys using SQL equality. Route by round-trip text with a single NaN spelling;
+			// the Parquet column stays numeric.
+			auto cast = write_column.source->GetReturnType().id() == LogicalTypeId::FLOAT
+			                ? CastFloatingPartitionKey<float>
+			                : CastFloatingPartitionKey<double>;
+			write_column.source =
+			    BoundCastExpression::Create(std::move(write_column.source), LogicalType::VARCHAR, BoundCastInfo(cast));
+		}
 		write_column.type = write_column.source->GetReturnType();
 		write_column.is_computed_partition_value = true;
 		write_column.transform = field.transform.Type();

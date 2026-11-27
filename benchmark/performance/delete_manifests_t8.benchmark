@@ -1,0 +1,6 @@
+# name: benchmark/performance/delete_manifests_t8.benchmark
+# description: first scan of a table with eight delete manifests of 40,000 entries, 8 threads
+# group: [performance]
+
+template benchmark/performance/delete_manifests.benchmark.in
+THREADS=8

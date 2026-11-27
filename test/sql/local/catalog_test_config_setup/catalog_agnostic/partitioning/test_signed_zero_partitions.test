@@ -1,0 +1,97 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/partitioning/test_signed_zero_partitions.test
+# description: Identity partition writes preserve signed zero and publish bounds that include both signs
+# group: [partitioning]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+SET threads = 1;
+
+statement ok
+SET iceberg_use_server_side_scan_planning = false;
+
+foreach type FLOAT DOUBLE
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.signed_zero_parts;
+
+statement ok
+CREATE TABLE my_datalake.default.signed_zero_parts (id INT, p {type}, metric {type}) PARTITIONED BY (p);
+
+# Both signs arrive in one insert. The metric column contains both signs in opposite orders in the two files.
+statement ok
+INSERT INTO my_datalake.default.signed_zero_parts VALUES
+	(1, '-0.0', '0.0'), (2, '0.0', '-0.0'), (3, '-0.0', '-0.0'), (4, '0.0', '0.0'),
+	(5, 'NaN', NULL), (6, -'NaN'::{type}, NULL), (7, NULL, NULL);
+
+query TI
+SELECT CASE WHEN partition.p IS NULL THEN 'null' WHEN isnan(partition.p) THEN 'nan'
+            WHEN signbit(partition.p) THEN 'negative' ELSE 'positive' END AS part, record_count
+FROM iceberg_partitions('my_datalake.default.signed_zero_parts') ORDER BY part;
+----
+nan	2
+negative	2
+null	1
+positive	2
+
+query IIII
+SELECT signbit(lower_bound::{type}), signbit(upper_bound::{type}), contains_nan, contains_null
+FROM iceberg_partition_stats('my_datalake.default.signed_zero_parts');
+----
+true	false	true	true
+
+query III
+SELECT count(*), bool_and(signbit(lower_bound::{type})), bool_and(NOT signbit(upper_bound::{type}))
+FROM iceberg_column_stats('my_datalake.default.signed_zero_parts')
+WHERE column_name = 'metric' AND lower_bound IS NOT NULL;
+----
+2	true	true
+
+# SQL equality and inclusive ranges must still visit both partitions.
+foreach zero 0.0 -0.0
+
+query II
+SELECT list(id ORDER BY id) FILTER (WHERE signbit(p)), list(id ORDER BY id) FILTER (WHERE NOT signbit(p))
+FROM my_datalake.default.signed_zero_parts WHERE p = '{zero}'::{type};
+----
+[1, 3]	[2, 4]
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.signed_zero_parts
+WHERE p >= '{zero}'::{type} AND p <= '{zero}'::{type};
+----
+[1, 2, 3, 4]
+
+endloop
+
+statement ok
+DROP TABLE my_datalake.default.signed_zero_parts;
+
+endloop
+
+# A nested identity source uses a computed key in a composite spec. Ordinary extrema still bound both zeros.
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.nested_zero_parts;
+
+statement ok
+CREATE TABLE my_datalake.default.nested_zero_parts (k INT, s STRUCT(p DOUBLE)) PARTITIONED BY (k, s.p);
+
+statement ok
+INSERT INTO my_datalake.default.nested_zero_parts
+SELECT 1, {p: value::DOUBLE} FROM (VALUES ('-1'), ('0.0'), ('-0.0'), ('1')) t(value);
+
+query II
+SELECT count(*), max(record_count) FROM iceberg_partitions('my_datalake.default.nested_zero_parts');
+----
+4	1
+
+query RR
+SELECT lower_bound::DOUBLE, upper_bound::DOUBLE FROM iceberg_partition_stats('my_datalake.default.nested_zero_parts')
+WHERE partition_field_type = 'DOUBLE';
+----
+-1.0	1.0
+
+statement ok
+DROP TABLE my_datalake.default.nested_zero_parts;

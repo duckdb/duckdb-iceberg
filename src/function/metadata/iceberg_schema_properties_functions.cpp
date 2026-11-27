@@ -156,38 +156,20 @@ static void SetIcebergSchemaPropertiesFunction(ClientContext &context, TableFunc
 		return;
 	}
 
-	auto iceberg_schema = bind_data.iceberg_schema;
-	iceberg_schema->LoadProperties(context);
-
-	// reflect changes to IcebergSchemaEntry
-	for (auto property : bind_data.properties) {
-		iceberg_schema->schema_info.properties[property.first] = property.second;
-	}
-
-	// populate removals to be sent to IRC API
-	auto &iceberg_transaction = IcebergTransaction::Get(context, iceberg_schema->catalog);
-	auto schema_key = iceberg_schema->GetSchemaKey();
-	if (iceberg_transaction.schema_property_updates.find(schema_key) ==
-	    iceberg_transaction.schema_property_updates.end()) {
-		// not present, create one
-		auto properties = SchemaPropertyUpdates();
-		properties.updates = bind_data.properties;
-		iceberg_transaction.schema_property_updates[schema_key] = std::move(properties);
-	} else {
-		auto &schema_property_updates = iceberg_transaction.schema_property_updates[schema_key];
-		auto &removals = schema_property_updates.removals;
-		auto &updates = schema_property_updates.updates;
-		for (auto &property : bind_data.properties) {
-			if (removals.find(property.first) != removals.end()) {
-				removals.erase(property.first);
-			}
-			updates[property.first] = property.second;
-		}
+	auto &schema = *bind_data.iceberg_schema;
+	auto &transaction = IcebergTransaction::Get(context, schema.catalog);
+	lock_guard<mutex> guard(transaction.table_update_lock);
+	auto &pending = transaction.GetOrCreateSchemaPropertyUpdates(schema.name.GetIdentifierName());
+	auto &properties = transaction.GetSchemaProperties(context, schema);
+	for (const auto &property : bind_data.properties) {
+		pending.removals.erase(property.first);
+		pending.updates[property.first] = property.second;
+		properties[property.first] = property.second;
 	}
 
 	global_state.properties_set = true;
 	// set success output, failure happens during transaction commit.
-	FlatVector::GetDataMutable<int64_t>(output.data[0])[0] = iceberg_schema->schema_info.properties.size();
+	FlatVector::GetDataMutable<int64_t>(output.data[0])[0] = properties.size();
 	output.SetChildCardinality(1);
 }
 
@@ -203,41 +185,20 @@ static void RemoveIcebergSchemaPropertiesFunction(ClientContext &context, TableF
 		return;
 	}
 
-	auto iceberg_schema = bind_data.iceberg_schema;
-	iceberg_schema->LoadProperties(context);
-
-	auto schema_key = iceberg_schema->GetSchemaKey();
-
-	// reflect changes to IcebergSchemaEntry
-	for (auto property_to_remove : bind_data.remove_properties) {
-		iceberg_schema->schema_info.properties.erase(property_to_remove);
-	}
-
-	// populate removals to be sent to IRC API
-	auto &iceberg_transaction = IcebergTransaction::Get(context, iceberg_schema->catalog);
-	if (iceberg_transaction.schema_property_updates.find(schema_key) ==
-	    iceberg_transaction.schema_property_updates.end()) {
-		// not present, create one
-		auto properties = SchemaPropertyUpdates();
-		properties.removals = bind_data.remove_properties;
-		iceberg_transaction.schema_property_updates[schema_key] = properties;
-
-	} else {
-		auto &schema_property_updates = iceberg_transaction.schema_property_updates[schema_key];
-		auto &removals = schema_property_updates.removals;
-		auto &updates = schema_property_updates.updates;
-
-		for (auto &property_to_remove : bind_data.remove_properties) {
-			if (updates.find(property_to_remove) != updates.end()) {
-				updates.erase(property_to_remove);
-			}
-			removals.insert(property_to_remove);
-		}
+	auto &schema = *bind_data.iceberg_schema;
+	auto &transaction = IcebergTransaction::Get(context, schema.catalog);
+	lock_guard<mutex> guard(transaction.table_update_lock);
+	auto &pending = transaction.GetOrCreateSchemaPropertyUpdates(schema.name.GetIdentifierName());
+	auto &properties = transaction.GetSchemaProperties(context, schema);
+	for (const auto &key : bind_data.remove_properties) {
+		pending.updates.erase(key);
+		pending.removals.insert(key);
+		properties.erase(key);
 	}
 
 	global_state.properties_removed = true;
 	// set success output, failure happens during transaction commit.
-	FlatVector::GetDataMutable<int64_t>(output.data[0])[0] = iceberg_schema->schema_info.properties.size();
+	FlatVector::GetDataMutable<int64_t>(output.data[0])[0] = properties.size();
 	output.SetChildCardinality(1);
 }
 
@@ -248,18 +209,11 @@ static void GetIcebergSchemaPropertiesFunction(ClientContext &context, TableFunc
 	if (!bind_data.iceberg_schema) {
 		return;
 	}
-	auto iceberg_schema = bind_data.iceberg_schema;
-	iceberg_schema->LoadProperties(context);
-
-	auto schema_key = iceberg_schema->GetSchemaKey();
-	auto &schema_properties = iceberg_schema->schema_info.properties;
-
-	if (schema_properties.empty()) {
-		output.SetChildCardinality(0);
-		return;
-	}
 	if (!global_state.all_properties_initialized) {
-		for (auto &property : schema_properties) {
+		auto &schema = *bind_data.iceberg_schema;
+		auto &transaction = IcebergTransaction::Get(context, schema.catalog);
+		lock_guard<mutex> guard(transaction.table_update_lock);
+		for (auto &property : transaction.GetSchemaProperties(context, schema)) {
 			global_state.all_properties.push_back(make_pair(property.first, property.second));
 		}
 		global_state.all_properties_initialized = true;

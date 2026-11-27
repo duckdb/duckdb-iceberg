@@ -8,6 +8,12 @@ include test/sql/init_requires
 
 require json
 
+statement ok
+SET enable_external_file_cache=false;
+
+statement ok
+SET iceberg_enable_manifest_cache=false;
+
 # DuckDB writes one position delete file per data file, so delete files that several data files share, as
 # other writers produce them, need explicit manifests (as in rewrite_shared_deletes.test).
 statement ok
@@ -88,6 +94,11 @@ SELECT count(*), count(*) FILTER (WHERE size > 0 AND num_rows > 0) FROM dfrt_fil
 99	98
 
 statement ok
+CREATE TABLE dfrt_delete_entries AS
+SELECT *, (row_number() OVER (ORDER BY name) - 1) % 3 AS manifest
+FROM dfrt_files WHERE name NOT LIKE 'dfrt_data_%';
+
+statement ok
 COPY (
 	SELECT 1::INTEGER AS status, 11::BIGINT AS snapshot_id, 9::BIGINT AS sequence_number,
 		11::BIGINT AS file_sequence_number,
@@ -110,6 +121,10 @@ COPY (
 	}
 );
 
+# Distribute shared, file-scoped, and equality deletes across three manifests, so opening a data file
+# first shares the manifest read tasks and then shares the delete-file read tasks.
+loop manifest 0 3
+
 statement ok
 COPY (
 	SELECT 1::INTEGER AS status, 10::BIGINT AS snapshot_id, 10::BIGINT AS sequence_number,
@@ -128,8 +143,8 @@ COPY (
 					THEN [getvariable('dfrt_field_ids').p, getvariable('dfrt_field_ids').id]
 					ELSE [getvariable('dfrt_field_ids').id] END END
 		} AS data_file
-	FROM dfrt_files WHERE name NOT LIKE 'dfrt_data_%' ORDER BY name
-) TO '{TEST_DIR}/dfrt_deletes.avro' (
+	FROM dfrt_delete_entries WHERE manifest = {manifest} ORDER BY name
+) TO '{TEST_DIR}/dfrt_deletes_{manifest}.avro' (
 	FORMAT AVRO,
 	METADATA {'schema-id': '0', 'partition-spec-id': '0', 'format-version': '2', 'content': 'deletes'},
 	FIELD_IDS {
@@ -139,6 +154,8 @@ COPY (
 			referenced_data_file: 143, equality_ids: {__duckdb_field_id: 135, list: 136}}
 	}
 );
+
+endloop
 
 statement ok
 COPY (
@@ -152,7 +169,12 @@ COPY (
 		0::INTEGER AS deleted_files_count,
 		rows::BIGINT AS added_rows_count, 0::BIGINT AS existing_rows_count,
 		0::BIGINT AS deleted_rows_count
-	FROM (VALUES ('data', 0, 11, 12, 36000), ('deletes', 1, 10, 87, 7500)) t(kind, content, seq, files, rows)
+	FROM (
+		SELECT 'data' AS kind, 0 AS content, 11 AS seq, 12 AS files, 36000 AS rows
+		UNION ALL
+		SELECT 'deletes_' || manifest, 1, 10, count(*), sum(num_rows)
+		FROM dfrt_delete_entries GROUP BY manifest
+	) t
 ) TO '{TEST_DIR}/dfrt_list.avro' (
 	FORMAT AVRO,
 	FIELD_IDS {
@@ -174,13 +196,13 @@ SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/
 ----
 200
 
-query TI
-SELECT content, count(*) FROM iceberg_metadata(my_datalake.default.delete_files_read_tasks)
+query TII
+SELECT content, count(DISTINCT manifest_path), count(*) FROM iceberg_metadata(my_datalake.default.delete_files_read_tasks)
 WHERE status <> 'DELETED' GROUP BY ALL ORDER BY ALL;
 ----
-DATA	12
-EQUALITY_DELETES	6
-POSITION_DELETES	81
+DATA	1	12
+EQUALITY_DELETES	3	6
+POSITION_DELETES	3	81
 
 statement ok
 SET iceberg_use_server_side_scan_planning=false;
@@ -210,6 +232,12 @@ query II
 SELECT count(*), sum(id) FROM dfrt_expected;
 ----
 29065	15889569420
+
+# Cover both physical manifest reads and cached manifests under each scheduler configuration.
+foreach manifest_cache false true
+
+statement ok
+SET iceberg_enable_manifest_cache={manifest_cache};
 
 # without async threads the workers that open the data files run every read task themselves
 foreach threads 1 4
@@ -259,6 +287,8 @@ FROM iceberg_scan_tasks(getvariable('dfrt_tasks'));
 
 statement ok
 COMMIT;
+
+endloop
 
 endloop
 
