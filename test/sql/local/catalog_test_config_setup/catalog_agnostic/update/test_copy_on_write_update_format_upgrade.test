@@ -1,0 +1,65 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/update/test_copy_on_write_update_format_upgrade.test
+# description: An UPDATE prepared on V2 assigns lineage on the first V3 rewrite after a format upgrade
+# group: [update]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+USE my_datalake.default;
+
+statement ok
+DROP TABLE IF EXISTS cow_update_upgrade;
+
+statement ok
+CREATE TABLE cow_update_upgrade (k INTEGER, v INTEGER)
+WITH ('format-version' = '2', 'write.update.mode' = 'copy-on-write');
+
+# The other file survives the upgrade with its original data sequence number.
+statement ok
+INSERT INTO cow_update_upgrade VALUES (10, 0);
+
+statement ok
+INSERT INTO cow_update_upgrade VALUES (20, 0);
+
+statement ok
+PREPARE bump_value AS UPDATE cow_update_upgrade SET v = v + 1 WHERE k = 20;
+
+query I
+EXECUTE bump_value;
+----
+1
+
+statement ok
+BEGIN;
+
+statement ok
+ALTER TABLE cow_update_upgrade SET ('format-version' = 3);
+
+query I
+EXECUTE bump_value;
+----
+1
+
+statement ok
+COMMIT;
+
+query III
+SELECT k, v, _last_updated_sequence_number FROM cow_update_upgrade ORDER BY k;
+----
+10	0	1
+20	2	4
+
+query I
+SELECT count(DISTINCT _row_id) FROM cow_update_upgrade;
+----
+2
+
+statement ok
+DEALLOCATE bump_value;
+
+statement ok
+DROP TABLE cow_update_upgrade;

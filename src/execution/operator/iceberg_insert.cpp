@@ -147,10 +147,6 @@ static bool IsTopLevelColumnSourceId(const IcebergTableSchema &schema, idx_t sou
 	return column_index.ChildIndexCount() == 0;
 }
 
-static string GetColumnNameBySourceId(const IcebergTableSchema &schema, idx_t source_id) {
-	return schema.GetColumnByFieldId(source_id).name;
-}
-
 //! SPEC (Appendix A): `unknown` has no physical Parquet type and must be omitted from data files.
 static bool IsWrittenToDataFile(const LogicalType &type) {
 	return type.id() != LogicalTypeId::SQLNULL;
@@ -264,44 +260,30 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 		auto table_current_schema_id = table_metadata.GetCurrentSchemaId();
 		auto &ic_schema = table_metadata.GetSchemaFromId(table_current_schema_id);
 
-		auto ic_partition_info = table_metadata.GetLatestPartitionSpec();
-
-		// Build a map from partition column name to its partition spec field
-		// To be used later to add partitioning info to the data file
-		case_insensitive_map_t<reference<const IcebergPartitionSpecField>> partition_colname_to_field;
-
-		// The copy operator reports a partition value under the name of the column it partitioned on: a computed
-		// column named after the partition field, or the written column itself when every field is the identity
-		// of a top-level column (see BuildWriteLayout).
-		if (!CanWriteIdentityPartitionsDirectly(ic_partition_info, ic_schema)) {
-			for (auto &partition_field : ic_partition_info.fields) {
-				partition_colname_to_field.emplace(partition_field.GetPartitionSpecFieldName(), partition_field);
-			}
-		} else {
-			for (auto &partition_field : ic_partition_info.fields) {
-				auto actual_col_name = GetColumnNameBySourceId(ic_schema, partition_field.source_id);
-				partition_colname_to_field.emplace(actual_col_name, partition_field);
+		const auto &spec = table_metadata.GetLatestPartitionSpec();
+		const bool direct = CanWriteIdentityPartitionsDirectly(spec, ic_schema);
+		case_insensitive_map_t<Value> copy_values;
+		if (!partition_values.IsNull()) {
+			for (auto &entry : MapValue::GetChildren(partition_values)) {
+				auto &pair = StructValue::GetChildren(entry);
+				copy_values.emplace(StringValue::Get(pair[0]), pair[1]);
 			}
 		}
-
-		if (!partition_values.IsNull()) {
-			// Populate partition_info from the partition values in the chunk
-			auto &partition_children = MapValue::GetChildren(partition_values);
-			for (auto &partition_val : partition_children) {
-				auto &struct_val = StructValue::GetChildren(partition_val);
-				auto &partition_name = StringValue::Get(struct_val[0]);
-
-				auto field_it = partition_colname_to_field.find(partition_name);
-				D_ASSERT(field_it != partition_colname_to_field.end());
-				auto &partition_field = field_it->second.get();
-				auto &source_type = ic_schema.GetColumnTypeFromFieldId(partition_field.source_id);
+		for (auto &field : spec.fields) {
+			// COPY omits void keys. Their slots in the Iceberg partition tuple are always null.
+			IcebergPartitionInfo info {field.partition_field_id, Value()};
+			if (field.transform.Type() != IcebergTransformType::VOID_TRANSFORM) {
+				// Direct identity partitions use the written column name. Computed keys use the partition label.
+				auto &name =
+				    direct ? ic_schema.GetColumnByFieldId(field.source_id).name : field.GetPartitionSpecFieldName();
+				auto &text = copy_values.at(name);
+				auto &source_type = ic_schema.GetColumnTypeFromFieldId(field.source_id);
 				// Decode COPY's text in the write schema. After FLOAT -> DOUBLE, for example, parsing "0.1"
 				// as DOUBLE would give a different value than widening the FLOAT that was written.
-				auto &text = struct_val[1];
-				auto bounds_type = partition_field.transform.GetBoundsType(source_type);
-				auto value = text.DefaultTryCastAs(bounds_type, nullptr, true).value_or(text);
-				data_file.partition_info.push_back({partition_field.partition_field_id, std::move(value)});
+				auto bounds_type = field.transform.GetBoundsType(source_type);
+				info.value = text.DefaultTryCastAs(bounds_type, nullptr, true).value_or(text);
 			}
+			data_file.partition_info.push_back(std::move(info));
 		}
 		// Partitioning alone does not imply sorted data. Only advertise the explicit sort order
 		// enforced by PlanCopyForInsert (PhysicalOrder or the partitioned copy writer).

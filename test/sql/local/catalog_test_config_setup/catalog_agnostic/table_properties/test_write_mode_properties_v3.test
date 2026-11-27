@@ -1,5 +1,5 @@
 # name: test/sql/local/catalog_test_config_setup/catalog_agnostic/table_properties/test_write_mode_properties_v3.test
-# description: Copy-on-write modes reject UPDATE and modifying MERGE actions on v3 tables while allowing appends
+# description: Copy-on-write modes reject modifying MERGE actions on v3 tables while allowing appends (copy-on-write UPDATE: test_copy_on_write_update_v3.test)
 # group: [table_properties]
 
 require-env CATALOG_TEST_CONFIG_SETUP
@@ -22,11 +22,6 @@ INSERT INTO my_datalake.default.write_modes_v3 VALUES (1, 'a'), (2, 'b'), (3, 'c
 statement ok
 CALL set_iceberg_table_properties(my_datalake.default.write_modes_v3,
     {'write.update.mode': 'copy-on-write', 'write.delete.mode': 'copy-on-write', 'write.merge.mode': 'copy-on-write'});
-
-statement error
-UPDATE my_datalake.default.write_modes_v3 SET v = 'z' WHERE id = 2;
-----
-<REGEX>:.*Not implemented Error.*write.update.mode.*copy-on-write.*
 
 statement error
 MERGE INTO my_datalake.default.write_modes_v3 AS t USING (SELECT 2 AS id) AS s ON t.id = s.id

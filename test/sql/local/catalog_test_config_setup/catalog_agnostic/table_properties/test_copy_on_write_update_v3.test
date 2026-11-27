@@ -1,0 +1,345 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/table_properties/test_copy_on_write_update_v3.test
+# description: A copy-on-write UPDATE on a v3 table keeps the row lineage of the rows it rewrites, and gives each updated row its own row ID and the sequence number of the update
+# group: [table_properties]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+require-env METADATA_FILE_READ_SUPPORT
+
+require-env SNAPSHOT_HISTORY_SUPPORT
+
+require-env TIMETRAVEL_SUPPORT
+
+include test/sql/init_requires
+
+require core_functions
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cow_update_v3;
+
+statement ok
+CREATE TABLE my_datalake.default.cow_update_v3 (id INTEGER, v VARCHAR) WITH (
+    'format-version' = '3',
+    'write.update.mode' = 'copy-on-write'
+);
+
+# two inserts, so two data files: row IDs 0-2 at sequence number 1, and 3-4 at sequence number 2
+
+statement ok
+INSERT INTO my_datalake.default.cow_update_v3 VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+statement ok
+INSERT INTO my_datalake.default.cow_update_v3 VALUES (4, 'd'), (5, 'e');
+
+query I
+UPDATE my_datalake.default.cow_update_v3 SET v = 'B' WHERE id = 2;
+----
+1
+
+# the updated row keeps its row ID and takes the sequence number of the update; the other rows of the rewritten
+# file keep both
+
+query IIII
+SELECT id, v, _row_id, _last_updated_sequence_number FROM my_datalake.default.cow_update_v3 ORDER BY id;
+----
+1	a	0	1
+2	B	1	3
+3	c	2	1
+4	d	3	2
+5	e	4	2
+
+# the file is replaced in an overwrite snapshot, and no deletion vector is written
+
+query T
+SELECT operation FROM iceberg_snapshots(my_datalake.default.cow_update_v3) ORDER BY sequence_number DESC LIMIT 1;
+----
+overwrite
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.cow_update_v3) WHERE content != 'DATA';
+----
+0
+
+# the rewritten file stores the lineage of its rows. The updated row's sequence number is written as NULL, so it
+# inherits the sequence number of the file
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE cow_update_v3_file = (SELECT filename FROM my_datalake.default.cow_update_v3 WHERE id = 1);
+
+query III
+SELECT id, _row_id, _last_updated_sequence_number FROM read_parquet(getvariable('cow_update_v3_file')) ORDER BY id;
+----
+1	0	1
+2	1	NULL
+3	2	1
+
+statement ok
+COMMIT;
+
+# the rewritten file still takes a fresh range of row IDs, so a later insert does not reuse an ID
+
+query I
+SELECT metadata."next-row-id"::BIGINT FROM iceberg_load_table_response('my_datalake.default.cow_update_v3');
+----
+8
+
+statement ok
+INSERT INTO my_datalake.default.cow_update_v3 VALUES (6, 'f');
+
+query III
+SELECT _row_id, _last_updated_sequence_number, (SELECT count(DISTINCT _row_id) FROM my_datalake.default.cow_update_v3)
+FROM my_datalake.default.cow_update_v3 WHERE id = 6;
+----
+8	4	6
+
+# the previous snapshot still reads the rows as they were
+
+statement ok
+SET VARIABLE cow_update_v3_previous = (
+    SELECT snapshot_id FROM iceberg_snapshots(my_datalake.default.cow_update_v3) WHERE sequence_number = 2);
+
+query IIII
+SELECT id, v, _row_id, _last_updated_sequence_number
+FROM my_datalake.default.cow_update_v3 AT (VERSION => getvariable('cow_update_v3_previous')) ORDER BY id;
+----
+1	a	0	1
+2	b	1	1
+3	c	2	1
+4	d	3	2
+5	e	4	2
+
+# new values computed from the row, across both files: each updated row keeps its own row ID
+
+query I
+UPDATE my_datalake.default.cow_update_v3 SET v = v || '!' WHERE id IN (3, 4);
+----
+2
+
+query IIII
+SELECT id, v, _row_id, _last_updated_sequence_number FROM my_datalake.default.cow_update_v3 ORDER BY id;
+----
+1	a	0	1
+2	B	1	3
+3	c!	2	5
+4	d!	3	5
+5	e	4	2
+6	f	8	4
+
+# updating the column a row would be identified by does not change its row ID
+
+query I
+UPDATE my_datalake.default.cow_update_v3 SET id = id + 10 WHERE id = 1;
+----
+1
+
+query IIII
+SELECT id, v, _row_id, _last_updated_sequence_number FROM my_datalake.default.cow_update_v3 WHERE id = 11;
+----
+11	a	0	6
+
+query I
+SELECT count(*) = count(DISTINCT _row_id) FROM my_datalake.default.cow_update_v3;
+----
+true
+
+# an UPDATE that matches nothing commits nothing
+
+query I
+UPDATE my_datalake.default.cow_update_v3 SET v = 'z' WHERE id = 42;
+----
+0
+
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.cow_update_v3);
+----
+6
+
+# write.delete.mode is not set, so it defaults to merge-on-read: the DELETE writes a deletion vector. A later
+# copy-on-write UPDATE of that file removes the deletion vector with it, and the deleted row stays deleted
+
+query I
+DELETE FROM my_datalake.default.cow_update_v3 WHERE id = 5;
+----
+1
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.cow_update_v3)
+WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+1
+
+query I
+UPDATE my_datalake.default.cow_update_v3 SET v = 'D' WHERE id = 4;
+----
+1
+
+query IIII
+SELECT id, v, _row_id, _last_updated_sequence_number FROM my_datalake.default.cow_update_v3 ORDER BY id;
+----
+2	B	1	3
+3	c!	2	5
+4	D	3	8
+6	f	8	4
+11	a	0	6
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.cow_update_v3)
+WHERE content = 'POSITION_DELETES' AND status != 'DELETED';
+----
+0
+
+# within a transaction: a row inserted in the transaction has no row ID until the commit assigns one, and can be
+# updated as long as no other uncommitted row has to be moved with it
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cow_update_v3_transaction;
+
+statement ok
+CREATE TABLE my_datalake.default.cow_update_v3_transaction (id INTEGER, v VARCHAR) WITH (
+    'format-version' = '3',
+    'write.update.mode' = 'copy-on-write'
+);
+
+statement ok
+INSERT INTO my_datalake.default.cow_update_v3_transaction VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.cow_update_v3_transaction VALUES (4, 'd');
+
+query I
+UPDATE my_datalake.default.cow_update_v3_transaction SET v = upper(v) WHERE id IN (2, 4);
+----
+2
+
+query IIII
+SELECT id, v, _row_id, _last_updated_sequence_number FROM my_datalake.default.cow_update_v3_transaction ORDER BY id;
+----
+1	a	0	1
+2	B	1	NULL
+3	c	2	1
+4	D	NULL	NULL
+
+statement ok
+COMMIT;
+
+query I
+SELECT count(*) FROM my_datalake.default.cow_update_v3_transaction
+WHERE _row_id IS NULL OR _last_updated_sequence_number IS NULL;
+----
+0
+
+query I
+SELECT count(DISTINCT _row_id) FROM my_datalake.default.cow_update_v3_transaction;
+----
+4
+
+query II
+SELECT id, _row_id FROM my_datalake.default.cow_update_v3_transaction WHERE id IN (1, 2, 3) ORDER BY id;
+----
+1	0
+2	1
+3	2
+
+# an uncommitted row that the UPDATE would only move cannot keep its lineage, so the UPDATE is refused
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO my_datalake.default.cow_update_v3_transaction VALUES (5, 'e'), (6, 'f');
+
+statement error
+UPDATE my_datalake.default.cow_update_v3_transaction SET v = 'E' WHERE id = 5;
+----
+Copy-on-write UPDATE cannot preserve uncommitted row lineage
+
+statement ok
+ROLLBACK;
+
+# a rolled back UPDATE leaves the rows and the row ID counter as they were
+
+statement ok
+SET VARIABLE cow_update_v3_next_row_id = (
+    SELECT metadata."next-row-id"::BIGINT FROM iceberg_load_table_response('my_datalake.default.cow_update_v3_transaction'));
+
+statement ok
+BEGIN;
+
+query I
+UPDATE my_datalake.default.cow_update_v3_transaction SET v = 'x' WHERE id = 1;
+----
+1
+
+statement ok
+ROLLBACK;
+
+query III
+SELECT id, v, _row_id FROM my_datalake.default.cow_update_v3_transaction WHERE id = 1;
+----
+1	a	0
+
+query I
+SELECT metadata."next-row-id"::BIGINT = getvariable('cow_update_v3_next_row_id')
+FROM iceberg_load_table_response('my_datalake.default.cow_update_v3_transaction');
+----
+true
+
+# a partitioned table: an updated row moves to the partition of its new value and keeps its row ID
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.cow_update_v3_partitioned;
+
+statement ok
+CREATE TABLE my_datalake.default.cow_update_v3_partitioned (id INTEGER, part VARCHAR) PARTITIONED BY (part) WITH (
+    'format-version' = '3',
+    'write.update.mode' = 'copy-on-write'
+);
+
+statement ok
+INSERT INTO my_datalake.default.cow_update_v3_partitioned VALUES (1, 'x'), (2, 'x'), (3, 'y'), (4, 'y');
+
+statement ok
+SET VARIABLE cow_update_v3_lineage = (
+    SELECT list({'id': id, 'row_id': _row_id, 'seq': _last_updated_sequence_number} ORDER BY id)
+    FROM my_datalake.default.cow_update_v3_partitioned WHERE id != 1);
+
+query I
+UPDATE my_datalake.default.cow_update_v3_partitioned SET part = 'y' WHERE id = 1;
+----
+1
+
+query IIII
+SELECT id, part, _row_id, _last_updated_sequence_number FROM my_datalake.default.cow_update_v3_partitioned WHERE id = 1;
+----
+1	y	0	2
+
+query I
+SELECT list({'id': id, 'row_id': _row_id, 'seq': _last_updated_sequence_number} ORDER BY id)
+    = getvariable('cow_update_v3_lineage')
+FROM my_datalake.default.cow_update_v3_partitioned WHERE id != 1;
+----
+true
+
+# the x file is rewritten into one file per partition; the y file is untouched
+
+query I
+SELECT count(*) FROM iceberg_metadata(my_datalake.default.cow_update_v3_partitioned) WHERE status != 'DELETED';
+----
+3
+
+statement ok
+DROP TABLE my_datalake.default.cow_update_v3;
+
+statement ok
+DROP TABLE my_datalake.default.cow_update_v3_transaction;
+
+statement ok
+DROP TABLE my_datalake.default.cow_update_v3_partitioned;
