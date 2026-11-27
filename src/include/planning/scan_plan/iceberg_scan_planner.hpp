@@ -16,6 +16,7 @@
 #include "planning/scan_plan/iceberg_scan_plan_provider.hpp"
 #include "planning/scan_plan/iceberg_scan_plan_state.hpp"
 #include "planning/scan_plan/iceberg_scan_task.hpp"
+#include "duckdb/storage/statistics/base_statistics.hpp"
 
 namespace duckdb {
 
@@ -58,6 +59,8 @@ public:
 	optional<IcebergDataFileDescriptor> GetDataFileDescriptor(idx_t file_id) const;
 	idx_t GetTotalFileCount() const;
 	unique_ptr<NodeStatistics> GetCardinality() const;
+	//! Statistics of a column of the scan, from the table statistics file of the scanned snapshot
+	unique_ptr<BaseStatistics> GetColumnStatistics(column_t column_index) const;
 	void GetStatistics(vector<PartitionStatistics> &result) const;
 	IcebergPartition GetPartitionForDataFile(const string &file_path) const;
 

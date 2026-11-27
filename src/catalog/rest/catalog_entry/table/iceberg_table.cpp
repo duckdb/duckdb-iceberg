@@ -418,6 +418,11 @@ bool IcebergTable::IsRenamed() const {
 optional_ptr<CatalogEntry> IcebergTable::CreateSchemaVersion(const IcebergTableSchema &table_schema) {
 	CreateTableInfo info;
 	info.SetTableName(Identifier(name));
+	const auto &properties = GetMetadata().GetTableProperties();
+	auto comment = properties.find("comment");
+	if (comment != properties.end()) {
+		info.comment = Value(comment->second);
+	}
 	for (auto &col : table_schema.columns) {
 		LogicalIndex column_index(info.columns.LogicalColumnCount());
 		info.columns.AddColumn(col->GetColumnDefinition());

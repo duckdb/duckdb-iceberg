@@ -1,0 +1,163 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/scan_planning/scan_tasks_call_context.test
+# description: Planned tasks with their shared context moved from the rows to the call read what the table holds
+# group: [scan_planning]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require json
+
+# The tasks are planned on the client, as the other scan-planning tests plan the plans they check.
+statement ok
+set iceberg_use_server_side_scan_planning=false;
+
+statement ok
+drop table if exists my_datalake.default.scan_tasks_call_context;
+
+statement ok
+create table my_datalake.default.scan_tasks_call_context(id integer, category integer, payload struct(n integer, tags varchar[]))
+partitioned by (category) with ('format-version'=2);
+
+statement ok
+insert into my_datalake.default.scan_tasks_call_context
+select i, i % 3, {'n': i, 'tags': [i::varchar]} from range(9000) t(i);
+
+statement ok
+delete from my_datalake.default.scan_tasks_call_context where id < 3 or id % 1000 = 7;
+
+# Keep the vended storage credentials alive from planning through task execution.
+statement ok
+begin;
+
+statement ok
+create temp table plan as select * from iceberg_scan_plan('my_datalake.default.scan_tasks_call_context');
+
+query II
+select count(*), bool_or(len(delete_files) > 0) from plan;
+----
+3	true
+
+statement ok
+set variable plan_rows = (select list(t) from plan t);
+
+statement ok
+set variable plan_files = (select list(t) from (select * exclude (snapshot_id, schema_id, metadata, schema) from plan) t);
+
+statement ok
+set variable plan_snapshot = (select any_value(snapshot_id) from plan);
+
+statement ok
+set variable plan_schema_id = (select any_value(schema_id) from plan);
+
+statement ok
+set variable plan_metadata = (select any_value(metadata) from plan);
+
+statement ok
+set variable plan_schema = (select any_value(schema) from plan);
+
+statement ok
+create temp table expected as
+select *, filename, file_row_number from my_datalake.default.scan_tasks_call_context;
+
+# The call form reads what the ordinary scan reads: every column, with the files' identity and row positions.
+query I
+select count(*) from (
+  (select *, filename, file_row_number from iceberg_scan_tasks(getvariable('plan_files'),
+    snapshot_id := getvariable('plan_snapshot'), schema_id := getvariable('plan_schema_id'),
+    metadata := getvariable('plan_metadata'), schema := getvariable('plan_schema'))
+   except all select * from expected)
+  union all
+  (select * from expected
+   except all select *, filename, file_row_number from iceberg_scan_tasks(getvariable('plan_files'),
+    snapshot_id := getvariable('plan_snapshot'), schema_id := getvariable('plan_schema_id'),
+    metadata := getvariable('plan_metadata'), schema := getvariable('plan_schema')))
+);
+----
+0
+
+# metadata and schema_id alone read the same.
+query II
+select count(*), sum(id) from iceberg_scan_tasks(getvariable('plan_files'), schema_id := getvariable('plan_schema_id'),
+ metadata := getvariable('plan_metadata'));
+----
+8988	40459434
+
+# And what the rows that carry the context read.
+query II
+select count(*), sum(id) from iceberg_scan_tasks(getvariable('plan_files'),
+ snapshot_id := getvariable('plan_snapshot'), schema_id := getvariable('plan_schema_id'),
+ metadata := getvariable('plan_metadata')::json, schema := getvariable('plan_schema'));
+----
+8988	40459434
+
+query II
+select count(*), sum(id) from iceberg_scan_tasks(getvariable('plan_rows'));
+----
+8988	40459434
+
+# A partition's files alone.
+statement ok
+set variable plan_partition = (select list(t) from (select * exclude (snapshot_id, schema_id, metadata, schema)
+ from plan where partition_constants."2" = 1) t);
+
+query II
+select count(*), min(category) from iceberg_scan_tasks(getvariable('plan_partition'),
+ snapshot_id := getvariable('plan_snapshot'), schema_id := getvariable('plan_schema_id'),
+ metadata := getvariable('plan_metadata'), schema := getvariable('plan_schema'));
+----
+2996	1
+
+statement ok
+commit;
+
+# A stored plan keeps reading its own schema after the table's changes.
+statement ok
+begin;
+
+statement ok
+create or replace temp table plan as select * from iceberg_scan_plan('my_datalake.default.scan_tasks_call_context');
+
+statement ok
+set variable plan_files = (select list(t) from (select * exclude (snapshot_id, schema_id, metadata, schema) from plan) t);
+
+statement ok
+set variable plan_snapshot = (select any_value(snapshot_id) from plan);
+
+statement ok
+set variable plan_schema_id = (select any_value(schema_id) from plan);
+
+statement ok
+set variable plan_metadata = (select any_value(metadata) from plan);
+
+statement ok
+set variable plan_schema = (select any_value(schema) from plan);
+
+statement ok
+alter table my_datalake.default.scan_tasks_call_context add column added varchar;
+
+query II
+select count(*), sum(id) from iceberg_scan_tasks(getvariable('plan_files'),
+ snapshot_id := getvariable('plan_snapshot'), schema_id := getvariable('plan_schema_id'),
+ metadata := getvariable('plan_metadata'), schema := getvariable('plan_schema'));
+----
+8988	40459434
+
+# Without the schema argument the columns come from the stored plan's document, which the table's change does not touch.
+query I
+select list(column_name order by column_name) from (describe select * from iceberg_scan_tasks(getvariable('plan_files'),
+ schema_id := getvariable('plan_schema_id'), metadata := getvariable('plan_metadata')));
+----
+[category, id, payload]
+
+query II
+select count(*), sum(id) from iceberg_scan_tasks(getvariable('plan_files'), schema_id := getvariable('plan_schema_id'),
+ metadata := getvariable('plan_metadata'));
+----
+8988	40459434
+
+statement ok
+commit;
+
+statement ok
+drop table my_datalake.default.scan_tasks_call_context;

@@ -1,6 +1,7 @@
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 
 #include "duckdb/common/assert.hpp"
+#include "duckdb/common/exception/http_exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "duckdb/common/types/timestamp.hpp"
@@ -130,11 +131,6 @@ static rest_api_objects::TableRequirement CreateAssertNoSnapshotRequirement() {
 	return req;
 }
 
-static bool NeedsAssertSchemaId(const IcebergTransactionData &transaction_data, const IcebergTable &table_info) {
-	(void)table_info;
-	return transaction_data.assert_schema_id || transaction_data.HasUpdate(IcebergTableUpdateType::SET_CURRENT_SCHEMA);
-}
-
 namespace {
 
 struct SingleTableStagedCommit {
@@ -194,13 +190,15 @@ static void CreateTableRequirements(DatabaseInstance &db, ClientContext &context
 	for (auto &requirement : transaction_data.requirements) {
 		requirement->CreateRequirement(db, context, commit_state);
 	}
-	if (!has_assert_create && NeedsAssertSchemaId(transaction_data, commit_state.table_info)) {
+	if (!has_assert_create &&
+	    (transaction_data.assert_schema_id || transaction_data.HasUpdate(IcebergTableUpdateType::SET_CURRENT_SCHEMA))) {
 		AssertCurrentSchemaIdRequirement requirement(transaction_data.initial_schema_id);
 		requirement.CreateRequirement(db, context, commit_state);
 	}
 	//! As in Iceberg's UpdateRequirements: these updates are only valid on top of the table state this transaction
 	//! started from, so the commit asserts that state.
-	if (!has_assert_create && transaction_data.HasUpdate(IcebergTableUpdateType::ADD_SCHEMA)) {
+	if (!has_assert_create && (transaction_data.assert_last_assigned_field_id ||
+	                           transaction_data.HasUpdate(IcebergTableUpdateType::ADD_SCHEMA))) {
 		AssertLastAssignedFieldIdRequirement requirement(
 		    NumericCast<int32_t>(transaction_data.initial_last_column_id.GetIndex()));
 		requirement.CreateRequirement(db, context, commit_state);
@@ -209,11 +207,13 @@ static void CreateTableRequirements(DatabaseInstance &db, ClientContext &context
 		AssertLastAssignedPartitionIdRequirement requirement(transaction_data.initial_last_partition_field_id);
 		requirement.CreateRequirement(db, context, commit_state);
 	}
-	if (!has_assert_create && transaction_data.HasUpdate(IcebergTableUpdateType::SET_DEFAULT_SPEC)) {
+	if (!has_assert_create &&
+	    (transaction_data.drops_field || transaction_data.HasUpdate(IcebergTableUpdateType::SET_DEFAULT_SPEC))) {
 		AssertDefaultSpecIdRequirement requirement(transaction_data.initial_default_spec_id);
 		requirement.CreateRequirement(db, context, commit_state);
 	}
-	if (!has_assert_create && transaction_data.HasUpdate(IcebergTableUpdateType::SET_DEFAULT_SORT_ORDER)) {
+	if (!has_assert_create &&
+	    (transaction_data.drops_field || transaction_data.HasUpdate(IcebergTableUpdateType::SET_DEFAULT_SORT_ORDER))) {
 		//! V1 metadata may omit sort orders; its implicit default is the unsorted order.
 		int32_t default_sort_order_id = UNSORTED_SORT_ORDER_ID;
 		if (transaction_data.initial_default_sort_order_id.IsValid()) {
@@ -447,6 +447,55 @@ bool IcebergTransaction::HasTableUpdate() const {
 	return !std::holds_alternative<std::monostate>(transaction_update);
 }
 
+idx_t IcebergTransaction::CatalogRequestCount() const {
+	// Compatible table changes share a request, as do property edits to the same namespace.
+	return HasTableUpdate() + created_schemas.Size() + deleted_schemas.size() + schema_property_updates.size() +
+	       created_views.size() + deleted_views.size();
+}
+
+void IcebergTransaction::VerifyCanAddRequest(RequestType request) const {
+	if (CatalogRequestCount() == 0) {
+		return;
+	}
+	if (request == RequestType::VIEW || !created_views.empty() || !deleted_views.empty()) {
+		throw TransactionException("Iceberg REST Catalog cannot commit view changes atomically with other catalog "
+		                           "changes. Run each view create or drop in a separate transaction");
+	}
+	if (request == RequestType::TABLE && HasTableUpdate()) {
+		throw TransactionException("Iceberg REST Catalog cannot commit this transaction atomically because it mixes "
+		                           "table updates with rename/drop requests");
+	}
+	throw TransactionException("Iceberg REST Catalog cannot commit this transaction atomically because the namespace "
+	                           "operation requires a separate REST request");
+}
+
+case_insensitive_map_t<string> &IcebergTransaction::GetSchemaProperties(ClientContext &context,
+                                                                        const IcebergSchemaEntry &schema) {
+	auto &info = schema_properties[schema.name.GetIdentifierName()];
+	if (!info.properties_loaded) {
+		auto result = IRCAPI::GetNamespace(context, catalog, schema);
+		if (result.error_) {
+			throw HTTPException(
+			    StringUtil::Format("GetNamespace endpoint returned response code %s with message \"%s\"",
+			                       EnumUtil::ToString(result.status_), result.error_->_error.message));
+		}
+		if (auto &properties = result.result_->properties) {
+			info.properties = *properties;
+		}
+		info.properties_loaded = true;
+	}
+	return info.properties;
+}
+
+SchemaPropertyUpdates &IcebergTransaction::GetOrCreateSchemaPropertyUpdates(const string &schema_name) {
+	auto it = schema_property_updates.find(schema_name);
+	if (it != schema_property_updates.end()) {
+		return it->second;
+	}
+	VerifyCanAddRequest(RequestType::NAMESPACE);
+	return schema_property_updates[schema_name];
+}
+
 IcebergTransactionAlterUpdate *IcebergTransaction::GetAlterUpdate() {
 	return std::get_if<IcebergTransactionAlterUpdate>(&transaction_update);
 }
@@ -550,21 +599,15 @@ static bool CommitStateUnknown(const ErrorData &error) {
 }
 
 void IcebergTransaction::Commit() {
-	if (!HasTableUpdate() && created_schemas.Empty() && deleted_schemas.empty() && schema_property_updates.empty() &&
-	    created_views.empty() && deleted_views.empty()) {
-		// Read-only transactions have no catalog commit work; temporary vended storage secrets
-		// are left to transaction/session cleanup.
+	auto requests = CatalogRequestCount();
+	if (requests == 0) {
 		return;
 	}
-	// Views use individual REST endpoints, not the atomic table commit endpoint. Validate
-	// the entire write set before any schema, table, or view request can reach the catalog.
-	auto view_operations = created_views.size() + deleted_views.size();
-	if (view_operations && (view_operations > 1 || HasTableUpdate() || !created_schemas.Empty() ||
-	                        !deleted_schemas.empty() || !schema_property_updates.empty())) {
-		CleanupFiles();
-		DropCreatedTables();
-		throw TransactionException("Iceberg REST Catalog cannot commit view changes atomically with other catalog "
-		                           "changes; commit each view create or drop separately");
+	if (requests > 1) {
+		// Staging checks enforce this invariant. Fail closed before publishing if a write path missed a check.
+		Rollback();
+		throw TransactionException("Iceberg REST Catalog cannot commit this transaction atomically because it has "
+		                           "multiple pending catalog write requests");
 	}
 
 	Connection temp_con(db);
@@ -774,12 +817,8 @@ void IcebergTransaction::DoSchemaDeletes(ClientContext &context) {
 void IcebergTransaction::DoSchemaPropertyUpdates(ClientContext &context) {
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	for (auto &properties_update : this->schema_property_updates) {
-		auto schema_name_with_catalog = properties_update.first;
-		auto catalog_splitter = schema_name_with_catalog.find(".");
-		auto schema_name_no_catalog = schema_name_with_catalog.erase(0, catalog_splitter + 1);
-
-		auto schema_property_updates = properties_update.second;
-		auto namespace_identifiers = IRCAPI::ParseSchemaName(schema_name_no_catalog);
+		auto &schema_property_updates = properties_update.second;
+		auto namespace_identifiers = IRCAPI::ParseSchemaName(properties_update.first);
 
 		rest_api_objects::UpdateNamespacePropertiesRequest request;
 		request.removals = vector<string>();
@@ -1133,24 +1172,17 @@ IcebergTransactionTableState &IcebergTransaction::GetOrCreateTransactionTableSta
 }
 
 IcebergTransactionAlterUpdate &IcebergTransaction::GetOrCreateAlter() {
-	if (!HasTableUpdate()) {
-		transaction_update.emplace<IcebergTransactionAlterUpdate>(*this);
+	if (auto alter_update = GetAlterUpdate()) {
+		return *alter_update;
 	}
-	auto alter_update = GetAlterUpdate();
-	if (!alter_update) {
-		throw TransactionException("Iceberg REST Catalog cannot commit this transaction atomically because it mixes "
-		                           "table updates with rename/drop requests");
-	}
-	return *alter_update;
+	VerifyCanAddRequest(RequestType::TABLE);
+	return transaction_update.emplace<IcebergTransactionAlterUpdate>(*this);
 }
 
 IcebergTable &IcebergTransaction::DeleteTable(IcebergTable &table) {
+	VerifyCanAddRequest(RequestType::TABLE);
 	auto table_key = table.GetTableKey();
 	auto state = GetLatestTableState(table_key);
-	if (HasTableUpdate()) {
-		throw TransactionException("Iceberg REST Catalog cannot commit this transaction atomically because it mixes "
-		                           "table updates with rename/drop requests");
-	}
 
 	if (!state) {
 		state = GetOrCreateTransactionTableState(table);
@@ -1162,12 +1194,9 @@ IcebergTable &IcebergTransaction::DeleteTable(IcebergTable &table) {
 }
 
 IcebergTable &IcebergTransaction::RenameTable(IcebergTable &table, const string &new_name) {
+	VerifyCanAddRequest(RequestType::TABLE);
 	auto table_key = table.GetTableKey();
 	auto state = GetLatestTableState(table_key);
-	if (HasTableUpdate()) {
-		throw TransactionException("Iceberg REST Catalog cannot commit this transaction atomically because it mixes "
-		                           "table updates with rename/drop requests");
-	}
 
 	if (!state) {
 		state = GetOrCreateTransactionTableState(table);

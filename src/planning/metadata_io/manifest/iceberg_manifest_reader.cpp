@@ -1,5 +1,6 @@
 #include "planning/metadata_io/manifest/iceberg_manifest_reader.hpp"
 
+#include "core/expression/iceberg_value.hpp"
 #include "duckdb/common/multi_file/multi_file_states.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/string.hpp"
@@ -52,18 +53,14 @@ void ManifestReader::Read() {
 	//! before this reader can produce chunks.
 	D_ASSERT(manifest_file.manifest_metadata);
 	auto &manifest_metadata = *manifest_file.manifest_metadata;
-	auto &metadata = scan_info.metadata;
-	auto spec_id = manifest_metadata.partition_spec_id;
-	auto partition_spec_p = metadata.FindPartitionSpecById(spec_id);
-	if (!partition_spec_p) {
+	if (!scan_info.partition_types_by_spec.count(manifest_metadata.partition_spec_id)) {
 		throw InvalidConfigurationException("Manifest file '%s' key-value metadata references partition-spec-id: "
-		                                    "%d, but no spec with that ID exists in the metadata",
-		                                    manifest_file.GetFile().manifest_path, spec_id);
+		                                    "%d, which is absent from the manifest scan",
+		                                    manifest_file.GetFile().manifest_path, manifest_metadata.partition_spec_id);
 	}
-	IcebergManifestReaderInput input(manifest_metadata, *partition_spec_p, metadata.iceberg_version);
 
 	vector<IcebergManifestEntry> decoded_entries;
-	ReadChunk(chunk, scan_info.partition_field_id_to_type, input, decoded_entries);
+	ReadChunk(scan_info, manifest_metadata, decoded_entries);
 	scan_info.manifest_entries_converted += decoded_entries.size();
 	scan_info.AddEntries(batch_index, manifest_file_idx, std::move(decoded_entries));
 }
@@ -173,12 +170,13 @@ static vector<int64_t> GetSplitOffsets(const Int64ListEntries::ValueEntry &entry
 	return GetListTemplated<int64_t>("split_offsets", entry);
 }
 
-void ManifestReader::ReadChunk(DataChunk &chunk, const map<idx_t, LogicalType> &partition_field_id_to_type,
-                               IcebergManifestReaderInput &input, vector<IcebergManifestEntry> &result) {
+void ManifestReader::ReadChunk(const IcebergManifestFileScanInfo &scan_info, const IcebergManifestMetadata &manifest,
+                               vector<IcebergManifestEntry> &result) {
 	idx_t count = chunk.size();
-	auto &partition_spec = input.partition_spec;
-	auto &manifest_format_version = input.metadata.format_version;
-	auto &table_format_version = input.table_format_version;
+	auto &manifest_format_version = manifest.format_version;
+	auto &table_format_version = scan_info.metadata.iceberg_version;
+	auto &partition_field_id_to_type = scan_info.partition_field_id_to_type;
+	auto &spec_types = scan_info.partition_types_by_spec.at(manifest.partition_spec_id);
 	//! The columns read below follow the table's format version, so a newer manifest has fields we did not read
 	if (manifest_format_version > table_format_version) {
 		throw InvalidConfigurationException(
@@ -278,13 +276,23 @@ void ManifestReader::ReadChunk(DataChunk &chunk, const map<idx_t, LogicalType> &
 		content_size_in_bytes_entries.emplace(content_size_in_bytes->Values<int64_t>());
 	}
 
-	vector<std::pair<int32_t, reference<Vector>>> partition_vectors;
+	struct PartitionColumn {
+		idx_t field_id;
+		reference<Vector> values;
+		optional_ptr<const LogicalType> unpack_as;
+	};
+	vector<PartitionColumn> partition_vectors;
 	if (partition.GetType().id() != LogicalTypeId::SQLNULL) {
 		auto &partition_children = StructVector::GetEntries(partition);
 		D_ASSERT(partition_children.size() == partition_field_id_to_type.size());
 		idx_t child_index = 0;
-		for (auto &it : partition_field_id_to_type) {
-			partition_vectors.emplace_back(it.first, partition_children[child_index++]);
+		for (auto &field : partition_field_id_to_type) {
+			auto &values = partition_children[child_index++];
+			auto type = spec_types.find(field.first);
+			if (type != spec_types.end()) {
+				partition_vectors.push_back(
+				    {field.first, values, field.second == type->second ? nullptr : &type->second});
+			}
 		}
 	}
 
@@ -358,17 +366,19 @@ void ManifestReader::ReadChunk(DataChunk &chunk, const map<idx_t, LogicalType> &
 			data_file.content_size_in_bytes = ReadOptionalField<int64_t>((*content_size_in_bytes_entries)[i]);
 		}
 
-		for (auto &it : partition_vectors) {
-			auto field_id = it.first;
-			auto &partition_vector = it.second.get();
-			for (auto &field : partition_spec.fields) {
-				if (field_id == field.partition_field_id) {
-					IcebergPartitionInfo info;
-					info.field_id = static_cast<uint64_t>(field_id);
-					info.value = partition_vector.GetValue(i);
-					data_file.partition_info.push_back(std::move(info));
+		for (auto &column : partition_vectors) {
+			auto value = column.values.get().GetValue(i);
+			if (column.unpack_as) {
+				value = value.IsNull() ? Value(*column.unpack_as) : VariantValue::GetValue(value);
+				// Spark can write day-transform integers as Avro dates (see FixSamePhysicalTypeCasts).
+				if (value.type().id() == LogicalTypeId::DATE && column.unpack_as->id() == LogicalTypeId::INTEGER) {
+					value = Value::INTEGER(DateValue::Get(value).days);
+				} else if (value.type() != *column.unpack_as) {
+					value = value.CastAs(scan.context, *column.unpack_as);
 				}
 			}
+			data_file.partition_info.push_back(
+			    {column.field_id, IcebergValue::NormalizePartitionNaN(std::move(value))});
 		}
 		result.push_back(std::move(entry));
 	}

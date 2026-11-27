@@ -1,12 +1,15 @@
 #include "function/iceberg_functions.hpp"
 
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
+#include "duckdb/common/operator/add.hpp"
 #include "duckdb/execution/execution_context.hpp"
+#include "duckdb/function/partition_stats.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/parallel/thread_context.hpp"
 #include "function/scan_planning/iceberg_scan_task_codec.hpp"
 #include "execution/scan/iceberg_task_executor.hpp"
 #include "function/scan_planning/iceberg_row_filter.hpp"
+#include "planning/iceberg_multi_file_reader.hpp"
 
 namespace duckdb {
 
@@ -15,6 +18,10 @@ using TaskCodec = IcebergScanTaskCodec;
 struct IcebergScanTasksBindData : public TableFunctionData {
 	TaskCodec::InputLayout layout;
 	Value tasks;
+	//! Metadata supplied as a named argument is parsed at bind. Each execution owns its delete caches.
+	unique_ptr<const IcebergTableMetadata> call_metadata;
+	int32_t schema_id = 0;
+	Value snapshot_id {LogicalType::BIGINT};
 };
 
 enum class IcebergScanTasksExecutionMode : uint8_t { UNSELECTED, SINGLE_FILE, MULTI_FILE };
@@ -25,6 +32,51 @@ struct IcebergScanTasksListClassification {
 	IcebergScanTasksListClass type;
 	string common_filter;
 };
+
+static IcebergScanTasksListClassification ClassifyTasks(ClientContext &context, const IcebergScanTasksBindData &bind,
+                                                        const vector<Value> &tasks) {
+	//! Delete processing retains per-file reader state for the executor lifetime. Keep every
+	//! delete-bearing list on the established one-task-at-a-time path.
+	for (auto &descriptor : tasks) {
+		context.InterruptCheck();
+		if (descriptor.IsNull()) {
+			return {IcebergScanTasksListClass::HETEROGENEOUS, {}};
+		}
+		auto deletes = TaskCodec::ReadValue(descriptor, bind.layout, TaskCodec::DELETE_FILES, true);
+		if (deletes.IsNull()) {
+			return {IcebergScanTasksListClass::HETEROGENEOUS, {}};
+		}
+		if (!ListValue::GetChildren(deletes).empty()) {
+			return {IcebergScanTasksListClass::DELETE_FILES, {}};
+		}
+	}
+
+	bool have_filter = false;
+	bool first_is_null = false;
+	string common_filter;
+	for (auto &descriptor : tasks) {
+		context.InterruptCheck();
+		auto filter = TaskCodec::ReadValue(descriptor, bind.layout, TaskCodec::ROW_FILTER, true);
+		if (!have_filter) {
+			have_filter = true;
+			first_is_null = filter.IsNull();
+			if (!first_is_null) {
+				common_filter = StringValue::Get(filter);
+			}
+			continue;
+		}
+		if (filter.IsNull() != first_is_null) {
+			return {IcebergScanTasksListClass::HETEROGENEOUS, {}};
+		}
+		if (!first_is_null && StringValue::Get(filter) != common_filter) {
+			return {IcebergScanTasksListClass::HETEROGENEOUS, {}};
+		}
+	}
+	if (first_is_null) {
+		return {IcebergScanTasksListClass::ALL_NULL_FILTERS, {}};
+	}
+	return {IcebergScanTasksListClass::COMMON_FILTER, std::move(common_filter)};
+}
 
 struct IcebergScanTasksGlobalState : public GlobalTableFunctionState {
 	IcebergScanTasksGlobalState(vector<ColumnIndex> column_indexes_p, optional_ptr<TableFilterSet> filters_p,
@@ -58,6 +110,13 @@ struct IcebergScanTasksGlobalState : public GlobalTableFunctionState {
 		if (descriptor.IsNull()) {
 			throw InvalidInputException("iceberg_scan_tasks requires non-NULL task structs");
 		}
+		if (bind.call_metadata) {
+			if (!execution) {
+				execution = make_shared_ptr<IcebergTaskExecutionContext>(bind.call_metadata->Copy(), bind.schema_id);
+			}
+			return TaskCodec::ReadTask(context, descriptor, bind.layout, execution->metadata, execution->schema,
+			                           bind.snapshot_id);
+		}
 		auto schema = TaskCodec::ReadValue(descriptor, bind.layout, TaskCodec::SCHEMA_ID, true);
 		auto snapshot = TaskCodec::ReadValue(descriptor, bind.layout, TaskCodec::SNAPSHOT_ID, true);
 		auto metadata_value = TaskCodec::ReadValue(descriptor, bind.layout, TaskCodec::METADATA, true);
@@ -73,58 +132,15 @@ struct IcebergScanTasksGlobalState : public GlobalTableFunctionState {
 				    "iceberg_scan_tasks requires one metadata document, schema ID, and snapshot ID");
 			}
 		} else {
-			auto metadata = TaskCodec::ReadMetadata(text, IntegerValue::Get(schema), snapshot, bind.layout.schema_type);
+			auto metadata =
+			    TaskCodec::ReadMetadata(text, IntegerValue::Get(schema), snapshot, &bind.layout.schema_type);
 			execution = make_shared_ptr<IcebergTaskExecutionContext>(std::move(metadata), IntegerValue::Get(schema));
 			metadata_json = text;
 			schema_id = schema;
 			snapshot_id = snapshot;
 		}
-		return TaskCodec::ReadTask(descriptor, bind.layout, execution->metadata, execution->schema);
-	}
-
-	IcebergScanTasksListClassification ClassifyTasks(ClientContext &context, const IcebergScanTasksBindData &bind,
-	                                                 const vector<Value> &tasks) const {
-		//! Delete processing retains per-file reader state for the executor lifetime. Keep every
-		//! delete-bearing list on the established one-task-at-a-time path.
-		for (auto &descriptor : tasks) {
-			context.InterruptCheck();
-			if (descriptor.IsNull()) {
-				return {IcebergScanTasksListClass::HETEROGENEOUS, {}};
-			}
-			auto deletes = TaskCodec::ReadValue(descriptor, bind.layout, TaskCodec::DELETE_FILES, true);
-			if (deletes.IsNull()) {
-				return {IcebergScanTasksListClass::HETEROGENEOUS, {}};
-			}
-			if (!ListValue::GetChildren(deletes).empty()) {
-				return {IcebergScanTasksListClass::DELETE_FILES, {}};
-			}
-		}
-
-		bool have_filter = false;
-		bool first_is_null = false;
-		string common_filter;
-		for (auto &descriptor : tasks) {
-			context.InterruptCheck();
-			auto filter = TaskCodec::ReadValue(descriptor, bind.layout, TaskCodec::ROW_FILTER, true);
-			if (!have_filter) {
-				have_filter = true;
-				first_is_null = filter.IsNull();
-				if (!first_is_null) {
-					common_filter = StringValue::Get(filter);
-				}
-				continue;
-			}
-			if (filter.IsNull() != first_is_null) {
-				return {IcebergScanTasksListClass::HETEROGENEOUS, {}};
-			}
-			if (!first_is_null && StringValue::Get(filter) != common_filter) {
-				return {IcebergScanTasksListClass::HETEROGENEOUS, {}};
-			}
-		}
-		if (first_is_null) {
-			return {IcebergScanTasksListClass::ALL_NULL_FILTERS, {}};
-		}
-		return {IcebergScanTasksListClass::COMMON_FILTER, std::move(common_filter)};
+		return TaskCodec::ReadTask(context, descriptor, bind.layout, execution->metadata, execution->schema,
+		                           snapshot_id);
 	}
 
 	unique_ptr<Expression> BindRowFilter(ClientContext &context, const IcebergScanTasksBindData &bind,
@@ -197,7 +213,7 @@ struct IcebergScanTasksLocalState : public LocalTableFunctionState {
 	unique_ptr<LocalTableFunctionState> scanner;
 };
 
-static unique_ptr<FunctionData> IcebergScanTasksBind(ClientContext &, TableFunctionBindInput &input,
+static unique_ptr<FunctionData> IcebergScanTasksBind(ClientContext &context, TableFunctionBindInput &input,
                                                      vector<LogicalType> &types, vector<Identifier> &names) {
 	auto &tasks = input.inputs[0];
 	if (tasks.type().id() != LogicalTypeId::LIST ||
@@ -205,7 +221,52 @@ static unique_ptr<FunctionData> IcebergScanTasksBind(ClientContext &, TableFunct
 		throw BinderException("iceberg_scan_tasks requires a list of task structs");
 	}
 	auto result = make_uniq<IcebergScanTasksBindData>();
-	result->layout = TaskCodec::BindInput(ListType::GetChildType(tasks.type()), types, names);
+	auto &arguments = input.named_parameters;
+	LogicalType call_schema;
+	if (arguments.contains("metadata") || arguments.contains("schema_id") || arguments.contains("snapshot_id") ||
+	    arguments.contains("schema")) {
+		if (!arguments.contains("metadata") || !arguments.contains("schema_id")) {
+			throw BinderException(
+			    "iceberg_scan_tasks takes metadata and schema_id together, and snapshot_id and schema "
+			    "only with them");
+		}
+		auto &metadata = arguments.at("metadata");
+		auto &schema_id = arguments.at("schema_id");
+		if (metadata.IsNull() || schema_id.IsNull()) {
+			throw InvalidInputException("iceberg_scan_tasks metadata and schema_id cannot be NULL");
+		}
+		// JSON is a VARCHAR by its physical type.
+		if (metadata.type().id() != LogicalTypeId::VARCHAR && metadata.type().id() != LogicalTypeId::VARIANT) {
+			throw BinderException(
+			    "iceberg_scan_tasks argument 'metadata' has unexpected type %s (expected JSON, VARCHAR or VARIANT)",
+			    metadata.type().ToString());
+		}
+		auto json = metadata.CastAs(context, LogicalType::JSON());
+		result->schema_id = IntegerValue::Get(schema_id);
+		if (arguments.contains("snapshot_id")) {
+			result->snapshot_id = arguments.at("snapshot_id");
+		}
+		// snapshot_id and schema, named as iceberg_scan_plan()'s columns, select nothing here: when given, they are
+		// only checked against the document. (In the rows, the schema column's type also spells the scan's columns.)
+		optional_ptr<const LogicalType> given_schema;
+		if (arguments.contains("schema")) {
+			given_schema = arguments.at("schema").type();
+			if (given_schema->id() != LogicalTypeId::STRUCT) {
+				throw BinderException(
+				    "iceberg_scan_tasks argument 'schema' has unexpected type %s (expected a STRUCT of "
+				    "the scan's columns)",
+				    given_schema->ToString());
+			}
+		}
+		// A document that does not parse, or lacks the schema or the snapshot it comes with, fails here rather than
+		// at the first task.
+		result->call_metadata = make_uniq<IcebergTableMetadata>(TaskCodec::ReadMetadata(
+		    StringValue::Get(json), result->schema_id, result->snapshot_id, given_schema, "argument"));
+		// The scan's columns are the schema schema_id selects, spelled as the document spells them.
+		call_schema = TaskCodec::SchemaType(result->call_metadata->GetSchemaFromId(result->schema_id));
+	}
+	result->layout = TaskCodec::BindInput(ListType::GetChildType(tasks.type()),
+	                                      result->call_metadata ? &call_schema : nullptr, types, names);
 	result->tasks = tasks;
 	return std::move(result);
 }
@@ -244,6 +305,42 @@ static void IcebergScanTasksFunction(ClientContext &context, TableFunctionInput 
 	}
 }
 
+//! For supported data files without deletes or row filters, trust the manifest record counts.
+//! Only a scan decodes the metadata to validate schema IDs and partition constants.
+static vector<PartitionStatistics> IcebergScanTasksGetPartitionStats(ClientContext &context,
+                                                                     GetPartitionStatsInput &input) {
+	auto &bind = input.bind_data->Cast<IcebergScanTasksBindData>();
+	vector<PartitionStatistics> result;
+	if (bind.tasks.IsNull()) {
+		return result;
+	}
+	auto &tasks = ListValue::GetChildren(bind.tasks);
+	if (tasks.empty() || ClassifyTasks(context, bind, tasks).type != IcebergScanTasksListClass::ALL_NULL_FILTERS) {
+		return result;
+	}
+	int64_t total = 0;
+	for (auto &descriptor : tasks) {
+		context.InterruptCheck();
+		auto format = TaskCodec::ReadValue(descriptor, bind.layout, TaskCodec::FILE_FORMAT, true);
+		if (format.IsNull() || !IcebergMultiFileReader::SupportsDataFileFormat(StringValue::Get(format))) {
+			return {};
+		}
+		auto record_count = TaskCodec::ReadValue(descriptor, bind.layout, TaskCodec::RECORD_COUNT, true);
+		if (record_count.IsNull() || BigIntValue::Get(record_count) < 0) {
+			return {};
+		}
+		auto count = BigIntValue::Get(record_count);
+		if (!TryAddOperator::Operation(total, count, total)) {
+			return {};
+		}
+		PartitionStatistics stats;
+		stats.count = NumericCast<idx_t>(count);
+		stats.count_type = CountType::COUNT_EXACT;
+		result.push_back(std::move(stats));
+	}
+	return result;
+}
+
 //! The file virtual columns the reader can produce for any task: the data file's path as the task
 //! names it, and the row's position in that file -- the row id an Iceberg positional delete refers to.
 static virtual_column_map_t IcebergScanTasksVirtualColumns(ClientContext &, optional_ptr<FunctionData>) {
@@ -258,7 +355,17 @@ static virtual_column_map_t IcebergScanTasksVirtualColumns(ClientContext &, opti
 
 TableFunctionSet IcebergFunctions::GetIcebergScanTasksFunction() {
 	TableFunction function("iceberg_scan_tasks", {LogicalType::ANY}, IcebergScanTasksFunction, IcebergScanTasksBind);
+	// The tasks' shared context, once for the call rather than in every row (see IcebergScanTasksBindData): metadata
+	// as JSON, VARCHAR or VARIANT and schema_id, and optionally snapshot_id and schema, a value of the STRUCT type of
+	// the scan's columns, NULL or not.
+	function.GetSignature().WithTypedKwargs("options", [](TypedKwargs &options) {
+		options.Add("snapshot_id", LogicalType::BIGINT)
+		    .Add("schema_id", LogicalType::INTEGER)
+		    .Add("metadata", LogicalType::ANY)
+		    .Add("schema", LogicalType::ANY);
+	});
 	function.get_virtual_columns = IcebergScanTasksVirtualColumns;
+	function.get_partition_stats = IcebergScanTasksGetPartitionStats;
 	function.init_global = [](ClientContext &context,
 	                          TableFunctionInitInput &input) -> unique_ptr<GlobalTableFunctionState> {
 		Value setting;

@@ -623,6 +623,31 @@ void Catalog::Apply(Json &metadata, const Json &update, map<string, int64_t> &la
 			metadata.At("snapshot-log").Push(Json::Object({{"snapshot-id", identifier}, {"timestamp-ms", timestamp}}));
 			metadata["current-snapshot-id"] = identifier;
 		}
+	} else if (action == "set-statistics") {
+		auto &file = update.At("statistics");
+		if (!file.IsObject() || !file.Has("snapshot-id") || !file.Has("statistics-path") ||
+		    !file.Has("blob-metadata")) {
+			Invalid("set-statistics requires a statistics file with snapshot-id, statistics-path and blob-metadata");
+		}
+		auto snapshot_id = file.At("snapshot-id").Integer();
+		if (!metadata.Has("statistics")) {
+			metadata["statistics"] = Json::Array();
+		}
+		// A table has at most one statistics file per snapshot; a new file replaces it.
+		auto &files = metadata.At("statistics").Items();
+		files.erase(std::remove_if(files.begin(), files.end(),
+		                           [&](const Json &entry) { return entry.At("snapshot-id").Integer() == snapshot_id; }),
+		            files.end());
+		files.push_back(file);
+	} else if (action == "remove-statistics") {
+		auto snapshot_id = update.At("snapshot-id").Integer();
+		if (metadata.Has("statistics")) {
+			auto &files = metadata.At("statistics").Items();
+			files.erase(
+			    std::remove_if(files.begin(), files.end(),
+			                   [&](const Json &entry) { return entry.At("snapshot-id").Integer() == snapshot_id; }),
+			    files.end());
+		}
 	} else if (action == "remove-snapshot-ref") {
 		if (update.At("ref-name").String() != "main") {
 			Unsupported("Only the main branch is implemented");

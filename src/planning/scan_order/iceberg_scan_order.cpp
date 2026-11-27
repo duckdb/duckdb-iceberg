@@ -82,8 +82,8 @@ void IcebergScanOrder::Apply(ClientContext &context, const IcebergTableSchema &s
 		if (lower_it == data_file.lower_bounds.end() || upper_it == data_file.upper_bounds.end()) {
 			return;
 		}
-		auto stats = IcebergPredicateStats::DeserializeBounds(context, lower_it->second, upper_it->second,
-		                                                      order_column.name, order_column.type);
+		auto stats = IcebergPredicateStats::DeserializeBoundsForPruning(context, lower_it->second, upper_it->second,
+		                                                                order_column.name, order_column.type);
 		if (!stats.lower_bound || !stats.upper_bound || stats.lower_bound->IsNull() || stats.upper_bound->IsNull()) {
 			return;
 		}
@@ -91,15 +91,16 @@ void IcebergScanOrder::Apply(ClientContext &context, const IcebergTableSchema &s
 		if (null_it == data_file.null_value_counts.end() || null_it->second > 0) {
 			can_prune = false;
 		}
+		auto upper_bound = *stats.upper_bound;
 		if (order_column.type.id() == LogicalTypeId::FLOAT || order_column.type.id() == LogicalTypeId::DOUBLE) {
-			// Iceberg bounds exclude NaNs, so they cannot rank every row when NaNs may be present.
+			// Iceberg bounds exclude NaN, which sorts last: a file that may hold NaN is unbounded above
 			auto nan_it = data_file.nan_value_counts.find(field_id);
 			if (nan_it == data_file.nan_value_counts.end() || nan_it->second != 0) {
-				can_prune = false;
+				upper_bound = Value("nan").DefaultCastAs(order_column.type);
 			}
 		}
 		order_entries.push_back(
-		    {i, *stats.lower_bound, *stats.upper_bound, NumericCast<idx_t>(data_file.record_count)});
+		    {i, *stats.lower_bound, std::move(upper_bound), NumericCast<idx_t>(data_file.record_count)});
 	}
 
 	if (has_matching_delete_manifests) {

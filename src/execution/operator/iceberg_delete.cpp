@@ -534,6 +534,11 @@ void IcebergDelete::ScheduleDeletes(Pipeline &pipeline, Event &event, IcebergDel
 		// An empty UPDATE may have no source scan after optimization.
 		return;
 	}
+	if (copy_on_write_merge_rows) {
+		//! A copy-on-write MERGE drops these rows in the rewrite that runs after it, instead of writing delete files
+		copy_on_write_merge_rows->Add(std::move(pending_deletes));
+		return;
+	}
 	if (!multi_file_list) {
 		throw InternalException("IcebergDelete multi_file_list is NULL");
 	}
@@ -740,9 +745,8 @@ PhysicalOperator &IcebergCatalog::PlanDelete(ClientContext &context, PhysicalPla
 		auto &alter = irc_transaction.GetOrCreateAlter();
 		auto &updated_table = alter.GetOrInitializeTable(table_entry.table_info);
 		auto &table_metadata = updated_table.GetMetadata();
-		//! V3 is not supported yet: a rewrite has to carry each kept row's lineage into the new files. A V3 DELETE
-		//! continues below, where a copy-on-write mode is refused as before.
-		if (table_metadata.iceberg_version == 2 && table_metadata.UsesCopyOnWrite(WRITE_DELETE_MODE)) {
+		//! V1 tables continue below, where a DELETE is refused
+		if (table_metadata.iceberg_version >= 2 && table_metadata.UsesCopyOnWrite(WRITE_DELETE_MODE)) {
 			table_entry.table_info.VerifyWriteEncryptionSupported();
 			table_entry.PrepareIcebergScanFromEntry(context);
 			auto &updated_table_entry = *updated_table.schema_versions[table_metadata.GetLatestSchema().schema_id];

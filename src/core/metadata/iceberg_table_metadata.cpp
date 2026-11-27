@@ -2,6 +2,7 @@
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/open_file_info.hpp"
+#include "duckdb/common/operator/cast_operators.hpp"
 
 #include "common/iceberg_utils.hpp"
 #include "catalog/rest/api/catalog_utils.hpp"
@@ -11,6 +12,29 @@
 #include "iceberg_options.hpp"
 
 namespace duckdb {
+
+//! Puffin blob type of a column's distinct-value sketch; the writer records the estimate in the 'ndv' property
+static constexpr const char *THETA_SKETCH_BLOB_TYPE = "apache-datasketches-theta-v1";
+static constexpr const char *NDV_PROPERTY = "ndv";
+
+optional<int64_t> IcebergStatisticsFile::GetDistinctCount(int32_t field_id) const {
+	for (auto &blob : blobs) {
+		if (blob.type != THETA_SKETCH_BLOB_TYPE || blob.fields.size() != 1 || blob.fields[0] != field_id) {
+			continue;
+		}
+		auto property = blob.properties.find(NDV_PROPERTY);
+		if (property == blob.properties.end()) {
+			continue;
+		}
+		int64_t distinct_count;
+		if (!TryCast::Operation<string_t, int64_t>(string_t(property->second), distinct_count, true) ||
+		    distinct_count < 0) {
+			continue;
+		}
+		return distinct_count;
+	}
+	return optional<int64_t>();
+}
 
 optional_ptr<const IcebergColumnDefinition> IcebergTableMetadataSchemas::FindColumnByFieldId(int32_t field_id) const {
 	for (auto &schema_entry : schemas) {
@@ -105,6 +129,15 @@ optional_ptr<const IcebergSortOrder> IcebergTableMetadata::FindSortOrderById(int
 		return nullptr;
 	}
 	return it->second;
+}
+
+optional_ptr<const IcebergStatisticsFile> IcebergTableMetadata::FindStatisticsFile(int64_t snapshot_id) const {
+	for (auto &file : statistics) {
+		if (file.snapshot_id == snapshot_id) {
+			return &file;
+		}
+	}
+	return nullptr;
 }
 
 const unordered_map<int32_t, IcebergSortOrder> &IcebergTableMetadata::GetSortOrderSpecs() const {
@@ -559,6 +592,29 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 			res.metadata_log.emplace_back(item.metadata_file, timestamp_ms_t(item.timestamp_ms));
 		}
 	}
+	if (table_metadata.statistics) {
+		res.statistics.reserve(table_metadata.statistics->size());
+		for (auto &file : *table_metadata.statistics) {
+			IcebergStatisticsFile statistics_file;
+			statistics_file.snapshot_id = file.snapshot_id;
+			statistics_file.path = file.statistics_path;
+			statistics_file.file_size_in_bytes = file.file_size_in_bytes;
+			statistics_file.file_footer_size_in_bytes = file.file_footer_size_in_bytes;
+			statistics_file.blobs.reserve(file.blob_metadata.size());
+			for (auto &blob : file.blob_metadata) {
+				IcebergStatisticsBlob statistics_blob;
+				statistics_blob.type = blob.type;
+				statistics_blob.snapshot_id = blob.snapshot_id;
+				statistics_blob.sequence_number = blob.sequence_number;
+				statistics_blob.fields = blob.fields;
+				if (blob.properties) {
+					statistics_blob.properties.insert(blob.properties->begin(), blob.properties->end());
+				}
+				statistics_file.blobs.push_back(std::move(statistics_blob));
+			}
+			res.statistics.push_back(std::move(statistics_file));
+		}
+	}
 	// Validate default references before a scan or writer can consume the metadata.
 	res.GetLatestSchema();
 	res.GetLatestPartitionSpec();
@@ -588,6 +644,7 @@ IcebergTableMetadata IcebergTableMetadata::Copy() const {
 		res.refs = refs->Copy();
 	}
 	res.snapshot_log = snapshot_log;
+	res.statistics = statistics;
 	res.mappings = mappings;
 	res.write_data_path = write_data_path;
 	res.write_metadata_path = write_metadata_path;
@@ -774,7 +831,9 @@ string IcebergTableMetadata::ToJSON() const {
 	root_obj.Add("current-schema-id", writer.CreateSignedInteger(current_schema_id));
 	root_obj.Add("partition-specs", PartitionsToJSON(writer));
 	root_obj.Add("default-spec-id", writer.CreateSignedInteger(default_spec_id));
-	root_obj.Add("last-partition-id", writer.CreateSignedInteger(last_partition_field_id.GetIndex()));
+	if (iceberg_version >= 2 || HasLastPartitionId()) {
+		root_obj.Add("last-partition-id", writer.CreateSignedInteger(GetLastPartitionFieldId()));
+	}
 	root_obj.Add("properties", TablePropertiesToJSON(writer));
 	if (current_snapshot_id) {
 		root_obj.Add("current-snapshot-id", writer.CreateSignedInteger(*current_snapshot_id));
@@ -785,7 +844,9 @@ string IcebergTableMetadata::ToJSON() const {
 	}
 	root_obj.Add("snapshot-log", SnapshotLogToJSON(writer));
 	root_obj.Add("sort-orders", SortOrdersToJSON(writer));
-	root_obj.Add("default-sort-order-id", writer.CreateSignedInteger(default_sort_order_id.GetIndex()));
+	if (iceberg_version >= 2 || HasSortOrder()) {
+		root_obj.Add("default-sort-order-id", writer.CreateSignedInteger(default_sort_order_id.GetIndex()));
+	}
 	if (iceberg_version >= 3) {
 		// Required since v3 (row lineage)
 		root_obj.Add("next-row-id", writer.CreateSignedInteger(next_row_id ? *next_row_id : 0));

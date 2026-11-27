@@ -56,7 +56,7 @@ statement ok
 SET VARIABLE mapped_tasks = (SELECT list(task) FROM (SELECT * FROM iceberg_scan_plan('data/persistent/name_mapping/warehouse_1/mydb/t1', version = '3', snapshot_from_id = 6597550917742534971)) task);
 
 query I
-SELECT count(*) FROM iceberg_scan_tasks(getvariable('mapped_tasks'));
+SELECT sum(1) FROM iceberg_scan_tasks(getvariable('mapped_tasks'));
 ----
 10000
 

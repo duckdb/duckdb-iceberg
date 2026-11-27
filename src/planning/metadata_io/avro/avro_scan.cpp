@@ -109,7 +109,7 @@ void AvroScan::FindCachedManifests() {
 			if (cached) {
 				auto metadata = cached->Validate(info, manifest);
 				manifest.ResetManifestEntries();
-				manifest.manifest_metadata.emplace(metadata);
+				info.SetManifestMetadata(index, std::move(metadata));
 				manifest.parsed_manifest = std::move(cached);
 				if (info.read_state) {
 					info.read_state->PushBatch({index, 0, manifest.GetManifestEntries().size()});
@@ -168,8 +168,9 @@ unique_ptr<AvroScan> AvroScan::ScanManifest(const IcebergSnapshotScanInfo &snaps
                                             optional_ptr<ManifestEntryReadState> read_state,
                                             vector<idx_t> manifest_indexes, IcebergFileSecret file_secret) {
 	D_ASSERT(!manifest_files.empty());
-	auto avro_scan_info = make_shared_ptr<IcebergManifestFileScanInfo>(
-	    metadata, snapshot_info, manifest_files, options, fs, iceberg_path, read_state, std::move(manifest_indexes));
+	auto avro_scan_info =
+	    make_shared_ptr<IcebergManifestFileScanInfo>(context, metadata, snapshot_info, manifest_files, options, fs,
+	                                                 iceberg_path, read_state, std::move(manifest_indexes));
 	avro_scan_info->file_secret = std::move(file_secret);
 	return make_uniq<AvroScan>("placeholder", context, std::move(avro_scan_info));
 }

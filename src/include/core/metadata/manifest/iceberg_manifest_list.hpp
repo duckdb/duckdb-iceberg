@@ -35,7 +35,7 @@ public:
 
 struct ManifestPartitions {
 public:
-	void Create(const IcebergTableMetadata &metadata, const IcebergTableSchema &target_schema,
+	void Create(ClientContext &context, const IcebergTableMetadata &metadata, const IcebergTableSchema &target_schema,
 	            const IcebergPartitionSpec &partition_spec, const vector<IcebergManifestEntry> &entries);
 
 public:
@@ -113,7 +113,7 @@ public:
 	}
 
 	//! Compute manifest attributes from content without taking ownership of its entries or assigning a file path.
-	static IcebergManifest CreateFromEntries(sequence_number_t sequence_number,
+	static IcebergManifest CreateFromEntries(ClientContext &context, sequence_number_t sequence_number,
 	                                         const IcebergTableMetadata &table_metadata,
 	                                         const IcebergManifestMetadata &manifest_metadata,
 	                                         const vector<IcebergManifestEntry> &entries,
@@ -199,7 +199,7 @@ public:
 
 public:
 	//! Adapt materialized entries to the scanner without a file path or manifest-level row-ID inheritance.
-	static IcebergManifestListEntry CreateForScan(sequence_number_t sequence_number,
+	static IcebergManifestListEntry CreateForScan(ClientContext &context, sequence_number_t sequence_number,
 	                                              const IcebergTableMetadata &table_metadata,
 	                                              const IcebergManifestMetadata &manifest_metadata,
 	                                              vector<IcebergManifestEntry> entries);

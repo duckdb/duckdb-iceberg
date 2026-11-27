@@ -9,6 +9,12 @@
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_data.hpp"
+#include "catalog/rest/iceberg_table_set.hpp"
+#include "duckdb/parser/parser.hpp"
+#include "duckdb/parser/statement/create_statement.hpp"
+#include "duckdb/planner/binder.hpp"
+#include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
+#include <algorithm>
 
 using namespace duckdb;
 
@@ -80,6 +86,15 @@ struct ReplacementTest {
 	void Replace() {
 		auto &table = WritableTable();
 		table.transaction_data->TableReplaceContents(table.GetMetadataMutable());
+	}
+
+	void Define(const string &definition) {
+		Parser parser(*connection.context);
+		parser.ParseQuery("CREATE TABLE lake.default.t " + definition);
+		auto &statement = parser.statements[0]->Cast<CreateStatement>();
+		auto binder = Binder::CreateBinder(*connection.context);
+		auto info = binder->BindCreateTableInfo(std::move(statement.info), WritableTable().schema);
+		IcebergTableSet::ReplaceDefinition(*connection.context, WritableTable(), info->Base());
 	}
 
 	string root;
@@ -236,7 +251,8 @@ TEST_CASE("Replacement rejects earlier data changes and rollback without changin
 	}
 	auto &table = test.WritableTable();
 	auto &data = *table.transaction_data;
-	auto before = table.GetMetadata().ToJSON();
+	// Materialize the transaction-local copy before comparing JSON: copying unordered maps can reorder it.
+	auto before = table.GetMetadataMutable().ToJSON();
 	auto update_count = data.updates.size();
 	REQUIRE_THROWS_WITH(test.Replace(), Catch::Contains("it was already changed in this transaction"));
 	REQUIRE(table.GetMetadata().ToJSON() == before);
@@ -344,6 +360,227 @@ TEST_CASE("DELETE keeps its existing retry behavior when replacement leaves no s
 	Query(test.connection, "COMMIT");
 	Query(writer, "COMMIT");
 	REQUIRE(Scalar(test.connection, "SELECT count(*) FROM lake.default.t") == Value::BIGINT(0));
+}
+
+TEST_CASE("Replacement definitions retain nested field IDs above a historical allocation watermark",
+          "[iceberg_replacement]") {
+	ReplacementTest test;
+	Query(test.connection, "ALTER TABLE lake.default.t ADD COLUMN s STRUCT(x INTEGER, y VARCHAR)");
+	Query(test.connection, "ALTER TABLE lake.default.t ADD COLUMN l STRUCT(k INTEGER)[]");
+	Query(test.connection, "ALTER TABLE lake.default.t ADD COLUMN m MAP(VARCHAR, STRUCT(v INTEGER))");
+	Query(test.connection, "ALTER TABLE lake.default.t ADD COLUMN retired INTEGER");
+	Query(test.connection, "ALTER TABLE lake.default.t DROP COLUMN retired");
+	Query(test.connection, "BEGIN");
+	auto original = test.WritableTable().GetMetadataOwner();
+	auto last_id = original->GetLastColumnId();
+	test.Define("(m MAP(VARCHAR, STRUCT(v INTEGER, extra INTEGER)), l STRUCT(k INTEGER, extra INTEGER)[], "
+	            "s STRUCT(y VARCHAR, x BIGINT, extra INTEGER), id BIGINT, added INTEGER)");
+	auto &metadata = test.WritableTable().GetMetadata();
+	auto fields = metadata.GetLatestSchema().GetFullNames();
+	for (auto &old_field : original->GetLatestSchema().GetFullNames()) {
+		auto match = std::find_if(fields.begin(), fields.end(),
+		                          [&](const pair<int32_t, string> &field) { return field.second == old_field.second; });
+		REQUIRE(match != fields.end());
+		REQUIRE(match->first == old_field.first);
+	}
+	REQUIRE(metadata.GetLastColumnId() == last_id + 4);
+	REQUIRE(metadata.current_snapshot_id == original->current_snapshot_id);
+	test.Replace();
+	Query(test.connection, "INSERT INTO lake.default.t VALUES ('{key={v:1, extra:2}}', "
+	                       "'[{k:3, extra:4}]', '{y:yes, x:5, extra:6}', 7, 8)");
+	Query(test.connection, "COMMIT");
+	REQUIRE(Scalar(test.connection, "SELECT m = '{key={v:1, extra:2}}'::MAP(VARCHAR, STRUCT(v INTEGER, extra INTEGER)) "
+	                                "AND l = '[{k:3, extra:4}]'::STRUCT(k INTEGER, extra INTEGER)[] "
+	                                "AND s = '{y:yes, x:5, extra:6}'::STRUCT(y VARCHAR, x BIGINT, extra INTEGER) "
+	                                "AND id = 7 AND added = 8 FROM lake.default.t") == Value::BOOLEAN(true));
+	CheckRows(test.connection, {1, 2}, "AT (VERSION => getvariable('old_snapshot'))");
+}
+
+TEST_CASE("Replacement definitions reuse schemas without rewriting schema properties", "[iceberg_replacement]") {
+	ReplacementTest test;
+	Connection observer(test.database);
+	Query(test.connection, "ALTER TABLE lake.default.t SET ('write.metadata.metrics.column.id' = 'full', "
+	                       "'schema.name-mapping.default' = '[{\"field-id\":1,\"names\":[\"id\",\"old_id\"]}]')");
+	Query(test.connection, "BEGIN");
+	test.Define("(id VARCHAR)");
+	test.Replace();
+	Query(test.connection, "INSERT INTO lake.default.t VALUES ('new')");
+	CheckRows(test.connection, {1, 2}, "AT (VERSION => getvariable('old_snapshot'))");
+	CheckRows(observer, {1, 2});
+	Query(test.connection, "COMMIT");
+	REQUIRE(Scalar(test.connection, "SELECT id FROM lake.default.t") == Value("new"));
+	CheckRows(test.connection, {1, 2}, "AT (VERSION => getvariable('old_snapshot'))");
+	Query(test.connection, "BEGIN");
+	test.Define("(id INTEGER)");
+	REQUIRE(test.WritableTable().GetMetadata().GetCurrentSchemaId() == 0);
+	REQUIRE(test.WritableTable().GetMetadata().GetLastColumnId() == 1);
+	test.Replace();
+	Query(test.connection, "COMMIT");
+	Query(test.connection, "BEGIN");
+	test.Define("(id INTEGER)");
+	REQUIRE(test.WritableTable().GetMetadata().GetCurrentSchemaId() == 0);
+	REQUIRE(test.WritableTable().GetMetadata().GetLastColumnId() == 1);
+	Query(test.connection, "ROLLBACK");
+	Query(test.connection, "BEGIN");
+	test.Define("(\"ID\" INTEGER)");
+	auto &metadata = test.WritableTable().GetMetadata();
+	REQUIRE(metadata.GetLatestSchema().columns[0]->id == 2);
+	REQUIRE(metadata.GetTableProperty("write.metadata.metrics.column.id") == "full");
+	REQUIRE(metadata.GetTableProperty("schema.name-mapping.default") ==
+	        "[{\"field-id\":1,\"names\":[\"id\",\"old_id\"]}]");
+	test.Replace();
+	Query(test.connection, "COMMIT");
+	Query(test.connection, "BEGIN");
+	test.Define("(id INTEGER)");
+	REQUIRE(test.WritableTable().GetMetadata().GetLatestSchema().columns[0]->id == 3);
+	Query(test.connection, "ROLLBACK");
+}
+
+TEST_CASE("Replacement definitions preserve or upgrade format and bind defaults and constraints",
+          "[iceberg_replacement]") {
+	ReplacementTest test;
+	Query(test.connection, "SET iceberg_default_format_version = 3");
+	Query(test.connection, "BEGIN");
+	test.Define("(id INTEGER)");
+	REQUIRE(test.WritableTable().GetMetadata().iceberg_version == 2);
+	Query(test.connection, "ROLLBACK");
+	Query(test.connection, "BEGIN");
+	test.Define("(note VARCHAR, id BIGINT DEFAULT 7 NOT NULL) WITH ('FORMAT-VERSION' = 3)");
+	test.Replace();
+	Query(test.connection, "INSERT INTO lake.default.t DEFAULT VALUES");
+	Query(test.connection, "COMMIT");
+	REQUIRE(Scalar(test.connection, "SELECT id = 7 AND note IS NULL AND _row_id IS NOT NULL FROM lake.default.t") ==
+	        Value::BOOLEAN(true));
+	auto invalid = test.connection.Query("INSERT INTO lake.default.t VALUES ('invalid', NULL)");
+	REQUIRE(invalid->HasError());
+	REQUIRE_THAT(invalid->GetError(), Catch::Contains("NOT NULL"));
+	Query(test.connection, "SET iceberg_default_format_version = 2");
+	Query(test.connection, "BEGIN");
+	test.Define("(id TIMESTAMP_NS)");
+	REQUIRE(test.WritableTable().GetMetadata().iceberg_version == 3);
+	test.Replace();
+	Query(test.connection, "INSERT INTO lake.default.t VALUES ('2026-01-01 00:00:00.123456789')");
+	Query(test.connection, "COMMIT");
+	REQUIRE(Scalar(test.connection, "SELECT id::VARCHAR FROM lake.default.t") ==
+	        Value("2026-01-01 00:00:00.123456789"));
+}
+
+TEST_CASE("Replacement definitions replace reset and reuse partitioning and sorting", "[iceberg_replacement]") {
+	ReplacementTest test;
+	Query(test.connection, "ALTER TABLE lake.default.t ADD COLUMN part VARCHAR");
+	Query(test.connection, "ALTER TABLE lake.default.t SET PARTITIONED BY (part)");
+	Query(test.connection, "ALTER TABLE lake.default.t SET SORTED BY (id)");
+	Query(test.connection, "BEGIN");
+	auto original = test.WritableTable().GetMetadataOwner();
+	test.Define("(part VARCHAR, id INTEGER) PARTITIONED BY (id) SORTED BY (part)");
+	auto &metadata = test.WritableTable().GetMetadata();
+	REQUIRE(metadata.GetLatestPartitionSpec().fields[0].source_id == 1);
+	REQUIRE(metadata.GetLatestSortOrder().fields[0].source_id == 2);
+	test.Replace();
+	Query(test.connection, "INSERT INTO lake.default.t VALUES ('new', 7)");
+	Query(test.connection, "COMMIT");
+	REQUIRE(Scalar(test.connection, "SELECT part FROM lake.default.t") == Value("new"));
+	Query(test.connection, "BEGIN");
+	test.Define("(id INTEGER, part VARCHAR) PARTITIONED BY (part) SORTED BY (id)");
+	auto &reused = test.WritableTable().GetMetadata();
+	REQUIRE(reused.default_spec_id == original->default_spec_id);
+	REQUIRE(reused.default_sort_order_id == original->default_sort_order_id);
+	test.Replace();
+	Query(test.connection, "COMMIT");
+	Query(test.connection, "BEGIN");
+	test.Define("(id INTEGER)");
+	auto &reset = test.WritableTable().GetMetadata();
+	REQUIRE(reset.GetLatestPartitionSpec().fields.empty());
+	REQUIRE(reset.GetLatestSortOrder().fields.empty());
+	REQUIRE(reset.default_sort_order_id.GetIndex() == 0);
+	test.Replace();
+	Query(test.connection, "INSERT INTO lake.default.t VALUES (8)");
+	Query(test.connection, "COMMIT");
+	CheckRows(test.connection, {8});
+}
+
+TEST_CASE("Replacement definitions merge properties and keep table identity and location", "[iceberg_replacement]") {
+	ReplacementTest test;
+	Query(test.connection, "ALTER TABLE lake.default.t SET ('kept' = 'old', 'overridden' = 'old')");
+	Query(test.connection,
+	      "SET VARIABLE base_location = (SELECT metadata.location FROM iceberg_load_table_response(lake.default.t))");
+	Query(test.connection, "BEGIN");
+	auto original = test.WritableTable().GetMetadataOwner();
+	test.Define("(id INTEGER) WITH ('LOCATION' = getvariable('base_location')::VARCHAR || '/', "
+	            "'overridden' = 'new', 'added' = 'yes')");
+	auto &metadata = test.WritableTable().GetMetadata();
+	REQUIRE(metadata.table_uuid == original->table_uuid);
+	REQUIRE(metadata.location == original->location);
+	REQUIRE(metadata.GetTableProperty("kept") == "old");
+	REQUIRE(metadata.GetTableProperty("overridden") == "new");
+	REQUIRE(metadata.GetTableProperty("added") == "yes");
+	test.Replace();
+	Query(test.connection, "COMMIT");
+	REQUIRE(Scalar(test.connection, "SELECT value FROM iceberg_table_properties(lake.default.t) WHERE key = 'added'") ==
+	        Value("yes"));
+	Query(test.connection, "BEGIN");
+	test.Define("(changed VARCHAR) WITH ('added' = 'rolled back')");
+	test.Replace();
+	Query(test.connection, "ROLLBACK");
+	REQUIRE(Scalar(test.connection, "SELECT value FROM iceberg_table_properties(lake.default.t) WHERE key = 'added'") ==
+	        Value("yes"));
+	Query(test.connection, "INSERT INTO lake.default.t VALUES (7)");
+	CheckRows(test.connection, {7});
+}
+
+TEST_CASE("Rejected replacement definitions leave the committed table intact", "[iceberg_replacement]") {
+	ReplacementTest test;
+	auto before = Scalar(test.connection, "SELECT metadata_location FROM iceberg_load_table_response(lake.default.t)");
+	for (auto &entry : vector<pair<string, string>> {
+	         {"(id INTEGER) WITH ('format-version' = 1)", "cannot be downgraded"},
+	         {"(id INTEGER) WITH ('format-version' = 0)", "lowest supported iceberg version"},
+	         {"(id INTEGER) WITH ('format-version' = 4)", "highest supported iceberg version"},
+	         {"(id INTEGER) WITH ('format-version' = 'invalid')", "Can't cast 'format-version'"},
+	         {"(id INTEGER) WITH ('format-version' = NULL)", "NULL is not supported"},
+	         {"(id INTEGER) WITH ('location' = 'different')", "cannot change the location"},
+	         {"(id INTEGER) WITH ('location' = NULL)", "NULL is not supported"},
+	         {"(id INTEGER) WITH ('UUID' = 'reserved')", "reserved Iceberg table property"},
+	         {"(id INTEGER) WITH ('custom' = NULL)", "NULL is not supported"},
+	         {"(id INTEGER DEFAULT 7)", "non-null DEFAULT values are not supported"},
+	         {"(id TIMESTAMP_NS)", "requires Iceberg format-version 3"},
+	         {"(b BOOLEAN) PARTITIONED BY (bucket(4, b))", "Cannot partition by"},
+	         {"(b BOOLEAN) SORTED BY (bucket(4, b))", "Cannot sort by"},
+	         {"(items INTEGER[]) PARTITIONED BY (items)", "Cannot partition by"},
+	         {"(items INTEGER[]) SORTED BY (items)", "Cannot sort by"},
+	         {"(new_id INTEGER, b BOOLEAN) PARTITIONED BY (new_id) SORTED BY (bucket(4, b)) "
+	          "WITH ('format-version' = 3, 'custom' = 'must not persist')",
+	          "Cannot sort by"}}) {
+		CAPTURE(entry.first);
+		Query(test.connection, "BEGIN");
+		REQUIRE_THROWS_WITH(test.Define(entry.first), Catch::Contains(entry.second));
+		Query(test.connection, "ROLLBACK");
+		REQUIRE(Scalar(test.connection, "SELECT metadata_location FROM iceberg_load_table_response(lake.default.t)") ==
+		        before);
+		CheckRows(test.connection, {1, 2});
+	}
+}
+
+TEST_CASE("Replacement definitions protect the field ID watermark even when the current schema is reused",
+          "[iceberg_replacement]") {
+	ReplacementTest test;
+	Connection writer(test.database);
+	Query(test.connection, "BEGIN");
+	SECTION("The replacement adds a schema") {
+		test.Define("(id INTEGER, replacement VARCHAR)");
+	}
+	SECTION("The replacement reuses its original schema") {
+		test.Define("(id INTEGER)");
+	}
+	test.Replace();
+	Query(writer, "ALTER TABLE lake.default.t ADD COLUMN concurrent INTEGER");
+	Query(writer, "ALTER TABLE lake.default.t DROP COLUMN concurrent");
+	REQUIRE(Scalar(writer,
+	               "SELECT metadata.\"current-schema-id\"::INTEGER FROM iceberg_load_table_response(lake.default.t)") ==
+	        Value::INTEGER(0));
+	auto commit = test.connection.Query("COMMIT");
+	REQUIRE(commit->HasError());
+	REQUIRE_THAT(commit->GetError(), Catch::Contains("assert-last-assigned-field-id"));
+	CheckRows(writer, {1, 2});
 }
 
 int main(int argc, char **argv) {

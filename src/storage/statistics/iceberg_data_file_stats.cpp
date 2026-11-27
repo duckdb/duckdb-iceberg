@@ -111,13 +111,16 @@ void IcebergDataFileStats::PopulateFromReturnStats(ClientContext &context, Icebe
 		auto &col_name = StringValue::Get(struct_children[0]);
 		auto &col_stats = MapValue::GetChildren(struct_children[1]);
 		auto column_names = ParseQuotedList(col_name, '.');
-		if (column_names[0] == "_row_id") {
-			continue;
-		}
-
 		optional_idx name_offset;
 		auto column_info_p = ic_schema.GetFromPath(StringsToIdentifiers(column_names), &name_offset);
 		if (!column_info_p) {
+			//! The row lineage columns written by a V3 rewrite are not part of the table schema, so no column metrics
+			//! are recorded for them. Look them up by name only after the schema: a V2 table may have a real column
+			//! with the same name, which must still be checked and get metrics.
+			if (column_names.size() == 1 &&
+			    (column_names[0] == "_row_id" || column_names[0] == "_last_updated_sequence_number")) {
+				continue;
+			}
 			auto normalized_col_name = StringUtil::Join(column_names, ".");
 			throw InternalException("Column '%s' can not be found in the schema, but returned by RETURN_STATS",
 			                        normalized_col_name);
@@ -146,7 +149,7 @@ void IcebergDataFileStats::PopulateFromReturnStats(ClientContext &context, Icebe
 
 		if (write_bounds && stats.min) {
 			auto serialized_value =
-			    IcebergValue::SerializeValue(*stats.min, column_info.type, SerializeBound::LOWER_BOUND, metrics);
+			    IcebergValue::SerializeFileBound(*stats.min, column_info.type, SerializeBound::LOWER_BOUND, metrics);
 			if (serialized_value.HasError()) {
 				throw InvalidConfigurationException(serialized_value.GetError());
 			} else if (serialized_value.HasValue()) {
@@ -155,7 +158,7 @@ void IcebergDataFileStats::PopulateFromReturnStats(ClientContext &context, Icebe
 		}
 		if (write_bounds && stats.max) {
 			auto serialized_value =
-			    IcebergValue::SerializeValue(*stats.max, column_info.type, SerializeBound::UPPER_BOUND, metrics);
+			    IcebergValue::SerializeFileBound(*stats.max, column_info.type, SerializeBound::UPPER_BOUND, metrics);
 			if (serialized_value.HasError()) {
 				throw InvalidConfigurationException(serialized_value.GetError());
 			} else if (serialized_value.HasValue()) {

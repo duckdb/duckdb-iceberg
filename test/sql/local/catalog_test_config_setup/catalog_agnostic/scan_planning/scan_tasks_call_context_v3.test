@@ -1,0 +1,118 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/scan_planning/scan_tasks_call_context_v3.test
+# description: Planned format-v3 tasks, with deletion vectors and a column default, read the same with their context in the call
+# group: [scan_planning]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+require-env COLUMN_DEFAULT_SUPPORT
+
+require-env TIMETRAVEL_SUPPORT
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+set iceberg_use_server_side_scan_planning=false;
+
+statement ok
+drop table if exists my_datalake.default.scan_tasks_call_context_v3;
+
+statement ok
+create table my_datalake.default.scan_tasks_call_context_v3(id integer) with ('format-version'=3);
+
+statement ok
+insert into my_datalake.default.scan_tasks_call_context_v3 values (1), (2), (3);
+
+# The snapshot written before the schema changes, to plan it after them.
+statement ok
+set variable v3_first_snapshot = (select any_value(snapshot_id) from iceberg_scan_plan('my_datalake.default.scan_tasks_call_context_v3'));
+
+statement ok
+alter table my_datalake.default.scan_tasks_call_context_v3 add column extra varchar default 'initial';
+
+statement ok
+delete from my_datalake.default.scan_tasks_call_context_v3 where id=2;
+
+statement ok
+begin;
+
+statement ok
+create or replace temp table plan as select * from iceberg_scan_plan('my_datalake.default.scan_tasks_call_context_v3');
+
+query I
+select bool_or(list_contains(list_transform(delete_files, lambda d: lower(d.file_format)), 'puffin')) from plan;
+----
+true
+
+statement ok
+set variable plan_files = (select list(t) from (select * exclude (snapshot_id, schema_id, metadata, schema) from plan) t);
+
+statement ok
+set variable plan_snapshot = (select any_value(snapshot_id) from plan);
+
+statement ok
+set variable plan_schema_id = (select any_value(schema_id) from plan);
+
+statement ok
+set variable plan_metadata = (select any_value(metadata) from plan);
+
+statement ok
+set variable plan_schema = (select any_value(schema) from plan);
+
+query IT
+select * from iceberg_scan_tasks(getvariable('plan_files'),
+ snapshot_id := getvariable('plan_snapshot'), schema_id := getvariable('plan_schema_id'),
+ metadata := getvariable('plan_metadata'), schema := getvariable('plan_schema'))
+order by id;
+----
+1	initial
+3	initial
+
+statement ok
+commit;
+
+# A plan of the snapshot written before the column was added: its document holds both schemas, and schema_id
+# selects the older one.
+statement ok
+begin;
+
+statement ok
+create or replace temp table old_plan as select * from iceberg_scan_plan('my_datalake.default.scan_tasks_call_context_v3',
+ snapshot_from_id=getvariable('v3_first_snapshot'));
+
+query I
+select max(len(metadata.schemas::variant[])) from old_plan;
+----
+2
+
+statement ok
+set variable old_files = (select list(t) from (select * exclude (snapshot_id, schema_id, metadata, schema) from old_plan) t);
+
+statement ok
+set variable old_schema_id = (select any_value(schema_id) from old_plan);
+
+statement ok
+set variable old_metadata = (select any_value(metadata) from old_plan);
+
+query I
+select list(column_name) from (describe select * from iceberg_scan_tasks(getvariable('old_files'),
+ schema_id := getvariable('old_schema_id'), metadata := getvariable('old_metadata')));
+----
+[id]
+
+query I
+select id from iceberg_scan_tasks(getvariable('old_files'), schema_id := getvariable('old_schema_id'),
+ metadata := getvariable('old_metadata')) order by id;
+----
+1
+2
+3
+
+statement ok
+commit;
+
+statement ok
+drop table my_datalake.default.scan_tasks_call_context_v3;

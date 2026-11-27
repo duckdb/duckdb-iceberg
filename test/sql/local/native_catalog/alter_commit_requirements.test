@@ -74,10 +74,14 @@ ALTER TABLE requirements_catalog.default.existing_{single_table} SET PARTITIONED
 statement ok
 ALTER TABLE requirements_catalog.default.existing_{single_table} SET SORTED BY (d);
 
+# Dropping b also depends on the default spec and sort order. Assert each only once.
+statement ok
+ALTER TABLE requirements_catalog.default.existing_{single_table} DROP COLUMN b;
+
 statement ok
 COMMIT;
 
-# Only this commit selects schema 3. Earlier setup commits must not satisfy these assertions.
+# Only this commit selects schema 4. Earlier setup commits must not satisfy these assertions.
 statement ok
 CREATE OR REPLACE TEMP TABLE repeated_alter_commit AS
 SELECT path, request FROM alter_table_commits
@@ -85,7 +89,7 @@ WHERE json_extract_string(request, '$.identifier.name') = 'existing_{single_tabl
 	AND EXISTS (
 		SELECT 1 FROM json_each(request, '$.updates') AS update_entry
 		WHERE json_extract_string(update_entry.value, '$.action') = 'set-current-schema'
-			AND json_extract(update_entry.value, '$."schema-id"')::INTEGER = 3
+			AND json_extract(update_entry.value, '$."schema-id"')::INTEGER = 4
 	);
 
 query II
@@ -129,12 +133,12 @@ assert-last-assigned-partition-id	true
 assert-table-uuid	true
 
 statement ok
-INSERT INTO requirements_catalog.default.existing_{single_table} VALUES (1, 2, 3, 4);
+INSERT INTO requirements_catalog.default.existing_{single_table} VALUES (1, 3, 4);
 
-query IIII fresh
+query III fresh
 SELECT * FROM requirements_catalog.default.existing_{single_table};
 ----
-1	2	3	4
+1	3	4
 
 # A staged table has no published metadata against which to assert any of those values.
 statement ok
