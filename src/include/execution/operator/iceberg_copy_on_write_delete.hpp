@@ -16,7 +16,6 @@
 
 namespace duckdb {
 
-class IcebergMultiFileList;
 class IcebergTableSchemaVersion;
 class LogicalDelete;
 class LogicalUpdate;
@@ -36,8 +35,9 @@ struct IcebergCopyOnWriteDeletes {
 //!    columns _row_id and _last_updated_sequence_number) and then those two virtual columns, and this operator keeps
 //!    only the rows of matched files that the DELETE does not remove.
 //! The kept rows are written by the IcebergFileRewrite above it, which replaces the matched files in one snapshot.
-//! A copy-on-write UPDATE uses the same operator: the build side also computes each matched row's new values, and
-//! once the probe side has read the matched files, the operator emits those rows in place of the ones it dropped.
+//! A copy-on-write UPDATE uses the same operator: the build side also computes each matched row's new values (on V3
+//! followed by its _row_id and a NULL _last_updated_sequence_number), and once the probe side has read the matched
+//! files, the operator emits those rows in place of the ones it dropped.
 class IcebergCopyOnWriteDeleteFilter : public PhysicalOperator {
 public:
 	IcebergCopyOnWriteDeleteFilter(PhysicalPlan &physical_plan, vector<LogicalType> types, PhysicalOperator &keep_plan,
@@ -45,15 +45,13 @@ public:
 
 	//! The filename and file_row_number columns of the build side
 	vector<idx_t> match_row_id_indexes;
-	//! The file list of the build-side scan. It has loaded the delete files of every matched data file, which are
-	//! removed together with that data file.
-	optional_ptr<IcebergMultiFileList> match_file_list;
 	//! The probe-side scan, if it is a plain table scan: it gets a runtime filter on the matched files
 	optional_ptr<PhysicalTableScan> keep_scan;
 	ProjectionIndex keep_scan_filename_index;
 	//! Owns the logical plan the probe side was planned from
 	unique_ptr<LogicalOperator> keep_logical_plan;
-	//! For an UPDATE: the new value of every table column, evaluated on the build side's rows
+	//! For an UPDATE: the new value of every table column, then on V3 the row lineage columns, evaluated on the build
+	//! side's rows
 	vector<unique_ptr<Expression>> update_expressions;
 	//! For a MERGE: the build side is the MERGE itself, which reports its row count, and the rows its UPDATE and
 	//! DELETE actions removed are collected here while it runs

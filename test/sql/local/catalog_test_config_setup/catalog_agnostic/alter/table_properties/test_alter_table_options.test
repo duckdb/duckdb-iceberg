@@ -61,11 +61,16 @@ page-write-size	10000
 write.delete.mode	copy-on-write
 write.update.mode	copy-on-write
 
-# write.update.mode is copy-on-write, so an UPDATE returns an error
-statement error
+# write.update.mode is copy-on-write, so an UPDATE rewrites the data file instead of writing a deletion vector
+query I
 update my_datalake.default.alter_table_set_options set b = b where a % 2 = 0;
 ----
-<REGEX>:.*Not implemented Error.*write.update.mode.*copy-on-write.*alter_table_set_options.*ALTER TABLE alter_table_set_options SET \('write.update.mode' = 'merge-on-read'\).*
+5
+
+query I
+select count(*) from iceberg_metadata(my_datalake.default.alter_table_set_options) where content = 'POSITION_DELETES';
+----
+0
 
 # write.delete.mode is copy-on-write, so a DELETE rewrites the data file instead of writing a deletion vector
 statement ok
