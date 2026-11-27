@@ -1,0 +1,497 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/insert_overwrite/insert_overwrite_static_partition.test
+# description: INSERT OVERWRITE with static PARTITION values replaces the rows that match them
+# group: [insert_overwrite]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+SET active_grammar_extensions = ['iceberg_insert_overwrite'];
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_static;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_static2;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_static3;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_static_names;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_static_types;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_static_no_metrics;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_static_modes;
+
+statement ok
+CREATE TABLE my_datalake.default.overwrite_static (id INTEGER, p INTEGER, v VARCHAR) PARTITIONED BY (p);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_static VALUES (1, 1, 'a'), (2, 1, 'b'), (3, 2, 'c'), (4, 3, 'd'), (5, NULL, 'e');
+
+# by position the query supplies the columns that are not static, in table order
+query I
+INSERT OVERWRITE my_datalake.default.overwrite_static PARTITION (p = 1) SELECT 10, 'x';
+----
+1
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_static ORDER BY id;
+----
+3	2	c
+4	3	d
+5	NULL	e
+10	1	x
+
+# a partition that does not exist yet
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_static PARTITION (p = 9) VALUES (11, 'new part');
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_static ORDER BY id;
+----
+3	2	c
+4	3	d
+5	NULL	e
+10	1	x
+11	9	new part
+
+# NULL matches the rows whose partition value is NULL
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_static PARTITION (p = NULL) VALUES (12, 'null part');
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_static ORDER BY id;
+----
+3	2	c
+4	3	d
+10	1	x
+11	9	new part
+12	NULL	null part
+
+# a column list
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_static PARTITION (p = 2) (v, id) VALUES ('listed', 13);
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_static ORDER BY id;
+----
+4	3	d
+10	1	x
+11	9	new part
+12	NULL	null part
+13	2	listed
+
+# BY NAME
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_static PARTITION (p = 3) BY NAME SELECT 'named' AS v, 14 AS id;
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_static ORDER BY id;
+----
+10	1	x
+11	9	new part
+12	NULL	null part
+13	2	listed
+14	3	named
+
+# names are case-insensitive, TABLE is optional
+statement ok
+INSERT OVERWRITE TABLE my_datalake.default.overwrite_static PARTITION (P = 1) VALUES (15, 'upper');
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_static ORDER BY id;
+----
+11	9	new part
+12	NULL	null part
+13	2	listed
+14	3	named
+15	1	upper
+
+# the query reads the partition it replaces
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_static PARTITION (p = 1)
+SELECT id + 100, v || '!' FROM my_datalake.default.overwrite_static WHERE p = 1;
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_static ORDER BY id;
+----
+11	9	new part
+12	NULL	null part
+13	2	listed
+14	3	named
+115	1	upper!
+
+# a string value for an integer column
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_static PARTITION (p = '2') VALUES (16, 'string value');
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_static ORDER BY id;
+----
+11	9	new part
+12	NULL	null part
+14	3	named
+16	2	string value
+115	1	upper!
+
+# a query without rows removes the rows that match
+query I
+INSERT OVERWRITE my_datalake.default.overwrite_static PARTITION (p = 9) SELECT 1, 'none' WHERE false;
+----
+0
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_static ORDER BY id;
+----
+12	NULL	null part
+14	3	named
+16	2	string value
+115	1	upper!
+
+# without rows and without a match nothing changes
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_static PARTITION (p = 77) SELECT 1, 'none' WHERE false;
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_static ORDER BY id;
+----
+12	NULL	null part
+14	3	named
+16	2	string value
+115	1	upper!
+
+# an entry without a value replaces nothing by itself: in static mode every row is replaced, and the column is
+# read from the query at its position in the table
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_static PARTITION (p) VALUES (20, 7, 'all');
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_static ORDER BY id;
+----
+20	7	all
+
+# prepared: the PARTITION value is a parameter
+statement ok
+PREPARE overwrite_static AS INSERT OVERWRITE my_datalake.default.overwrite_static PARTITION (p = $1) VALUES ($2, $3);
+
+# the statement is kept as it was written
+query I
+SELECT statement LIKE 'INSERT OVERWRITE %overwrite_static PARTITION (p = $1) %' FROM duckdb_prepared_statements()
+WHERE name = 'overwrite_static';
+----
+true
+
+statement ok
+EXECUTE overwrite_static(7, 21, 'param');
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_static ORDER BY id;
+----
+21	7	param
+
+statement ok
+EXECUTE overwrite_static(8, 22, 'param 2');
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_static ORDER BY id;
+----
+21	7	param
+22	8	param 2
+
+statement ok
+EXECUTE overwrite_static(7, 23, 'param 3');
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_static ORDER BY id;
+----
+22	8	param 2
+23	7	param 3
+
+statement ok
+DEALLOCATE overwrite_static;
+
+# EXPLAIN shows the overwrite and does not run it; EXPLAIN ANALYZE runs it
+query II
+EXPLAIN INSERT OVERWRITE my_datalake.default.overwrite_static PARTITION (p = 8) VALUES (24, 'explained');
+----
+physical_plan	<REGEX>:.*Iceberg Insert Overwrite.*
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_static ORDER BY id;
+----
+22	8	param 2
+23	7	param 3
+
+statement ok
+EXPLAIN ANALYZE INSERT OVERWRITE my_datalake.default.overwrite_static PARTITION (p = 8) VALUES (24, 'analyzed');
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_static ORDER BY id;
+----
+23	7	param 3
+24	8	analyzed
+
+# a number written as a string, also with a leading zero or blanks around it
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_static PARTITION (p = '08') VALUES (25, 'leading zero');
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_static PARTITION (p = ' 7 ') VALUES (26, 'blanks');
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_static ORDER BY id;
+----
+25	8	leading zero
+26	7	blanks
+
+# a VALUES list stays the source of the INSERT beside a static value: DEFAULT, and rows whose types only agree
+# through the columns they go into
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_static PARTITION (p = 8) VALUES (27, DEFAULT);
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_static PARTITION (p = 7) (v, id) VALUES (DEFAULT, 28);
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_static ORDER BY id;
+----
+27	8	NULL
+28	7	NULL
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_static PARTITION (p = 8) VALUES (29, 'text'), (30, 31);
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_static ORDER BY id;
+----
+28	7	NULL
+29	8	text
+30	8	31
+
+# two partition columns
+statement ok
+CREATE TABLE my_datalake.default.overwrite_static2 (id INTEGER, p INTEGER, q VARCHAR, v VARCHAR) PARTITIONED BY (p, q);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_static2 VALUES (1, 1, 'a', 'one'), (2, 1, 'b', 'two'), (3, 2, 'a', 'three'), (4, 2, 'b', 'four');
+
+# one of the two is static: every q under p = 1 is replaced
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_static2 PARTITION (p = 1) VALUES (10, 'c', 'p1');
+
+query IITT
+SELECT id, p, q, v FROM my_datalake.default.overwrite_static2 ORDER BY id;
+----
+3	2	a	three
+4	2	b	four
+10	1	c	p1
+
+# both static, in another order than the table's
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_static2 PARTITION (q = 'a', p = 2) VALUES (11, 'p2a');
+
+query IITT
+SELECT id, p, q, v FROM my_datalake.default.overwrite_static2 ORDER BY id;
+----
+4	2	b	four
+10	1	c	p1
+11	2	a	p2a
+
+# a static entry and one without a value: only the static one selects what is replaced
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_static2 PARTITION (p = 2, q) VALUES (12, 'z', 'p2z');
+
+query IITT
+SELECT id, p, q, v FROM my_datalake.default.overwrite_static2 ORDER BY id;
+----
+10	1	c	p1
+12	2	z	p2z
+
+# a date partition: a string and a typed literal
+statement ok
+CREATE TABLE my_datalake.default.overwrite_static3 (id INTEGER, d DATE) PARTITIONED BY (d);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_static3 VALUES (1, DATE '2024-01-01'), (2, DATE '2024-01-02');
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_static3 PARTITION (d = '2024-01-01') VALUES (10);
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_static3 PARTITION (d = DATE '2024-01-02') VALUES (11);
+
+query IT
+SELECT id, d FROM my_datalake.default.overwrite_static3 ORDER BY id;
+----
+10	2024-01-01
+11	2024-01-02
+
+# partition columns whose names are keywords or need quotes
+statement ok
+CREATE TABLE my_datalake.default.overwrite_static_names (id INTEGER, "year" INTEGER, "Mixed Case" VARCHAR) PARTITIONED BY ("year", "Mixed Case");
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_static_names VALUES (1, 2023, 'a'), (2, 2024, 'a'), (3, 2024, 'b');
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_static_names PARTITION (year = 2024, "mixed case" = 'a') VALUES (10);
+
+query IIT
+SELECT * FROM my_datalake.default.overwrite_static_names ORDER BY id;
+----
+1	2023	a
+3	2024	b
+10	2024	a
+
+statement ok
+PREPARE overwrite_names AS INSERT OVERWRITE my_datalake.default.overwrite_static_names PARTITION ("Mixed Case" = $1, year = 2024) VALUES ($2);
+
+query I
+SELECT statement LIKE 'INSERT OVERWRITE %overwrite_static_names PARTITION ("Mixed Case" = $1, "year" = 2024) %'
+FROM duckdb_prepared_statements() WHERE name = 'overwrite_names';
+----
+true
+
+statement ok
+EXECUTE overwrite_names('b', 11);
+
+query IIT
+SELECT * FROM my_datalake.default.overwrite_static_names ORDER BY id;
+----
+1	2023	a
+10	2024	a
+11	2024	b
+
+statement ok
+DEALLOCATE overwrite_names;
+
+# values of other types, each in the form of its column
+statement ok
+CREATE TABLE my_datalake.default.overwrite_static_types (id INTEGER, b BOOLEAN, d DECIMAL(10,2), ts TIMESTAMP, s VARCHAR) PARTITIONED BY (b, d, ts, s);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_static_types VALUES (1, true, 1.50, TIMESTAMP '2024-01-01 10:00:00', 'x '), (2, false, 2.25, TIMESTAMP '2024-01-02 10:00:00', 'y');
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_static_types PARTITION (b = true, d = 1.5, ts = '2024-01-01 10:00:00', s = 'x ') VALUES (10);
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_static_types PARTITION (b = 'false', d = '2.250', ts = TIMESTAMP '2024-01-02 10:00:00', s = 'y') VALUES (11);
+
+query ITTTT
+SELECT id, b, d, ts, s || '|' FROM my_datalake.default.overwrite_static_types ORDER BY id;
+----
+10	true	1.50	2024-01-01 10:00:00	x |
+11	false	2.25	2024-01-02 10:00:00	y|
+
+# a table whose data files carry no column metrics: the partition values decide, also for NULL
+statement ok
+CREATE TABLE my_datalake.default.overwrite_static_no_metrics (id INTEGER, p INTEGER, v VARCHAR) PARTITIONED BY (p) WITH ('write.metadata.metrics.default' = 'none');
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_static_no_metrics VALUES (1, 1, 'a'), (2, 2, 'b'), (3, NULL, 'c');
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_static_no_metrics PARTITION (p = NULL) VALUES (10, 'null part');
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_static_no_metrics PARTITION (p = 1) VALUES (11, 'one');
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_static_no_metrics ORDER BY id;
+----
+2	2	b
+10	NULL	null part
+11	1	one
+
+# every clause of the statement survives a copy of the statement, and printing it and parsing it again
+statement ok
+CREATE TABLE my_datalake.default.overwrite_static_modes (id INTEGER, "Mixed Case" VARCHAR, p INTEGER, q VARCHAR) PARTITIONED BY (p, q);
+
+foreach mode copy_statement reparse_statement
+
+statement ok
+SET debug_verify_statement = '{mode}';
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_static_modes VALUES (1, 'a', 1, 'x'), (2, 'b', 2, 'y');
+
+# a WITH clause, an entry with and one without a value, a column list
+statement ok
+WITH src AS (SELECT 10 AS id, 'new' AS v, 'x' AS q)
+INSERT OVERWRITE TABLE my_datalake.default.overwrite_static_modes PARTITION (p = 1, q) (id, "Mixed Case", q) SELECT id, v, q FROM src;
+
+query ITIT
+SELECT * FROM my_datalake.default.overwrite_static_modes ORDER BY id;
+----
+2	b	2	y
+10	new	1	x
+
+# BY NAME, the value an expression
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_static_modes PARTITION (p = 1 + 1) BY NAME SELECT 'z' AS q, 20 AS id, 'named' AS "Mixed Case";
+
+query ITIT
+SELECT * FROM my_datalake.default.overwrite_static_modes ORDER BY id;
+----
+10	new	1	x
+20	named	2	z
+
+# prepared, a value a parameter
+statement ok
+PREPARE overwrite_static_modes AS INSERT OVERWRITE my_datalake.default.overwrite_static_modes PARTITION (p = $1, q = 'x') VALUES ($2, $3);
+
+statement ok
+EXECUTE overwrite_static_modes(1, 30, 'prepared');
+
+query ITIT
+SELECT * FROM my_datalake.default.overwrite_static_modes ORDER BY id;
+----
+20	named	2	z
+30	prepared	1	x
+
+statement ok
+DEALLOCATE overwrite_static_modes;
+
+# no PARTITION clause and no rows: the table is empty for the next round
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_static_modes SELECT 1, 'none', 1, 'x' WHERE false;
+
+query I
+SELECT count(*) FROM my_datalake.default.overwrite_static_modes;
+----
+0
+
+endloop
+
+statement ok
+RESET debug_verify_statement;
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_static_modes;
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_static;
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_static_names;
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_static_types;
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_static_no_metrics;
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_static2;
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_static3;

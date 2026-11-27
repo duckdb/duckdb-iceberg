@@ -1,0 +1,289 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/insert_overwrite/insert_overwrite_snapshots.test
+# description: The snapshots INSERT OVERWRITE commits: operation and summary
+# group: [insert_overwrite]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SNAPSHOT_HISTORY_SUPPORT
+
+include test/sql/init_requires
+
+statement ok
+SET active_grammar_extensions = ['iceberg_insert_overwrite'];
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_snapshots;
+
+statement ok
+CREATE TABLE my_datalake.default.overwrite_snapshots (p INTEGER, v VARCHAR) PARTITIONED BY (p);
+
+# rows into an empty table: an overwrite snapshot that only adds
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_snapshots VALUES (1, 'a'), (2, 'b'), (2, 'c');
+
+query ITIIIII
+SELECT sequence_number, operation, summary['added-data-files']::BIGINT, summary['added-records']::BIGINT,
+       coalesce(summary['deleted-data-files']::BIGINT, 0), summary['total-data-files']::BIGINT,
+       summary['total-records']::BIGINT
+FROM iceberg_snapshots(my_datalake.default.overwrite_snapshots) ORDER BY sequence_number;
+----
+1	overwrite	2	3	0	2	3
+
+# every row replaced: one snapshot removes the two files and adds one
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_snapshots VALUES (7, 'only');
+
+query ITIIIIII
+SELECT sequence_number, operation, summary['added-data-files']::BIGINT, summary['added-records']::BIGINT,
+       summary['deleted-data-files']::BIGINT, summary['deleted-records']::BIGINT,
+       summary['total-data-files']::BIGINT, summary['total-records']::BIGINT
+FROM iceberg_snapshots(my_datalake.default.overwrite_snapshots) ORDER BY sequence_number DESC LIMIT 1;
+----
+2	overwrite	1	1	2	3	1	1
+
+# static PARTITION values: only the files of the matching partition are removed
+statement ok
+INSERT INTO my_datalake.default.overwrite_snapshots VALUES (1, 'a'), (1, 'b'), (2, 'c');
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_snapshots PARTITION (p = 1) VALUES ('new');
+
+query ITIIIIII
+SELECT sequence_number, operation, summary['added-data-files']::BIGINT, summary['added-records']::BIGINT,
+       summary['deleted-data-files']::BIGINT, summary['deleted-records']::BIGINT,
+       summary['total-data-files']::BIGINT, summary['total-records']::BIGINT
+FROM iceberg_snapshots(my_datalake.default.overwrite_snapshots) ORDER BY sequence_number DESC LIMIT 1;
+----
+4	overwrite	1	1	1	2	3	3
+
+# a query without rows: the matching files are removed in a delete snapshot
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_snapshots PARTITION (p = 2) SELECT 'none' WHERE false;
+
+query ITIIIIII
+SELECT sequence_number, operation, coalesce(summary['added-data-files']::BIGINT, 0),
+       coalesce(summary['added-records']::BIGINT, 0), summary['deleted-data-files']::BIGINT,
+       summary['deleted-records']::BIGINT, summary['total-data-files']::BIGINT, summary['total-records']::BIGINT
+FROM iceberg_snapshots(my_datalake.default.overwrite_snapshots) ORDER BY sequence_number DESC LIMIT 1;
+----
+5	delete	0	0	1	1	2	2
+
+# without rows and without a matching file no snapshot is added
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_snapshots PARTITION (p = 77) SELECT 'none' WHERE false;
+
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.overwrite_snapshots);
+----
+5
+
+# dynamic mode: the snapshot is marked as a replacement of partitions
+statement ok
+SET iceberg_partition_overwrite_mode = 'dynamic';
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_snapshots VALUES (3, 'd'), (3, 'e');
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_snapshots VALUES (3, 'new 3'), (4, 'new 4');
+
+query ITIIIIIIT
+SELECT sequence_number, operation, summary['added-data-files']::BIGINT, summary['added-records']::BIGINT,
+       summary['deleted-data-files']::BIGINT, summary['deleted-records']::BIGINT,
+       summary['total-data-files']::BIGINT, summary['total-records']::BIGINT, summary['replace-partitions']
+FROM iceberg_snapshots(my_datalake.default.overwrite_snapshots) ORDER BY sequence_number DESC LIMIT 1;
+----
+7	overwrite	2	2	1	2	4	4	true
+
+# a query without rows adds no snapshot
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_snapshots SELECT 3, 'none' WHERE false;
+
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.overwrite_snapshots);
+----
+7
+
+# a static overwrite is not marked
+statement ok
+SET iceberg_partition_overwrite_mode = 'static';
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_snapshots VALUES (5, 'static');
+
+query ITIIIIIIT
+SELECT sequence_number, operation, summary['added-data-files']::BIGINT, summary['added-records']::BIGINT,
+       summary['deleted-data-files']::BIGINT, summary['deleted-records']::BIGINT,
+       summary['total-data-files']::BIGINT, summary['total-records']::BIGINT, summary['replace-partitions']
+FROM iceberg_snapshots(my_datalake.default.overwrite_snapshots) ORDER BY sequence_number DESC LIMIT 1;
+----
+8	overwrite	1	1	4	4	1	1	NULL
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_snapshots;
+
+# dynamic mode on an unpartitioned table: the table is the one partition that is replaced
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_snapshots_plain;
+
+statement ok
+CREATE TABLE my_datalake.default.overwrite_snapshots_plain (id INTEGER, v VARCHAR);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_snapshots_plain VALUES (1, 'a'), (2, 'b');
+
+statement ok
+SET iceberg_partition_overwrite_mode = 'dynamic';
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_snapshots_plain VALUES (10, 'x');
+
+query ITIIIIIIT
+SELECT sequence_number, operation, summary['added-data-files']::BIGINT, summary['added-records']::BIGINT,
+       summary['deleted-data-files']::BIGINT, summary['deleted-records']::BIGINT,
+       summary['total-data-files']::BIGINT, summary['total-records']::BIGINT, summary['replace-partitions']
+FROM iceberg_snapshots(my_datalake.default.overwrite_snapshots_plain) ORDER BY sequence_number DESC LIMIT 1;
+----
+2	overwrite	1	1	1	2	1	1	true
+
+# a query without rows commits nothing
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_snapshots_plain SELECT 1, 'none' WHERE false;
+
+query I
+SELECT count(*) FROM iceberg_snapshots(my_datalake.default.overwrite_snapshots_plain);
+----
+2
+
+statement ok
+SET iceberg_partition_overwrite_mode = 'static';
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_snapshots_plain;
+
+# the position delete files of replaced data files leave the table in the same snapshot
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_snapshots_deletes;
+
+statement ok
+CREATE TABLE my_datalake.default.overwrite_snapshots_deletes (id INTEGER, p INTEGER, v VARCHAR) PARTITIONED BY (p) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_snapshots_deletes VALUES (1, 1, 'a'), (2, 1, 'b'), (3, 2, 'c'), (4, 2, 'd'), (5, 3, 'e'), (6, 3, 'f');
+
+# one deleted row in each data file
+statement ok
+DELETE FROM my_datalake.default.overwrite_snapshots_deletes WHERE id = 1;
+
+statement ok
+DELETE FROM my_datalake.default.overwrite_snapshots_deletes WHERE id = 3;
+
+statement ok
+DELETE FROM my_datalake.default.overwrite_snapshots_deletes WHERE id = 5;
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_snapshots_deletes ORDER BY id;
+----
+2	1	b
+4	2	d
+6	3	f
+
+query TIIIII
+SELECT operation, coalesce(summary['deleted-data-files']::BIGINT, 0),
+       coalesce(summary['removed-delete-files']::BIGINT, 0), coalesce(summary['removed-position-delete-files']::BIGINT, 0),
+       summary['total-data-files']::BIGINT, summary['total-delete-files']::BIGINT
+FROM iceberg_snapshots(my_datalake.default.overwrite_snapshots_deletes) ORDER BY sequence_number DESC LIMIT 1;
+----
+delete	0	0	0	3	3
+
+# a static value: the data file of p = 1 is removed, and its deletes with it
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_snapshots_deletes PARTITION (p = 1) VALUES (10, 'x');
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_snapshots_deletes ORDER BY id;
+----
+4	2	d
+6	3	f
+10	1	x
+
+query TIIIII
+SELECT operation, coalesce(summary['deleted-data-files']::BIGINT, 0),
+       coalesce(summary['removed-delete-files']::BIGINT, 0), coalesce(summary['removed-position-delete-files']::BIGINT, 0),
+       summary['total-data-files']::BIGINT, summary['total-delete-files']::BIGINT
+FROM iceberg_snapshots(my_datalake.default.overwrite_snapshots_deletes) ORDER BY sequence_number DESC LIMIT 1;
+----
+overwrite	1	1	1	3	2
+
+# dynamic mode: the same for the partition that receives rows
+statement ok
+SET iceberg_partition_overwrite_mode = 'dynamic';
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_snapshots_deletes VALUES (11, 2, 'y');
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_snapshots_deletes ORDER BY id;
+----
+6	3	f
+10	1	x
+11	2	y
+
+query TIIIII
+SELECT operation, coalesce(summary['deleted-data-files']::BIGINT, 0),
+       coalesce(summary['removed-delete-files']::BIGINT, 0), coalesce(summary['removed-position-delete-files']::BIGINT, 0),
+       summary['total-data-files']::BIGINT, summary['total-delete-files']::BIGINT
+FROM iceberg_snapshots(my_datalake.default.overwrite_snapshots_deletes) ORDER BY sequence_number DESC LIMIT 1;
+----
+overwrite	1	1	1	3	1
+
+# no static value: every data file and every delete is removed
+statement ok
+SET iceberg_partition_overwrite_mode = 'static';
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_snapshots_deletes VALUES (12, 4, 'z'), (13, 4, 'w');
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_snapshots_deletes ORDER BY id;
+----
+12	4	z
+13	4	w
+
+query TIIIII
+SELECT operation, coalesce(summary['deleted-data-files']::BIGINT, 0),
+       coalesce(summary['removed-delete-files']::BIGINT, 0), coalesce(summary['removed-position-delete-files']::BIGINT, 0),
+       summary['total-data-files']::BIGINT, summary['total-delete-files']::BIGINT
+FROM iceberg_snapshots(my_datalake.default.overwrite_snapshots_deletes) ORDER BY sequence_number DESC LIMIT 1;
+----
+overwrite	3	1	1	1	0
+
+# the new rows are deleted and updated as any other
+statement ok
+DELETE FROM my_datalake.default.overwrite_snapshots_deletes WHERE id = 12;
+
+statement ok
+UPDATE my_datalake.default.overwrite_snapshots_deletes SET v = 'updated' WHERE id = 13;
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_snapshots_deletes VALUES (14, 5, 'appended');
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_snapshots_deletes ORDER BY id;
+----
+13	4	updated
+14	5	appended
+
+# a query without rows removes the data files of the partition and their deletes
+query I
+INSERT OVERWRITE my_datalake.default.overwrite_snapshots_deletes PARTITION (p = 4) SELECT 1, 'none' WHERE false;
+----
+0
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_snapshots_deletes ORDER BY id;
+----
+14	5	appended
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_snapshots_deletes;

@@ -1,0 +1,47 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/insert_overwrite/insert_overwrite_many_files.test_slow
+# description: INSERT OVERWRITE that writes more data files than the copy returns in one chunk
+# group: [insert_overwrite]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+SET active_grammar_extensions = ['iceberg_insert_overwrite'];
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_many_files;
+
+statement ok
+CREATE TABLE my_datalake.default.overwrite_many_files (id INTEGER, p INTEGER) PARTITIONED BY (p);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_many_files VALUES (-1, -1);
+
+# static mode: the files of every chunk are part of the snapshot
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_many_files SELECT i, i FROM range(2050) t(i);
+
+query III
+SELECT count(*), count(DISTINCT p), sum(id) FROM my_datalake.default.overwrite_many_files;
+----
+2050	2050	2100225
+
+# dynamic mode: the 2040 partitions that receive rows again are replaced, 10 stay and 10 are new
+statement ok
+SET iceberg_partition_overwrite_mode = 'dynamic';
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_many_files SELECT i + 10000, i FROM range(10, 2060) t(i);
+
+query IIII
+SELECT count(*), count(DISTINCT p), count(*) FILTER (WHERE id < 10000), sum(id)
+FROM my_datalake.default.overwrite_many_files;
+----
+2060	2060	10	22620770
+
+statement ok
+SET iceberg_partition_overwrite_mode = 'static';
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_many_files;

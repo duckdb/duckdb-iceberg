@@ -8,6 +8,7 @@ add_library(
   iceberg_delete.cpp
   iceberg_file_rewrite.cpp
   iceberg_insert.cpp
+  iceberg_insert_overwrite.cpp
   iceberg_update.cpp
   iceberg_written_files.cpp)
 set(ALL_OBJECT_FILES

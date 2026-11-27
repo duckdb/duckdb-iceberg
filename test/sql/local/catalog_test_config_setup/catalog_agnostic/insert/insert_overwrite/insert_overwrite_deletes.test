@@ -1,0 +1,104 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/insert_overwrite/insert_overwrite_deletes.test
+# description: INSERT OVERWRITE on data files that have position deletes
+# group: [insert_overwrite]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+SET active_grammar_extensions = ['iceberg_insert_overwrite'];
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_deletes;
+
+statement ok
+CREATE TABLE my_datalake.default.overwrite_deletes (id INTEGER, p INTEGER, v VARCHAR) PARTITIONED BY (p) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_deletes VALUES (1, 1, 'a'), (2, 1, 'b'), (3, 2, 'c'), (4, 2, 'd'), (5, 3, 'e'), (6, 3, 'f');
+
+# one deleted row in each data file
+statement ok
+DELETE FROM my_datalake.default.overwrite_deletes WHERE id = 1;
+
+statement ok
+DELETE FROM my_datalake.default.overwrite_deletes WHERE id = 3;
+
+statement ok
+DELETE FROM my_datalake.default.overwrite_deletes WHERE id = 5;
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_deletes ORDER BY id;
+----
+2	1	b
+4	2	d
+6	3	f
+
+# a static value: the data file of p = 1 is removed, and its deletes with it
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_deletes PARTITION (p = 1) VALUES (10, 'x');
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_deletes ORDER BY id;
+----
+4	2	d
+6	3	f
+10	1	x
+
+# dynamic mode: the same for the partition that receives rows
+statement ok
+SET iceberg_partition_overwrite_mode = 'dynamic';
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_deletes VALUES (11, 2, 'y');
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_deletes ORDER BY id;
+----
+6	3	f
+10	1	x
+11	2	y
+
+# no static value: every data file and every delete is removed
+statement ok
+SET iceberg_partition_overwrite_mode = 'static';
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_deletes VALUES (12, 4, 'z'), (13, 4, 'w');
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_deletes ORDER BY id;
+----
+12	4	z
+13	4	w
+
+# the new rows are deleted and updated as any other
+statement ok
+DELETE FROM my_datalake.default.overwrite_deletes WHERE id = 12;
+
+statement ok
+UPDATE my_datalake.default.overwrite_deletes SET v = 'updated' WHERE id = 13;
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_deletes VALUES (14, 5, 'appended');
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_deletes ORDER BY id;
+----
+13	4	updated
+14	5	appended
+
+# a query without rows removes the data files of the partition and their deletes
+query I
+INSERT OVERWRITE my_datalake.default.overwrite_deletes PARTITION (p = 4) SELECT 1, 'none' WHERE false;
+----
+0
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_deletes ORDER BY id;
+----
+14	5	appended
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_deletes;

@@ -8,10 +8,12 @@
 
 #pragma once
 
+#include "execution/operator/iceberg_insert_overwrite.hpp"
 #include "duckdb/execution/physical_plan_generator.hpp"
 #include "duckdb/execution/operator/persistent/physical_copy_to_file.hpp"
 #include "duckdb/execution/physical_operator.hpp"
 #include "duckdb/common/index_vector.hpp"
+#include "duckdb/common/types/column/column_data_collection.hpp"
 
 #include "catalog/rest/catalog_entry/table/iceberg_table_schema_version.hpp"
 #include "catalog/rest/catalog_entry/schema/iceberg_schema_entry.hpp"
@@ -86,15 +88,26 @@ public:
 class IcebergInsertGlobalState : public GlobalSinkState {
 public:
 	explicit IcebergInsertGlobalState(ClientContext &context);
+	IcebergInsertGlobalState(ClientContext &context, bool cleanup_enabled);
+	~IcebergInsertGlobalState() override;
 
 public:
 	void AddFiles(DataChunk &chunk, const string &table_name, const IcebergTableMetadata &table_metadata);
+	//! Records the files of a chunk the copy returned: they are removed with this state unless it is staged
+	void RecordProducedPaths(DataChunk &chunk);
 
 public:
 	ClientContext &context;
 	mutex lock;
 	vector<IcebergManifestEntry> written_files;
 	atomic<idx_t> insert_count;
+	vector<string> produced_paths;
+	//! INSERT OVERWRITE: what the copy returned for the files it wrote, interpreted by Finalize
+	unique_ptr<ColumnDataCollection> returned_files;
+	//! The catalog's cleanup policy, captured while the table is alive.
+	const bool cleanup_enabled = false;
+	//! Once staged, the transaction owns these files, including when publication has not happened yet.
+	bool staged = false;
 };
 
 class IcebergInsert : public PhysicalOperator {
@@ -117,6 +130,8 @@ public:
 	optional_ptr<PhysicalOperator> update_delete_op;
 	//! Contribute this action's files to the active MERGE's snapshot.
 	bool merge_action = false;
+	//! Set for INSERT OVERWRITE: the written files replace data files of the table
+	optional<IcebergOverwriteSpec> overwrite;
 	//! When set, this insert is a CTAS whose table is created lazily by this copy operator (its child).
 	//! Sink/Finalize resolve the TableCatalogEntry through it instead of through `table`.
 	optional_ptr<IcebergCopyToFile> ctas_copy_op;

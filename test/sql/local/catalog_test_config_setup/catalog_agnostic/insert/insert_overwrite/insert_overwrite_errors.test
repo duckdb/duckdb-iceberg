@@ -1,0 +1,542 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/insert_overwrite/insert_overwrite_errors.test
+# description: What INSERT OVERWRITE refuses; a refused statement changes nothing
+# group: [insert_overwrite]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+SET active_grammar_extensions = ['iceberg_insert_overwrite'];
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_errors;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_errors_days;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_errors_plain;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_errors_types;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_errors_names;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_errors_not_null;
+
+statement ok
+CREATE TABLE my_datalake.default.overwrite_errors (id INTEGER, p INTEGER, v VARCHAR) PARTITIONED BY (p);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_errors VALUES (1, 1, 'a'), (2, 2, 'b');
+
+statement ok
+CREATE TABLE my_datalake.default.overwrite_errors_days (id INTEGER, ts TIMESTAMP) PARTITIONED BY (day(ts));
+
+statement ok
+CREATE TABLE my_datalake.default.overwrite_errors_plain (id INTEGER, v VARCHAR);
+
+statement ok
+CREATE TABLE my_datalake.default.overwrite_errors_types (id INTEGER, d DATE, c DECIMAL(10,2), b BOOLEAN) PARTITIONED BY (d, c, b);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_errors_types VALUES (1, DATE '2024-01-02', 1.56, true);
+
+# the PARTITION clause takes identity partition columns only, with or without a value
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors PARTITION (v = 'x') VALUES (9, 9);
+----
+<REGEX>:.*PARTITION clause names "v", which is not an identity partition column of table "overwrite_errors".*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors PARTITION (v) VALUES (9, 9, 'x');
+----
+<REGEX>:.*PARTITION clause names "v", which is not an identity partition column of table "overwrite_errors".*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors PARTITION (p = 1, v) VALUES (9, 'x');
+----
+<REGEX>:.*PARTITION clause names "v", which is not an identity partition column of table "overwrite_errors".*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors PARTITION (zzz = 1) VALUES (9, 9, 'x');
+----
+<REGEX>:.*PARTITION clause names "zzz", which is not an identity partition column of table "overwrite_errors".*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors PARTITION (zzz) VALUES (9, 9, 'x');
+----
+<REGEX>:.*PARTITION clause names "zzz", which is not an identity partition column of table "overwrite_errors".*
+
+# the source column of a transform is not one
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors_days PARTITION (ts = TIMESTAMP '2024-01-01 00:00:00') VALUES (9);
+----
+<REGEX>:.*PARTITION clause names "ts", which is not an identity partition column of table "overwrite_errors_days".*
+
+# an unpartitioned table has none
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors_plain PARTITION (id = 1) VALUES ('x');
+----
+<REGEX>:.*PARTITION clause names "id", which is not an identity partition column of table "overwrite_errors_plain".*
+
+# EXPLAIN reports it as well
+statement error
+EXPLAIN INSERT OVERWRITE my_datalake.default.overwrite_errors PARTITION (v = 'x') VALUES (9, 9);
+----
+<REGEX>:.*PARTITION clause names "v", which is not an identity partition column of table "overwrite_errors".*
+
+# a column is named once, whatever its case
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors PARTITION (p = 1, p = 2) VALUES (9, 'x');
+----
+<REGEX>:.*Parser Error.*PARTITION clause names column "p" more than once.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors PARTITION (p = 1, P) VALUES (9, 'x');
+----
+<REGEX>:.*Parser Error.*PARTITION clause names column "P" more than once.*
+
+# a static column cannot also come from the query
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors PARTITION (p = 1) (id, p) VALUES (9, 9);
+----
+<REGEX>:.*Static partition column "p" is also specified in the column list.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors PARTITION (p = 1) BY NAME SELECT 9 AS id, 9 AS p, 'x' AS v;
+----
+<REGEX>:.*Binder Error: Duplicate column name "p" in INSERT.*
+
+# BY NAME takes a query, not a VALUES list, with or without a static value
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors BY NAME VALUES (9, 9, 'x');
+----
+<REGEX>:.*Binder Error: INSERT BY NAME can only be used when inserting from a SELECT statement.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors PARTITION (p = 1) BY NAME VALUES (9, 'x');
+----
+<REGEX>:.*Binder Error: INSERT BY NAME can only be used when inserting from a SELECT statement.*
+
+# also when the columns of the table have the names a VALUES list gives its columns
+statement ok
+CREATE TABLE my_datalake.default.overwrite_errors_names (col0 INTEGER, p INTEGER, col1 VARCHAR) PARTITIONED BY (p);
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors_names PARTITION (p = 1) BY NAME VALUES (9, 'x');
+----
+<REGEX>:.*Binder Error: INSERT BY NAME can only be used when inserting from a SELECT statement.*
+
+query I
+SELECT count(*) FROM my_datalake.default.overwrite_errors_names;
+----
+0
+
+# a value has to fit the type of its column
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors PARTITION (p = 'abc') VALUES (9, 'x');
+----
+<REGEX>:.*PARTITION value 'abc' cannot be used for column "p" of type INTEGER: Could not convert string 'abc' to INT32.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors PARTITION (p = 3000000000) VALUES (9, 'x');
+----
+<REGEX>:.*PARTITION value 3000000000 cannot be used for column "p" of type INTEGER: Type INT64 with value 3000000000 can't be cast because the value is out of range for the destination type INT32.*
+
+# an INSERT would round 1.5 to 2; as a PARTITION value that would replace the rows of another partition
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors PARTITION (p = 1.5) VALUES (9, 'x');
+----
+<REGEX>:.*PARTITION value 1.5 cannot be used for column "p" of type INTEGER: the value does not fit the type exactly.*
+
+# the same for a string and for a parameter: the number they denote has to be a value of the column
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors PARTITION (p = '1.5') VALUES (9, 'x');
+----
+<REGEX>:.*PARTITION value '1.5' cannot be used for column "p" of type INTEGER: the value does not fit the type exactly.*
+
+statement ok
+PREPARE overwrite_errors AS INSERT OVERWRITE my_datalake.default.overwrite_errors PARTITION (p = $1) VALUES ($2, $3);
+
+statement error
+EXECUTE overwrite_errors('1.5', 9, 'x');
+----
+<REGEX>:.*PARTITION value '1.5' cannot be used for column "p" of type INTEGER: the value does not fit the type exactly.*
+
+statement error
+EXECUTE overwrite_errors(1.5, 9, 'x');
+----
+<REGEX>:.*PARTITION value 1.5 cannot be used for column "p" of type INTEGER: the value does not fit the type exactly.*
+
+statement error
+EXECUTE overwrite_errors('abc', 9, 'x');
+----
+<REGEX>:.*PARTITION value 'abc' cannot be used for column "p" of type INTEGER: Could not convert string 'abc' to INT32.*
+
+statement ok
+DEALLOCATE overwrite_errors;
+
+# a timestamp with a time of day is not a date, a DECIMAL keeps its scale, a BOOLEAN is not a number
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors_types PARTITION (d = TIMESTAMP '2024-01-02 12:34:56', c = 1.56, b = true) VALUES (9);
+----
+<REGEX>:.*PARTITION value '2024-01-02 12:34:56'::TIMESTAMP cannot be used for column "d" of type DATE: the value does not fit the type exactly.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors_types PARTITION (d = '2024-01-02 12:34:56', c = 1.56, b = true) VALUES (9);
+----
+<REGEX>:.*PARTITION value '2024-01-02 12:34:56' cannot be used for column "d" of type DATE: invalid date field format: "2024-01-02 12:34:56", expected format is \(YYYY-MM-DD\).*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors_types PARTITION (d = '2024-01-02', c = 1.555, b = true) VALUES (9);
+----
+<REGEX>:.*PARTITION value 1.555 cannot be used for column "c" of type DECIMAL\(10,2\): the value does not fit the type exactly.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors_types PARTITION (d = '2024-01-02', c = '1.555', b = true) VALUES (9);
+----
+<REGEX>:.*PARTITION value '1.555' cannot be used for column "c" of type DECIMAL\(10,2\): the value does not fit the type exactly.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors_types PARTITION (d = '2024-01-02', c = 1.56, b = 2) VALUES (9);
+----
+<REGEX>:.*PARTITION value 2 cannot be used for column "b" of type BOOLEAN: the value does not fit the type exactly.*
+
+query ITTT
+SELECT id, d, c, b FROM my_datalake.default.overwrite_errors_types;
+----
+1	2024-01-02	1.56	true
+
+# a value is a constant: no column, no subquery, no function that changes between calls
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors PARTITION (p = id) VALUES (9, 'x');
+----
+<REGEX>:.*Binder Error.*PARTITION values cannot contain column names.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors PARTITION (p = (SELECT 1)) VALUES (9, 'x');
+----
+<REGEX>:.*Binder Error.*PARTITION values cannot contain subqueries.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors PARTITION (p = (random() * 10)::INTEGER) VALUES (9, 'x');
+----
+<REGEX>:.*Binder Error: PARTITION value CAST\(\(random\(\) \* 10\) AS INTEGER\) of column "p" is not a constant.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors PARTITION (p = DEFAULT) VALUES (9, 'x');
+----
+<REGEX>:.*Binder Error: PARTITION values cannot contain DEFAULT clause.*
+
+# the query has to supply the other columns, no fewer and no more
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors PARTITION (p = 1) VALUES (9);
+----
+<REGEX>:.*Binder Error: Column name/value mismatch for insert on "overwrite_errors": expected 3 columns but 2 values were supplied.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors PARTITION (p = 1) VALUES (9, 'x', 'y');
+----
+<REGEX>:.*Binder Error: Column name/value mismatch for insert on "overwrite_errors": expected 3 columns but 4 values were supplied.*
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_errors ORDER BY id;
+----
+1	1	a
+2	2	b
+
+# the PARTITION clause is checked in the same way in dynamic mode
+statement ok
+SET iceberg_partition_overwrite_mode = 'dynamic';
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors PARTITION (v = 'x') VALUES (9, 9);
+----
+<REGEX>:.*PARTITION clause names "v", which is not an identity partition column of table "overwrite_errors".*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors PARTITION (p = 'abc') VALUES (9, 'x');
+----
+<REGEX>:.*PARTITION value 'abc' cannot be used for column "p" of type INTEGER: Could not convert string 'abc' to INT32.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors PARTITION (p = 1, p = 2) VALUES (9, 'x');
+----
+<REGEX>:.*Parser Error.*PARTITION clause names column "p" more than once.*
+
+# the mode is 'static' or 'dynamic', in any case
+statement error
+SET iceberg_partition_overwrite_mode = 'append';
+----
+<REGEX>:.*'iceberg_partition_overwrite_mode' must be 'static' or 'dynamic', got 'append'.*
+
+statement error
+SET iceberg_partition_overwrite_mode = NULL;
+----
+<REGEX>:.*'iceberg_partition_overwrite_mode' must be 'static' or 'dynamic', got NULL.*
+
+query T
+SELECT current_setting('iceberg_partition_overwrite_mode');
+----
+dynamic
+
+statement ok
+SET iceberg_partition_overwrite_mode = 'STATIC';
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_errors ORDER BY id;
+----
+1	1	a
+2	2	b
+
+# forms that are not part of the statement
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors PARTITION (p = 1) IF NOT EXISTS VALUES (9, 'x');
+----
+<REGEX>:.*Parser Error: syntax error at or near "IF".*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors DEFAULT VALUES;
+----
+<REGEX>:.*Parser Error.*INSERT OVERWRITE needs a query, DEFAULT VALUES is not supported.*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors VALUES (9, 9, 'x') RETURNING id;
+----
+<REGEX>:.*Parser Error: syntax error at or near "RETURNING".*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors VALUES (9, 9, 'x') ON CONFLICT DO NOTHING;
+----
+<REGEX>:.*Parser Error: syntax error at or near "ON".*
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors WITH ('write.format.default' = 'parquet') VALUES (9, 9, 'x');
+----
+<REGEX>:.*Parser Error: syntax error at or near "\(".*
+
+statement error
+INSERT OVERWRITE DIRECTORY '/tmp/overwrite_errors' USING parquet SELECT 1;
+----
+<REGEX>:.*Parser Error: syntax error at or near "'/tmp/overwrite_errors'".*
+
+statement error
+FROM my_datalake.default.overwrite_errors_plain INSERT OVERWRITE my_datalake.default.overwrite_errors SELECT id, 1, v;
+----
+<REGEX>:.*Parser Error: syntax error at or near "OVERWRITE".*
+
+# a table alias is no part of it either
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors AS t VALUES (9, 9, 'x');
+----
+<REGEX>:.*Parser Error: syntax error at or near "AS".*
+
+# in a WITH clause the statement would lose what makes it an overwrite
+statement error
+WITH written AS (INSERT OVERWRITE my_datalake.default.overwrite_errors VALUES (9, 9, 'x')) SELECT 1;
+----
+<REGEX>:.*Parser Error.*INSERT OVERWRITE cannot be used in a WITH clause.*
+
+statement error
+WITH written AS (INSERT OVERWRITE my_datalake.default.overwrite_errors PARTITION (p = 1) VALUES (9, 'x')) SELECT 1;
+----
+<REGEX>:.*Parser Error.*INSERT OVERWRITE cannot be used in a WITH clause.*
+
+statement error
+PREPARE overwrite_errors AS WITH written AS (INSERT OVERWRITE my_datalake.default.overwrite_errors VALUES (9, 9, 'x')) SELECT 1;
+----
+<REGEX>:.*Parser Error.*INSERT OVERWRITE cannot be used in a WITH clause.*
+
+statement error
+EXPLAIN WITH written AS (INSERT OVERWRITE my_datalake.default.overwrite_errors VALUES (9, 9, 'x')) SELECT 1;
+----
+<REGEX>:.*Parser Error.*INSERT OVERWRITE cannot be used in a WITH clause.*
+
+# a table that does not exist, and a table of another catalog
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors_missing PARTITION (p = 1) VALUES (9, 'x');
+----
+<REGEX>:.*Catalog Error: Table with name overwrite_errors_missing does not exist!.*
+
+statement ok
+CREATE TABLE memory.main.overwrite_errors_local (id INTEGER, p INTEGER);
+
+statement error
+INSERT OVERWRITE memory.main.overwrite_errors_local VALUES (9, 9);
+----
+<REGEX>:.*Binder Error: INSERT OVERWRITE is only supported for Iceberg tables.*
+
+statement error
+INSERT OVERWRITE memory.main.overwrite_errors_local PARTITION (p = 1) VALUES (9);
+----
+<REGEX>:.*Binder Error: INSERT OVERWRITE is only supported for Iceberg tables.*
+
+query I
+SELECT count(*) FROM memory.main.overwrite_errors_local;
+----
+0
+
+# a table of another catalog whose trigger inserts as well: the same error
+statement ok
+CREATE TABLE memory.main.overwrite_errors_trigger (a INTEGER);
+
+statement ok
+CREATE TABLE memory.main.overwrite_errors_trigger_log (x INTEGER);
+
+statement ok
+CREATE TRIGGER overwrite_errors_statement AFTER INSERT ON memory.main.overwrite_errors_trigger FOR EACH STATEMENT INSERT INTO memory.main.overwrite_errors_trigger_log VALUES (1);
+
+statement error
+INSERT OVERWRITE memory.main.overwrite_errors_trigger VALUES (9);
+----
+<REGEX>:.*Binder Error: INSERT OVERWRITE is only supported for Iceberg tables.*
+
+statement ok
+DROP TRIGGER overwrite_errors_statement ON memory.main.overwrite_errors_trigger;
+
+statement ok
+CREATE TRIGGER overwrite_errors_row AFTER INSERT ON memory.main.overwrite_errors_trigger FOR EACH ROW INSERT INTO memory.main.overwrite_errors_trigger_log VALUES (NEW.a);
+
+statement error
+INSERT OVERWRITE memory.main.overwrite_errors_trigger VALUES (9);
+----
+<REGEX>:.*Binder Error: INSERT OVERWRITE is only supported for Iceberg tables.*
+
+query II
+SELECT (SELECT count(*) FROM memory.main.overwrite_errors_trigger), (SELECT count(*) FROM memory.main.overwrite_errors_trigger_log);
+----
+0	0
+
+statement ok
+DROP TABLE memory.main.overwrite_errors_trigger;
+
+statement ok
+DROP TABLE memory.main.overwrite_errors_trigger_log;
+
+# nor can another data-modifying statement stand in the WITH clause of an INSERT OVERWRITE: the two would change
+# tables in one statement, in no defined order
+statement error
+WITH written AS (INSERT INTO my_datalake.default.overwrite_errors_plain VALUES (1, 'cte'))
+INSERT OVERWRITE my_datalake.default.overwrite_errors VALUES (9, 9, 'x');
+----
+<REGEX>:.*INSERT OVERWRITE cannot be combined with a data-modifying statement in its WITH clause.*
+
+statement error
+WITH written AS (INSERT INTO memory.main.overwrite_errors_local VALUES (7, 7) RETURNING id)
+INSERT OVERWRITE my_datalake.default.overwrite_errors PARTITION (p = 1) SELECT id, 'x' FROM written;
+----
+<REGEX>:.*INSERT OVERWRITE cannot be combined with a data-modifying statement in its WITH clause.*
+
+statement error
+WITH removed AS (DELETE FROM memory.main.overwrite_errors_local RETURNING id)
+INSERT OVERWRITE my_datalake.default.overwrite_errors SELECT id, 1, 'x' FROM removed;
+----
+<REGEX>:.*INSERT OVERWRITE cannot be combined with a data-modifying statement in its WITH clause.*
+
+statement error
+EXPLAIN WITH written AS (INSERT INTO my_datalake.default.overwrite_errors_plain VALUES (1, 'cte'))
+INSERT OVERWRITE my_datalake.default.overwrite_errors VALUES (9, 9, 'x');
+----
+<REGEX>:.*INSERT OVERWRITE cannot be combined with a data-modifying statement in its WITH clause.*
+
+query I
+SELECT count(*) FROM my_datalake.default.overwrite_errors_plain;
+----
+0
+
+query I
+SELECT count(*) FROM memory.main.overwrite_errors_local;
+----
+0
+
+# other statements keep working in a WITH clause while the grammar extension is on
+query I
+WITH written AS (INSERT INTO memory.main.overwrite_errors_local VALUES (1, 1), (2, 2) RETURNING id)
+SELECT sum(id) FROM written;
+----
+3
+
+query I
+WITH removed AS (DELETE FROM memory.main.overwrite_errors_local WHERE id = 1 RETURNING id)
+SELECT count(*) FROM removed;
+----
+1
+
+query II
+SELECT id, p FROM memory.main.overwrite_errors_local;
+----
+2	2
+
+statement ok
+DROP TABLE memory.main.overwrite_errors_local;
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_errors ORDER BY id;
+----
+1	1	a
+2	2	b
+
+# a number that the cast leaves unchanged is taken
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_errors PARTITION (p = 1.0) VALUES (9, 'fits');
+
+query IIT
+SELECT id, p, v FROM my_datalake.default.overwrite_errors ORDER BY id;
+----
+2	2	b
+9	1	fits
+
+# a row the table does not take fails the statement, in both modes: the rows stay
+statement ok
+CREATE TABLE my_datalake.default.overwrite_errors_not_null (id INTEGER NOT NULL, p INTEGER) PARTITIONED BY (p);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_errors_not_null VALUES (1, 1), (2, 2);
+
+foreach mode static dynamic
+
+statement ok
+SET iceberg_partition_overwrite_mode = '{mode}';
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors_not_null VALUES (3, 1), (NULL, 2);
+----
+Constraint Error: NOT NULL constraint failed: overwrite_errors_not_null.id
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_errors_not_null PARTITION (p = 1) VALUES (NULL);
+----
+Constraint Error: NOT NULL constraint failed: overwrite_errors_not_null.id
+
+query II
+SELECT id, p FROM my_datalake.default.overwrite_errors_not_null ORDER BY id;
+----
+1	1
+2	2
+
+endloop
+
+statement ok
+SET iceberg_partition_overwrite_mode = 'static';
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_errors;
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_errors_not_null;
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_errors_days;
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_errors_plain;
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_errors_types;
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_errors_names;

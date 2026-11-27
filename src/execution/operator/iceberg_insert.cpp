@@ -106,8 +106,43 @@ IcebergInsertGlobalState::IcebergInsertGlobalState(ClientContext &context)
     : GlobalSinkState(), context(context), insert_count(0) {
 }
 
+IcebergInsertGlobalState::IcebergInsertGlobalState(ClientContext &context, bool cleanup_enabled)
+    : GlobalSinkState(), context(context), insert_count(0), cleanup_enabled(cleanup_enabled) {
+}
+
+IcebergInsertGlobalState::~IcebergInsertGlobalState() { // NOLINT: allow internal exceptions
+	if (staged || !cleanup_enabled || produced_paths.empty()) {
+		return;
+	}
+	auto &fs = FileSystem::GetFileSystem(context);
+	for (auto &path : produced_paths) {
+		try {
+			fs.TryRemoveFile(path);
+		} catch (...) {
+			DUCKDB_LOG_DEBUG(context, "Failed to clean up unstaged output file '%s'", path);
+		}
+	}
+}
+
+void IcebergInsertGlobalState::RecordProducedPaths(DataChunk &chunk) {
+	lock_guard<mutex> guard(lock);
+	for (idx_t row = 0; row < chunk.size(); row++) {
+		auto path = chunk.GetValue(0, row).GetValue<string>();
+		if (path.empty()) {
+			throw InternalException("Iceberg write: COPY returned an empty file path");
+		}
+		produced_paths.push_back(std::move(path));
+	}
+}
+
 unique_ptr<GlobalSinkState> IcebergInsert::GetGlobalSinkState(ClientContext &context) const {
-	return make_uniq<IcebergInsertGlobalState>(context);
+	//! Only an INSERT OVERWRITE removes the files of a statement that fails: it is the one that sets 'staged'
+	bool cleanup_enabled = false;
+	if (overwrite) {
+		auto &table_info = table->Cast<IcebergTableSchemaVersion>().table_info;
+		cleanup_enabled = table_info.catalog.attach_options.remove_files_on_delete;
+	}
+	return make_uniq<IcebergInsertGlobalState>(context, cleanup_enabled);
 }
 
 //===--------------------------------------------------------------------===//
@@ -327,6 +362,16 @@ SinkResultType IcebergInsert::Sink(ExecutionContext &context, DataChunk &chunk, 
 	// IcebergCopyToFile will create the table, so we can resolve the effective
 	// table from there
 	auto effective_table = GetEffectiveTable();
+	if (overwrite) {
+		//! Record all produced paths before interpreting statistics, which can itself fail. The copy returns its
+		//! files in chunks, so Finalize interprets them, once the paths of every chunk are recorded
+		global_state.RecordProducedPaths(chunk);
+		if (!global_state.returned_files) {
+			global_state.returned_files = make_uniq<ColumnDataCollection>(context.client, chunk.GetTypes());
+		}
+		global_state.returned_files->Append(chunk);
+		return SinkResultType::NEED_MORE_INPUT;
+	}
 	AddWrittenFiles(global_state, chunk, effective_table);
 
 	return SinkResultType::NEED_MORE_INPUT;
@@ -360,6 +405,11 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 	auto &transaction = IcebergTransaction::Get(context, effective_table->catalog);
 	auto &iceberg_transaction = transaction.Cast<IcebergTransaction>();
 
+	if (global_state.returned_files) {
+		for (auto &returned_chunk : global_state.returned_files->Chunks()) {
+			AddWrittenFiles(global_state, returned_chunk, effective_table);
+		}
+	}
 	vector<IcebergManifestEntry> written_files;
 	{
 		lock_guard<mutex> guard(global_state.lock);
@@ -383,6 +433,13 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 			// Replacement files are now staged; even an empty UPDATE must complete its collector participant.
 			update_delete_op->Cast<IcebergDelete>().ScheduleDeletes(pipeline, event, delete_global_state, true);
 		}
+	} else if (overwrite) {
+		//! INSERT OVERWRITE: one snapshot that removes the replaced files and adds the written ones
+		ApplyTableUpdate(table_info, iceberg_transaction, [&](IcebergTable &tbl) {
+			auto &transaction_data = tbl.GetOrCreateTransactionData(iceberg_transaction);
+			IcebergInsertOverwrite::Stage(context, tbl, transaction_data, *overwrite, std::move(written_files));
+		});
+		global_state.staged = true;
 	} else {
 		// Stage an INSERT statement or a MERGE insert action; the latter may join an overwrite snapshot.
 		if (!written_files.empty()) {
@@ -410,7 +467,7 @@ SinkFinalizeType IcebergInsert::Finalize(Pipeline &pipeline, Event &event, Clien
 // Helpers
 //===--------------------------------------------------------------------===//
 string IcebergInsert::GetName() const {
-	return "ICEBERG_INSERT";
+	return overwrite ? "ICEBERG_INSERT_OVERWRITE" : "ICEBERG_INSERT";
 }
 
 InsertionOrderPreservingMap<string> IcebergInsert::ParamsToString() const {

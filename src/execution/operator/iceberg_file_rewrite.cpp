@@ -1,6 +1,5 @@
 #include "execution/operator/iceberg_file_rewrite.hpp"
 
-#include "duckdb/logging/logger.hpp"
 #include "duckdb/parallel/meta_pipeline.hpp"
 #include "duckdb/parallel/pipeline.hpp"
 
@@ -14,22 +13,8 @@
 namespace duckdb {
 
 IcebergFileRewriteGlobalState::IcebergFileRewriteGlobalState(ClientContext &context, IcebergTable &table_info)
-    : IcebergInsertGlobalState(context), table_info(table_info),
-      cleanup_enabled(table_info.catalog.attach_options.remove_files_on_delete) {
-}
-
-IcebergFileRewriteGlobalState::~IcebergFileRewriteGlobalState() {
-	if (staged || !cleanup_enabled || produced_paths.empty()) {
-		return;
-	}
-	auto &fs = FileSystem::GetFileSystem(context);
-	for (auto &path : produced_paths) {
-		try {
-			fs.TryRemoveFile(path);
-		} catch (...) {
-			DUCKDB_LOG_DEBUG(context, "Failed to clean up rewrite output file '%s'", path);
-		}
-	}
+    : IcebergInsertGlobalState(context, table_info.catalog.attach_options.remove_files_on_delete),
+      table_info(table_info) {
 }
 
 IcebergFileRewrite::IcebergFileRewrite(PhysicalPlan &physical_plan, vector<LogicalType> types,
@@ -72,17 +57,8 @@ void IcebergFileRewrite::BuildPipelines(Pipeline &current, MetaPipeline &meta_pi
 
 SinkResultType IcebergFileRewrite::Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const {
 	auto &state = input.global_state.Cast<IcebergFileRewriteGlobalState>();
-	{
-		lock_guard<mutex> guard(state.lock);
-		//! Record all produced paths before interpreting statistics, which can itself fail.
-		for (idx_t row = 0; row < chunk.size(); row++) {
-			auto path = chunk.GetValue(0, row).GetValue<string>();
-			if (path.empty()) {
-				throw InternalException("Iceberg file rewrite: COPY returned an empty file path");
-			}
-			state.produced_paths.push_back(std::move(path));
-		}
-	}
+	//! Record all produced paths before interpreting statistics, which can itself fail.
+	state.RecordProducedPaths(chunk);
 	state.AddFiles(chunk, state.table_info.name, state.table_info.GetMetadata());
 	return SinkResultType::NEED_MORE_INPUT;
 }

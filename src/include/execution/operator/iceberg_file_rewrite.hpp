@@ -31,15 +31,9 @@ struct IcebergFileRewriteInput {
 class IcebergFileRewriteGlobalState : public IcebergInsertGlobalState {
 public:
 	IcebergFileRewriteGlobalState(ClientContext &context, IcebergTable &table_info);
-	~IcebergFileRewriteGlobalState() override;
 
 	IcebergTable &table_info;
-	vector<string> produced_paths;
 	idx_t added_data_files = 0;
-	//! Capture the catalog's cleanup policy while table_info is alive.
-	const bool cleanup_enabled;
-	//! Once staged, the transaction owns these files, including when publication has not happened yet.
-	bool staged = false;
 };
 
 //! Writes replacement data files and stages their additions and input-file invalidations together.

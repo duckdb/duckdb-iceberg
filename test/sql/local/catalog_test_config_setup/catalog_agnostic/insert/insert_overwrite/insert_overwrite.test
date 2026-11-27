@@ -1,0 +1,305 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/insert_overwrite/insert_overwrite.test
+# description: INSERT OVERWRITE replaces every row of an Iceberg table once its grammar extension is switched on
+# group: [insert_overwrite]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_all;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.overwrite_all_parts;
+
+statement ok
+CREATE TABLE my_datalake.default.overwrite_all (id INTEGER, v VARCHAR);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_all VALUES (1, 'a'), (2, 'b');
+
+# the syntax is off until the grammar extension is switched on
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_all VALUES (9, 'x');
+----
+<REGEX>:.*Parser Error: syntax error at or near "OVERWRITE".*
+
+query IT
+SELECT id, v FROM my_datalake.default.overwrite_all ORDER BY id;
+----
+1	a
+2	b
+
+statement ok
+SET active_grammar_extensions = ['iceberg_insert_overwrite'];
+
+# INSERT INTO appends as before, whatever the overwrite mode
+statement ok
+SET iceberg_partition_overwrite_mode = 'dynamic';
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_all VALUES (3, 'c');
+
+statement ok
+SET iceberg_partition_overwrite_mode = 'static';
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_all VALUES (4, 'd');
+
+query IT
+SELECT id, v FROM my_datalake.default.overwrite_all ORDER BY id;
+----
+1	a
+2	b
+3	c
+4	d
+
+# nor does the mode change DELETE, UPDATE or MERGE
+statement ok
+SET iceberg_partition_overwrite_mode = 'dynamic';
+
+statement ok
+DELETE FROM my_datalake.default.overwrite_all WHERE id = 4;
+
+statement ok
+UPDATE my_datalake.default.overwrite_all SET v = 'updated' WHERE id = 3;
+
+statement ok
+MERGE INTO my_datalake.default.overwrite_all t USING (SELECT 2 AS id, 'merged' AS v UNION ALL SELECT 5, 'merged') s ON t.id = s.id
+WHEN MATCHED THEN UPDATE SET v = s.v WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
+
+statement ok
+SET iceberg_partition_overwrite_mode = 'static';
+
+query IT
+SELECT id, v FROM my_datalake.default.overwrite_all ORDER BY id;
+----
+1	a
+2	merged
+3	updated
+5	merged
+
+# EXPLAIN does not run the statement
+statement ok
+EXPLAIN INSERT OVERWRITE my_datalake.default.overwrite_all VALUES (7, 'explained');
+
+query I
+SELECT count(*) FROM my_datalake.default.overwrite_all;
+----
+4
+
+# every row is replaced; the statement returns the number of rows written
+query I
+INSERT OVERWRITE my_datalake.default.overwrite_all VALUES (10, 'x'), (11, 'y'), (12, 'z');
+----
+3
+
+query IT
+SELECT id, v FROM my_datalake.default.overwrite_all ORDER BY id;
+----
+10	x
+11	y
+12	z
+
+# TABLE is optional
+statement ok
+INSERT OVERWRITE TABLE my_datalake.default.overwrite_all SELECT 20, 'with table';
+
+query IT
+SELECT id, v FROM my_datalake.default.overwrite_all ORDER BY id;
+----
+20	with table
+
+# a column list
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_all (v, id) VALUES ('listed', 21);
+
+query IT
+SELECT id, v FROM my_datalake.default.overwrite_all ORDER BY id;
+----
+21	listed
+
+# BY NAME
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_all BY NAME SELECT 'named' AS v, 22 AS id;
+
+query IT
+SELECT id, v FROM my_datalake.default.overwrite_all ORDER BY id;
+----
+22	named
+
+# after a WITH clause
+statement ok
+WITH src AS (SELECT 23 AS id, 'from cte' AS v)
+INSERT OVERWRITE my_datalake.default.overwrite_all SELECT id, v FROM src;
+
+query IT
+SELECT id, v FROM my_datalake.default.overwrite_all ORDER BY id;
+----
+23	from cte
+
+# the query reads the table it replaces
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_all
+SELECT id + i, v || ' ' || i FROM my_datalake.default.overwrite_all, range(1, 3) r(i);
+
+query IT
+SELECT id, v FROM my_datalake.default.overwrite_all ORDER BY id;
+----
+24	from cte 1
+25	from cte 2
+
+# EXPLAIN ANALYZE runs the statement
+statement ok
+EXPLAIN ANALYZE INSERT OVERWRITE my_datalake.default.overwrite_all VALUES (30, 'analyzed');
+
+query IT
+SELECT id, v FROM my_datalake.default.overwrite_all ORDER BY id;
+----
+30	analyzed
+
+# prepared: every execution replaces the table
+statement ok
+PREPARE overwrite_all AS INSERT OVERWRITE my_datalake.default.overwrite_all VALUES ($1, $2), ($1 + 1, $2);
+
+statement ok
+EXECUTE overwrite_all(40, 'first');
+
+query IT
+SELECT id, v FROM my_datalake.default.overwrite_all ORDER BY id;
+----
+40	first
+41	first
+
+statement ok
+EXECUTE overwrite_all(50, 'second');
+
+query IT
+SELECT id, v FROM my_datalake.default.overwrite_all ORDER BY id;
+----
+50	second
+51	second
+
+statement ok
+DEALLOCATE overwrite_all;
+
+# a prepared statement is kept as it was written, with its WITH clause in front
+statement ok
+PREPARE overwrite_all AS WITH src AS (SELECT 70 AS id, 'kept text' AS v)
+INSERT OVERWRITE my_datalake.default.overwrite_all (v, id) SELECT v, id FROM src;
+
+query I
+SELECT statement LIKE 'WITH src AS (%) INSERT OVERWRITE %overwrite_all (v, id) %' FROM duckdb_prepared_statements()
+WHERE name = 'overwrite_all';
+----
+true
+
+statement ok
+EXECUTE overwrite_all;
+
+query IT
+SELECT id, v FROM my_datalake.default.overwrite_all ORDER BY id;
+----
+70	kept text
+
+statement ok
+DEALLOCATE overwrite_all;
+
+# with the verification of serialized plans switched on
+statement ok
+SET debug_verify_serializer = true;
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_all VALUES (80, 'verified');
+
+statement ok
+RESET debug_verify_serializer;
+
+query IT
+SELECT id, v FROM my_datalake.default.overwrite_all ORDER BY id;
+----
+80	verified
+
+# the engine can copy the statement, or print it and parse it again: it stays an INSERT OVERWRITE
+statement ok
+SET debug_verify_statement = 'copy_statement';
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_all VALUES (81, 'copied');
+
+query IT
+SELECT id, v FROM my_datalake.default.overwrite_all ORDER BY id;
+----
+81	copied
+
+statement ok
+SET debug_verify_statement = 'reparse_statement';
+
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_all VALUES (82, 'parsed again');
+
+query IT
+SELECT id, v FROM my_datalake.default.overwrite_all ORDER BY id;
+----
+82	parsed again
+
+# what it replaces cannot be serialized: the statement fails, it does not run as an INSERT INTO
+statement ok
+SET debug_verify_statement = 'serialize_statement';
+
+statement error
+INSERT OVERWRITE my_datalake.default.overwrite_all VALUES (83, 'serialized');
+----
+<REGEX>:.*Serialization Error: INSERT OVERWRITE cannot be serialized.*
+
+statement ok
+RESET debug_verify_statement;
+
+query IT
+SELECT id, v FROM my_datalake.default.overwrite_all ORDER BY id;
+----
+82	parsed again
+
+# a query without rows empties the table
+query I
+INSERT OVERWRITE my_datalake.default.overwrite_all SELECT 1, 'none' WHERE false;
+----
+0
+
+query I
+SELECT count(*) FROM my_datalake.default.overwrite_all;
+----
+0
+
+# and the empty table takes rows again
+statement ok
+INSERT OVERWRITE my_datalake.default.overwrite_all VALUES (60, 'again');
+
+query IT
+SELECT id, v FROM my_datalake.default.overwrite_all ORDER BY id;
+----
+60	again
+
+# a partitioned table: without a PARTITION clause every partition is replaced, also those that get no rows
+statement ok
+CREATE TABLE my_datalake.default.overwrite_all_parts (p INTEGER, v VARCHAR) PARTITIONED BY (p);
+
+statement ok
+INSERT INTO my_datalake.default.overwrite_all_parts VALUES (1, 'old 1'), (2, 'old 2'), (3, 'old 3');
+
+query I
+INSERT OVERWRITE my_datalake.default.overwrite_all_parts VALUES (2, 'new 2'), (5, 'new 5');
+----
+2
+
+query IT
+SELECT p, v FROM my_datalake.default.overwrite_all_parts ORDER BY p;
+----
+2	new 2
+5	new 5
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_all;
+
+statement ok
+DROP TABLE my_datalake.default.overwrite_all_parts;

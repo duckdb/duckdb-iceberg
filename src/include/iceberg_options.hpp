@@ -39,6 +39,8 @@ static constexpr bool DEFAULT_ENABLE_SCAN_SERIALIZATION = true;
 // Whether a scan gives the optimizer the distinct counts recorded in the table's statistics files.
 static constexpr const char *ENABLE_TABLE_STATISTICS_CONFIG_VARIABLE = "iceberg_enable_table_statistics";
 static constexpr bool DEFAULT_ENABLE_TABLE_STATISTICS = true;
+// Which rows INSERT OVERWRITE replaces: 'static' or 'dynamic'.
+static constexpr const char *PARTITION_OVERWRITE_MODE_CONFIG_VARIABLE = "iceberg_partition_overwrite_mode";
 
 // Controls structural Puffin footer verification for deletion-vector files. When skipping is
 // enabled the deletion vector is read by the manifest's offset and length, which permits
