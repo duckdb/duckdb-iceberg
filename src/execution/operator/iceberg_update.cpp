@@ -8,7 +8,7 @@
 #include "duckdb/execution/operator/scan/physical_table_scan.hpp"
 
 #include "execution/operator/iceberg_delete.hpp"
-#include "execution/operator/iceberg_copy_on_write_delete.hpp"
+#include "execution/operator/copy_on_write/iceberg_copy_on_write.hpp"
 #include "execution/operator/iceberg_insert.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
@@ -235,7 +235,7 @@ PhysicalOperator &IcebergCatalog::PlanUpdate(ClientContext &context, PhysicalPla
 			table_entry.table_info.VerifyWriteEncryptionSupported();
 			table_entry.PrepareIcebergScanFromEntry(context);
 			auto &updated_table_entry = *updated_table.schema_versions[table_metadata.GetLatestSchema().schema_id];
-			return IcebergCopyOnWriteDeleteFilter::PlanUpdate(context, planner, op, updated_table_entry);
+			return IcebergCopyOnWrite::PlanUpdate(context, planner, op, updated_table_entry);
 		}
 	}
 	return Catalog::PlanUpdate(context, planner, op);

@@ -1,6 +1,6 @@
 #include "duckdb/execution/operator/persistent/physical_merge_into.hpp"
 #include "execution/operator/iceberg_delete.hpp"
-#include "execution/operator/iceberg_copy_on_write_delete.hpp"
+#include "execution/operator/copy_on_write/iceberg_copy_on_write.hpp"
 #include "execution/operator/merge_into/iceberg_merge_delete_collector.hpp"
 
 #include "iceberg_logging.hpp"
@@ -750,7 +750,7 @@ PhysicalOperator &IcebergCatalog::PlanDelete(ClientContext &context, PhysicalPla
 			table_entry.table_info.VerifyWriteEncryptionSupported();
 			table_entry.PrepareIcebergScanFromEntry(context);
 			auto &updated_table_entry = *updated_table.schema_versions[table_metadata.GetLatestSchema().schema_id];
-			return IcebergCopyOnWriteDeleteFilter::PlanDelete(context, planner, op, updated_table_entry);
+			return IcebergCopyOnWrite::PlanDelete(context, planner, op, updated_table_entry);
 		}
 	}
 	return Catalog::PlanDelete(context, planner, op);
