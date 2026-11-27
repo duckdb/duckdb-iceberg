@@ -1,0 +1,125 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/scan_planning/scan_tasks_exclusion_filters.test
+# description: Exclusion filters across identity and bucket specs keep colliding values and apply residuals
+# group: [scan_planning]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+SET threads=1;
+
+statement ok
+SET iceberg_use_server_side_scan_planning=false;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.task_exclusions;
+
+statement ok
+CREATE TABLE my_datalake.default.task_exclusions (id INTEGER, k INTEGER)
+PARTITIONED BY (k) WITH ('format-version'=2, 'write.metadata.metrics.default'='none');
+
+statement ok
+INSERT INTO my_datalake.default.task_exclusions VALUES (1, 3), (2, 7), (3, NULL);
+
+statement ok
+ALTER TABLE my_datalake.default.task_exclusions SET PARTITIONED BY (bucket(4, k));
+
+statement ok
+INSERT INTO my_datalake.default.task_exclusions VALUES (4, 3), (5, 7), (6, NULL);
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE TEMP TABLE planned AS SELECT * FROM iceberg_scan_plan('my_datalake.default.task_exclusions');
+
+# 3 and 7 occupy distinct identity files and share one bucket file.
+query III
+SELECT partition_spec_id, count(*), max(record_count) FROM planned GROUP BY ALL ORDER BY 1;
+----
+0	3	1
+1	2	2
+
+statement ok
+SET VARIABLE tasks = (SELECT list(t) FROM planned t);
+
+statement ok
+SET VARIABLE without_values = (SELECT list(t) FROM (SELECT * EXCLUDE (partition_values) FROM planned) t);
+
+statement ok
+SET VARIABLE with_residual = (SELECT list(struct_update(t, row_filter := 'id < k')) FROM planned t);
+
+statement ok
+CALL enable_logging('Iceberg');
+
+statement ok
+CREATE TEMP MACRO skipped_tasks() AS (
+	SELECT count(*) FROM duckdb_logs() WHERE type='Iceberg' AND message.contains('skipped ''data_file'':')
+);
+
+foreach mode true false
+
+statement ok
+SET iceberg_enable_multi_file_scan_tasks={mode};
+
+foreach pred k!=3 not(k)in(3,11)
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(id ORDER BY id) FROM iceberg_scan_tasks(getvariable('tasks')) WHERE {pred};
+----
+[2, 5]
+
+# The identity-3 file and both NULL files can be skipped. The shared bucket
+# must be opened, and the row with k=3 inside it must still be filtered out.
+query I
+SELECT skipped_tasks();
+----
+3
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(id ORDER BY id) FROM iceberg_scan_tasks(getvariable('without_values')) WHERE {pred};
+----
+[2, 5]
+
+query I
+SELECT skipped_tasks();
+----
+0
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.task_exclusions WHERE {pred};
+----
+[2, 5]
+
+endloop
+
+# The second arm rescues both NULL partitions. The remaining predicate still
+# distinguishes rows inside the shared bucket.
+query I
+SELECT list(id ORDER BY id) FROM iceberg_scan_tasks(getvariable('tasks'))
+WHERE k NOT IN (7, 11) OR k IS NULL;
+----
+[1, 3, 4, 6]
+
+# The task residual discards id=4. Evaluating this outer cast on the rows of
+# the Parquet file before that residual would raise a conversion error.
+query I
+SELECT list(id ORDER BY id) FROM iceberg_scan_tasks(getvariable('with_residual'))
+WHERE (CASE WHEN id = 4 THEN 'bad' ELSE '7' END)::INTEGER NOT IN (4, 5);
+----
+[1, 2, 5]
+
+endloop
+
+statement ok
+COMMIT;
+
+statement ok
+DROP TABLE my_datalake.default.task_exclusions;

@@ -75,7 +75,8 @@ static bool NaNMayMatch(const Value &constant, ExpressionType comparison_type, c
 
 template <class TRANSFORM>
 static bool MatchBoundsConstantTemplated(const Value &constant, ExpressionType comparison_type,
-                                         const IcebergPredicateStats &stats, const IcebergTransform &transform) {
+                                         const IcebergPredicateStats &stats, const IcebergTransform &transform,
+                                         bool adjust_legacy_time = false) {
 	if (constant.IsNull()) {
 		switch (comparison_type) {
 		case ExpressionType::COMPARE_DISTINCT_FROM:
@@ -112,6 +113,25 @@ static bool MatchBoundsConstantTemplated(const Value &constant, ExpressionType c
 		return true;
 	}
 
+	// As in Iceberg's fixInclusiveTimeProjection, older writers could assign a negative period to the next
+	// partition. Equality can match either partition, and an upper limit must include the later one.
+	if (adjust_legacy_time) {
+		auto period = IntegerValue::Get(constant_value);
+		if (period < 0) {
+			switch (comparison_type) {
+			case ExpressionType::COMPARE_EQUAL:
+				return TRANSFORM::CompareEqual(constant_value, stats) ||
+				       TRANSFORM::CompareEqual(Value::INTEGER(period + 1), stats);
+			case ExpressionType::COMPARE_LESSTHAN:
+			case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+				constant_value = Value::INTEGER(period + 1);
+				break;
+			default:
+				break;
+			}
+		}
+	}
+
 	switch (comparison_type) {
 	case ExpressionType::COMPARE_EQUAL:
 		return TRANSFORM::CompareEqual(constant_value, stats);
@@ -140,13 +160,15 @@ static bool MatchBoundsConstant(const Value &constant, ExpressionType comparison
 	case IcebergTransformType::TRUNCATE:
 		return MatchBoundsConstantTemplated<TruncateTransform>(constant, comparison_type, stats, transform);
 	case IcebergTransformType::YEAR:
-		return MatchBoundsConstantTemplated<YearTransform>(constant, comparison_type, stats, transform);
+		return MatchBoundsConstantTemplated<YearTransform>(constant, comparison_type, stats, transform, true);
 	case IcebergTransformType::MONTH:
-		return MatchBoundsConstantTemplated<MonthTransform>(constant, comparison_type, stats, transform);
+		return MatchBoundsConstantTemplated<MonthTransform>(constant, comparison_type, stats, transform, true);
 	case IcebergTransformType::DAY:
-		return MatchBoundsConstantTemplated<DayTransform>(constant, comparison_type, stats, transform);
+		// day(DATE) directly stores the epoch day and has no rounding step.
+		return MatchBoundsConstantTemplated<DayTransform>(constant, comparison_type, stats, transform,
+		                                                  constant.type().id() != LogicalTypeId::DATE);
 	case IcebergTransformType::HOUR:
-		return MatchBoundsConstantTemplated<HourTransform>(constant, comparison_type, stats, transform);
+		return MatchBoundsConstantTemplated<HourTransform>(constant, comparison_type, stats, transform, true);
 	case IcebergTransformType::VOID_TRANSFORM:
 		return true;
 	default:

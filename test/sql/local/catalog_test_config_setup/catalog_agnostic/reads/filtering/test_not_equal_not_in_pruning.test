@@ -196,3 +196,32 @@ SELECT list(v ORDER BY v) FROM my_datalake.default.not_equal_pruning WHERE p NOT
 
 statement ok
 DROP TABLE my_datalake.default.not_equal_pruning;
+
+# Only s.k is a partition field. Rows within the excluded partition disagree
+# on s.keep, and a NULL parent shares a partition with a non-NULL struct.
+statement ok
+CREATE TABLE my_datalake.default.not_equal_pruning (id INTEGER, s STRUCT(k INTEGER, keep BOOLEAN))
+PARTITIONED BY (s.k) WITH ('write.metadata.metrics.default'='none');
+
+statement ok
+INSERT INTO my_datalake.default.not_equal_pruning VALUES
+	(1, {'k': 10, 'keep': false}), (2, {'k': 10, 'keep': true}),
+	(3, {'k': 20, 'keep': false}), (4, NULL), (5, {'k': NULL, 'keep': true});
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.not_equal_pruning WHERE s.k != 10 OR s.keep;
+----
+[2, 3, 5]
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.not_equal_pruning WHERE s.k NOT IN (10, 20) OR s.keep;
+----
+[2, 5]
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.not_equal_pruning WHERE 10 != s.k OR s IS NULL;
+----
+[3, 4]
+
+statement ok
+DROP TABLE my_datalake.default.not_equal_pruning;
