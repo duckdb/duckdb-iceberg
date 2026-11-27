@@ -1,4 +1,6 @@
 #include "catalog/rest/api/api_utils.hpp"
+#include "metrics/iceberg_profile_metrics.hpp"
+#include "duckdb/main/profiler/profiling_utils.hpp"
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/http_util.hpp"
@@ -32,6 +34,7 @@ unique_ptr<HTTPResponse> APIUtils::Request(RequestType request_type, ClientConte
 
 	auto session = db.config.GetHTTPTransportManager().CreateSession(context, request_url);
 	auto &params = session.Parameters();
+	auto request_timer = IcebergProfileMetrics::StartRequest(context);
 
 	switch (request_type) {
 	case RequestType::GET_REQUEST: {

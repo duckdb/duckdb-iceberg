@@ -1,4 +1,6 @@
 #include "catalog/rest/storage/aws.hpp"
+#include "metrics/iceberg_profile_metrics.hpp"
+#include "duckdb/main/profiler/profiling_utils.hpp"
 
 #include "duckdb/common/http_util.hpp"
 #include "duckdb/common/http_transport_manager.hpp"
@@ -204,6 +206,7 @@ unique_ptr<HTTPResponse> AWSInput::Request(RequestType request_type, ClientConte
 	string request_url = URL();
 	auto session = db.config.GetHTTPTransportManager().CreateSession(context, request_url);
 	auto &params = session.Parameters();
+	auto request_timer = IcebergProfileMetrics::StartRequest(context);
 
 	switch (request_type) {
 	case RequestType::HEAD_REQUEST: {

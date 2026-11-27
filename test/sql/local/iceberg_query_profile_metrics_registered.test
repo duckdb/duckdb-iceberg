@@ -1,0 +1,32 @@
+# name: test/sql/local/iceberg_query_profile_metrics_registered.test
+# description: The iceberg.* query profile metrics are registered, and a query that reads no Iceberg table reports none
+# group: [local]
+
+include test/sql/init_requires
+
+require iceberg
+
+require json
+
+query III
+SELECT metric_name, metric_type, unit FROM duckdb_available_metrics() WHERE metric_name LIKE 'iceberg.%' ORDER BY metric_name
+----
+iceberg.rest_request_time	double	seconds
+iceberg.rest_requests	uint64	requests
+
+statement ok
+SET enable_profiling = 'json';
+
+statement ok
+SET profiling_output = '{TEST_DIR}/iceberg_no_iceberg_profile.json';
+
+statement ok
+SELECT count(*) FROM range(1000);
+
+statement ok
+SET enable_profiling = 'no_output';
+
+query I
+SELECT count(*) FROM (DESCRIBE SELECT * FROM read_json('{TEST_DIR}/iceberg_no_iceberg_profile.json')) WHERE column_name = 'iceberg';
+----
+0

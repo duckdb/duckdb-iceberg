@@ -1,0 +1,76 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/test_query_profile_metrics.test
+# description: The query profile counts the REST catalog requests of a query and the time they took
+# group: [reads]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.query_profile_metrics;
+
+statement ok
+CREATE TABLE my_datalake.default.query_profile_metrics (id INTEGER, region VARCHAR)
+PARTITIONED BY (region) WITH ('format-version' = '2');
+
+statement ok
+INSERT INTO my_datalake.default.query_profile_metrics VALUES (1, 'north'), (2, 'south');
+
+statement ok
+INSERT INTO my_datalake.default.query_profile_metrics VALUES (3, 'east');
+
+statement ok
+PRAGMA enable_profiling = 'json';
+
+statement ok
+PRAGMA profiling_output = '{TEST_DIR}/iceberg_select_profile.json';
+
+query I
+SELECT id FROM my_datalake.default.query_profile_metrics ORDER BY id;
+----
+1
+2
+3
+
+statement ok
+PRAGMA disable_profiling;
+
+statement ok
+CREATE TABLE select_profile AS SELECT * FROM read_json('{TEST_DIR}/iceberg_select_profile.json');
+
+query II
+SELECT iceberg.rest_requests > 0, iceberg.rest_request_time > 0 FROM select_profile;
+----
+true	true
+
+statement ok
+DROP TABLE select_profile;
+
+# A write counts the requests it makes
+statement ok
+PRAGMA enable_profiling = 'json';
+
+statement ok
+PRAGMA profiling_output = '{TEST_DIR}/iceberg_insert_profile.json';
+
+statement ok
+INSERT INTO my_datalake.default.query_profile_metrics VALUES (4, 'west');
+
+statement ok
+PRAGMA disable_profiling;
+
+statement ok
+CREATE TABLE insert_profile AS SELECT * FROM read_json('{TEST_DIR}/iceberg_insert_profile.json');
+
+query I
+SELECT iceberg.rest_requests > 0 FROM insert_profile;
+----
+true
+
+statement ok
+DROP TABLE insert_profile;
+
+statement ok
+DROP TABLE my_datalake.default.query_profile_metrics;
