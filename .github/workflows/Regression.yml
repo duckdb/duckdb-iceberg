@@ -149,7 +149,8 @@ jobs:
           ENABLE_EXTENSION_AUTOLOADING: 1
           ENABLE_EXTENSION_AUTOINSTALL: 1
           BUILD_BENCHMARK: 1
-          EXT_FLAGS: -DICEBERG_ENABLE_EQUALITY_DELETE_WRITES=1
+          # The baseline benchmark runner uses the fixture catalog and needs only production extensions.
+          EXT_FLAGS: -DICEBERG_ENABLE_EQUALITY_DELETE_WRITES=1 -DSKIP_EXTENSIONS=iceberg_mock
         with:
           build-type: release
           build: python3 duckdb/scripts/ci/retry.py -- make -C base release

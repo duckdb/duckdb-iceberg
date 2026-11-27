@@ -1415,8 +1415,8 @@ TEST_CASE("Iceberg delete manifest read failure on a waiting thread reaches the 
 	REQUIRE_THROWS_AS(store.GetDeleteIndexes({0}), InternalException);
 	REQUIRE_THROWS_AS(store.GetDeleteIndexes({1}), InternalException);
 	auto descriptors = store.DeleteManifests();
-	IcebergManifestFileScanInfo info(context.metadata, context.snapshot, descriptors, context.options, fs, context.path,
-	                                 nullptr, {0, 1});
+	IcebergManifestFileScanInfo info(context.context, context.metadata, context.snapshot, descriptors, context.options,
+	                                 fs, context.path, nullptr, {0, 1});
 	auto &cache = ObjectCache::GetObjectCache(context.context);
 	for (idx_t i = 0; i < 2; i++) {
 		REQUIRE_FALSE(cache.GetWithTypePrefix<IcebergParsedManifest>(ManifestCacheKey(info, i)));
