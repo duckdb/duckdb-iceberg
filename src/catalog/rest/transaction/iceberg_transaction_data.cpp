@@ -210,6 +210,37 @@ bool IcebergTransactionData::SupportsAppendRetry() const {
 	return true;
 }
 
+bool IcebergTransactionData::SupportsExpirationRetry() const {
+	if (!expiration_replan || updates.empty()) {
+		return false;
+	}
+	if (!alters.empty() || assert_schema_id || has_assert_create || rolls_back || contains_merge) {
+		return false;
+	}
+	for (auto &update : updates) {
+		if (update->type != IcebergTableUpdateType::REMOVE_SNAPSHOTS) {
+			return false;
+		}
+	}
+	for (auto &requirement : requirements) {
+		if (requirement->type != IcebergTableRequirementType::ASSERT_REF_SNAPSHOT_ID) {
+			return false;
+		}
+	}
+	return true;
+}
+
+void IcebergTransactionData::ReplanExpiration(ClientContext &context, IcebergTable &table) {
+	if (!expiration_replan) {
+		return;
+	}
+	D_ASSERT(SupportsExpirationRetry());
+	//! The staged update and requirement describe the table as it was before the refresh.
+	updates.clear();
+	requirements.clear();
+	expiration_replan(context, table);
+}
+
 bool IcebergTransactionData::RetryStateMatches(const IcebergTable &table) const {
 	if (table.GetMetadata().table_uuid != initial_table_uuid) {
 		return false;

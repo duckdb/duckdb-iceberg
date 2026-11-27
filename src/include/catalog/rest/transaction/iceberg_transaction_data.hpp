@@ -15,6 +15,8 @@
 #include "catalog/rest/api/iceberg_create_table_request.hpp"
 #include "catalog/rest/transaction/iceberg_transaction_metadata.hpp"
 
+#include <functional>
+
 namespace duckdb {
 
 struct IcebergTable;
@@ -28,6 +30,10 @@ public:
 public:
 	int64_t GetCommitRetryCount() const;
 	bool SupportsAppendRetry() const;
+	//! Whether a conflicting commit of this snapshot expiration is retried by planning it again.
+	bool SupportsExpirationRetry() const;
+	//! Replace the staged snapshot expiration with one planned on the table's refreshed metadata.
+	void ReplanExpiration(ClientContext &context, IcebergTable &table);
 	bool RetryStateMatches(const IcebergTable &table_info) const;
 	//! Whether this transaction stages a DELETE snapshot; gates the commit-retry safety check.
 	bool ContainsDelete() const;
@@ -126,6 +132,9 @@ public:
 	bool has_maintenance_rewrite = false;
 	//! A MERGE chose its actions against the snapshot it read, so its commit can't be re-applied to a newer one.
 	bool contains_merge = false;
+	//! Set by snapshot expiration: plans it again on the refreshed table before a conflicting commit is retried.
+	//! Empty when the staged expiration cannot be planned again.
+	std::function<void(ClientContext &, IcebergTable &)> expiration_replan;
 	mutable mutex lock;
 };
 
