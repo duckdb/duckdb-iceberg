@@ -13,8 +13,10 @@
 #include "duckdb/optimizer/join_filter_pushdown_optimizer.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/parser/expression/star_expression.hpp"
+#include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/query_node/select_node.hpp"
 #include "duckdb/parser/tableref/basetableref.hpp"
+#include "duckdb/parser/tableref/emptytableref.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
@@ -28,6 +30,7 @@
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/operator/logical_materialized_cte.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
+#include "duckdb/planner/operator/logical_window.hpp"
 #include "duckdb/planner/operator/logical_update.hpp"
 #include "duckdb/planner/table_filter_set.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
@@ -101,10 +104,11 @@ private:
 class CopyOnWriteDeleteRewrite : public IcebergFileRewrite {
 public:
 	CopyOnWriteDeleteRewrite(PhysicalPlan &physical_plan, IcebergTable &table,
-	                         IcebergCopyOnWriteDeleteCollector &collector, IcebergCopyOnWriteRowCounter &touched_rows,
-	                         IcebergCopyOnWriteRowCounter &kept_rows, unique_ptr<LogicalOperator> logical_plan)
+	                         IcebergCopyOnWriteRowCounter &touched_rows,
+	                         optional_ptr<IcebergMultiFileList> match_file_list,
+	                         unique_ptr<LogicalOperator> logical_plan)
 	    : IcebergFileRewrite(physical_plan, {LogicalType::BIGINT}, 1, IcebergWriteOperation::COPY_ON_WRITE_DELETE),
-	      table(table), collector(collector), touched_rows(touched_rows), kept_rows(kept_rows),
+	      table(table), touched_rows(touched_rows), match_file_list(match_file_list),
 	      logical_plan(std::move(logical_plan)) {
 	}
 
@@ -114,7 +118,8 @@ public:
 
 	SourceResultType GetDataInternal(ExecutionContext &context, DataChunk &chunk,
 	                                 OperatorSourceInput &input) const override {
-		chunk.data[0].Append(Value::BIGINT(NumericCast<int64_t>(GetDeletedCount())));
+		auto &state = sink_state->Cast<IcebergFileRewriteGlobalState>();
+		chunk.data[0].Append(Value::BIGINT(NumericCast<int64_t>(GetDeletedCount(state.insert_count.load()))));
 		chunk.SetChildCardinality(1);
 		return SourceResultType::FINISHED;
 	}
@@ -126,27 +131,26 @@ protected:
 		//! are rebuilt for each commit attempt, including those of files inserted in this transaction.
 		IcebergFileRewriteInput result(state.added_data_files ? IcebergSnapshotOperationType::OVERWRITE
 		                                                      : IcebergSnapshotOperationType::DELETE);
-		auto &files = collector.GetDeletes().files;
+		auto &files = touched_rows.GetFiles();
 		//! The DELETE binder takes filename and file_row_number from the target scan. If the optimizer
-		//! eliminated that scan, the collector cannot have received a matching row.
-		if (!files.empty() && !collector.match_file_list) {
+		//! eliminated that scan, no file can have been touched.
+		if (!files.empty() && !match_file_list) {
 			throw InternalException("Copy-on-write DELETE: matched rows without an Iceberg scan of the matching rows");
 		}
 		for (auto &file : files) {
-			AddReplacedFile(result, file, *collector.match_file_list);
+			AddReplacedFile(result, file, *match_file_list);
 		}
 		return result;
 	}
 
 private:
 	//! Every live row of a touched file is either deleted or kept. `deletee` may list a row twice, the probe side
-	//! cannot, so this is the number of distinct deleted rows.
-	idx_t GetDeletedCount() const {
-		if (collector.GetDeletes().files.empty()) {
+	//! cannot, so this is the number of distinct deleted rows. The kept rows are the rows the writer wrote.
+	idx_t GetDeletedCount(idx_t kept) const {
+		if (touched_rows.GetFiles().empty()) {
 			return 0;
 		}
 		auto touched = touched_rows.GetCount();
-		auto kept = kept_rows.GetCount();
 		if (kept > touched) {
 			throw InternalException("Copy-on-write DELETE: kept %llu rows of the %llu rows of the touched files", kept,
 			                        touched);
@@ -155,10 +159,11 @@ private:
 	}
 
 	IcebergTable &table;
-	IcebergCopyOnWriteDeleteCollector &collector;
-	//! The rows of the touched files (the semi join's output), and the rows written back (the anti join's output)
+	//! The rows of the touched files (the join with dict's output), which also records the files
 	IcebergCopyOnWriteRowCounter &touched_rows;
-	IcebergCopyOnWriteRowCounter &kept_rows;
+	//! The file list of the DELETE's scan. It has loaded the delete files of every matched data file, which are
+	//! removed together with that data file. Null if the optimizer removed the scan because no rows can match.
+	optional_ptr<IcebergMultiFileList> match_file_list;
 	//! Owns the logical plan the rewritten rows were planned from
 	unique_ptr<LogicalOperator> logical_plan;
 };
@@ -223,32 +228,27 @@ optional_ptr<PhysicalTableScan> FindTableScan(PhysicalOperator &plan) {
 	return FindTableScan(plan.children[0].get());
 }
 
-//! The body of the `deletee` CTE: the DELETE's own scan, reduced to the (file number, file_row_number) of each row it
-//! matches. DELETE ... USING can match a row more than once; the anti join does not need the pairs to be distinct.
-//! The DELETE's plan is already optimized and resolved, so it is planned as is rather than as a child of this tree.
+//! The body of the `raw` CTE: the DELETE's own scan, reduced to the (filename, file_row_number) of each row it matches.
+//! DELETE ... USING can match a row more than once; the anti join does not need the pairs to be distinct. The DELETE's
+//! plan is already optimized and resolved, so it is planned as is rather than as a child of this tree.
 class LogicalCopyOnWriteDeleteMatches : public LogicalExtensionOperator {
 public:
 	LogicalCopyOnWriteDeleteMatches(LogicalOperator &match_plan, vector<idx_t> row_id_indexes,
 	                                vector<LogicalType> row_id_types)
 	    : match_plan(match_plan), row_id_indexes(std::move(row_id_indexes)), row_id_types(std::move(row_id_types)) {
-		types = GetDeleteeTypes();
+		types = this->row_id_types;
 	}
 
 	LogicalOperator &match_plan;
 	//! The filename and file_row_number columns of match_plan, and their types
 	vector<idx_t> row_id_indexes;
 	vector<LogicalType> row_id_types;
-	optional_ptr<IcebergCopyOnWriteDeleteCollector> collector;
-
-	//! The columns of `deletee`: the file number, then file_row_number
-	vector<LogicalType> GetDeleteeTypes() const {
-		return {LogicalType::BIGINT, row_id_types[1]};
-	}
+	//! The file list of the DELETE's scan, set when planned; null if the optimizer removed the scan
+	optional_ptr<IcebergMultiFileList> match_file_list;
 
 public:
 	PhysicalOperator &CreatePlan(ClientContext &context, PhysicalPlanGenerator &planner) override {
 		auto &match = planner.CreatePlan(match_plan);
-
 		vector<unique_ptr<Expression>> select_list;
 		for (idx_t i = 0; i < row_id_indexes.size(); i++) {
 			select_list.push_back(make_uniq<BoundReferenceExpression>(row_id_types[i], row_id_indexes[i]));
@@ -256,18 +256,13 @@ public:
 		auto &projection =
 		    planner.Make<PhysicalProjection>(row_id_types, std::move(select_list), match.estimated_cardinality);
 		projection.children.push_back(match);
-
-		auto &result =
-		    planner.Make<IcebergCopyOnWriteDeleteCollector>(GetDeleteeTypes(), projection.estimated_cardinality);
-		result.children.push_back(projection);
-		collector = result.Cast<IcebergCopyOnWriteDeleteCollector>();
 		//! The optimizer can remove the scan when no rows match.
 		auto match_scan = IcebergDelete::FindIcebergScan(match);
 		if (match_scan) {
 			auto &bind_data = match_scan->bind_data->Cast<MultiFileBindData>();
-			collector->match_file_list = bind_data.file_list->Cast<IcebergMultiFileList>();
+			match_file_list = bind_data.file_list->Cast<IcebergMultiFileList>();
 		}
-		return result;
+		return projection;
 	}
 
 	string GetExtensionName() const override {
@@ -276,23 +271,26 @@ public:
 
 protected:
 	void ResolveTypes() override {
-		types = GetDeleteeTypes();
+		types = row_id_types;
 	}
 };
 
 //! Counts the rows of its child (see IcebergCopyOnWriteRowCounter); its output is its child's
 class LogicalCopyOnWriteRowCount : public LogicalExtensionOperator {
 public:
-	explicit LogicalCopyOnWriteRowCount(unique_ptr<LogicalOperator> child) {
+	explicit LogicalCopyOnWriteRowCount(unique_ptr<LogicalOperator> child, optional_idx file_column = optional_idx())
+	    : file_column(file_column) {
 		children.push_back(std::move(child));
 	}
 
+	//! The column of the child with the filename, if the files are to be recorded too
+	optional_idx file_column;
 	optional_ptr<IcebergCopyOnWriteRowCounter> counter;
 
 public:
 	PhysicalOperator &CreatePlan(ClientContext &context, PhysicalPlanGenerator &planner) override {
 		auto &child = planner.CreatePlan(*children[0]);
-		auto &result = planner.Make<IcebergCopyOnWriteRowCounter>(child);
+		auto &result = planner.Make<IcebergCopyOnWriteRowCounter>(child, file_column);
 		counter = result.Cast<IcebergCopyOnWriteRowCounter>();
 		return result;
 	}
@@ -311,138 +309,44 @@ protected:
 	}
 };
 
-//! Maps the file numbers of `touched` back to the paths the collector numbered: outputs (filename, file number)
-class CopyOnWriteFilePaths : public PhysicalOperator {
-public:
-	CopyOnWriteFilePaths(PhysicalPlan &physical_plan, IcebergCopyOnWriteDeleteCollector &collector,
-	                     PhysicalOperator &child)
-	    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, {LogicalType::VARCHAR, LogicalType::BIGINT},
-	                       child.estimated_cardinality),
-	      collector(collector) {
-		children.push_back(child);
-	}
-
-	IcebergCopyOnWriteDeleteCollector &collector;
-
-	OperatorResultType Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
-	                           GlobalOperatorState &gstate, OperatorState &state) const override {
-		//! `touched` reads `deletee`, so the collector has numbered every file by now
-		auto &files = collector.GetDeletes().files;
-		UnifiedVectorFormat file_number_data;
-		input.data[0].ToUnifiedFormat(file_number_data);
-		auto file_numbers = UnifiedVectorFormat::GetData<int64_t>(file_number_data);
-		auto paths = FlatVector::GetDataMutable<string_t>(chunk.data[0]);
-		for (idx_t i = 0; i < input.size(); i++) {
-			auto idx = file_number_data.sel->get_index(i);
-			if (!file_number_data.validity.RowIsValid(idx) || file_numbers[idx] < 0 ||
-			    NumericCast<idx_t>(file_numbers[idx]) >= files.size()) {
-				throw InternalException("Copy-on-write DELETE: no file with this number");
-			}
-			paths[i] = StringVector::AddString(chunk.data[0], files[NumericCast<idx_t>(file_numbers[idx])]);
-		}
-		chunk.data[1].Reference(input.data[0]);
-		chunk.SetChildCardinality(input.size());
-		return OperatorResultType::NEED_MORE_INPUT;
-	}
-
-	bool ParallelOperator() const override {
-		return true;
-	}
-
-	string GetName() const override {
-		return "ICEBERG_COPY_ON_WRITE_FILE_PATHS";
-	}
-};
-
-class LogicalCopyOnWriteFilePaths : public LogicalExtensionOperator {
-public:
-	LogicalCopyOnWriteFilePaths(TableIndex table_index, LogicalCopyOnWriteDeleteMatches &matches,
-	                            unique_ptr<LogicalOperator> child)
-	    : table_index(table_index), matches(matches) {
-		children.push_back(std::move(child));
-	}
-
-	TableIndex table_index;
-	LogicalCopyOnWriteDeleteMatches &matches;
-
-public:
-	PhysicalOperator &CreatePlan(ClientContext &context, PhysicalPlanGenerator &planner) override {
-		auto &child = planner.CreatePlan(*children[0]);
-		//! The CTE body is planned before the CTE's consumers, so its collector exists
-		if (!matches.collector) {
-			throw InternalException("Copy-on-write DELETE: the files are numbered after they are read");
-		}
-		return planner.Make<CopyOnWriteFilePaths>(*matches.collector, child);
-	}
-
-	vector<ColumnBinding> GetColumnBindings() override {
-		return GenerateColumnBindings(table_index, 2);
-	}
-
-	vector<TableIndex> GetTableIndex() const override {
-		return {table_index};
-	}
-
-	string GetExtensionName() const override {
-		return "iceberg_copy_on_write_file_paths";
-	}
-
-protected:
-	void ResolveTypes() override {
-		types = {LogicalType::VARCHAR, LogicalType::BIGINT};
-	}
-};
-
 class RowCounterGlobalState : public GlobalOperatorState {
 public:
 	atomic<idx_t> count {0};
-};
-
-class CollectorGlobalState : public GlobalOperatorState {
-public:
 	mutex lock;
-	//! The files by number, and the number of each file
-	IcebergCopyOnWriteDeletedFiles deletes;
-	unordered_map<string, idx_t> file_numbers;
+	unordered_set<string> files;
 };
 
-class CollectorLocalState : public OperatorState {
+class RowCounterLocalState : public OperatorState {
 public:
-	//! The number of a file, taking the global lock only for a file this thread has not seen yet
-	int64_t GetFileNumber(CollectorGlobalState &gstate, const string_t &file_name) {
-		//! The scan reads one file at a time, so the last file is usually the next one
-		if (has_last_file && file_name == string_t(last_file)) {
-			return last_file_number;
-		}
-		auto path = file_name.GetString();
-		auto entry = file_numbers.find(path);
-		if (entry == file_numbers.end()) {
-			idx_t file_number;
-			{
-				lock_guard<mutex> guard(gstate.lock);
-				auto global_entry = gstate.file_numbers.find(path);
-				if (global_entry == gstate.file_numbers.end()) {
-					file_number = gstate.deletes.files.size();
-					gstate.deletes.files.push_back(path);
-					gstate.file_numbers.emplace(path, file_number);
-				} else {
-					file_number = global_entry->second;
-				}
-			}
-			entry = file_numbers.emplace(std::move(path), file_number).first;
-		}
-		has_last_file = true;
-		last_file = entry->first;
-		last_file_number = NumericCast<int64_t>(entry->second);
-		return last_file_number;
-	}
-
-private:
-	unordered_map<string, idx_t> file_numbers;
+	//! The files this thread has recorded, so the global lock is only taken for a new one
+	unordered_set<string> seen_files;
+	//! The scan reads one file at a time, so the last file is usually the next one
 	bool has_last_file = false;
 	string last_file;
-	int64_t last_file_number = 0;
 };
+
+//! row_number() OVER (), bound by DuckDB's binder as in `SELECT row_number() OVER ()`. It refers to no column, so it
+//! can be used in any window operator.
+unique_ptr<Expression> BindRowNumber(ClientContext &context) {
+	auto select = make_uniq<SelectNode>();
+	Parser parser(context);
+	auto expressions = parser.ParseExpressionList("row_number() OVER ()");
+	D_ASSERT(expressions.size() == 1);
+	select->select_list.push_back(std::move(expressions[0]));
+	select->from_table = make_uniq<EmptyTableRef>();
+	auto binder = Binder::CreateBinder(context);
+	auto bound = binder->Bind(*select);
+	reference<LogicalOperator> op = *bound.plan;
+	while (op.get().type != LogicalOperatorType::LOGICAL_WINDOW) {
+		if (op.get().children.size() != 1) {
+			throw InternalException("Copy-on-write DELETE: row_number() did not bind as a window");
+		}
+		op = *op.get().children[0];
+	}
+	auto &window = op.get().Cast<LogicalWindow>();
+	D_ASSERT(window.expressions.size() == 1);
+	return window.expressions[0]->Copy();
+}
 
 //! Bind `SELECT * FROM <table>`, then add virtual columns to its scan: on V3, the row lineage columns
 //! `_row_id` and `_last_updated_sequence_number`, then always `filename` and `file_row_number`. They are added by
@@ -571,54 +475,87 @@ PhysicalOperator &IcebergCopyOnWriteDelete::PlanDelete(ClientContext &context, P
 		column_types.push_back(expr->GetReturnType());
 	}
 
-	//! The CTE index has to be distinct from any CTE in the DELETE's plan: they share the physical planner
+	//! The CTE indexes have to be distinct from any CTE in the DELETE's plan: they share the physical planner
 	idx_t max_index = 0;
 	MaxTableIndex(match_plan, max_index);
 	MaxTableIndex(*keep, max_index);
-	TableIndex cte_index(MaxValue(max_index + 1, binder->GenerateTableIndex().index));
-	auto deletee_types = matches_ref.GetDeleteeTypes();
-	auto cte_ref = [&]() {
-		return make_uniq<LogicalCTERef>(binder->GenerateTableIndex(), cte_index, deletee_types,
-		                                vector<Identifier> {"file_no", "file_row_number"});
+	TableIndex raw_index(MaxValue(max_index + 1, binder->GenerateTableIndex().index));
+	TableIndex dict_index(raw_index.index + 1);
+	auto raw_ref = [&]() {
+		return make_uniq<LogicalCTERef>(binder->GenerateTableIndex(), raw_index, row_id_types,
+		                                vector<Identifier> {"filename", "file_row_number"});
+	};
+	vector<LogicalType> dict_types {LogicalType::VARCHAR, LogicalType::BIGINT};
+	auto dict_ref = [&]() {
+		return make_uniq<LogicalCTERef>(binder->GenerateTableIndex(), dict_index, dict_types,
+		                                vector<Identifier> {"filename", "file_no"});
 	};
 
-	//! touched: SELECT DISTINCT file_no FROM deletee, mapped back to (filename, file_no)
-	auto touched_ref = cte_ref();
-	auto touched_ref_index = touched_ref->table_index;
-	auto touched_projection_index = binder->GenerateTableIndex();
-	vector<unique_ptr<Expression>> touched_list;
-	touched_list.push_back(ColumnRef(deletee_types[0], touched_ref_index, 0));
-	auto touched_projection = make_uniq<LogicalProjection>(touched_projection_index, std::move(touched_list));
-	touched_projection->AddChild(std::move(touched_ref));
+	//! dict: SELECT filename, row_number() OVER () AS file_no FROM (SELECT DISTINCT filename FROM raw), one row per
+	//! touched file
+	auto paths_ref = raw_ref();
+	auto paths_ref_index = paths_ref->table_index;
+	auto paths_index = binder->GenerateTableIndex();
+	vector<unique_ptr<Expression>> paths_list;
+	paths_list.push_back(ColumnRef(row_id_types[0], paths_ref_index, 0));
+	auto paths = make_uniq<LogicalProjection>(paths_index, std::move(paths_list));
+	paths->AddChild(std::move(paths_ref));
 	vector<unique_ptr<Expression>> distinct_targets;
-	distinct_targets.push_back(ColumnRef(deletee_types[0], touched_projection_index, 0));
-	auto touched_numbers = make_uniq<LogicalDistinct>(std::move(distinct_targets), DistinctType::DISTINCT);
-	touched_numbers->AddChild(std::move(touched_projection));
-	auto touched_index = binder->GenerateTableIndex();
-	auto touched = make_uniq<LogicalCopyOnWriteFilePaths>(touched_index, matches_ref, std::move(touched_numbers));
+	distinct_targets.push_back(ColumnRef(row_id_types[0], paths_index, 0));
+	auto distinct_paths = make_uniq<LogicalDistinct>(std::move(distinct_targets), DistinctType::DISTINCT);
+	distinct_paths->AddChild(std::move(paths));
+	auto window_index = binder->GenerateTableIndex();
+	auto numbering = make_uniq<LogicalWindow>(window_index);
+	numbering->expressions.push_back(BindRowNumber(context));
+	numbering->AddChild(std::move(distinct_paths));
+	vector<unique_ptr<Expression>> dict_list;
+	dict_list.push_back(ColumnRef(row_id_types[0], paths_index, 0));
+	dict_list.push_back(ColumnRef(dict_types[1], window_index, 0));
+	unique_ptr<LogicalOperator> dict = make_uniq<LogicalProjection>(binder->GenerateTableIndex(), std::move(dict_list));
+	dict->AddChild(std::move(numbering));
 
-	//! keep JOIN touched ON keep.filename = touched.filename: touched has each file once, so this only adds the
-	//! file number to the rows of the touched files
+	//! deletee: SELECT dict.file_no, raw.file_row_number FROM raw JOIN dict USING (filename). dict, one row per
+	//! file, is the build side.
+	auto deletee_raw = raw_ref();
+	auto deletee_raw_index = deletee_raw->table_index;
+	auto deletee_dict = dict_ref();
+	auto deletee_dict_index = deletee_dict->table_index;
+	auto numbering_join = make_uniq<LogicalComparisonJoin>(JoinType::INNER);
+	numbering_join->conditions.emplace_back(ColumnRef(row_id_types[0], deletee_raw_index, 0),
+	                                        ColumnRef(dict_types[0], deletee_dict_index, 0),
+	                                        ExpressionType::COMPARE_EQUAL);
+	numbering_join->AddChild(std::move(deletee_raw));
+	numbering_join->AddChild(std::move(deletee_dict));
+	auto deletee_index = binder->GenerateTableIndex();
+	vector<unique_ptr<Expression>> deletee_list;
+	deletee_list.push_back(ColumnRef(dict_types[1], deletee_dict_index, 1));
+	deletee_list.push_back(ColumnRef(row_id_types[1], deletee_raw_index, 1));
+	auto deletee = make_uniq<LogicalProjection>(deletee_index, std::move(deletee_list));
+	deletee->AddChild(std::move(numbering_join));
+
+	//! keep JOIN dict ON keep.filename = dict.filename: dict has each file once, so this only adds the file number to
+	//! the rows of the touched files
+	auto touched = dict_ref();
+	auto touched_index = touched->table_index;
 	auto touched_join = make_uniq<LogicalComparisonJoin>(JoinType::INNER);
 	auto &touched_join_ref = *touched_join;
 	touched_join->conditions.emplace_back(ColumnRef(row_id_types[0], keep_index, column_count),
-	                                      ColumnRef(row_id_types[0], touched_index, 0), ExpressionType::COMPARE_EQUAL);
+	                                      ColumnRef(dict_types[0], touched_index, 0), ExpressionType::COMPARE_EQUAL);
 	touched_join->AddChild(std::move(keep));
 	touched_join->AddChild(std::move(touched));
 
-	//! ANTI JOIN deletee ON touched.file_no = deletee.file_no AND keep.file_row_number = deletee.file_row_number
-	auto deletee_ref = cte_ref();
-	auto deletee_index = deletee_ref->table_index;
+	//! ANTI JOIN deletee ON dict.file_no = deletee.file_no AND keep.file_row_number = deletee.file_row_number
 	auto anti_join = make_uniq<LogicalComparisonJoin>(JoinType::ANTI);
-	anti_join->conditions.emplace_back(ColumnRef(deletee_types[0], touched_index, 1),
-	                                   ColumnRef(deletee_types[0], deletee_index, 0), ExpressionType::COMPARE_EQUAL);
-	anti_join->conditions.emplace_back(ColumnRef(deletee_types[1], keep_index, column_count + 1),
-	                                   ColumnRef(deletee_types[1], deletee_index, 1), ExpressionType::COMPARE_EQUAL);
-	//! count the rows of the touched files, before the anti join removes the deleted ones
-	auto touched_rows = make_uniq<LogicalCopyOnWriteRowCount>(std::move(touched_join));
+	anti_join->conditions.emplace_back(ColumnRef(dict_types[1], touched_index, 1),
+	                                   ColumnRef(dict_types[1], deletee_index, 0), ExpressionType::COMPARE_EQUAL);
+	anti_join->conditions.emplace_back(ColumnRef(row_id_types[1], keep_index, column_count + 1),
+	                                   ColumnRef(row_id_types[1], deletee_index, 1), ExpressionType::COMPARE_EQUAL);
+	//! count the rows of the touched files, before the anti join removes the deleted ones, and record the files:
+	//! every file of dict has a live row here, including a file whose rows are all deleted
+	auto touched_rows = make_uniq<LogicalCopyOnWriteRowCount>(std::move(touched_join), column_count);
 	auto &touched_rows_ref = *touched_rows;
 	anti_join->AddChild(std::move(touched_rows));
-	anti_join->AddChild(std::move(deletee_ref));
+	anti_join->AddChild(std::move(deletee));
 
 	//! SELECT keep.*
 	vector<unique_ptr<Expression>> keep_list;
@@ -628,8 +565,8 @@ PhysicalOperator &IcebergCopyOnWriteDelete::PlanDelete(ClientContext &context, P
 	unique_ptr<LogicalOperator> rows = make_uniq<LogicalProjection>(binder->GenerateTableIndex(), std::move(keep_list));
 	rows->AddChild(std::move(anti_join));
 
-	//! The join with touched restricts the keep scan to the touched files at runtime: its build side becomes a filter
-	//! on the constant `filename` column, which the scan evaluates once per file, skipping every other file unread.
+	//! The join with dict restricts the keep scan to the touched files at runtime: its build side becomes a filter on
+	//! the constant `filename` column, which the scan evaluates once per file, skipping every other file unread.
 	Optimizer optimizer(*binder, context);
 	JoinFilterPushdownOptimizer join_filter_pushdown(optimizer);
 	join_filter_pushdown.VisitOperator(*rows);
@@ -638,32 +575,33 @@ PhysicalOperator &IcebergCopyOnWriteDelete::PlanDelete(ClientContext &context, P
 		touched_join_ref.filter_pushdown->build_side_has_filter = true;
 	}
 
-	//! The DELETE's plan is resolved already; only the new operators above the CTE body need it.
-	ColumnBindingResolver resolver;
-	resolver.VisitOperator(*rows);
+	//! The DELETE's plan is resolved already; only the new operators above the raw CTE body need it.
+	ColumnBindingResolver dict_resolver;
+	dict_resolver.VisitOperator(*dict);
+	ColumnBindingResolver rows_resolver;
+	rows_resolver.VisitOperator(*rows);
 
+	auto with_dict = make_uniq<LogicalMaterializedCTE>("dict", dict_index, 2, std::move(dict), std::move(rows),
+	                                                   CTEMaterialize::CTE_MATERIALIZE_ALWAYS);
 	unique_ptr<LogicalOperator> plan = make_uniq<LogicalMaterializedCTE>(
-	    "deletee", cte_index, 2, std::move(matches), std::move(rows), CTEMaterialize::CTE_MATERIALIZE_ALWAYS);
+	    "raw", raw_index, 2, std::move(matches), std::move(with_dict), CTEMaterialize::CTE_MATERIALIZE_ALWAYS);
 	plan->ResolveOperatorTypes();
 	auto &rows_plan = planner.CreatePlan(*plan);
 	D_ASSERT(rows_plan.GetTypes().size() == column_count);
-	if (!matches_ref.collector || !touched_rows_ref.counter) {
+	if (!touched_rows_ref.counter) {
 		throw InternalException("Copy-on-write DELETE: the deleted rows are not collected");
 	}
-	auto &kept_rows_counter =
-	    planner.Make<IcebergCopyOnWriteRowCounter>(rows_plan).Cast<IcebergCopyOnWriteRowCounter>();
-
 	//! An earlier V3 snapshot in this transaction will assign any lineage that still reads NULL.
-	reference<PhysicalOperator> kept_rows = kept_rows_counter;
+	reference<PhysicalOperator> kept_rows = rows_plan;
 	auto &transaction_data = table.table_info.transaction_data;
 	if (with_row_lineage && transaction_data && transaction_data->has_pending_v3_snapshot) {
-		kept_rows = planner.Make<CopyOnWriteLineageCheck>(kept_rows_counter);
+		kept_rows = planner.Make<CopyOnWriteLineageCheck>(rows_plan);
 	}
 
 	//! Use the same replacement-file writer and snapshot staging as maintenance rewrites.
 	auto &rewrite = planner
-	                    .Make<CopyOnWriteDeleteRewrite>(table.table_info, *matches_ref.collector,
-	                                                    *touched_rows_ref.counter, kept_rows_counter, std::move(plan))
+	                    .Make<CopyOnWriteDeleteRewrite>(table.table_info, *touched_rows_ref.counter,
+	                                                    matches_ref.match_file_list, std::move(plan))
 	                    .Cast<CopyOnWriteDeleteRewrite>();
 	rewrite.PlanCopy(context, planner, metadata, kept_rows.get(), optional_idx(),
 	                 with_row_lineage ? IcebergInsertVirtualColumns::WRITE_ROW_ID_AND_SEQUENCE_NUMBER
@@ -1012,74 +950,12 @@ string IcebergCopyOnWriteDeleteFilter::GetName() const {
 }
 
 //===--------------------------------------------------------------------===//
-// Collector
-//===--------------------------------------------------------------------===//
-IcebergCopyOnWriteDeleteCollector::IcebergCopyOnWriteDeleteCollector(PhysicalPlan &physical_plan,
-                                                                     vector<LogicalType> types,
-                                                                     idx_t estimated_cardinality)
-    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, std::move(types), estimated_cardinality) {
-}
-
-unique_ptr<GlobalOperatorState>
-IcebergCopyOnWriteDeleteCollector::GetGlobalOperatorState(ClientContext &context) const {
-	return make_uniq<CollectorGlobalState>();
-}
-
-unique_ptr<OperatorState> IcebergCopyOnWriteDeleteCollector::GetOperatorState(ExecutionContext &context) const {
-	return make_uniq<CollectorLocalState>();
-}
-
-OperatorResultType IcebergCopyOnWriteDeleteCollector::Execute(ExecutionContext &context, DataChunk &input,
-                                                              DataChunk &chunk, GlobalOperatorState &gstate_p,
-                                                              OperatorState &state_p) const {
-	auto &gstate = gstate_p.Cast<CollectorGlobalState>();
-	auto &state = state_p.Cast<CollectorLocalState>();
-
-	auto &file_name_vector = input.data[0];
-	auto &file_number_vector = chunk.data[0];
-	if (file_name_vector.GetVectorType() == VectorType::CONSTANT_VECTOR) {
-		//! The scan emits one file per chunk as a constant: number it once, not for every row
-		if (ConstantVector::IsNull(file_name_vector)) {
-			throw InternalException("Filename cannot be NULL!");
-		}
-		auto file_name = ConstantVector::GetData<string_t>(file_name_vector)[0];
-		file_number_vector.SetVectorType(VectorType::CONSTANT_VECTOR);
-		ConstantVector::GetData<int64_t>(file_number_vector)[0] = state.GetFileNumber(gstate, file_name);
-	} else {
-		UnifiedVectorFormat file_name_data;
-		file_name_vector.ToUnifiedFormat(file_name_data);
-		auto file_names = UnifiedVectorFormat::GetData<string_t>(file_name_data);
-		file_number_vector.SetVectorType(VectorType::FLAT_VECTOR);
-		auto file_numbers = FlatVector::GetDataMutable<int64_t>(file_number_vector);
-		for (idx_t i = 0; i < input.size(); i++) {
-			auto file_idx = file_name_data.sel->get_index(i);
-			if (!file_name_data.validity.RowIsValid(file_idx)) {
-				throw InternalException("Filename cannot be NULL!");
-			}
-			file_numbers[i] = state.GetFileNumber(gstate, file_names[file_idx]);
-		}
-	}
-	chunk.data[1].Reference(input.data[1]);
-	chunk.SetChildCardinality(input.size());
-	return OperatorResultType::NEED_MORE_INPUT;
-}
-
-const IcebergCopyOnWriteDeletedFiles &IcebergCopyOnWriteDeleteCollector::GetDeletes() const {
-	if (!op_state) {
-		throw InternalException("Copy-on-write DELETE: the deleted rows were read before they were collected");
-	}
-	return op_state->Cast<CollectorGlobalState>().deletes;
-}
-
-string IcebergCopyOnWriteDeleteCollector::GetName() const {
-	return "ICEBERG_COPY_ON_WRITE_DELETED_ROWS";
-}
-
-//===--------------------------------------------------------------------===//
 // Row counter
 //===--------------------------------------------------------------------===//
-IcebergCopyOnWriteRowCounter::IcebergCopyOnWriteRowCounter(PhysicalPlan &physical_plan, PhysicalOperator &child)
-    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, child.GetTypes(), child.estimated_cardinality) {
+IcebergCopyOnWriteRowCounter::IcebergCopyOnWriteRowCounter(PhysicalPlan &physical_plan, PhysicalOperator &child,
+                                                           optional_idx file_column)
+    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, child.GetTypes(), child.estimated_cardinality),
+      file_column(file_column) {
 	children.push_back(child);
 }
 
@@ -1087,11 +963,58 @@ unique_ptr<GlobalOperatorState> IcebergCopyOnWriteRowCounter::GetGlobalOperatorS
 	return make_uniq<RowCounterGlobalState>();
 }
 
+unique_ptr<OperatorState> IcebergCopyOnWriteRowCounter::GetOperatorState(ExecutionContext &context) const {
+	return make_uniq<RowCounterLocalState>();
+}
+
+static void RecordFile(RowCounterGlobalState &gstate, RowCounterLocalState &state, const string_t &file_name) {
+	if (state.has_last_file && file_name == string_t(state.last_file)) {
+		return;
+	}
+	auto path = file_name.GetString();
+	state.has_last_file = true;
+	state.last_file = path;
+	if (state.seen_files.insert(path).second) {
+		lock_guard<mutex> guard(gstate.lock);
+		gstate.files.insert(std::move(path));
+	}
+}
+
 OperatorResultType IcebergCopyOnWriteRowCounter::Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
-                                                         GlobalOperatorState &gstate, OperatorState &state) const {
-	gstate.Cast<RowCounterGlobalState>().count += input.size();
+                                                         GlobalOperatorState &gstate_p, OperatorState &state_p) const {
+	auto &gstate = gstate_p.Cast<RowCounterGlobalState>();
+	gstate.count += input.size();
+	if (file_column.IsValid() && input.size() > 0) {
+		auto &state = state_p.Cast<RowCounterLocalState>();
+		auto &file_name_vector = input.data[file_column.GetIndex()];
+		if (file_name_vector.GetVectorType() == VectorType::CONSTANT_VECTOR) {
+			//! The scan emits one file per chunk as a constant: record it once, not for every row
+			if (ConstantVector::IsNull(file_name_vector)) {
+				throw InternalException("Filename cannot be NULL!");
+			}
+			RecordFile(gstate, state, ConstantVector::GetData<string_t>(file_name_vector)[0]);
+		} else {
+			UnifiedVectorFormat file_name_data;
+			file_name_vector.ToUnifiedFormat(file_name_data);
+			auto file_names = UnifiedVectorFormat::GetData<string_t>(file_name_data);
+			for (idx_t i = 0; i < input.size(); i++) {
+				auto file_idx = file_name_data.sel->get_index(i);
+				if (!file_name_data.validity.RowIsValid(file_idx)) {
+					throw InternalException("Filename cannot be NULL!");
+				}
+				RecordFile(gstate, state, file_names[file_idx]);
+			}
+		}
+	}
 	chunk.Reference(input);
 	return OperatorResultType::NEED_MORE_INPUT;
+}
+
+const unordered_set<string> &IcebergCopyOnWriteRowCounter::GetFiles() const {
+	if (!op_state) {
+		throw InternalException("Copy-on-write DELETE: the files were read before they were recorded");
+	}
+	return op_state->Cast<RowCounterGlobalState>().files;
 }
 
 idx_t IcebergCopyOnWriteRowCounter::GetCount() const {
