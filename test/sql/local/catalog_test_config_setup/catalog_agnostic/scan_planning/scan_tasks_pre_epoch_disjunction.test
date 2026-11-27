@@ -1,0 +1,80 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/scan_planning/scan_tasks_pre_epoch_disjunction.test
+# description: OR pruning accepts both historical and current pre-epoch time partitions
+# group: [scan_planning]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+SET threads=1;
+
+statement ok
+SET iceberg_use_server_side_scan_planning=false;
+
+statement ok
+CALL enable_logging('Iceberg');
+
+foreach transform year month day hour
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.pre_epoch_disjunction;
+
+statement ok
+CREATE TABLE my_datalake.default.pre_epoch_disjunction(id INTEGER, ts TIMESTAMP)
+PARTITIONED BY ({transform}(ts));
+
+statement ok
+INSERT INTO my_datalake.default.pre_epoch_disjunction VALUES (1, '1969-12-31 23:30:00');
+
+statement ok
+INSERT INTO my_datalake.default.pre_epoch_disjunction VALUES
+	(2, '1969-12-31 23:30:00'), (3, '1969-12-31 23:45:00');
+
+statement ok
+INSERT INTO my_datalake.default.pre_epoch_disjunction VALUES (4, '2000-01-01');
+
+statement ok
+BEGIN;
+
+# Older writers could record partition 0 for timestamps in period -1. Give just
+# the two-row task that historical partition value. Its Parquet timestamps are intact.
+statement ok
+SET VARIABLE tasks = (
+	SELECT list(CASE WHEN record_count = 2 THEN struct_update(t, partition_values := {'1000': 0}) ELSE t END)
+	FROM iceberg_scan_plan('my_datalake.default.pre_epoch_disjunction') t
+);
+
+foreach mode true false
+
+statement ok
+SET iceberg_enable_multi_file_scan_tasks={mode};
+
+foreach early ts='1969-12-31T23:30:00' ts<'1969-12-31T23:45:00' ts<='1969-12-31T23:30:00'
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(id ORDER BY id) FROM iceberg_scan_tasks(getvariable('tasks'))
+WHERE {early} OR ts > '2050-01-01';
+----
+[1, 2]
+
+# The unrelated 2000 partition can still be skipped.
+query I
+SELECT count(*) FROM duckdb_logs() WHERE type='Iceberg' AND message.contains('skipped ''data_file'':');
+----
+1
+
+endloop
+
+endloop
+
+statement ok
+COMMIT;
+
+statement ok
+DROP TABLE my_datalake.default.pre_epoch_disjunction;
+
+endloop

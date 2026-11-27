@@ -1,0 +1,150 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/reads/filtering/test_disjunction_exclusion_metrics.test
+# description: OR, != and NOT IN on mixed files with full, partial or absent metrics
+# group: [filtering]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env SCAN_PLANNING_MODE client
+
+include test/sql/init_requires
+
+statement ok
+SET threads=1;
+
+statement ok
+CALL enable_logging('Iceberg');
+
+statement ok
+CREATE TEMP MACRO skipped_files() AS (
+	SELECT count(*) FROM duckdb_logs()
+	WHERE type = 'Iceberg' AND message.contains('Iceberg Filter Pushdown, skipped ''data_file'':')
+);
+
+# One file per batch. Batches 1, 2 and 3 have the same finite bounds [0, 0],
+# but a NaN in batch 2 satisfies != 0 and a NULL in batch 3 satisfies IS NULL.
+statement ok
+CREATE TEMP TABLE source(batch INTEGER, id INTEGER, x DOUBLE);
+
+statement ok
+INSERT INTO source VALUES
+	(1, 1, '-0'), (1, 2, 0),
+	(2, 3, 0), (2, 4, 'NaN'),
+	(3, 5, 0), (3, 6, NULL),
+	(4, 7, NULL), (4, 8, NULL),
+	(5, 9, -1), (5, 10, 0), (5, 11, 1),
+	(6, 12, 'NaN'), (6, 13, 'NaN'),
+	(7, 14, 'Infinity'), (7, 15, 'Infinity');
+
+foreach metrics none counts full
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.exclusion_metrics;
+
+statement ok
+CREATE TABLE my_datalake.default.exclusion_metrics (id INTEGER, f FLOAT, d DOUBLE)
+WITH ('write.metadata.metrics.default'='{metrics}');
+
+foreach batch 1 2 3 4 5 6 7
+
+statement ok
+INSERT INTO my_datalake.default.exclusion_metrics SELECT id, x, x FROM source WHERE batch={batch};
+
+endloop
+
+foreach pred f!=0 0!=f d!=0 0!=d
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.exclusion_metrics WHERE {pred};
+----
+[4, 9, 11, 12, 13, 14, 15]
+
+# Counts suffice to exclude the all-NULL file. Bounds and a zero NaN count
+# also exclude batch 1. Batch 5 must survive even though its range contains 0.
+query I
+SELECT skipped_files() = CASE '{metrics}' WHEN 'none' THEN 0 WHEN 'counts' THEN 1 ELSE 2 END;
+----
+true
+
+endloop
+
+foreach col f d
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.exclusion_metrics
+WHERE {col} NOT IN ('Infinity', 0, 0);
+----
+[4, 9, 11, 12, 13]
+
+query I
+SELECT skipped_files() = CASE '{metrics}' WHEN 'none' THEN 0 WHEN 'counts' THEN 1 ELSE 3 END;
+----
+true
+
+# UNKNOWN inside NOT IN cannot satisfy WHERE. The other disjunct can still
+# match the row in the mixed file and both rows in the all-NULL file.
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.exclusion_metrics
+WHERE {col} NOT IN (1, NULL, 0) OR {col} IS NULL;
+----
+[6, 7, 8]
+
+# Both endpoints are excluded, but the interior value of the mixed file matches.
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.exclusion_metrics
+WHERE ({col} > -1 AND {col} < 1) OR {col} = 'NaN';
+----
+[1, 2, 3, 4, 5, 10, 12, 13]
+
+endloop
+
+statement ok
+DROP TABLE my_datalake.default.exclusion_metrics;
+
+endloop
+
+# Truncated string bounds can span a prefix and its extensions, or lack an
+# upper endpoint when the prefix ends at the largest Unicode code point.
+statement ok
+DROP TABLE IF EXISTS my_datalake.default.exclusion_strings;
+
+statement ok
+CREATE TABLE my_datalake.default.exclusion_strings (id INTEGER, s VARCHAR)
+WITH ('write.metadata.metrics.default'='truncate(4)');
+
+statement ok
+INSERT INTO my_datalake.default.exclusion_strings VALUES (1, 'abcd'), (2, 'abcd-tail');
+
+statement ok
+INSERT INTO my_datalake.default.exclusion_strings VALUES (3, chr(1114111)), (4, chr(1114111) || 'tail');
+
+statement ok
+INSERT INTO my_datalake.default.exclusion_strings VALUES (5, 'xyz'), (6, 'xyz');
+
+query III
+SELECT count(*), count(lower_bound), count(upper_bound) FROM iceberg_column_stats(my_datalake.default.exclusion_strings)
+WHERE column_name='s';
+----
+3	3	2
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT list(id ORDER BY id) FROM my_datalake.default.exclusion_strings
+WHERE s NOT IN ('abcd', chr(1114111), 'xyz');
+----
+[2, 4]
+
+query I
+SELECT skipped_files();
+----
+1
+
+statement ok
+DROP TABLE my_datalake.default.exclusion_strings;

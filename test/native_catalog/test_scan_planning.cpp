@@ -7,6 +7,8 @@
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/main/database_manager.hpp"
+#include "duckdb/planner/expression/bound_cast_expression.hpp"
+#include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/filter/table_filter_functions.hpp"
 #include "duckdb/storage/table/row_group_order_options.hpp"
@@ -1413,8 +1415,8 @@ TEST_CASE("Iceberg delete manifest read failure on a waiting thread reaches the 
 	REQUIRE_THROWS_AS(store.GetDeleteIndexes({0}), InternalException);
 	REQUIRE_THROWS_AS(store.GetDeleteIndexes({1}), InternalException);
 	auto descriptors = store.DeleteManifests();
-	IcebergManifestFileScanInfo info(context.metadata, context.snapshot, descriptors, context.options, fs, context.path,
-	                                 nullptr, {0, 1});
+	IcebergManifestFileScanInfo info(context.context, context.metadata, context.snapshot, descriptors, context.options,
+	                                 fs, context.path, nullptr, {0, 1});
 	auto &cache = ObjectCache::GetObjectCache(context.context);
 	for (idx_t i = 0; i < 2; i++) {
 		REQUIRE_FALSE(cache.GetWithTypePrefix<IcebergParsedManifest>(ManifestCacheKey(info, i)));
@@ -2399,6 +2401,9 @@ TEST_CASE("Iceberg strict floating file bounds account for NaNs and missing metr
 				file.nan_value_counts[field_id] = nan_count;
 			}
 			auto finite_only = nan_count == 0 ? Match::ROWS_MUST_MATCH : Match::ROWS_MIGHT_MATCH;
+			// Equal finite bounds cannot rule out a matching NaN unless the count is known to be zero.
+			check(ExpressionType::COMPARE_NOTEQUAL, one,
+			      nan_count == 0 ? Match::ROWS_CANNOT_MATCH : Match::ROWS_MIGHT_MATCH);
 			check(ExpressionType::COMPARE_LESSTHAN, two, finite_only);
 			check(ExpressionType::COMPARE_LESSTHANOREQUALTO, one, finite_only);
 			check(ExpressionType::COMPARE_EQUAL, one, finite_only);
@@ -2417,6 +2422,116 @@ TEST_CASE("Iceberg strict floating file bounds account for NaNs and missing metr
 		file.lower_bounds.clear();
 		check(ExpressionType::COMPARE_GREATERTHAN, zero, Match::ROWS_MIGHT_MATCH);
 	}
+}
+
+TEST_CASE("Iceberg OR combines strict and inclusive matches in either child order", "[iceberg_metrics]") {
+	DuckDB database(nullptr);
+	Connection connection(database);
+	auto &context = *connection.context;
+	using Match = IcebergMetricsMatch;
+	const auto any = ExpressionType::CONJUNCTION_OR;
+	const auto all = ExpressionType::CONJUNCTION_AND;
+	auto compare = [](ExpressionType op, int value) {
+		return ExpressionFilter::CreateComparisonFilter(op, Value(value));
+	};
+	auto none = compare(ExpressionType::COMPARE_LESSTHAN, 10);
+	auto some = compare(ExpressionType::COMPARE_EQUAL, 15);
+	auto every = compare(ExpressionType::COMPARE_GREATERTHANOREQUALTO, 10);
+	auto stats = MetricsBounds(Value(10), Value(20));
+
+	auto check_pair = [&](const ExpressionFilter &a, const ExpressionFilter &b, Match expected) {
+		CheckMetrics(context,
+		             ExpressionFilter(make_uniq<BoundConjunctionExpression>(any, a.expr->Copy(), b.expr->Copy())),
+		             stats, expected);
+		CheckMetrics(context,
+		             ExpressionFilter(make_uniq<BoundConjunctionExpression>(any, b.expr->Copy(), a.expr->Copy())),
+		             stats, expected);
+	};
+	check_pair(*none, *none, Match::ROWS_CANNOT_MATCH);
+	check_pair(*none, *some, Match::ROWS_MIGHT_MATCH);
+	check_pair(*some, *some, Match::ROWS_MIGHT_MATCH);
+	check_pair(*none, *every, Match::ROWS_MUST_MATCH);
+	check_pair(*some, *every, Match::ROWS_MUST_MATCH);
+	check_pair(*every, *every, Match::ROWS_MUST_MATCH);
+
+	// An optional comparison cannot prove that every row matches. A required sibling still can.
+	ExpressionFilter optional(CreateOptionalFilterExpression(every->expr->Copy(), LogicalType::INTEGER));
+	check_pair(optional, *none, Match::ROWS_MIGHT_MATCH);
+	check_pair(optional, *every, Match::ROWS_MUST_MATCH);
+	ExpressionFilter nested(make_uniq<BoundConjunctionExpression>(all, some->expr->Copy(), none->expr->Copy()));
+	check_pair(nested, *none, Match::ROWS_CANNOT_MATCH);
+	check_pair(nested, *some, Match::ROWS_MIGHT_MATCH);
+
+	// The >= arm no longer covers rows with NULL. Adding an IS NULL arm must keep the file.
+	stats.has_null = true;
+	check_pair(*none, *every, Match::ROWS_MIGHT_MATCH);
+	ExpressionFilter is_null(ExpressionFilter::CreateNullCheckExpression(
+	    make_uniq<BoundReferenceExpression>(LogicalType::INTEGER, 0ULL), ExpressionType::OPERATOR_IS_NULL));
+	check_pair(*none, is_null, Match::ROWS_MIGHT_MATCH);
+	stats.has_not_null = false;
+	stats.lower_bound.reset();
+	stats.upper_bound.reset();
+	check_pair(*some, *every, Match::ROWS_CANNOT_MATCH);
+	check_pair(*some, is_null, Match::ROWS_MUST_MATCH);
+}
+
+TEST_CASE("Iceberg NOT IN uses only provable exclusions", "[iceberg_metrics]") {
+	DuckDB database(nullptr);
+	Connection connection(database);
+	auto &context = *connection.context;
+	using Match = IcebergMetricsMatch;
+	auto ref = [] {
+		return make_uniq<BoundReferenceExpression>(LogicalType::INTEGER, 0ULL);
+	};
+	auto negate = [](unique_ptr<Expression> child) {
+		auto op = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_NOT, LogicalType::BOOLEAN);
+		op->GetChildrenMutable().push_back(std::move(child));
+		return ExpressionFilter(std::move(op));
+	};
+	auto excluded = [&](vector<Value> values) {
+		return negate(ExpressionFilter::CreateInExpression(ref(), std::move(values)));
+	};
+	auto singleton = MetricsBounds(Value(10), Value(10));
+	auto mixed = MetricsBounds(Value(10), Value(20));
+	auto list = excluded({Value(5), Value(10), Value(10)});
+	CheckMetrics(context, list, singleton, Match::ROWS_CANNOT_MATCH);
+	CheckMetrics(context, list, mixed, Match::ROWS_MIGHT_MATCH);
+	CheckMetrics(context, excluded({Value(5), Value(20)}), mixed, Match::ROWS_MIGHT_MATCH);
+	// truncate[1] identifies the source integer. truncate[10] can represent 10 through 19.
+	CheckMetrics(context, list, singleton, Match::ROWS_CANNOT_MATCH, IcebergTransform("truncate[1]"));
+	CheckMetrics(context, list, singleton, Match::ROWS_MIGHT_MATCH, IcebergTransform("truncate[10]"));
+	for (bool missing_upper : {false, true}) {
+		auto partial = singleton;
+		(missing_upper ? partial.upper_bound : partial.lower_bound).reset();
+		CheckMetrics(context, list, partial, Match::ROWS_MIGHT_MATCH);
+		CheckComparison(context, ExpressionType::COMPARE_NOTEQUAL, Value(10), partial, Match::ROWS_MIGHT_MATCH);
+	}
+	IcebergPredicateStats missing;
+	CheckMetrics(context, list, missing, Match::ROWS_MIGHT_MATCH);
+	missing.has_not_null = false;
+	CheckMetrics(context, list, missing, Match::ROWS_CANNOT_MATCH);
+
+	// No non-NULL probe can make NOT IN true when any list member is NULL.
+	auto null = Value(LogicalType::INTEGER);
+	CheckMetrics(context, excluded({null, Value(5)}), mixed, Match::ROWS_CANNOT_MATCH);
+	CheckMetrics(context, excluded({Value(5), null}), mixed, Match::ROWS_CANNOT_MATCH);
+
+	// CAST(x AS BOOLEAN) changes which values are equal. The bounds still describe integer x.
+	auto cast = BoundCastExpression::AddCastToType(context, ref(), LogicalType::BOOLEAN);
+	CheckMetrics(context, negate(ExpressionFilter::CreateInExpression(std::move(cast), {Value::BOOLEAN(false)})),
+	             MetricsBounds(Value(0), Value(10)), Match::ROWS_MIGHT_MATCH);
+	// b NOT IN (false, b IS NULL) is true for true rows and false for false rows.
+	auto bool_ref = [] {
+		return make_uniq<BoundReferenceExpression>(LogicalType::BOOLEAN, 0ULL);
+	};
+	auto in = ExpressionFilter::CreateInExpression(bool_ref(), {Value::BOOLEAN(false)});
+	in->Cast<BoundOperatorExpression>().GetChildrenMutable().push_back(
+	    ExpressionFilter::CreateNullCheckExpression(bool_ref(), ExpressionType::OPERATOR_IS_NULL));
+	CheckMetrics(context, negate(std::move(in)), MetricsBounds(Value::BOOLEAN(false), Value::BOOLEAN(true)),
+	             Match::ROWS_MIGHT_MATCH);
+	mixed.has_null = true;
+	CheckMetrics(context, negate(ExpressionFilter::CreateNullCheckExpression(ref(), ExpressionType::OPERATOR_IS_NULL)),
+	             mixed, Match::ROWS_MIGHT_MATCH);
 }
 
 TEST_CASE("Iceberg ignores an unreadable partition bound and still uses other pruning evidence", "[iceberg_metrics]") {
@@ -2599,6 +2714,19 @@ TEST_CASE("Iceberg strict partition projections respect discrete boundaries", "[
 	stats.has_null = true;
 	CheckComparison(context, ExpressionType::COMPARE_EQUAL, Value(10), stats, Match::ROWS_MIGHT_MATCH,
 	                IcebergTransform("void"));
+
+	// 22:30 belongs to hour -2, or -1 with the old rounding. Hour 0 is still out of range.
+	auto before_epoch = Value("1969-12-31 22:30:00").DefaultCastAs(LogicalType::TIMESTAMP);
+	IcebergTransform hour("hour");
+	for (int period : {-2, -1, 0}) {
+		auto bounds = MetricsBounds(Value(period), Value(period));
+		auto expected = period == 0 ? Match::ROWS_CANNOT_MATCH : Match::ROWS_MIGHT_MATCH;
+		CheckComparison(context, ExpressionType::COMPARE_EQUAL, before_epoch, bounds, expected, hour);
+		CheckComparison(context, ExpressionType::COMPARE_LESSTHANOREQUALTO, before_epoch, bounds, expected, hour);
+	}
+	// day(DATE) never rounded: 1969-12-31 cannot occur in epoch day 0.
+	CheckComparison(context, ExpressionType::COMPARE_EQUAL, Value::DATE(1969, 12, 31),
+	                MetricsBounds(Value(0), Value(0)), Match::ROWS_CANNOT_MATCH, IcebergTransform("day"));
 }
 
 TEST_CASE("Iceberg strict file metrics require proof for every filter and only cover data files", "[iceberg_metrics]") {
@@ -2648,6 +2776,40 @@ TEST_CASE("Iceberg strict file metrics require proof for every filter and only c
 	REQUIRE(pruner.FileMatchesFilter(manifest, entry, true) == Match::ROWS_MIGHT_MATCH);
 	SetIntegerMetrics(entry.data_file, other, 20, 20);
 	REQUIRE(pruner.FileMatchesFilter(manifest, entry, true) == Match::ROWS_MUST_MATCH);
+}
+
+TEST_CASE("Iceberg exclusion filters distinguish equality and position delete metrics", "[iceberg_metrics]") {
+	PlanningTest test;
+	Query(test.connection, "CREATE TABLE lake.default.t (k INTEGER)");
+	auto bound = test.Bind();
+	auto &base = bound->Cast<MultiFileBindData>().file_list->Cast<IcebergMultiFileList>().GetScanPlanner();
+	auto field_id = base.GetSchema().columns[0]->id;
+	IcebergManifest manifest(0, IcebergManifestContentType::DELETE, 1);
+	auto entry = MetricsEntry();
+	entry.data_file.equality_ids = {field_id};
+
+	// (k != 10 OR k < 5) cannot match a delete key of 10, but can match a key of 11.
+	IcebergTableFilters filters;
+	auto different = ExpressionFilter::CreateComparisonFilter(ExpressionType::COMPARE_NOTEQUAL, Value(10));
+	auto less = ExpressionFilter::CreateComparisonFilter(ExpressionType::COMPARE_LESSTHAN, Value(5));
+	auto either = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_OR, std::move(different->expr),
+	                                                    std::move(less->expr));
+	filters.PushFilter(ColumnIndex(0), make_uniq<ExpressionFilter>(std::move(either)));
+	IcebergFilePruner pruner(*test.connection.context, base.GetMetadata(), base.GetSchema(), filters);
+	using Match = IcebergMetricsMatch;
+	entry.data_file.content = IcebergManifestEntryContentType::EQUALITY_DELETES;
+	SetIntegerMetrics(entry.data_file, field_id, 10, 11);
+	REQUIRE(pruner.FileMatchesFilter(manifest, entry) == Match::ROWS_MIGHT_MATCH);
+	SetIntegerMetrics(entry.data_file, field_id, 10, 10);
+	REQUIRE(pruner.FileMatchesFilter(manifest, entry) == Match::ROWS_CANNOT_MATCH);
+	entry.data_file.upper_bounds.clear();
+	REQUIRE(pruner.FileMatchesFilter(manifest, entry) == Match::ROWS_MIGHT_MATCH);
+
+	// Position deletes apply by path and row position, even when they carry extra row columns.
+	entry.data_file.content = IcebergManifestEntryContentType::POSITION_DELETES;
+	entry.data_file.equality_ids.clear();
+	SetIntegerMetrics(entry.data_file, field_id, 10, 10);
+	REQUIRE(pruner.FileMatchesFilter(manifest, entry) == Match::ROWS_MIGHT_MATCH);
 }
 
 TEST_CASE("Iceberg strict partition metrics cannot cover a sibling struct predicate", "[iceberg_metrics]") {

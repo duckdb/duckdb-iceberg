@@ -75,7 +75,8 @@ static bool NaNMayMatch(const Value &constant, ExpressionType comparison_type, c
 
 template <class TRANSFORM>
 static bool MatchBoundsConstantTemplated(const Value &constant, ExpressionType comparison_type,
-                                         const IcebergPredicateStats &stats, const IcebergTransform &transform) {
+                                         const IcebergPredicateStats &stats, const IcebergTransform &transform,
+                                         bool adjust_legacy_time = false) {
 	if (constant.IsNull()) {
 		switch (comparison_type) {
 		case ExpressionType::COMPARE_DISTINCT_FROM:
@@ -112,6 +113,25 @@ static bool MatchBoundsConstantTemplated(const Value &constant, ExpressionType c
 		return true;
 	}
 
+	// As in Iceberg's fixInclusiveTimeProjection, older writers could assign a negative period to the next
+	// partition. Equality can match either partition, and an upper limit must include the later one.
+	if (adjust_legacy_time) {
+		auto period = IntegerValue::Get(constant_value);
+		if (period < 0) {
+			switch (comparison_type) {
+			case ExpressionType::COMPARE_EQUAL:
+				return TRANSFORM::CompareEqual(constant_value, stats) ||
+				       TRANSFORM::CompareEqual(Value::INTEGER(period + 1), stats);
+			case ExpressionType::COMPARE_LESSTHAN:
+			case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+				constant_value = Value::INTEGER(period + 1);
+				break;
+			default:
+				break;
+			}
+		}
+	}
+
 	switch (comparison_type) {
 	case ExpressionType::COMPARE_EQUAL:
 		return TRANSFORM::CompareEqual(constant_value, stats);
@@ -140,13 +160,15 @@ static bool MatchBoundsConstant(const Value &constant, ExpressionType comparison
 	case IcebergTransformType::TRUNCATE:
 		return MatchBoundsConstantTemplated<TruncateTransform>(constant, comparison_type, stats, transform);
 	case IcebergTransformType::YEAR:
-		return MatchBoundsConstantTemplated<YearTransform>(constant, comparison_type, stats, transform);
+		return MatchBoundsConstantTemplated<YearTransform>(constant, comparison_type, stats, transform, true);
 	case IcebergTransformType::MONTH:
-		return MatchBoundsConstantTemplated<MonthTransform>(constant, comparison_type, stats, transform);
+		return MatchBoundsConstantTemplated<MonthTransform>(constant, comparison_type, stats, transform, true);
 	case IcebergTransformType::DAY:
-		return MatchBoundsConstantTemplated<DayTransform>(constant, comparison_type, stats, transform);
+		// day(DATE) directly stores the epoch day and has no rounding step.
+		return MatchBoundsConstantTemplated<DayTransform>(constant, comparison_type, stats, transform,
+		                                                  constant.type().id() != LogicalTypeId::DATE);
 	case IcebergTransformType::HOUR:
-		return MatchBoundsConstantTemplated<HourTransform>(constant, comparison_type, stats, transform);
+		return MatchBoundsConstantTemplated<HourTransform>(constant, comparison_type, stats, transform, true);
 	case IcebergTransformType::VOID_TRANSFORM:
 		return true;
 	default:
@@ -429,6 +451,23 @@ static optional<LogicalType> FindFilteredColumnType(const Expression &expr) {
 	return result;
 }
 
+static IcebergMetricsMatch MatchComparison(const Value &constant, ExpressionType comparison_type,
+                                           const IcebergPredicateStats &stats, const IcebergTransform &transform,
+                                           bool evaluate_strict) {
+	if (!MatchBoundsConstant(constant, comparison_type, stats, transform)) {
+		return IcebergMetricsMatch::ROWS_CANNOT_MATCH;
+	}
+	if (comparison_type == ExpressionType::COMPARE_NOTEQUAL) {
+		//! Assumes equal bounds with no NULLs mean every row holds that value
+		return StrictMatchBoundsConstant(constant, ExpressionType::COMPARE_EQUAL, stats, transform)
+		           ? IcebergMetricsMatch::ROWS_CANNOT_MATCH
+		           : IcebergMetricsMatch::ROWS_MIGHT_MATCH;
+	}
+	return evaluate_strict && StrictMatchBoundsConstant(constant, comparison_type, stats, transform)
+	           ? IcebergMetricsMatch::ROWS_MUST_MATCH
+	           : IcebergMetricsMatch::ROWS_MIGHT_MATCH;
+}
+
 static IcebergMetricsMatch MatchBoundsExpression(ClientContext &context, const unique_ptr<Expression> &expr_p,
                                                  const IcebergPredicateStats &stats, const IcebergTransform &transform,
                                                  bool evaluate_strict) {
@@ -451,25 +490,15 @@ static IcebergMetricsMatch MatchBoundsExpression(ClientContext &context, const u
 		} else if (right_is_const) {
 			if (left_is_ref) {
 				auto &constant = right.Cast<BoundConstantExpression>().GetValue();
-				if (!MatchBoundsConstant(constant, comparison_type, stats, transform)) {
-					return IcebergMetricsMatch::ROWS_CANNOT_MATCH;
-				}
-				return evaluate_strict && StrictMatchBoundsConstant(constant, comparison_type, stats, transform)
-				           ? IcebergMetricsMatch::ROWS_MUST_MATCH
-				           : IcebergMetricsMatch::ROWS_MIGHT_MATCH;
+				return MatchComparison(constant, comparison_type, stats, transform, evaluate_strict);
 			} else if (is_identity && IsVariantReference(left)) {
 				return InclusiveOnly(MatchVariantBounds(context, comparison_type, left, right, stats, transform));
 			}
 		} else if (left_is_const) {
 			if (right_is_ref) {
 				auto &constant = left.Cast<BoundConstantExpression>().GetValue();
-				auto flipped = FlipComparisonExpression(comparison_type);
-				if (!MatchBoundsConstant(constant, flipped, stats, transform)) {
-					return IcebergMetricsMatch::ROWS_CANNOT_MATCH;
-				}
-				return evaluate_strict && StrictMatchBoundsConstant(constant, flipped, stats, transform)
-				           ? IcebergMetricsMatch::ROWS_MUST_MATCH
-				           : IcebergMetricsMatch::ROWS_MIGHT_MATCH;
+				return MatchComparison(constant, FlipComparisonExpression(comparison_type), stats, transform,
+				                       evaluate_strict);
 			} else if (is_identity && IsVariantReference(right)) {
 				return InclusiveOnly(MatchVariantBounds(context, FlipComparisonExpression(comparison_type), right, left,
 				                                        stats, transform));
@@ -481,6 +510,20 @@ static IcebergMetricsMatch MatchBoundsExpression(ClientContext &context, const u
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::BOUND_CONJUNCTION: {
 		auto &conjunction = expr.Cast<BoundConjunctionExpression>();
+		if (conjunction.GetExpressionType() == ExpressionType::CONJUNCTION_OR) {
+			//! OR can't match when no child can, and must match when one child must
+			auto result = IcebergMetricsMatch::ROWS_CANNOT_MATCH;
+			for (auto &child : conjunction.GetChildren()) {
+				auto child_result = MatchBoundsExpression(context, child, stats, transform, evaluate_strict);
+				if (child_result == IcebergMetricsMatch::ROWS_MUST_MATCH) {
+					return IcebergMetricsMatch::ROWS_MUST_MATCH;
+				}
+				if (child_result == IcebergMetricsMatch::ROWS_MIGHT_MATCH) {
+					result = IcebergMetricsMatch::ROWS_MIGHT_MATCH;
+				}
+			}
+			return result;
+		}
 		if (conjunction.GetExpressionType() != ExpressionType::CONJUNCTION_AND) {
 			return IcebergMetricsMatch::ROWS_MIGHT_MATCH;
 		}
@@ -547,6 +590,27 @@ static IcebergMetricsMatch MatchBoundsExpression(ClientContext &context, const u
 				}
 			}
 			return IcebergMetricsMatch::ROWS_CANNOT_MATCH;
+		}
+		case ExpressionType::OPERATOR_NOT: {
+			if (bound_operator_expr.GetChildren().size() != 1 ||
+			    bound_operator_expr.GetChildren()[0]->GetExpressionType() != ExpressionType::COMPARE_IN) {
+				return IcebergMetricsMatch::ROWS_MIGHT_MATCH;
+			}
+			auto &in_children = bound_operator_expr.GetChildren()[0]->Cast<BoundOperatorExpression>().GetChildren();
+			if (in_children.empty() || !IsDirectReference(*in_children[0])) {
+				return IcebergMetricsMatch::ROWS_MIGHT_MATCH;
+			}
+			for (idx_t i = 1; i < in_children.size(); i++) {
+				if (in_children[i]->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
+					return IcebergMetricsMatch::ROWS_MIGHT_MATCH;
+				}
+				auto &value = in_children[i]->Cast<BoundConstantExpression>().GetValue();
+				if (MatchComparison(value, ExpressionType::COMPARE_NOTEQUAL, stats, transform, false) ==
+				    IcebergMetricsMatch::ROWS_CANNOT_MATCH) {
+					return IcebergMetricsMatch::ROWS_CANNOT_MATCH;
+				}
+			}
+			return IcebergMetricsMatch::ROWS_MIGHT_MATCH;
 		}
 		default:
 			return IcebergMetricsMatch::ROWS_MIGHT_MATCH;

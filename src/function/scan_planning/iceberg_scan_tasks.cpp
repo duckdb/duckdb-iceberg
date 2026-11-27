@@ -381,6 +381,11 @@ TableFunctionSet IcebergFunctions::GetIcebergScanTasksFunction() {
 	};
 	function.projection_pushdown = true;
 	function.filter_pushdown = true;
+	// Forward single-column expression filters (including NOT IN) to the task's Parquet reader. It applies
+	// the residual to rows that survive partition pruning. Throwing expressions must stay above the scan.
+	function.pushdown_expression = [](ClientContext &, const LogicalGet &, Expression &expr) {
+		return expr.IsConsistent() && !expr.CanThrow();
+	};
 	function.order_preservation_type = OrderPreservationType::NO_ORDER;
 	return TableFunctionSet(function);
 }
