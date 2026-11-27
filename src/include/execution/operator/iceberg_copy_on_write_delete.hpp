@@ -145,8 +145,14 @@ private:
 //! of the table appears once: the rows of the touched files (the join with dict) minus the kept rows (the rows the
 //! writer wrote). The counter of the touched rows also records their files, which the rewrite replaces: a file whose
 //! rows are all deleted produces no kept row, but its rows still pass the join with dict.
+//!
+//! A copy-on-write UPDATE is planned the same way, with the new version of each matched row in `raw`, and writes the
+//! kept rows UNION ALL those new versions. Every live row of a touched file is then written exactly once, unless an
+//! UPDATE ... FROM matched a row more than once, which the rewrite detects as more rows written than touched.
 struct IcebergCopyOnWriteDelete {
 	static PhysicalOperator &PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
+	                                    IcebergTableSchemaVersion &table);
+	static PhysicalOperator &PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
 	                                    IcebergTableSchemaVersion &table);
 };
 

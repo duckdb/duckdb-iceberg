@@ -31,6 +31,8 @@
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/operator/logical_materialized_cte.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
+#include "duckdb/planner/operator/logical_set_operation.hpp"
+
 #include "duckdb/planner/operator/logical_window.hpp"
 #include "duckdb/planner/operator/logical_update.hpp"
 #include "duckdb/planner/table_filter_set.hpp"
@@ -115,10 +117,12 @@ private:
 class CopyOnWriteDeleteRewrite : public IcebergFileRewrite {
 public:
 	CopyOnWriteDeleteRewrite(PhysicalPlan &physical_plan, IcebergTable &table,
-	                         IcebergCopyOnWriteRowCounter &touched_rows, const IcebergMultiFileList &target_files,
-	                         unique_ptr<LogicalOperator> logical_plan)
+	                         IcebergCopyOnWriteRowCounter &touched_rows,
+	                         optional_ptr<IcebergCopyOnWriteRowCounter> updated_rows,
+	                         const IcebergMultiFileList &target_files, unique_ptr<LogicalOperator> logical_plan)
 	    : IcebergFileRewrite(physical_plan, {LogicalType::BIGINT}, 1, IcebergWriteOperation::COPY_ON_WRITE_DELETE),
-	      table(table), touched_rows(touched_rows), target_files(target_files), logical_plan(std::move(logical_plan)) {
+	      table(table), touched_rows(touched_rows), updated_rows(updated_rows), target_files(target_files),
+	      logical_plan(std::move(logical_plan)) {
 	}
 
 	unique_ptr<GlobalSinkState> GetGlobalSinkState(ClientContext &context) const override {
@@ -128,7 +132,9 @@ public:
 	SourceResultType GetDataInternal(ExecutionContext &context, DataChunk &chunk,
 	                                 OperatorSourceInput &input) const override {
 		auto &state = sink_state->Cast<IcebergFileRewriteGlobalState>();
-		chunk.data[0].Append(Value::BIGINT(NumericCast<int64_t>(GetDeletedCount(state.insert_count.load()))));
+		//! An UPDATE returns the rows it updated, a DELETE the rows it removed
+		auto count = updated_rows ? updated_rows->GetCount() : GetDeletedCount(state.insert_count.load());
+		chunk.data[0].Append(Value::BIGINT(NumericCast<int64_t>(count)));
 		chunk.SetChildCardinality(1);
 		return SourceResultType::FINISHED;
 	}
@@ -140,6 +146,13 @@ protected:
 		//! are rebuilt for each commit attempt, including those of files inserted in this transaction.
 		IcebergFileRewriteInput result(state.added_data_files ? IcebergSnapshotOperationType::OVERWRITE
 		                                                      : IcebergSnapshotOperationType::DELETE);
+		//! Every live row of a touched file is written once, kept or updated, unless an UPDATE ... FROM matched a row
+		//! more than once: then that row is written once per match.
+		if (updated_rows && state.insert_count.load() != touched_rows.GetCount()) {
+			throw NotImplementedException(
+			    "The same row was updated multiple times - this is not (yet) supported in Iceberg. Eliminate "
+			    "duplicate matches prior to running the UPDATE");
+		}
 		for (auto &file : touched_rows.GetFiles()) {
 			AddReplacedFile(result, file, target_files);
 		}
@@ -164,6 +177,8 @@ private:
 	IcebergTable &table;
 	//! The rows of the touched files (the join with dict's output), which also records the files
 	IcebergCopyOnWriteRowCounter &touched_rows;
+	//! For an UPDATE: the updated rows, written after the kept ones
+	optional_ptr<IcebergCopyOnWriteRowCounter> updated_rows;
 	//! The file list of the keep scan, which reads every touched file. It has loaded their delete files, which are
 	//! removed together with them. Not the DELETE's own scan: in a DELETE ... USING, the scan that a matched row's
 	//! filename comes from can be the source's.
@@ -240,15 +255,26 @@ optional_ptr<PhysicalTableScan> FindTableScan(PhysicalOperator &plan) {
 class LogicalCopyOnWriteDeleteMatches : public LogicalExtensionOperator {
 public:
 	LogicalCopyOnWriteDeleteMatches(LogicalOperator &match_plan, vector<idx_t> row_id_indexes,
-	                                vector<LogicalType> row_id_types)
-	    : match_plan(match_plan), row_id_indexes(std::move(row_id_indexes)), row_id_types(std::move(row_id_types)) {
-		types = this->row_id_types;
+	                                vector<LogicalType> row_id_types, vector<unique_ptr<Expression>> values)
+	    : match_plan(match_plan), row_id_indexes(std::move(row_id_indexes)), row_id_types(std::move(row_id_types)),
+	      values(std::move(values)) {
+		types = GetRawTypes();
 	}
 
 	LogicalOperator &match_plan;
 	//! The filename and file_row_number columns of match_plan, and their types
 	vector<idx_t> row_id_indexes;
 	vector<LogicalType> row_id_types;
+	//! For an UPDATE: the new version of the row, evaluated on match_plan's output
+	vector<unique_ptr<Expression>> values;
+
+	vector<LogicalType> GetRawTypes() const {
+		auto result = row_id_types;
+		for (auto &value : values) {
+			result.push_back(value->GetReturnType());
+		}
+		return result;
+	}
 
 public:
 	PhysicalOperator &CreatePlan(ClientContext &context, PhysicalPlanGenerator &planner) override {
@@ -257,8 +283,11 @@ public:
 		for (idx_t i = 0; i < row_id_indexes.size(); i++) {
 			select_list.push_back(make_uniq<BoundReferenceExpression>(row_id_types[i], row_id_indexes[i]));
 		}
+		for (auto &value : values) {
+			select_list.push_back(value->Copy());
+		}
 		auto &projection =
-		    planner.Make<PhysicalProjection>(row_id_types, std::move(select_list), match.estimated_cardinality);
+		    planner.Make<PhysicalProjection>(GetRawTypes(), std::move(select_list), match.estimated_cardinality);
 		projection.children.push_back(match);
 		return projection;
 	}
@@ -269,7 +298,7 @@ public:
 
 protected:
 	void ResolveTypes() override {
-		types = row_id_types;
+		types = GetRawTypes();
 	}
 };
 
@@ -412,11 +441,15 @@ unique_ptr<Expression> ColumnRef(const LogicalType &type, TableIndex table_index
 //! changing the identity or last update of an unchanged row between the two snapshots published at commit.
 class CopyOnWriteLineageCheck : public PhysicalOperator {
 public:
-	CopyOnWriteLineageCheck(PhysicalPlan &physical_plan, PhysicalOperator &child)
+	CopyOnWriteLineageCheck(PhysicalPlan &physical_plan, PhysicalOperator &child, string statement)
 	    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, child.GetTypes(),
-	                       child.estimated_cardinality) {
+	                       child.estimated_cardinality),
+	      statement(std::move(statement)) {
 		children.push_back(child);
 	}
+
+	//! DELETE or UPDATE, for the error
+	string statement;
 
 	OperatorResultType Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
 	                           GlobalOperatorState &gstate, OperatorState &state) const override {
@@ -425,8 +458,9 @@ public:
 		D_ASSERT(column_count >= 2);
 		if (input.size() && (VectorOperations::HasNull(input.data[column_count - 2]) ||
 		                     VectorOperations::HasNull(input.data[column_count - 1]))) {
-			throw InvalidInputException("Copy-on-write DELETE cannot preserve uncommitted row lineage. "
-			                            "Commit the earlier changes to this table before running the DELETE.");
+			throw InvalidInputException("Copy-on-write %s cannot preserve uncommitted row lineage. "
+			                            "Commit the earlier changes to this table before running the %s.",
+			                            statement, statement);
 		}
 		chunk.Reference(input);
 		return OperatorResultType::NEED_MORE_INPUT;
@@ -441,17 +475,48 @@ public:
 	}
 };
 
+//! See CopyOnWriteLineageCheck; its output is its child's
+class LogicalCopyOnWriteLineageCheck : public LogicalExtensionOperator {
+public:
+	LogicalCopyOnWriteLineageCheck(unique_ptr<LogicalOperator> child, string statement)
+	    : statement(std::move(statement)) {
+		children.push_back(std::move(child));
+	}
+
+	string statement;
+
+public:
+	PhysicalOperator &CreatePlan(ClientContext &context, PhysicalPlanGenerator &planner) override {
+		auto &child = planner.CreatePlan(*children[0]);
+		return planner.Make<CopyOnWriteLineageCheck>(child, statement);
+	}
+
+	vector<ColumnBinding> GetColumnBindings() override {
+		return children[0]->GetColumnBindings();
+	}
+
+	string GetExtensionName() const override {
+		return "iceberg_copy_on_write_lineage_check";
+	}
+
+protected:
+	void ResolveTypes() override {
+		types = children[0]->types;
+	}
+};
+
+//! Plans a copy-on-write DELETE (values empty) or UPDATE (values: the new version of each matched row, evaluated on
+//! match_plan's output), see IcebergCopyOnWriteDelete
+PhysicalOperator &PlanJoinRewrite(ClientContext &context, PhysicalPlanGenerator &planner,
+                                  IcebergTableSchemaVersion &table, LogicalOperator &match_plan,
+                                  vector<idx_t> row_id_indexes, vector<LogicalType> row_id_types,
+                                  vector<unique_ptr<Expression>> values);
+
 } // namespace
 
 PhysicalOperator &IcebergCopyOnWriteDelete::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner,
                                                        LogicalDelete &op, IcebergTableSchemaVersion &table) {
-	auto &metadata = table.table_info.GetMetadata();
-	//! A V3 DELETE carries each kept row's _row_id and _last_updated_sequence_number into the new files.
-	//! Rows inserted in this transaction carry NULL until the commit assigns their lineage.
-	const bool with_row_lineage = metadata.iceberg_version >= 3;
-
-	//! deletee: the DELETE's own scan emits the filename and file_row_number of every matching row
-	auto &match_plan = *op.children[0];
+	//! The DELETE's own scan emits the filename and file_row_number of every matching row
 	vector<idx_t> row_id_indexes;
 	vector<LogicalType> row_id_types;
 	for (idx_t i = 0; i < 2; i++) {
@@ -459,8 +524,67 @@ PhysicalOperator &IcebergCopyOnWriteDelete::PlanDelete(ClientContext &context, P
 		row_id_indexes.push_back(ref.Index());
 		row_id_types.push_back(ref.GetReturnType());
 	}
-	auto matches = make_uniq<LogicalCopyOnWriteDeleteMatches>(match_plan, std::move(row_id_indexes), row_id_types);
-	auto &matches_ref = *matches;
+	return PlanJoinRewrite(context, planner, table, *op.children[0], std::move(row_id_indexes), std::move(row_id_types),
+	                       {});
+}
+
+PhysicalOperator &IcebergCopyOnWriteDelete::PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner,
+                                                       LogicalUpdate &op, IcebergTableSchemaVersion &table) {
+	//! An Iceberg UPDATE is bound as a delete and an insert, so its expressions give the new value of every table
+	//! column, followed in the scan's output by filename and file_row_number and, on V3, _row_id (see
+	//! IcebergTableSchemaVersion::GetRowIdColumns).
+	auto &match_plan = *op.children[0];
+	const bool with_row_lineage = table.table_info.GetMetadata().iceberg_version >= 3;
+	auto match_column_count = match_plan.types.size();
+	const idx_t lineage_column_count = with_row_lineage ? 1 : 0;
+	D_ASSERT(match_column_count >= 2 + lineage_column_count);
+	vector<idx_t> row_id_indexes {match_column_count - lineage_column_count - 2,
+	                              match_column_count - lineage_column_count - 1};
+	vector<LogicalType> row_id_types {match_plan.types[row_id_indexes[0]], match_plan.types[row_id_indexes[1]]};
+
+	auto &columns = table.table_info.GetMetadata().GetLatestSchema().columns;
+	if (op.columns.size() != columns.size()) {
+		throw InternalException(
+		    "Copy-on-write UPDATE: expected a new value for each of the %llu table columns, got %llu", columns.size(),
+		    op.columns.size());
+	}
+	unordered_map<idx_t, idx_t> expression_index_by_column;
+	for (idx_t i = 0; i < op.columns.size(); i++) {
+		expression_index_by_column[op.columns[i].index] = i;
+	}
+	vector<unique_ptr<Expression>> values;
+	for (idx_t column = 0; column < op.columns.size(); column++) {
+		auto expression_index = expression_index_by_column.at(column);
+		auto expression = op.expressions[expression_index]->Copy();
+		if (expression->GetExpressionType() == ExpressionType::VALUE_DEFAULT) {
+			expression = op.bound_defaults[expression_index]->Copy();
+		}
+		values.push_back(std::move(expression));
+	}
+	if (with_row_lineage) {
+		//! SPEC: an updated row keeps its _row_id, and its _last_updated_sequence_number is written as NULL, so it
+		//! inherits the sequence number of the snapshot that commits the update. A row inserted earlier in this
+		//! transaction has no _row_id yet; it gets one at commit, as with a merge-on-read UPDATE.
+		auto row_id_index = match_column_count - 1;
+		values.push_back(make_uniq<BoundReferenceExpression>(match_plan.types[row_id_index], row_id_index));
+		values.push_back(make_uniq<BoundConstantExpression>(Value(LogicalType::BIGINT)));
+	}
+	return PlanJoinRewrite(context, planner, table, match_plan, std::move(row_id_indexes), std::move(row_id_types),
+	                       std::move(values));
+}
+
+namespace {
+
+PhysicalOperator &PlanJoinRewrite(ClientContext &context, PhysicalPlanGenerator &planner,
+                                  IcebergTableSchemaVersion &table, LogicalOperator &match_plan,
+                                  vector<idx_t> row_id_indexes, vector<LogicalType> row_id_types,
+                                  vector<unique_ptr<Expression>> values) {
+	auto &metadata = table.table_info.GetMetadata();
+	//! A V3 rewrite carries each kept row's _row_id and _last_updated_sequence_number into the new files.
+	//! Rows inserted in this transaction carry NULL until the commit assigns their lineage.
+	const bool with_row_lineage = metadata.iceberg_version >= 3;
+	const bool is_update = !values.empty();
+	const string statement = is_update ? "UPDATE" : "DELETE";
 
 	//! keep: the whole table again (on V3 followed by its row lineage columns), with its filename and file_row_number
 	//! as the last two columns
@@ -475,15 +599,30 @@ PhysicalOperator &IcebergCopyOnWriteDelete::PlanDelete(ClientContext &context, P
 		column_types.push_back(expr->GetReturnType());
 	}
 
-	//! The CTE indexes have to be distinct from any CTE in the DELETE's plan: they share the physical planner
+	//! raw: the matched rows' filename and file_row_number, and for an UPDATE their new version, with the types of
+	//! the rows the rewrite writes
+	D_ASSERT(!is_update || values.size() == column_count);
+	for (idx_t i = 0; i < values.size(); i++) {
+		if (values[i]->GetReturnType() != column_types[i]) {
+			values[i] = BoundCastExpression::AddCastToType(context, std::move(values[i]), column_types[i]);
+		}
+	}
+	auto matches = make_uniq<LogicalCopyOnWriteDeleteMatches>(match_plan, std::move(row_id_indexes), row_id_types,
+	                                                          std::move(values));
+	auto raw_types = matches->GetRawTypes();
+	vector<Identifier> raw_names {"filename", "file_row_number"};
+	for (idx_t i = 2; i < raw_types.size(); i++) {
+		raw_names.emplace_back("value" + to_string(i - 2));
+	}
+
+	//! The CTE indexes have to be distinct from any CTE in the statement's plan: they share the physical planner
 	idx_t max_index = 0;
 	MaxTableIndex(match_plan, max_index);
 	MaxTableIndex(*keep, max_index);
 	TableIndex raw_index(MaxValue(max_index + 1, binder->GenerateTableIndex().index));
 	TableIndex dict_index(raw_index.index + 1);
 	auto raw_ref = [&]() {
-		return make_uniq<LogicalCTERef>(binder->GenerateTableIndex(), raw_index, row_id_types,
-		                                vector<Identifier> {"filename", "file_row_number"});
+		return make_uniq<LogicalCTERef>(binder->GenerateTableIndex(), raw_index, raw_types, raw_names);
 	};
 	vector<LogicalType> dict_types {LogicalType::VARCHAR, LogicalType::BIGINT};
 	auto dict_ref = [&]() {
@@ -564,6 +703,29 @@ PhysicalOperator &IcebergCopyOnWriteDelete::PlanDelete(ClientContext &context, P
 	}
 	unique_ptr<LogicalOperator> rows = make_uniq<LogicalProjection>(binder->GenerateTableIndex(), std::move(keep_list));
 	rows->AddChild(std::move(anti_join));
+	//! An earlier V3 snapshot in this transaction will assign any lineage that still reads NULL. Only the kept rows
+	//! must have theirs: an updated row's sequence number is NULL on purpose.
+	auto &transaction_data = table.table_info.transaction_data;
+	if (with_row_lineage && transaction_data && transaction_data->has_pending_v3_snapshot) {
+		rows = make_uniq<LogicalCopyOnWriteLineageCheck>(std::move(rows), statement);
+	}
+
+	//! For an UPDATE: UNION ALL SELECT <new values> FROM raw, counted
+	optional_ptr<LogicalCopyOnWriteRowCount> updated_rows_ref;
+	if (is_update) {
+		auto updated_raw = raw_ref();
+		auto updated_raw_index = updated_raw->table_index;
+		vector<unique_ptr<Expression>> updated_list;
+		for (idx_t i = 0; i < column_count; i++) {
+			updated_list.push_back(ColumnRef(raw_types[2 + i], updated_raw_index, 2 + i));
+		}
+		auto updated = make_uniq<LogicalProjection>(binder->GenerateTableIndex(), std::move(updated_list));
+		updated->AddChild(std::move(updated_raw));
+		auto updated_rows = make_uniq<LogicalCopyOnWriteRowCount>(std::move(updated));
+		updated_rows_ref = updated_rows.get();
+		rows = make_uniq<LogicalSetOperation>(binder->GenerateTableIndex(), column_count, std::move(rows),
+		                                      std::move(updated_rows), LogicalOperatorType::LOGICAL_UNION, true);
+	}
 
 	//! The join with dict restricts the keep scan to the touched files at runtime: its build side becomes a filter on
 	//! the constant `filename` column, which the scan evaluates once per file, skipping every other file unread.
@@ -571,11 +733,11 @@ PhysicalOperator &IcebergCopyOnWriteDelete::PlanDelete(ClientContext &context, P
 	JoinFilterPushdownOptimizer join_filter_pushdown(optimizer);
 	join_filter_pushdown.VisitOperator(*rows);
 	if (touched_join_ref.filter_pushdown) {
-		//! The DELETE's predicate usually selects few rows, so the touched files are worth filtering on
+		//! The statement's predicate usually selects few rows, so the touched files are worth filtering on
 		touched_join_ref.filter_pushdown->build_side_has_filter = true;
 	}
 
-	//! The DELETE's plan is resolved already; only the new operators above the raw CTE body need it.
+	//! The statement's plan is resolved already; only the new operators above the raw CTE body need it.
 	ColumnBindingResolver dict_resolver;
 	dict_resolver.VisitOperator(*dict);
 	ColumnBindingResolver rows_resolver;
@@ -583,31 +745,29 @@ PhysicalOperator &IcebergCopyOnWriteDelete::PlanDelete(ClientContext &context, P
 
 	auto with_dict = make_uniq<LogicalMaterializedCTE>("dict", dict_index, 2, std::move(dict), std::move(rows),
 	                                                   CTEMaterialize::CTE_MATERIALIZE_ALWAYS);
-	unique_ptr<LogicalOperator> plan = make_uniq<LogicalMaterializedCTE>(
-	    "raw", raw_index, 2, std::move(matches), std::move(with_dict), CTEMaterialize::CTE_MATERIALIZE_ALWAYS);
+	unique_ptr<LogicalOperator> plan =
+	    make_uniq<LogicalMaterializedCTE>("raw", raw_index, raw_types.size(), std::move(matches), std::move(with_dict),
+	                                      CTEMaterialize::CTE_MATERIALIZE_ALWAYS);
 	plan->ResolveOperatorTypes();
 	auto &rows_plan = planner.CreatePlan(*plan);
 	D_ASSERT(rows_plan.GetTypes().size() == column_count);
-	if (!touched_rows_ref.counter) {
-		throw InternalException("Copy-on-write DELETE: the deleted rows are not collected");
-	}
-	//! An earlier V3 snapshot in this transaction will assign any lineage that still reads NULL.
-	reference<PhysicalOperator> kept_rows = rows_plan;
-	auto &transaction_data = table.table_info.transaction_data;
-	if (with_row_lineage && transaction_data && transaction_data->has_pending_v3_snapshot) {
-		kept_rows = planner.Make<CopyOnWriteLineageCheck>(rows_plan);
+	if (!touched_rows_ref.counter || (updated_rows_ref && !updated_rows_ref->counter)) {
+		throw InternalException("Copy-on-write %s: the rows are not counted", statement);
 	}
 
 	//! Use the same replacement-file writer and snapshot staging as maintenance rewrites.
-	auto &rewrite =
-	    planner
-	        .Make<CopyOnWriteDeleteRewrite>(table.table_info, *touched_rows_ref.counter, target_files, std::move(plan))
-	        .Cast<CopyOnWriteDeleteRewrite>();
-	rewrite.PlanCopy(context, planner, metadata, kept_rows.get(), optional_idx(),
+	auto &rewrite = planner
+	                    .Make<CopyOnWriteDeleteRewrite>(table.table_info, *touched_rows_ref.counter,
+	                                                    updated_rows_ref ? updated_rows_ref->counter : nullptr,
+	                                                    target_files, std::move(plan))
+	                    .Cast<CopyOnWriteDeleteRewrite>();
+	rewrite.PlanCopy(context, planner, metadata, rows_plan, optional_idx(),
 	                 with_row_lineage ? IcebergInsertVirtualColumns::WRITE_ROW_ID_AND_SEQUENCE_NUMBER
 	                                  : IcebergInsertVirtualColumns::NONE);
 	return rewrite;
 }
+
+} // namespace
 
 //===--------------------------------------------------------------------===//
 // Copy-on-write UPDATE
