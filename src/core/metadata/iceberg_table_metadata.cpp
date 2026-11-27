@@ -17,21 +17,31 @@ namespace duckdb {
 static constexpr const char *THETA_SKETCH_BLOB_TYPE = "apache-datasketches-theta-v1";
 static constexpr const char *NDV_PROPERTY = "ndv";
 
+optional<int64_t> IcebergStatisticsBlob::GetDistinctCount() const {
+	if (type != THETA_SKETCH_BLOB_TYPE || fields.size() != 1) {
+		return optional<int64_t>();
+	}
+	auto property = properties.find(NDV_PROPERTY);
+	if (property == properties.end()) {
+		return optional<int64_t>();
+	}
+	int64_t distinct_count;
+	if (!TryCast::Operation<string_t, int64_t>(string_t(property->second), distinct_count, true) ||
+	    distinct_count < 0) {
+		return optional<int64_t>();
+	}
+	return distinct_count;
+}
+
 optional<int64_t> IcebergStatisticsFile::GetDistinctCount(int32_t field_id) const {
 	for (auto &blob : blobs) {
-		if (blob.type != THETA_SKETCH_BLOB_TYPE || blob.fields.size() != 1 || blob.fields[0] != field_id) {
+		if (blob.fields.size() != 1 || blob.fields[0] != field_id) {
 			continue;
 		}
-		auto property = blob.properties.find(NDV_PROPERTY);
-		if (property == blob.properties.end()) {
-			continue;
+		auto distinct_count = blob.GetDistinctCount();
+		if (distinct_count) {
+			return distinct_count;
 		}
-		int64_t distinct_count;
-		if (!TryCast::Operation<string_t, int64_t>(string_t(property->second), distinct_count, true) ||
-		    distinct_count < 0) {
-			continue;
-		}
-		return distinct_count;
 	}
 	return optional<int64_t>();
 }
@@ -615,6 +625,16 @@ IcebergTableMetadata IcebergTableMetadata::FromTableMetadata(const rest_api_obje
 			res.statistics.push_back(std::move(statistics_file));
 		}
 	}
+	if (table_metadata.partition_statistics) {
+		res.partition_statistics.reserve(table_metadata.partition_statistics->size());
+		for (auto &file : *table_metadata.partition_statistics) {
+			IcebergStatisticsFile statistics_file;
+			statistics_file.snapshot_id = file.snapshot_id;
+			statistics_file.path = file.statistics_path;
+			statistics_file.file_size_in_bytes = file.file_size_in_bytes;
+			res.partition_statistics.push_back(std::move(statistics_file));
+		}
+	}
 	// Validate default references before a scan or writer can consume the metadata.
 	res.GetLatestSchema();
 	res.GetLatestPartitionSpec();
@@ -645,6 +665,7 @@ IcebergTableMetadata IcebergTableMetadata::Copy() const {
 	}
 	res.snapshot_log = snapshot_log;
 	res.statistics = statistics;
+	res.partition_statistics = partition_statistics;
 	res.mappings = mappings;
 	res.write_data_path = write_data_path;
 	res.write_metadata_path = write_metadata_path;

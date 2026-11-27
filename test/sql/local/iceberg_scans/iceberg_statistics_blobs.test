@@ -1,0 +1,87 @@
+# name: test/sql/local/iceberg_scans/iceberg_statistics_blobs.test
+# description: Match registered statistics to individual Puffin blobs and read their properties
+# group: [iceberg_scans]
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+CREATE MACRO stats_blob(kind, ids, props) AS json_object(
+	'type', kind, 'snapshot-id', 1001, 'sequence-number', 1, 'fields', ids, 'properties', props);
+
+statement ok
+CREATE MACRO theta(props) AS stats_blob('apache-datasketches-theta-v1', [1], props);
+
+# Two sketches share an identity but carry different properties. The third blob is a different statistic.
+statement ok
+SET VARIABLE footer = (
+	SELECT encode(json_object('blobs', [
+		json_merge_patch(theta(json_object('ndv','0','writer','a','Writer','A')), '{"offset":4,"length":1}'),
+		json_merge_patch(theta('{}'::JSON), '{"offset":5,"length":1,"properties":null}'),
+		json_merge_patch(stats_blob('joint', [2,1], {'ndv':'3'}), '{"offset":6,"length":1}')
+	])::VARCHAR)
+);
+
+statement ok
+COPY (
+	SELECT 'PFA1abcPFA1'::BLOB || getvariable('footer') ||
+	       unhex(n[7:8] || n[5:6] || n[3:4] || n[1:2]) || '\x00\x00\x00\x00PFA1'::BLOB
+	FROM (SELECT lpad(hex(octet_length(getvariable('footer'))::UINTEGER), 8, '0') n)
+) TO '{TEST_DIR}/blobs.puffin' (FORMAT BLOB);
+
+statement ok
+CREATE MACRO table_metadata(blobs) AS (
+	SELECT json_merge_patch(content::JSON, json_object('statistics', [json_object(
+		'snapshot-id', 1001, 'statistics-path', '{TEMP_DIR_ABSOLUTE}/blobs.puffin',
+		'file-size-in-bytes', (SELECT size FROM read_blob('{TEST_DIR}/blobs.puffin')),
+		'file-footer-size-in-bytes', octet_length(getvariable('footer')) + 16,
+		'blob-metadata', blobs)]))
+	FROM read_text('data/persistent/table_statistics/metadata/v1.metadata.json')
+);
+
+# The first registration omits properties and can match either sketch. Only one matches the second registration.
+statement ok
+COPY (SELECT table_metadata([theta('{}'::JSON), theta({'writer':'a'}), stats_blob('joint', [2,1], '{}'::JSON)]))
+TO '{TEST_DIR}/registered.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+query IIII
+SELECT blob_type, field_names, ndv, properties FROM iceberg_table_stats('{TEST_DIR}/registered.json') ORDER BY ALL;
+----
+apache-datasketches-theta-v1	[id]	0	{Writer=A, ndv=0, writer=a}
+apache-datasketches-theta-v1	[id]	NULL	{}
+joint	[region, id]	NULL	{ndv=3}
+
+# A footer blob cannot satisfy two registrations, even if the file contains enough blobs in total.
+statement ok
+COPY (SELECT table_metadata([theta({'ndv':'0'}), theta({'ndv':'0'}), stats_blob('joint', [2,1], '{}'::JSON)]))
+TO '{TEST_DIR}/duplicate.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+statement error
+SELECT * FROM iceberg_table_stats('{TEST_DIR}/duplicate.json');
+----
+no distinct footer entry matching registered blob 'apache-datasketches-theta-v1'
+
+# Field IDs remain inspectable after a source column is dropped from the current schema.
+statement ok
+COPY (SELECT json_merge_patch(content::JSON, json_object('current-schema-id', 1, 'schemas', [
+	(content::JSON->'schemas'->0), json_object('schema-id', 1, 'type', 'struct', 'fields', [
+		{'id':1, 'name':'renamed', 'type':'long', 'required':false}])]))
+	FROM read_text('{TEST_DIR}/registered.json'))
+TO '{TEST_DIR}/dropped-field.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+query II
+SELECT DISTINCT field_ids, field_names FROM iceberg_table_stats('{TEST_DIR}/dropped-field.json') ORDER BY field_ids;
+----
+[1]	[renamed]
+[2, 1]	NULL
+
+# A registered property must agree with the footer.
+statement ok
+COPY (SELECT table_metadata([theta(json_object('Writer','A','writer','wrong'))]))
+TO '{TEST_DIR}/conflict.json' (FORMAT CSV, HEADER false, QUOTE '', ESCAPE '');
+
+statement error
+SELECT * FROM iceberg_table_stats('{TEST_DIR}/conflict.json');
+----
+no distinct footer entry matching registered blob 'apache-datasketches-theta-v1'

@@ -7,6 +7,7 @@ add_library(
   iceberg_metadata.cpp
   iceberg_move_column.cpp
   iceberg_partition_stats.cpp
+  iceberg_partition_statistics.cpp
   iceberg_partition_specs.cpp
   iceberg_schemas.cpp
   iceberg_partitions.cpp
@@ -15,6 +16,7 @@ add_library(
   iceberg_rollback_to_snapshot.cpp
   iceberg_schema_properties_functions.cpp
   iceberg_snapshots.cpp
+  iceberg_table_stats.cpp
   iceberg_manifests.cpp
   iceberg_history.cpp
   iceberg_files.cpp

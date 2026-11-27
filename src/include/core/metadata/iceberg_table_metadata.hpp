@@ -40,6 +40,10 @@ public:
 //! One blob of a table statistics file, as listed in the table metadata ("blob-metadata")
 struct IcebergStatisticsBlob {
 public:
+	//! The number of distinct values the blob records, when it is a theta sketch of one field
+	optional<int64_t> GetDistinctCount() const;
+
+public:
 	string type;
 	int64_t snapshot_id = 0;
 	int64_t sequence_number = 0;
@@ -206,6 +210,8 @@ public:
 	vector<pair<int64_t /*snapshot_id*/, timestamp_ms_t>> snapshot_log;
 	//! Table statistics files, at most one per snapshot
 	vector<IcebergStatisticsFile> statistics;
+	//! Partition statistics files, at most one per snapshot
+	vector<IcebergStatisticsFile> partition_statistics;
 	vector<IcebergFieldMapping> mappings;
 
 	//! Custom write paths from table properties

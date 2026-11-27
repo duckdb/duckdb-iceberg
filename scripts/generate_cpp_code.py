@@ -1383,6 +1383,9 @@ class CPPClass:
             assert not object_property.properties
             if object_property.additional_properties:
                 variable_type = self.generate_variable_type(object_property.additional_properties)
+                # Blob properties are keys supplied by Puffin writers. Their spelling is significant.
+                if self.name == 'BlobMetadata':
+                    return f'unordered_map<string, {variable_type}>'
                 return f'case_insensitive_map_t<{variable_type}>'
             return 'JSONValue'
         elif schema.type == Property.Type.ARRAY:
