@@ -1,0 +1,152 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/scan_planning/scan_tasks_cardinality.test
+# description: iceberg_scan_plan's tasks give iceberg_scan_tasks the estimate iceberg_scan has
+# group: [scan_planning]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+require-env FORMAT_V3_SUPPORT
+
+include test/sql/init_requires
+
+require json
+
+statement ok
+drop table if exists my_datalake.default.scan_tasks_cardinality;
+
+statement ok
+create table my_datalake.default.scan_tasks_cardinality(id integer, category integer)
+partitioned by (category) with ('format-version'=2);
+
+statement ok
+insert into my_datalake.default.scan_tasks_cardinality select i, i % 3 from range(9000) t(i);
+
+statement ok
+set iceberg_use_server_side_scan_planning=false;
+
+# Keep the vended storage credentials alive from planning through task execution.
+statement ok
+begin;
+
+statement ok
+set variable cardinality_plan = (select list(t) from iceberg_scan_plan('my_datalake.default.scan_tasks_cardinality') t);
+
+# The tasks' estimate is the table scan's.
+query II
+explain (format json) select * from my_datalake.default.scan_tasks_cardinality;
+----
+physical_plan	<REGEX>:[\s\S]*"Estimated Cardinality": "9000"[\s\S]*
+
+query II
+explain (format json) select * from iceberg_scan_tasks(getvariable('cardinality_plan'));
+----
+physical_plan	<REGEX>:[\s\S]*"name": "ICEBERG_SCAN_TASKS"[\s\S]*"Estimated Cardinality": "9000"[\s\S]*
+
+# A join with a larger filtered table, in a default session: the task scan is probed.
+statement ok
+create temp table chosen_categories as
+select (case when i = 0 then 1 else -i end)::integer category, i = 0 chosen from range(1000) t(i);
+
+query II
+explain (format json) select count(*)
+from iceberg_scan_tasks(getvariable('cardinality_plan')) s
+join chosen_categories d on s.category = d.category
+where d.chosen;
+----
+physical_plan	<REGEX>:[\s\S]*"name": "HASH_JOIN",\s*"children": \[\s*\{\s*"name": "ICEBERG_SCAN_TASKS"[\s\S]*
+
+query II
+select count(*), sum(s.id)
+from iceberg_scan_tasks(getvariable('cardinality_plan')) s
+join chosen_categories d on s.category = d.category
+where d.chosen;
+----
+3000	13498500
+
+statement ok
+commit;
+
+# Save the v2 position deletes. The writer produces one position-delete file per affected data file.
+statement ok
+delete from my_datalake.default.scan_tasks_cardinality where id % 20 = 0;
+
+statement ok
+create temp table old_positions as
+select file_path, list_transform(delete_files, lambda d: struct_update(d, referenced_data_file := file_path)) as deletes
+from iceberg_scan_plan('my_datalake.default.scan_tasks_cardinality') where len(delete_files) > 0;
+
+query I
+select sum(d.record_count) from old_positions, unnest(deletes) u(d) where upper(d.file_format) = 'PARQUET';
+----
+450
+
+# The new vectors include the positions deleted before the upgrade.
+statement ok
+alter table my_datalake.default.scan_tasks_cardinality set ('format-version'=3);
+
+statement ok
+delete from my_datalake.default.scan_tasks_cardinality where id % 20 = 10;
+
+statement ok
+begin;
+
+statement ok
+set variable cardinality_plan = (select list(t) from iceberg_scan_plan('my_datalake.default.scan_tasks_cardinality') t);
+
+query I
+select count(*) > 0 and bool_and(upper(d.file_format) = 'PUFFIN' and d.referenced_data_file = t.file_path)
+from (select unnest(getvariable('cardinality_plan')) t), unnest(t.delete_files) u(d);
+----
+true
+
+query II
+explain (format json) select * from my_datalake.default.scan_tasks_cardinality;
+----
+physical_plan	<REGEX>:[\s\S]*"Estimated Cardinality": "8100"[\s\S]*
+
+query II
+explain (format json) select * from iceberg_scan_tasks(getvariable('cardinality_plan'));
+----
+physical_plan	<REGEX>:[\s\S]*"name": "ICEBERG_SCAN_TASKS"[\s\S]*"Estimated Cardinality": "8100"[\s\S]*
+
+query I
+select count(*) from iceberg_scan_tasks(getvariable('cardinality_plan'));
+----
+8100
+
+# Older writers can leave the position deletes live alongside the vector. Pass the context once per call
+# and reorder the task fields. The estimate and execution must use the vector in either descriptor order.
+statement ok
+set variable plan_metadata = getvariable('cardinality_plan')[1].metadata;
+
+statement ok
+set variable plan_schema_id = getvariable('cardinality_plan')[1].schema_id;
+
+foreach first positions vector
+
+statement ok
+set variable mixed_tasks = (select list(f) from (
+    select case when '{first}' = 'positions' then list_concat(p.deletes, t.delete_files)
+                else list_concat(t.delete_files, p.deletes) end as delete_files,
+           t.* exclude (delete_files, snapshot_id, schema_id, metadata, schema)
+    from unnest(getvariable('cardinality_plan')) u(t) left join old_positions p on p.file_path = t.file_path
+) f);
+
+query I
+select count(*) from iceberg_scan_tasks(getvariable('mixed_tasks'),
+    metadata := getvariable('plan_metadata'), schema_id := getvariable('plan_schema_id'));
+----
+8100
+
+query II
+explain (format json) select * from iceberg_scan_tasks(getvariable('mixed_tasks'),
+    metadata := getvariable('plan_metadata'), schema_id := getvariable('plan_schema_id'));
+----
+physical_plan	<REGEX>:[\s\S]*"name": "ICEBERG_SCAN_TASKS"[\s\S]*"Estimated Cardinality": "8100"[\s\S]*
+
+endloop
+
+statement ok
+commit;
+
+statement ok
+drop table my_datalake.default.scan_tasks_cardinality;
