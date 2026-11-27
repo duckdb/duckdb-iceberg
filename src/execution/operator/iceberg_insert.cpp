@@ -294,16 +294,13 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 				auto field_it = partition_colname_to_field.find(partition_name);
 				D_ASSERT(field_it != partition_colname_to_field.end());
 				auto &partition_field = field_it->second.get();
-				auto source_type = ic_schema.GetColumnTypeFromFieldId(partition_field.source_id);
-
-				IcebergPartitionInfo info;
-				info.field_id = partition_field.partition_field_id;
-				if (!struct_val[1].IsNull()) {
-					info.value = Value(StringValue::Get(struct_val[1]));
-				} else {
-					info.value = Value();
-				}
-				data_file.partition_info.push_back(std::move(info));
+				auto &source_type = ic_schema.GetColumnTypeFromFieldId(partition_field.source_id);
+				// Decode COPY's text in the write schema. After FLOAT -> DOUBLE, for example, parsing "0.1"
+				// as DOUBLE would give a different value than widening the FLOAT that was written.
+				auto &text = struct_val[1];
+				auto bounds_type = partition_field.transform.GetBoundsType(source_type);
+				auto value = text.DefaultTryCastAs(bounds_type, nullptr, true).value_or(text);
+				data_file.partition_info.push_back({partition_field.partition_field_id, std::move(value)});
 			}
 		}
 		// Partitioning alone does not imply sorted data. Only advertise the explicit sort order

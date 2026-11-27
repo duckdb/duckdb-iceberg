@@ -15,16 +15,16 @@ statement ok
 drop table if exists my_datalake.default.pending_partition_filters;
 
 statement ok
-create table my_datalake.default.pending_partition_filters (id INTEGER, i INTEGER, ts TIMESTAMP)
-partitioned by (i, day(ts)) with ('format-version'=2);
+create table my_datalake.default.pending_partition_filters (id INTEGER, i INTEGER, ts TIMESTAMP, s VARCHAR)
+partitioned by (i, day(ts), s) with ('format-version'=2);
 
 statement ok
 begin;
 
 statement ok
 insert into my_datalake.default.pending_partition_filters values
-    (1, 9, '1970-01-10 00:00:00'), (2, 10, '1970-01-11 00:00:00'),
-    (3, 100, '1970-04-11 00:00:00'), (4, -5, '1969-12-31 00:00:00');
+    (1, 9, '1970-01-10 00:00:00', '9'), (2, 10, '1970-01-11 00:00:00', '10'),
+    (3, 100, '1970-04-11 00:00:00', '100'), (4, -5, '1969-12-31 00:00:00', NULL);
 
 query I
 select id from my_datalake.default.pending_partition_filters where i > 9 order by id;
@@ -36,6 +36,18 @@ query I
 select id from my_datalake.default.pending_partition_filters where i < 10 order by id;
 ----
 1
+4
+
+# The same digits in a string partition keep their lexical ordering.
+query I
+select id from my_datalake.default.pending_partition_filters where s < '9' order by id;
+----
+2
+3
+
+query I
+select id from my_datalake.default.pending_partition_filters where s is null;
+----
 4
 
 query I

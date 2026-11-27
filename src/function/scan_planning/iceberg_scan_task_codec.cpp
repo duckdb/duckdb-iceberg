@@ -467,8 +467,7 @@ void IcebergScanTaskCodec::WriteTask(ClientContext &context, const IcebergFileSc
 		constants.push_back(value == task.partition_constants.end() ? Value(field.second) : value->second);
 	}
 	output.data[PARTITION_CONSTANTS].SetValue(row, Value::STRUCT(partition_type, std::move(constants)));
-	//! A field of another spec is NULL. A committed file's values already have these types, except across a type
-	//! promotion; a file written in the planning transaction has textual values, cast as its manifest will be.
+	//! A field of another spec is NULL. Values from older schemas can need promotion to the plan's types.
 	//! Each field is written into its child vector, without building a STRUCT value per row.
 	auto &value_fields = StructType::GetChildTypes(output.data[PARTITION_VALUES].GetType());
 	auto &value_children = StructVector::GetEntries(output.data[PARTITION_VALUES]);

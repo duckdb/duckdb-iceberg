@@ -467,8 +467,7 @@ void ManifestPartitions::Create(ClientContext &context, const IcebergTableMetada
 			auto serialized_type =
 			    extended_partition_info.transform.GetSerializedType(extended_partition_info.source_type);
 
-			// Cast the partition value (stored as VARCHAR) to the correct serialized type so we can compare typed
-			// values
+			// Compare partition values in the manifest schema's type.
 			auto typed_value = extended_partition_info.value.DefaultCastAs(serialized_type);
 
 			if ((serialized_type.id() == LogicalTypeId::FLOAT && Value::IsNan(typed_value.GetValue<float>())) ||

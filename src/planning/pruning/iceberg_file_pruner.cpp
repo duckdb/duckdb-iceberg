@@ -147,17 +147,14 @@ bool IcebergFilePruner::PartitionValuesMatchFilter(int32_t spec_id, const vector
 		}
 		auto &partition_value = partition_info[it->second].value;
 		auto &source_column = IcebergTableSchema::GetFromColumnIndex(schema.columns, column_id, 0);
+		if (partition_value.type().id() == LogicalTypeId::VARCHAR && !partition_value.IsNull() &&
+		    field.transform.GetBoundsType(source_column.type).id() != LogicalTypeId::VARCHAR) {
+			// COPY's text could not be decoded in the write schema. Other fields and file metrics can still prune.
+			continue;
+		}
 		IcebergPredicateStats stats;
 		stats.lower_bound = partition_value;
-		if (partition_value.type().id() == LogicalTypeId::VARCHAR && !partition_value.IsNull()) {
-			//! COPY reports pending partition values as text. Compare them in the same type as manifest bounds.
-			auto bounds_type = field.transform.GetBoundsType(source_column.type);
-			stats.lower_bound = partition_value.DefaultTryCastAs(bounds_type, nullptr, true);
-			if (!stats.lower_bound) {
-				continue;
-			}
-		}
-		stats.upper_bound = stats.lower_bound;
+		stats.upper_bound = partition_value;
 		//! Every transform maps NULL to NULL, so a file under a non-NULL partition value has no NULL rows here.
 		stats.has_null = partition_value.IsNull();
 		stats.has_not_null = !stats.has_null;
@@ -165,7 +162,7 @@ bool IcebergFilePruner::PartitionValuesMatchFilter(int32_t spec_id, const vector
 		auto nan_counts_it = nan_value_counts.find(field.source_id);
 		if (field.transform.Type() == IcebergTransformType::IDENTITY && !stats.has_null) {
 			//! An identity partition is exact, even when the file has no NaN counts.
-			stats.has_nan = IsNaN(*stats.lower_bound);
+			stats.has_nan = IsNaN(partition_value);
 		} else if (nan_counts_it != nan_value_counts.end()) {
 			stats.has_nan = nan_counts_it->second != 0;
 		}
