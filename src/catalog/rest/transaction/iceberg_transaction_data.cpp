@@ -102,6 +102,13 @@ IcebergTransactionData::IcebergTransactionData(ClientContext &context, IcebergTr
 	initial_format_version = table_info.GetMetadata().iceberg_version;
 	initial_schema_id = table_info.GetMetadata().GetCurrentSchemaId();
 	initial_snapshot_id = table_info.GetMetadata().current_snapshot_id;
+	initial_last_column_id = table_info.GetMetadata().last_column_id;
+	if (table_info.GetMetadata().HasLastPartitionId()) {
+		initial_last_partition_field_id = table_info.GetMetadata().GetLastPartitionFieldId();
+	} else {
+		//! V1 can omit last-partition-id. Infer it from all specs before this transaction adds any fields.
+		initial_last_partition_field_id = NumericCast<int32_t>(table_info.GetNextPartitionFieldId() - 1);
+	}
 	initial_default_spec_id = table_info.GetMetadata().default_spec_id;
 	if (table_info.GetMetadata().HasSortOrder()) {
 		initial_default_sort_order_id = table_info.GetMetadata().default_sort_order_id;
@@ -132,6 +139,10 @@ int64_t IcebergTransactionData::GetCommitRetryCount() const {
 		    it->second);
 	}
 	return result;
+}
+
+bool IcebergTransactionData::HasUpdate(IcebergTableUpdateType type) const {
+	return HasTableUpdate(updates, type);
 }
 
 bool IcebergTransactionData::ContainsDelete() const {
@@ -369,6 +380,10 @@ void IcebergTransactionData::AddUpdateSnapshot(partitioned_manifest_entry_map_t 
 }
 
 void IcebergTransactionData::TableAddSchema(int32_t schema_id) {
+	if (!has_assert_create && !initial_last_column_id.IsValid()) {
+		throw InvalidConfigurationException(
+		    "Cannot add a schema to table '%s': Iceberg metadata is missing 'last-column-id'", table_info.name);
+	}
 	auto &schema = table_info.GetMetadata().GetSchemaFromId(schema_id);
 	auto add_schema_update = make_uniq<AddSchemaUpdate>(schema.Copy(), table_info.GetMetadata().last_column_id);
 	updates.push_back(std::move(add_schema_update));
@@ -376,8 +391,6 @@ void IcebergTransactionData::TableAddSchema(int32_t schema_id) {
 }
 
 void IcebergTransactionData::TableSetCurrentSchema(int32_t schema_id) {
-	// Reusing a historical schema can also overwrite a concurrent schema or identifier change.
-	assert_schema_id = true;
 	// Later specs and sort orders are validated against the schema current at this point in the transaction.
 	updates.push_back(make_uniq<SetCurrentSchema>(schema_id));
 }
@@ -400,24 +413,6 @@ void IcebergTransactionData::TableAddAssertUUID() {
 
 void IcebergTransactionData::TableAddAssertCurrentSchemaId() {
 	assert_schema_id = true;
-}
-
-void IcebergTransactionData::TableAddAssertLastAssignedFieldId() {
-	D_ASSERT(table_info.GetMetadata().HasLastColumnId());
-	requirements.push_back(make_uniq<AssertLastAssignedFieldIdRequirement>(
-	    static_cast<int32_t>(table_info.GetMetadata().GetLastColumnId())));
-}
-
-void IcebergTransactionData::TableAddAssertLastAssignedPartitionId() {
-	int32_t last_assigned_partition_id = 999;
-	if (table_info.GetMetadata().HasLastPartitionId()) {
-		last_assigned_partition_id = table_info.GetMetadata().GetLastPartitionFieldId();
-	}
-	requirements.push_back(make_uniq<AssertLastAssignedPartitionIdRequirement>(last_assigned_partition_id));
-}
-
-void IcebergTransactionData::TableAddAssertDefaultSpecId() {
-	requirements.push_back(make_uniq<AssertDefaultSpecIdRequirement>(table_info.GetMetadata().default_spec_id));
 }
 
 void IcebergTransactionData::TableAddUpradeFormatVersion() {

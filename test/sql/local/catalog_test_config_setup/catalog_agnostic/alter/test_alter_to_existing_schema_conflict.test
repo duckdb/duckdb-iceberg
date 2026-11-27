@@ -1,0 +1,72 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/test_alter_to_existing_schema_conflict.test
+# description: An ALTER that ends on a schema the table already had conflicts with a concurrent schema change
+# group: [alter]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+drop table if exists my_datalake.default.existing_schema_conflict;
+
+statement ok
+CREATE TABLE my_datalake.default.existing_schema_conflict (id INTEGER, amount INTEGER);
+
+statement ok
+ALTER TABLE my_datalake.default.existing_schema_conflict ADD COLUMN tmp INTEGER;
+
+statement ok
+INSERT INTO my_datalake.default.existing_schema_conflict VALUES (1, 100, NULL);
+
+statement ok con1
+begin;
+
+# dropping the column again ends on the first schema, which is reused instead of added
+statement ok con1
+ALTER TABLE my_datalake.default.existing_schema_conflict DROP COLUMN tmp;
+
+# con2 is in autocommit: its schema change is committed before con1 commits
+statement ok con2
+ALTER TABLE my_datalake.default.existing_schema_conflict ADD COLUMN discount INTEGER;
+
+statement ok con2
+INSERT INTO my_datalake.default.existing_schema_conflict VALUES (2, 200, NULL, 5);
+
+# con1 should error since the current schema id has changed before con1 could commit
+statement error con1
+commit;
+----
+<REGEX>:.*Conflict_409.*
+
+# con2's column is still there
+query IIII
+select * from my_datalake.default.existing_schema_conflict order by id;
+----
+1	100	NULL	NULL
+2	200	NULL	5
+
+# Reusing a schema allocates no field IDs. Another writer can advance last-column-id
+# and return to the same schema while the DROP is pending.
+statement ok con1
+BEGIN;
+
+statement ok con1
+ALTER TABLE my_datalake.default.existing_schema_conflict DROP COLUMN discount;
+
+statement ok con2
+ALTER TABLE my_datalake.default.existing_schema_conflict ADD COLUMN transient INTEGER;
+
+statement ok con2
+ALTER TABLE my_datalake.default.existing_schema_conflict DROP COLUMN transient;
+
+statement ok con1
+COMMIT;
+
+query III fresh
+SELECT * FROM my_datalake.default.existing_schema_conflict ORDER BY id;
+----
+1	100	NULL
+2	200	NULL
+
+statement ok
+drop table my_datalake.default.existing_schema_conflict;

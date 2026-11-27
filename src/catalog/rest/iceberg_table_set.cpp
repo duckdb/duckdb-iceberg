@@ -574,7 +574,7 @@ void IcebergTableSet::ReplaceDefinition(ClientContext &context, IcebergTable &ta
 	auto new_schema = IcebergCreateTableRequest::CreateIcebergSchema(context, metadata, info.columns, &info.constraints,
 	                                                                 last_column_id);
 	last_column_id = IcebergCreateTableRequest::AssignReplacementFieldIds(*new_schema, metadata);
-	transaction_data.TableAddAssertLastAssignedFieldId();
+	transaction_data.assert_last_assigned_field_id = true;
 	metadata.last_column_id = NumericCast<idx_t>(last_column_id);
 	IntroduceNewSchema(context, table_info, transaction_data, std::move(new_schema), false);
 	auto &current_schema = metadata.GetLatestSchema();

@@ -1,0 +1,153 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/alter/sorted_by/test_set_sorted_by_conflict.test
+# description: SET SORTED BY conflicts with a concurrent change of the sort order, not with one of the partitioning
+# group: [sorted_by]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+statement ok
+drop table if exists my_datalake.default.sorted_by_conflict;
+
+statement ok
+CREATE TABLE my_datalake.default.sorted_by_conflict (a INTEGER, b INTEGER, c INTEGER);
+
+statement ok con1
+begin;
+
+statement ok con1
+ALTER TABLE my_datalake.default.sorted_by_conflict SET SORTED BY (a ASC NULLS FIRST);
+
+# con2 is in autocommit: it adds a sort order of its own, committed before con1 commits
+statement ok con2
+ALTER TABLE my_datalake.default.sorted_by_conflict SET SORTED BY (b DESC NULLS LAST);
+
+statement error con1
+commit;
+----
+<REGEX>:.*Conflict_409.*
+
+# the table is sorted by (b DESC NULLS LAST)
+query ITT
+SELECT
+	metadata."default-sort-order-id",
+	sort_order.fields[1].direction,
+	sort_order.fields[1]."null-order"
+FROM iceberg_load_table_response('my_datalake.default.sorted_by_conflict'),
+unnest(metadata."sort-orders"::VARIANT[]) AS t(sort_order)
+WHERE try_cast(sort_order."order-id" AS INTEGER) = metadata."default-sort-order-id";
+----
+1	desc	nulls-last
+
+statement ok
+ALTER TABLE my_datalake.default.sorted_by_conflict SET SORTED BY (a ASC NULLS FIRST);
+
+statement ok con1
+begin;
+
+statement ok con1
+ALTER TABLE my_datalake.default.sorted_by_conflict SET SORTED BY (c ASC NULLS FIRST);
+
+# con2 switches back to the sort order on b, which exists already
+statement ok con2
+ALTER TABLE my_datalake.default.sorted_by_conflict SET SORTED BY (b DESC NULLS LAST);
+
+statement error con1
+commit;
+----
+<REGEX>:.*Conflict_409.*
+
+# the table is sorted by (b DESC NULLS LAST)
+query ITT
+SELECT
+	metadata."default-sort-order-id",
+	sort_order.fields[1].direction,
+	sort_order.fields[1]."null-order"
+FROM iceberg_load_table_response('my_datalake.default.sorted_by_conflict'),
+unnest(metadata."sort-orders"::VARIANT[]) AS t(sort_order)
+WHERE try_cast(sort_order."order-id" AS INTEGER) = metadata."default-sort-order-id";
+----
+1	desc	nulls-last
+
+statement ok con1
+begin;
+
+statement ok con1
+ALTER TABLE my_datalake.default.sorted_by_conflict SET SORTED BY (c ASC NULLS FIRST);
+
+# con2 changes the partitioning, which the sort order does not depend on
+statement ok con2
+ALTER TABLE my_datalake.default.sorted_by_conflict SET PARTITIONED BY (a);
+
+statement ok con1
+commit;
+
+# the table is sorted by (c ASC NULLS FIRST) and partitioned by (a)
+query ITT
+SELECT
+	metadata."default-sort-order-id",
+	sort_order.fields[1].direction,
+	sort_order.fields[1]."null-order"
+FROM iceberg_load_table_response('my_datalake.default.sorted_by_conflict'),
+unnest(metadata."sort-orders"::VARIANT[]) AS t(sort_order)
+WHERE try_cast(sort_order."order-id" AS INTEGER) = metadata."default-sort-order-id";
+----
+3	asc	nulls-first
+
+query T
+SELECT spec.fields[1].name
+FROM iceberg_load_table_response('my_datalake.default.sorted_by_conflict'),
+unnest(metadata."partition-specs"::VARIANT[]) AS t(spec)
+WHERE try_cast(spec."spec-id" AS INTEGER) = metadata."default-spec-id";
+----
+a
+
+# RESET also changes the default, even though it adds no sort order.
+statement ok con1
+BEGIN;
+
+statement ok con1
+ALTER TABLE my_datalake.default.sorted_by_conflict RESET SORTED BY;
+
+# Reuse the existing order on a instead of adding a new one.
+statement ok con2
+ALTER TABLE my_datalake.default.sorted_by_conflict SET SORTED BY (a ASC NULLS FIRST);
+
+statement error con1
+COMMIT;
+----
+<REGEX>:.*Conflict_409.*
+
+query IIT
+SELECT metadata."default-sort-order-id", sort_order.fields[1]."source-id", sort_order.fields[1].direction
+FROM iceberg_load_table_response('my_datalake.default.sorted_by_conflict'),
+unnest(metadata."sort-orders"::VARIANT[]) AS t(sort_order)
+WHERE try_cast(sort_order."order-id" AS INTEGER) = metadata."default-sort-order-id";
+----
+2	1	asc
+
+# The opposite direction conflicts too: a stale SET must not undo a committed RESET.
+statement ok con1
+BEGIN;
+
+statement ok con1
+ALTER TABLE my_datalake.default.sorted_by_conflict SET SORTED BY (b DESC NULLS LAST);
+
+statement ok con2
+ALTER TABLE my_datalake.default.sorted_by_conflict RESET SORTED BY;
+
+statement error con1
+COMMIT;
+----
+<REGEX>:.*Conflict_409.*
+
+query II
+SELECT metadata."default-sort-order-id", len(sort_order.fields::VARIANT[])
+FROM iceberg_load_table_response('my_datalake.default.sorted_by_conflict'),
+unnest(metadata."sort-orders"::VARIANT[]) AS t(sort_order)
+WHERE try_cast(sort_order."order-id" AS INTEGER) = metadata."default-sort-order-id";
+----
+0	0
+
+statement ok
+drop table my_datalake.default.sorted_by_conflict;

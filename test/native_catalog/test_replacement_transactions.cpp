@@ -565,7 +565,12 @@ TEST_CASE("Replacement definitions protect the field ID watermark even when the 
 	ReplacementTest test;
 	Connection writer(test.database);
 	Query(test.connection, "BEGIN");
-	test.Define("(id INTEGER, replacement VARCHAR)");
+	SECTION("The replacement adds a schema") {
+		test.Define("(id INTEGER, replacement VARCHAR)");
+	}
+	SECTION("The replacement reuses its original schema") {
+		test.Define("(id INTEGER)");
+	}
 	test.Replace();
 	Query(writer, "ALTER TABLE lake.default.t ADD COLUMN concurrent INTEGER");
 	Query(writer, "ALTER TABLE lake.default.t DROP COLUMN concurrent");

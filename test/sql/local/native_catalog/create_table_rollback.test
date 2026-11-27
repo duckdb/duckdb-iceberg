@@ -144,6 +144,31 @@ SELECT id FROM eager_catalog.create_rollback.shared;
 ----
 42
 
+# Eager creation publishes the table before COMMIT. The creator must preserve a newer layout.
+foreach layout,default_id partitioned,default-spec-id sorted,default-sort-order-id
+
+statement ok con1
+BEGIN;
+
+statement ok con1
+CREATE TABLE eager_catalog.create_rollback.altered_{layout} (a INTEGER, b INTEGER);
+
+statement ok con2
+ALTER TABLE eager_catalog.create_rollback.altered_{layout} SET {layout} BY (b);
+
+statement error con1
+COMMIT;
+----
+<REGEX>:.*Conflict_409.*
+
+query II
+SELECT status, json_extract(body, '$.metadata."{default_id}"')::INTEGER
+FROM iceberg_test_catalog_request('GET', '/v1/namespaces/create_rollback/tables/altered_{layout}', NULL);
+----
+200	1
+
+endloop
+
 # Reject an incompatible eager create before making the table visible to other transactions.
 statement ok
 CREATE TABLE eager_catalog.create_rollback.existing (id INTEGER);
