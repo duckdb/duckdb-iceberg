@@ -1,6 +1,8 @@
 #include "execution/operator/iceberg_copy_to_file.hpp"
 
 #include "duckdb/common/mutex.hpp"
+#include "duckdb/common/vector/list_vector.hpp"
+#include "duckdb/common/vector/struct_vector.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/database.hpp"
 
@@ -23,7 +25,34 @@ IcebergCopyToFile::IcebergCopyToFile(PhysicalPlan &physical_plan, vector<Logical
 	parallel = true;
 }
 
-void IcebergCopyToFile::ApplyCopyOptions(IcebergCopyOptions &copy_options) {
+void IcebergCopyToFile::ApplyCopyOptions(IcebergCopyOptions &copy_options, const IcebergTableSchema &schema) {
+	required_lists.clear();
+	auto collect = [&](auto &self, const IcebergColumnDefinition &field, const LogicalType &type,
+	                   RequiredList path) -> void {
+		if (type.id() == LogicalTypeId::LIST && field.type.id() == LogicalTypeId::LIST &&
+		    field.GetChild(0)->IsSinkCheckedListElement()) {
+			required_lists.push_back(std::move(path));
+		} else if (type.id() == LogicalTypeId::STRUCT && field.type.id() == LogicalTypeId::STRUCT) {
+			for (idx_t i = 0; i < StructType::GetChildCount(type); i++) {
+				auto &name = StructType::GetChildName(type, i);
+				auto child = field.GetChild(name.GetIdentifierName());
+				if (!child) {
+					throw InternalException("Written struct field %s.%s not found in Iceberg schema", path.name,
+					                        name.GetIdentifierName());
+				}
+				auto next = path;
+				next.struct_path.push_back(i);
+				next.name += "." + child->name;
+				self(self, *child, StructType::GetChildType(type, i), std::move(next));
+			}
+		}
+	};
+	for (idx_t i = 0; i < copy_options.names.size(); i++) {
+		auto field = schema.GetFromPath({copy_options.names[i]}, nullptr);
+		if (field) {
+			collect(collect, *field, copy_options.expected_types[i], {i, {}, field->name});
+		}
+	}
 	bind_data = std::move(copy_options.bind_data);
 	file_path = std::move(copy_options.file_path);
 	filename_pattern = std::move(copy_options.filename_pattern);
@@ -46,6 +75,36 @@ void IcebergCopyToFile::ApplyCopyOptions(IcebergCopyOptions &copy_options) {
 	// PlanCopyForInsert moves these out into a PhysicalOrder when the write is not partitioned, leaving an
 	// empty vector here; for a partitioned write the copy operator sorts within each partition itself.
 	order_columns = std::move(copy_options.order_columns);
+}
+
+SinkResultType IcebergCopyToFile::Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const {
+	for (auto &path : required_lists) {
+		auto list = &chunk.data[path.column];
+		for (auto index : path.struct_path) {
+			list = &StructVector::GetEntries(*list)[index];
+		}
+		UnifiedVectorFormat elements;
+		ListVector::GetChild(*list).ToUnifiedFormat(elements);
+		if (elements.validity.CannotHaveNull()) {
+			continue;
+		}
+		UnifiedVectorFormat lists;
+		list->ToUnifiedFormat(lists);
+		auto entries = lists.GetData<list_entry_t>();
+		for (idx_t row = 0; row < chunk.size(); row++) {
+			auto i = lists.sel->get_index(row);
+			if (!lists.validity.RowIsValid(i)) {
+				continue;
+			}
+			auto &entry = entries[i];
+			for (idx_t j = 0; j < entry.length; j++) {
+				if (!elements.validity.RowIsValid(elements.sel->get_index(entry.offset + j))) {
+					throw ConstraintException("NOT NULL constraint failed: %s.element", path.name);
+				}
+			}
+		}
+	}
+	return PhysicalCopyToFile::Sink(context, chunk, input);
 }
 
 unique_ptr<GlobalSinkState> IcebergCopyToFile::GetGlobalSinkState(ClientContext &context) const {
@@ -95,7 +154,7 @@ void IcebergCopyToFile::EnsureTableCreated(ClientContext &context) const {
 	// Replace the plan-time options, which were derived from placeholder metadata without a location.
 	IcebergCopyInput copy_input(context, table_metadata, table_schema);
 	auto copy_options = IcebergInsert::GetCopyOptions(context, copy_input);
-	op.ApplyCopyOptions(copy_options);
+	op.ApplyCopyOptions(copy_options, table_schema);
 
 	created_table = &ic_table;
 }
