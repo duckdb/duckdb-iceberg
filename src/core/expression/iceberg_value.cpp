@@ -13,7 +13,17 @@
 #include "duckdb/common/types/vector.hpp"
 #include "utf8proc_wrapper.hpp"
 
+#include <limits>
+
 namespace duckdb {
+
+Value IcebergValue::NormalizePartitionNaN(Value value) {
+	if (!value.IsNull() && value.type().IsFloating() && Value::IsNan(value.GetValue<double>())) {
+		return value.type().id() == LogicalTypeId::FLOAT ? Value::FLOAT(std::numeric_limits<float>::quiet_NaN())
+		                                                 : Value::DOUBLE(std::numeric_limits<double>::quiet_NaN());
+	}
+	return value;
+}
 
 static Value TransformPartitionValueFromBlob(const string_t &blob, const LogicalType &type) {
 	auto result = IcebergValue::DeserializeValue(blob, type);
@@ -30,7 +40,7 @@ static Value TransformPartitionValueTemplated(const Value &value, const LogicalT
 	return TransformPartitionValueFromBlob(blob, type);
 }
 
-Value IcebergValue::TransformPartitionValue(const Value &value, const LogicalType &type) {
+Value IcebergValue::TransformPartitionValue(ClientContext &context, const Value &value, const LogicalType &type) {
 	D_ASSERT(!value.type().IsNested());
 	// COPY's partition map contains textual values. VARCHAR and BLOB share a physical
 	// type, but only BLOB contains bytes that should be decoded as Iceberg values.
@@ -39,16 +49,15 @@ Value IcebergValue::TransformPartitionValue(const Value &value, const LogicalTyp
 			auto blob = value.DefaultCastAs(LogicalType::BLOB);
 			return TransformPartitionValueFromBlob(blob.GetValueUnsafe<string_t>(), type);
 		}
-		return value.DefaultCastAs(type);
+		return value.CastAs(context, type);
 	}
-	// DECIMAL partition values are already decoded as proper DuckDB DECIMALs by the Avro reader.
-	// The blob round-trip below misinterprets the little-endian internal representation as
-	// big-endian Iceberg bytes, producing garbage. Return directly (or cast if params differ).
-	if (value.type().id() == LogicalTypeId::DECIMAL) {
+	// DECIMAL and UUID partition values are already decoded. Their internal values
+	// have a different byte order from the Iceberg encoding used by the blob path below.
+	if (value.type().id() == LogicalTypeId::DECIMAL || value.type().id() == LogicalTypeId::UUID) {
 		if (value.type() == type) {
 			return value;
 		}
-		return value.DefaultCastAs(type);
+		return value.CastAs(context, type);
 	}
 	switch (value.type().InternalType()) {
 	case PhysicalType::BOOL:
@@ -414,6 +423,17 @@ std::vector<uint8_t> HexStringToBytes(const std::string &hex) {
 		bytes.push_back(byte);
 	}
 	return bytes;
+}
+
+SerializeResult IcebergValue::SerializeFileBound(Value value, const LogicalType &type, SerializeBound bound,
+                                                 const IcebergMetricsConfig &metrics) {
+	if (type.IsFloating()) {
+		value = value.DefaultCastAs(type);
+		if (value.GetValue<double>() == 0) {
+			value = Value::DOUBLE(bound == SerializeBound::LOWER_BOUND ? -0.0 : 0.0);
+		}
+	}
+	return SerializeValue(std::move(value), type, bound, metrics);
 }
 
 SerializeResult IcebergValue::SerializeValue(Value input_value, const LogicalType &column_type,

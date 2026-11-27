@@ -1,10 +1,14 @@
 #include "execution/scan/iceberg_task_executor.hpp"
 
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
+#include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/common/multi_file/multi_file_states.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
+#include "duckdb/planner/filter/expression_filter.hpp"
 #include "planning/iceberg_multi_file_reader.hpp"
+#include "planning/pruning/iceberg_file_pruner.hpp"
+#include "planning/pruning/iceberg_table_filter.hpp"
 #include "function/scan_planning/iceberg_row_filter.hpp"
 #include "iceberg_logging.hpp"
 #include "duckdb/execution/expression_executor.hpp"
@@ -33,6 +37,96 @@ struct IcebergTaskLocalState : public LocalTableFunctionState {
 struct IcebergTaskScanInfo : public TableFunctionInfo {
 	shared_ptr<IcebergTaskExecutionContext> execution;
 	vector<IcebergFileScanTask> tasks;
+	//! Whether any task carries its data file's partition tuple (partition_values), by which the scan's filters may
+	//! skip the file before it is opened (IcebergTaskFileList::DynamicFilterPushdown).
+	bool has_partition_values = false;
+};
+
+//! The data files of a list of scan tasks, each with the index of its task in IcebergTaskScanInfo::tasks. The scan's
+//! filters, static ones and the runtime filters of joins alike, reach the list before any file is opened
+//! (MultiFileFunction::MultiFileInitGlobal). A file whose task carries its partition tuple is dropped from the list
+//! then if the filters reject the tuple, by the test iceberg_scan's planner applies to the same values from the
+//! manifests (IcebergFilePruner::PartitionMatchesFilter), and is never opened. A task without the tuple is always
+//! kept: its partition_constants are only defaults for columns its file lacks. The kept files keep their tasks, so
+//! the reader still finds each file's task when the list is shorter than the task list
+//! (IcebergTaskReader::InitializeReader).
+class IcebergTaskFileList : public SimpleMultiFileList {
+public:
+	IcebergTaskFileList(shared_ptr<TableFunctionInfo> info_p, vector<OpenFileInfo> files, vector<idx_t> task_indexes_p)
+	    : SimpleMultiFileList(std::move(files)), info(std::move(info_p)), task_indexes(std::move(task_indexes_p)) {
+		if (paths.size() != task_indexes.size()) {
+			throw InternalException("Iceberg task file list has %llu files for %llu tasks", paths.size(),
+			                        task_indexes.size());
+		}
+	}
+
+	const IcebergFileScanTask &GetTask(idx_t file_list_idx) const {
+		auto &tasks = info->Cast<IcebergTaskScanInfo>().tasks;
+		if (file_list_idx >= task_indexes.size() || task_indexes[file_list_idx] >= tasks.size()) {
+			throw InternalException("Missing Iceberg task for file-list index %llu", file_list_idx);
+		}
+		return tasks[task_indexes[file_list_idx]];
+	}
+
+	unique_ptr<MultiFileList> DynamicFilterPushdown(MultiFileDynamicPushdownInfo &pushdown_info) const override {
+		auto &filters = pushdown_info.filters;
+		auto &scan_info = info->Cast<IcebergTaskScanInfo>();
+		if (!scan_info.has_partition_values || !filters.HasFilters() || paths.empty()) {
+			return nullptr;
+		}
+		auto &schema = scan_info.execution->schema;
+		//! The filters by table column, as IcebergMultiFileList::PushdownInternal collects them for iceberg_scan.
+		IcebergTableFilters table_filters;
+		for (auto &entry : filters) {
+			auto projection_index = entry.GetIndex().GetIndex();
+			if (projection_index >= pushdown_info.column_indexes.size()) {
+				continue;
+			}
+			auto &column_index = pushdown_info.column_indexes[projection_index];
+			if (column_index.IsVirtualColumn() || column_index.GetPrimaryIndex() >= schema.columns.size() ||
+			    table_filters.TryGetFilterByColumnIndex(column_index)) {
+				continue;
+			}
+			//! Every pushed filter is an expression filter; should one not be, it only prunes nothing.
+			if (entry.Filter().filter_type != TableFilterType::EXPRESSION_FILTER) {
+				continue;
+			}
+			auto &filter =
+			    ExpressionFilter::GetExpressionFilter(entry.Filter(), "IcebergTaskFileList::DynamicFilterPushdown");
+			table_filters.PushFilter(column_index, filter.Copy());
+		}
+		if (!table_filters.HasFilters()) {
+			return nullptr;
+		}
+		auto &context = pushdown_info.context;
+		IcebergFilePruner pruner(context, scan_info.execution->metadata, schema, table_filters);
+		vector<OpenFileInfo> kept_files;
+		vector<idx_t> kept_tasks;
+		for (idx_t i = 0; i < paths.size(); i++) {
+			auto &task = GetTask(i);
+			if (!task.partition_values.empty() &&
+			    !pruner.PartitionMatchesFilter(task.partition_spec_id, task.partition_values, task.file_path)) {
+				continue;
+			}
+			kept_files.push_back(paths[i]);
+			kept_tasks.push_back(task_indexes[i]);
+		}
+		if (kept_files.size() == paths.size()) {
+			return nullptr;
+		}
+		DUCKDB_LOG(context, IcebergLogType, "Iceberg scan tasks filter pushdown kept %llu of %llu data files",
+		           kept_files.size(), paths.size());
+		return make_uniq<IcebergTaskFileList>(info, std::move(kept_files), std::move(kept_tasks));
+	}
+
+	unique_ptr<MultiFileList> Copy() const override {
+		return make_uniq<IcebergTaskFileList>(info, paths, task_indexes);
+	}
+
+private:
+	//! Owns the tasks the indexes refer to.
+	shared_ptr<TableFunctionInfo> info;
+	vector<idx_t> task_indexes;
 };
 
 //! The ordinary reader owns mapping, read-ahead and chunk finalization. Only its planner-facing
@@ -48,11 +142,14 @@ struct IcebergTaskReader : public IcebergMultiFileReader {
 	shared_ptr<MultiFileList> CreateFileList(ClientContext &, const vector<string> &, const FileGlobInput &) override {
 		auto &info = function_info->Cast<IcebergTaskScanInfo>();
 		vector<OpenFileInfo> files;
+		vector<idx_t> task_indexes;
 		files.reserve(info.tasks.size());
-		for (auto &task : info.tasks) {
-			files.push_back(IcebergMultiFileReader::FileInfo(task));
+		task_indexes.reserve(info.tasks.size());
+		for (idx_t i = 0; i < info.tasks.size(); i++) {
+			files.push_back(IcebergMultiFileReader::FileInfo(info.tasks[i]));
+			task_indexes.push_back(i);
 		}
-		return make_shared_ptr<SimpleMultiFileList>(std::move(files));
+		return make_shared_ptr<IcebergTaskFileList>(function_info, std::move(files), std::move(task_indexes));
 	}
 
 	bool Bind(MultiFileOptions &, MultiFileList &, vector<LogicalType> &types, vector<Identifier> &names,
@@ -76,11 +173,12 @@ struct IcebergTaskReader : public IcebergMultiFileReader {
 	                                      const vector<ColumnIndex> &column_ids, optional_ptr<TableFilterSet> filters,
 	                                      ClientContext &context, MultiFileGlobalState &gstate) override {
 		auto &info = function_info->Cast<IcebergTaskScanInfo>();
-		auto file_index = reader_data.reader->file_list_idx.GetIndex();
-		if (file_index >= info.tasks.size()) {
-			throw InternalException("Missing Iceberg task for file-list index %llu", file_index);
+		//! The index is into the list being scanned, which the filters may have shortened (DynamicFilterPushdown).
+		auto task_list = dynamic_cast<const IcebergTaskFileList *>(&gstate.file_list);
+		if (!task_list) {
+			throw InternalException("iceberg_scan_tasks is scanning a file list that its reader did not create");
 		}
-		auto &task = info.tasks[file_index];
+		auto &task = task_list->GetTask(reader_data.reader->file_list_idx.GetIndex());
 		auto &execution = *info.execution;
 		IcebergDeleteExecutionContext delete_context {context, FileSystem::GetFileSystem(context),
 		                                              execution.metadata.location, execution.options,
@@ -89,6 +187,8 @@ struct IcebergTaskReader : public IcebergMultiFileReader {
 		//! InitializeTaskReader resolves physical fields and fallback partition constants before
 		//! CreateMapping evaluates these filters. A rejected constant skips the data read safely;
 		//! testing task.partition_constants before resolving the file schema could discard real values.
+		//! Only a task's partition tuple (partition_values), the manifests' own values, skips its file before
+		//! it is opened, in IcebergTaskFileList::DynamicFilterPushdown.
 		return InitializeTaskReader(reader_data, bind, columns, column_ids, filters, context, gstate,
 		                            execution.metadata.GetSchemas(), execution.metadata.mappings, std::move(deletes),
 		                            task.partition_constants);
@@ -113,6 +213,7 @@ IcebergTaskExecutor::IcebergTaskExecutor(ClientContext &context, shared_ptr<Iceb
 	paths.reserve(tasks.size());
 	for (auto &task : tasks) {
 		paths.emplace_back(task.file_path);
+		info->has_partition_values = info->has_partition_values || !task.partition_values.empty();
 	}
 	info->tasks = std::move(tasks);
 	auto path_list = Value::LIST(LogicalType::VARCHAR, std::move(paths));

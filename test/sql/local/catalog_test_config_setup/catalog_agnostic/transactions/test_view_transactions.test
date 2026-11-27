@@ -93,31 +93,20 @@ select n from my_datalake.view_txn_a.v;
 ----
 22
 
-# Explicit drop/create must resolve the new entry inside the same transaction.
+# Replacing a committed view would require both a drop and a create request.
 statement ok writer
 begin;
 
 statement ok writer
 drop view my_datalake.view_txn_a.v;
 
-statement ok writer
-create view my_datalake.view_txn_a.v as select 33 as n;
-
-query I writer
-select n from my_datalake.view_txn_a.v;
-----
-33
-
-query I reader
-select n from my_datalake.view_txn_a.v;
-----
-22
-
-# A replacement requires two REST requests: reject it before deleting the original.
 statement error writer
-commit;
+create view my_datalake.view_txn_a.v as select 33 as n;
 ----
 cannot commit view changes atomically
+
+statement ok writer
+rollback;
 
 query I reader
 select n from my_datalake.view_txn_a.v;
@@ -132,12 +121,19 @@ statement ok writer
 create view my_datalake.view_txn_b.v as select 44 as n;
 
 statement ok writer
+create view if not exists my_datalake.view_txn_b.v as select 99 as n;
+
+statement ok writer
 drop view my_datalake.view_txn_b.v;
 
-statement error writer
-select * from my_datalake.view_txn_b.v;
+query I writer
+select count(*) from duckdb_views() where database_name = 'my_datalake' and schema_name = 'view_txn_b' and view_name = 'v';
 ----
-<REGEX>:.*does not exist.*
+0
+
+# Canceling the only pending request leaves room for a table create.
+statement ok writer
+create table my_datalake.view_txn_b.after_cancel (n int);
 
 statement ok writer
 commit;
@@ -147,7 +143,10 @@ select * from my_datalake.view_txn_b.v;
 ----
 <REGEX>:.*does not exist.*
 
-# Staged views with identical names in different schemas must not share entries.
+statement ok
+drop table my_datalake.view_txn_b.after_cancel;
+
+# Identical view names in different schemas still need two create requests.
 statement ok
 drop view my_datalake.view_txn_a.v;
 
@@ -157,25 +156,18 @@ begin;
 statement ok writer
 create view my_datalake.view_txn_a.v as select 55 as n;
 
-statement ok writer
-create view my_datalake.view_txn_b.v as select 66 as n;
-
 query II writer
 select schema_name, count(*) from duckdb_views() where database_name = 'my_datalake' and schema_name in ('view_txn_a', 'view_txn_b') and view_name = 'v' group by schema_name order by schema_name;
 ----
 view_txn_a	1
-view_txn_b	1
-
-query I writer
-select n from my_datalake.view_txn_a.v union all select n from my_datalake.view_txn_b.v order by n;
-----
-55
-66
 
 statement error writer
-commit;
+create view my_datalake.view_txn_b.v as select 66 as n;
 ----
 cannot commit view changes atomically
+
+statement ok writer
+rollback;
 
 query I reader
 select count(*) from duckdb_views() where database_name = 'my_datalake' and schema_name in ('view_txn_a', 'view_txn_b') and view_name = 'v';
@@ -188,6 +180,12 @@ create view my_datalake.view_txn_a.v as select 55 as n;
 statement ok
 create view my_datalake.view_txn_b.v as select 66 as n;
 
+query I
+select n from my_datalake.view_txn_a.v union all select n from my_datalake.view_txn_b.v order by n;
+----
+55
+66
+
 # Table writes must not commit before a mixed view operation fails.
 statement ok
 create table my_datalake.view_txn_a.t (n int);
@@ -199,12 +197,15 @@ statement ok writer
 insert into my_datalake.view_txn_a.t values (7);
 
 statement ok writer
-drop view my_datalake.view_txn_a.v;
+drop view if exists my_datalake.view_txn_a.missing_v;
 
 statement error writer
-commit;
+drop view my_datalake.view_txn_a.v;
 ----
 cannot commit view changes atomically
+
+statement ok writer
+rollback;
 
 query I reader
 select count(*) from my_datalake.view_txn_a.t;
@@ -223,13 +224,13 @@ begin;
 statement ok writer
 create view my_datalake.view_txn_a.new_v as select 8;
 
-statement ok writer
-create table my_datalake.view_txn_a.new_t (n int);
-
 statement error writer
-commit;
+create table my_datalake.view_txn_a.new_t (n int);
 ----
 cannot commit view changes atomically
+
+statement ok writer
+rollback;
 
 statement error reader
 select * from my_datalake.view_txn_a.new_t;
@@ -243,6 +244,21 @@ does not exist
 
 statement ok
 drop table my_datalake.view_txn_a.t;
+
+# A pending view drop also excludes a namespace request.
+statement ok writer
+begin;
+
+statement ok writer
+drop view my_datalake.view_txn_a.v;
+
+statement error writer
+create schema my_datalake.view_txn_uncommitted;
+----
+cannot commit view changes atomically
+
+statement ok writer
+rollback;
 
 # A committed drop must also be visible through a connection that cached the view.
 statement ok writer
@@ -262,20 +278,20 @@ drop schema my_datalake.view_txn_a;
 statement ok
 drop schema my_datalake.view_txn_b;
 
-# A staged namespace must not be created before a rejected view commit.
+# With a namespace create already staged, reject the view create itself.
 statement ok writer
 begin;
 
 statement ok writer
 create schema my_datalake.view_txn_uncommitted;
 
-statement ok writer
-create view my_datalake.view_txn_uncommitted.v as select 1;
-
 statement error writer
-commit;
+create view my_datalake.view_txn_uncommitted.v as select 1;
 ----
 cannot commit view changes atomically
+
+statement ok writer
+rollback;
 
 query I reader
 select count(*) from duckdb_schemas() where database_name = 'my_datalake' and schema_name = 'view_txn_uncommitted';

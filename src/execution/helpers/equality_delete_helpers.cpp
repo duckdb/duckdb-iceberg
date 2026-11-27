@@ -524,13 +524,13 @@ void IcebergDelete::WriteEqualityDeleteFile(ClientContext &context, IcebergDelet
 		if (!min_value || !max_value) {
 			continue;
 		}
-		auto lower = IcebergValue::SerializeValue(*min_value, predicate.type, SerializeBound::LOWER_BOUND);
+		auto lower = IcebergValue::SerializeFileBound(*min_value, predicate.type, SerializeBound::LOWER_BOUND);
 		if (lower.HasError()) {
 			throw InvalidConfigurationException(lower.GetError());
 		} else if (lower.HasValue()) {
 			delete_file.lower_bounds[predicate.field_id] = lower.GetValue();
 		}
-		auto upper = IcebergValue::SerializeValue(*max_value, predicate.type, SerializeBound::UPPER_BOUND);
+		auto upper = IcebergValue::SerializeFileBound(*max_value, predicate.type, SerializeBound::UPPER_BOUND);
 		if (upper.HasError()) {
 			throw InvalidConfigurationException(upper.GetError());
 		} else if (upper.HasValue()) {

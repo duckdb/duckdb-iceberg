@@ -26,6 +26,8 @@ struct IcebergTaskExecutionContext {
 //! own a separate local scanner.
 class IcebergTaskExecutor {
 public:
+	//! A task that carries its partition tuple (partition_values) is skipped before its file is opened when the table
+	//! filters reject the tuple.
 	IcebergTaskExecutor(ClientContext &context, shared_ptr<IcebergTaskExecutionContext> execution,
 	                    vector<IcebergFileScanTask> tasks, vector<ColumnIndex> column_indexes,
 	                    const TableFilterSet &table_filters, unique_ptr<Expression> row_filter);

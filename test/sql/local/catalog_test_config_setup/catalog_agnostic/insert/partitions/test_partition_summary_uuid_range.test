@@ -4,10 +4,9 @@
 
 require-env CATALOG_TEST_CONFIG_SETUP
 
-# With server-side scan planning the catalog picks the files using its own UUID order
-require-env SCAN_PLANNING_MODE client
-
 include test/sql/init_requires
+
+require json
 
 # ---- UUID starting with 8-f only, the manifest has partition summaries ----
 
@@ -76,6 +75,24 @@ query I
 SELECT list(id ORDER BY id) FROM my_datalake.default.partition_summary_uuid_range WHERE u BETWEEN '7fffffff-ffff-4fff-bfff-ffffffffffff' AND '80000000-0000-4000-8000-000000000000';
 ----
 [2, 3]
+
+# A saved plan must also preserve the range when it is in a disjunction with an equality.
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE uuid_range_tasks = (SELECT list(t) FROM iceberg_scan_plan(
+	'my_datalake.default.partition_summary_uuid_range',
+	row_filter = 'u > UUID ''80000000-0000-4000-8000-000000000000'' OR u = UUID ''11111111-1111-4111-8111-111111111111'''
+) t);
+
+query I
+SELECT list(id ORDER BY id) FROM iceberg_scan_tasks(getvariable('uuid_range_tasks'));
+----
+[1, 4]
+
+statement ok
+COMMIT;
 
 statement ok
 DROP TABLE my_datalake.default.partition_summary_uuid_range;

@@ -50,7 +50,8 @@ loop batch 0 2
 
 statement ok
 COPY (
-	SELECT p, q, id::INTEGER AS id FROM candidate_partitions CROSS JOIN range(1, 4) r(id) WHERE part={part}
+	SELECT IF(part=3 AND {batch}=1, -p, p) AS p, q, id::INTEGER AS id
+	FROM candidate_partitions CROSS JOIN range(1, 4) r(id) WHERE part={part}
 ) TO '{TEST_DIR}/candidate_data_{part}_{batch}.parquet'
 (FORMAT PARQUET, FIELD_IDS getvariable('candidate_field_ids'));
 
@@ -69,7 +70,7 @@ COPY (
 		{
 			content: 0::INTEGER,
 			file_path: '{TEST_DIR}/candidate_data_' || part || '_' || batch || '.parquet',
-			file_format: 'PARQUET', partition: {p: p, q: q},
+			file_format: 'PARQUET', partition: {p: IF(part=3 AND batch=1, -p, p), q: q},
 			record_count: 3::BIGINT, file_size_in_bytes: 1000::BIGINT
 		} AS data_file
 	FROM candidate_partitions CROSS JOIN range(2) r(batch)
@@ -140,6 +141,25 @@ SELECT count(*) FILTER (WHERE content='DATA'), count(*) FILTER (WHERE content='E
 FROM iceberg_metadata(my_datalake.default.delete_candidate_partitions) WHERE status<>'DELETED';
 ----
 8	4
+
+# Both encodings of NaN belong to the same partition, including when compaction groups input files.
+query III
+SELECT file_count, record_count, equality_delete_file_count
+FROM iceberg_partitions('my_datalake.default.delete_candidate_partitions') WHERE isnan(partition.p);
+----
+2	6	1
+
+statement ok
+BEGIN;
+
+query II
+SELECT rewritten_data_files_count, added_data_files_count
+FROM iceberg_rewrite_data_files('my_datalake.default.delete_candidate_partitions', min_input_files => 2);
+----
+8	4
+
+statement ok
+ROLLBACK;
 
 statement ok
 CALL enable_logging('Iceberg', storage='memory');
