@@ -69,8 +69,10 @@ unique_ptr<IcebergScanPlanProvider> IcebergScanPlanProvider::Create(IcebergScanP
 			rest_api_objects::PlanTableScanRequest request;
 			request.snapshot_id = context.snapshot.snapshot->snapshot_id;
 			request.case_sensitive = true;
-			request.use_snapshot_schema =
-			    context.snapshot.snapshot->snapshot_id != context.metadata.current_snapshot_id;
+			//! Follow the schema the scan picked: branches read with the table schema, while snapshot ids,
+			//! timestamps and tags read with the snapshot's schema (REST spec, PlanTableScanRequest
+			//! 'use-snapshot-schema', open-api/rest-catalog-open-api.yaml:4406-4413 at apache-iceberg-1.10.0)
+			request.use_snapshot_schema = context.snapshot.schema_id != context.metadata.GetCurrentSchemaId();
 			unique_ptr<rest_api_objects::Predicate> server_side_filter;
 			for (auto &filter : table_filters) {
 				auto primary_index = filter.first.GetPrimaryIndex();

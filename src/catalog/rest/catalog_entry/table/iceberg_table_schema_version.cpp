@@ -92,7 +92,7 @@ TableFunction IcebergTableSchemaVersion::GetScanFunction(ClientContext &context,
 	auto &transaction = IcebergTransaction::Get(context, catalog);
 	scan_info->serialization_transaction_id = transaction.scan_serialization_id;
 	scan_info->serialization_query_id = transaction.active_query.load();
-	if (table_info.transaction_data && snapshot_lookup.IsLatest()) {
+	if (table_info.transaction_data && snapshot_info.is_transaction_head) {
 		scan_info->transaction_data = table_info.transaction_data.get();
 	}
 
