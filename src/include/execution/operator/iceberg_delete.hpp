@@ -53,8 +53,21 @@ public:
 	vector<idx_t> file_row_numbers;
 };
 
+//! How many position-delete files one v2 write produces, from `write.delete.granularity`.
+enum class IcebergDeleteGranularity : uint8_t { FILE, PARTITION };
+
+//! The data files whose deletes go into one delete file, with the positions deleted from each, ordered by
+//! path. One data file under file granularity; the data files of one partition under partition granularity.
+struct IcebergDeleteFileGroup {
+	vector<pair<string, vector<idx_t>>> files;
+};
+
 struct IcebergDeleteFileInfo {
 	string data_file_path;
+	//! The highest data-file path this delete file covers; `data_file_path` is the lowest. Empty when it
+	//! covers a single data file, which is what lets a reader recognize it as file-scoped from the
+	//! `file_path` bounds alone.
+	string data_file_path_upper;
 	string file_name;
 	string file_format;
 	optional_idx footer_size;
@@ -90,7 +103,8 @@ struct IcebergDeleteFileWrite {
 
 //! Materialized deletes and the old deletion vectors they supersede.
 struct IcebergDeleteWriteResult {
-	unordered_map<string, IcebergDeleteFileInfo> written_files;
+	//! A list, not a map keyed by data file: one partition-granularity delete file covers several data files.
+	vector<IcebergDeleteFileInfo> written_files;
 	IcebergManifestDeletes altered_manifests;
 
 	partitioned_manifest_entry_map_t GenerateManifestEntries() const;
@@ -228,16 +242,17 @@ public:
 	                     bool stage_snapshot) const;
 	//! Stage the materialized delete files in this statement's snapshot.
 	void AddDeleteSnapshot(ClientContext &context, IcebergDeleteGlobalState &global_state) const;
-	//! Write a v2 delete file or serialize a v3 vector for subsequent size-based Puffin packing.
-	IcebergDeleteFileWrite MaterializeDeletes(ClientContext &context, const string &filename,
-	                                          const vector<idx_t> &deleted_rows) const;
+	//! Write a v2 delete file for the group or serialize a v3 vector for subsequent size-based Puffin packing.
+	IcebergDeleteFileWrite MaterializeDeletes(ClientContext &context, const IcebergDeleteFileGroup &group) const;
 	//! Walk `plan` for the PhysicalTableScan that emits the row-id virtual columns the delete needs.
 	static optional_ptr<PhysicalTableScan> FindIcebergScan(PhysicalOperator &plan);
 
 private:
-	IcebergDeleteFileInfo WritePositionalDeleteFile(ClientContext &context, const string &filename,
-	                                                IcebergDeleteFileInfo delete_file,
-	                                                const set<idx_t> &sorted_deletes) const;
+	//! Write one position-delete file covering `deletes_by_file`, which must be ordered by data-file
+	//! path: the spec requires the rows sorted by `file_path` then `pos`.
+	IcebergDeleteFileInfo WritePositionalDeleteFile(ClientContext &context,
+	                                                const vector<pair<string, set<idx_t>>> &deletes_by_file,
+	                                                IcebergDeleteFileInfo delete_file) const;
 	vector<data_t> SerializeDeletionVector(const set<idx_t> &sorted_deletes) const;
 	//! Writes the Iceberg equality-delete parquet file (one column per equality field, one row of
 	//! constants) and records it in `global_state.write_result`.

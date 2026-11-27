@@ -538,7 +538,7 @@ void IcebergDelete::WriteEqualityDeleteFile(ClientContext &context, IcebergDelet
 		}
 	}
 
-	global_state.write_result.written_files.emplace(delete_file_path, std::move(delete_file));
+	global_state.write_result.written_files.push_back(std::move(delete_file));
 }
 
 } // namespace duckdb
