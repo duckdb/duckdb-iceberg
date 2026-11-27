@@ -47,7 +47,7 @@ PhysicalOperator &IcebergCatalog::PlanCopyOnWriteMergeInto(ClientContext &contex
 			break;
 		}
 	}
-	return IcebergCopyOnWriteDeleteFilter::PlanMerge(context, planner, table, *merge, std::move(merge_rows));
+	return IcebergCopyOnWriteDelete::PlanMerge(context, planner, op, *merge, table, std::move(merge_rows));
 }
 
 PhysicalOperator &IcebergCatalog::PlanMergeInto(ClientContext &context, PhysicalPlanGenerator &planner,

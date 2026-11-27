@@ -18,89 +18,10 @@ namespace duckdb {
 
 class IcebergTableSchemaVersion;
 class LogicalDelete;
+class LogicalMergeInto;
 class LogicalUpdate;
 class PhysicalPlanGenerator;
 class PhysicalTableScan;
-
-//! The data files a copy-on-write MERGE rewrites, and the positions it removes from each.
-struct IcebergCopyOnWriteDeletes {
-	unordered_map<string, unordered_set<int64_t>> rows_by_file;
-	idx_t deleted_count = 0;
-};
-
-//! A copy-on-write MERGE rewrites every data file that holds a row its UPDATE or DELETE actions matched. (A
-//! copy-on-write DELETE and UPDATE used this operator too; they are now planned as joins, see
-//! IcebergCopyOnWriteDelete.) This operator is shaped like a join:
-//!  - the build side (children[1]) is the MERGE itself: it emits its row count, and its actions hand the positions
-//!    they removed to merge_rows;
-//!  - the probe side (children[0]) scans the table again, emitting its columns (on V3 followed by the row lineage
-//!    columns _row_id and _last_updated_sequence_number) and then filename and file_row_number, and this operator keeps
-//!    only the rows of matched files that the MERGE does not remove.
-//! The kept rows are written by the IcebergFileRewrite above it, which replaces the matched files in the snapshot the
-//! MERGE's own data files are staged in.
-class IcebergCopyOnWriteDeleteFilter : public PhysicalOperator {
-public:
-	IcebergCopyOnWriteDeleteFilter(PhysicalPlan &physical_plan, vector<LogicalType> types, PhysicalOperator &keep_plan,
-	                               PhysicalOperator &match_plan);
-
-	//! The probe-side scan, if it is a plain table scan: it gets a runtime filter on the matched files
-	optional_ptr<PhysicalTableScan> keep_scan;
-	ProjectionIndex keep_scan_filename_index;
-	//! Owns the logical plan the probe side was planned from
-	unique_ptr<LogicalOperator> keep_logical_plan;
-	//! The rows the MERGE's UPDATE and DELETE actions removed, collected while it runs
-	shared_ptr<IcebergCopyOnWriteMergeRows> merge_rows;
-
-public:
-	//! Rewrites the files a planned MERGE matched, once the MERGE has run
-	static PhysicalOperator &PlanMerge(ClientContext &context, PhysicalPlanGenerator &planner,
-	                                   IcebergTableSchemaVersion &table, PhysicalOperator &merge_plan,
-	                                   shared_ptr<IcebergCopyOnWriteMergeRows> merge_rows);
-
-	//! The rows the MERGE removed; valid once the build side has finalized
-	const IcebergCopyOnWriteDeletes &GetDeletes() const;
-	//! The row count the MERGE returns: the rows it merged
-	idx_t GetResultCount() const;
-
-public:
-	// Operator interface (probe side)
-	unique_ptr<OperatorState> GetOperatorState(ExecutionContext &context) const override;
-	OperatorResultType Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
-	                           GlobalOperatorState &gstate, OperatorState &state) const override;
-
-	bool ParallelOperator() const override {
-		return true;
-	}
-
-public:
-	// Sink interface (build side)
-	unique_ptr<GlobalSinkState> GetGlobalSinkState(ClientContext &context) const override;
-	SinkResultType Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const override;
-	SinkFinalizeType Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
-	                          OperatorSinkFinalizeInput &input) const override;
-
-	bool IsSink() const override {
-		return true;
-	}
-	bool ParallelSink() const override {
-		return true;
-	}
-
-public:
-	void BuildPipelines(Pipeline &current, MetaPipeline &meta_pipeline) override;
-	vector<const_reference<PhysicalOperator>> GetSources() const override;
-
-	string GetName() const override;
-
-private:
-	//! An earlier V3 snapshot in this transaction will assign any lineage that still reads NULL.
-	bool require_assigned_lineage = false;
-	//! Plans the rewrite of the files the MERGE `match_plan` matches
-	static PhysicalOperator &PlanRewrite(ClientContext &context, PhysicalPlanGenerator &planner,
-	                                     IcebergTableSchemaVersion &table, PhysicalOperator &match_plan,
-	                                     shared_ptr<IcebergCopyOnWriteMergeRows> merge_rows);
-	void PushKeepScanFilter(const IcebergCopyOnWriteDeletes &deletes) const;
-};
 
 //! A DELETE on a table whose write.delete.mode is copy-on-write rewrites every data file that holds a matching row,
 //! instead of writing delete files. It is planned as
@@ -135,6 +56,11 @@ struct IcebergCopyOnWriteDelete {
 	                                    IcebergTableSchemaVersion &table);
 	static PhysicalOperator &PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
 	                                    IcebergTableSchemaVersion &table);
+	//! A copy-on-write MERGE: raw is the positions its UPDATE and DELETE actions removed (they hand them to
+	//! merge_rows), and it writes only the kept rows; the MERGE writes its new rows itself.
+	static PhysicalOperator &PlanMerge(ClientContext &context, PhysicalPlanGenerator &planner, LogicalMergeInto &op,
+	                                   PhysicalOperator &merge_plan, IcebergTableSchemaVersion &table,
+	                                   shared_ptr<IcebergCopyOnWriteMergeRows> merge_rows);
 };
 
 //! Passes its rows through unchanged and counts them; with a file column, also records the distinct files
