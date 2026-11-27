@@ -5,6 +5,7 @@ import pytest
 
 from conftest import is_active_catalog
 from duckdb_unittest import DuckDBUnittestRunner
+from spark_seed import SparkSeedTable
 
 
 JAVA_FIXTURE_ONLY = pytest.mark.skipif(
@@ -165,3 +166,121 @@ def test_statistics_functions_read_the_registered_files(rest_catalog, duckdb_run
             )
     finally:
         _drop_table_if_exists(rest_catalog, identifier)
+
+
+NDV_TABLE = "default.spark_table_statistics"
+NDV_SEED = SparkSeedTable(
+    NDV_TABLE,
+    f"""
+    CREATE TABLE {NDV_TABLE} (id INT, region STRING, never_set BIGINT)
+    USING iceberg TBLPROPERTIES ('format-version'='2');
+    INSERT INTO {NDV_TABLE} VALUES (1, 'eu', NULL), (1, NULL, NULL), (2, 'eu', NULL);
+    INSERT INTO {NDV_TABLE} VALUES (2, 'us', NULL), (3, 'us', NULL);
+    """,
+)
+
+
+def _write_spark_statistics(spark, table, procedure):
+    snapshots = spark.sql(f"SELECT snapshot_id FROM {table}.snapshots ORDER BY parent_id NULLS FIRST").collect()
+    assert len(snapshots) == 2
+    files = []
+    for (snapshot_id,) in snapshots:
+        [(path,)] = spark.sql(
+            f"CALL {spark.catalog.currentCatalog()}.system.{procedure}("
+            f"table => '{table}', snapshot_id => {snapshot_id}L)"
+        ).collect()
+        files.append((snapshot_id, path))
+    return files
+
+
+@pytest.mark.spark_seed_tables(NDV_SEED)
+def test_spark_table_statistics(spark_con, duckdb_runner):
+    expected = []
+    for snapshot_id, path in _write_spark_statistics(spark_con, NDV_TABLE, "compute_table_stats"):
+        # These small sketches are exact. Count the source values at the same snapshot.
+        counts = spark_con.sql(
+            f"""SELECT count(DISTINCT id) AS id, count(DISTINCT region) AS region,
+                       count(DISTINCT never_set) AS never_set
+                FROM {NDV_TABLE} VERSION AS OF {snapshot_id}"""
+        ).first()
+        for name, count in counts.asDict().items():
+            expected.append((snapshot_id, snapshot_id, path, THETA_SKETCH_BLOB_TYPE, name, count))
+
+    with duckdb_runner() as test:
+        test.query(
+            "IITTTI",
+            f"""
+            SELECT statistics_snapshot_id, blob_snapshot_id, statistics_path, blob_type, field_names[1], ndv
+            FROM iceberg_table_stats(my_datalake.{NDV_TABLE})
+            ORDER BY statistics_snapshot_id, field_names[1]
+            """,
+            sorted(expected),
+        )
+
+
+def _partition_statistics_case(version, *requirements):
+    table = f"default.spark_partition_statistics_v{version}"
+    seed = SparkSeedTable(
+        table,
+        f"""
+        CREATE TABLE {table} (id INT, region STRING, event_time TIMESTAMP)
+        USING iceberg PARTITIONED BY (region, days(event_time))
+        TBLPROPERTIES ('format-version'='{version}', 'write.delete.mode'='merge-on-read');
+        INSERT INTO {table}
+        SELECT /*+ COALESCE(1) */ * FROM VALUES
+            (1, 'eu', TIMESTAMP '2024-01-01 01:00:00'),
+            (2, 'eu', TIMESTAMP '2024-01-01 02:00:00'),
+            (3, 'eu', TIMESTAMP '2024-01-02 01:00:00'),
+            (4, NULL, CAST(NULL AS TIMESTAMP)) AS t(id, region, event_time);
+        DELETE FROM {table} WHERE id = 2;
+        """,
+    )
+    return pytest.param(table, version, marks=[pytest.mark.spark_seed_tables(seed), *requirements], id=f"v{version}")
+
+
+def _spark_partition_counts(spark, table, snapshot_id, version):
+    # Count live manifest entries independently of the partition statistics file.
+    # V2 omits the deletion vector count. V3 counts vectors separately from position delete files.
+    dv_count = "count_if(content = 1 AND file_format = 'PUFFIN')" if version == 3 else "NULL"
+    return spark.sql(
+        f"""
+        SELECT partition.region, partition.event_time_day, spec_id,
+               sum(IF(content = 0, record_count, 0)), count_if(content = 0),
+               sum(IF(content = 0, file_size_in_bytes, 0)),
+               sum(IF(content = 1, record_count, 0)),
+               count_if(content = 1 AND file_format <> 'PUFFIN') AS position_delete_files,
+               {dv_count} AS deletion_vectors
+        FROM {table}.files VERSION AS OF {snapshot_id}
+        GROUP BY partition, spec_id
+        ORDER BY partition.region NULLS FIRST, partition.event_time_day NULLS FIRST
+        """
+    ).collect()
+
+
+@pytest.mark.requires_spark(">=4.0")
+@pytest.mark.parametrize(
+    "table,version",
+    [
+        _partition_statistics_case(2),
+        _partition_statistics_case(3, pytest.mark.requires_capabilities("format_v3")),
+    ],
+)
+def test_spark_partition_statistics(table, version, spark_con, duckdb_runner):
+    files = _write_spark_statistics(spark_con, table, "compute_partition_stats")
+    with duckdb_runner() as test:
+        for expected_deletes, (snapshot_id, path) in enumerate(files):
+            partitions = _spark_partition_counts(spark_con, table, snapshot_id, version)
+            assert len(partitions) == 3
+            delete_count = "position_delete_files" if version == 2 else "deletion_vectors"
+            assert sum(row[delete_count] for row in partitions) == expected_deletes
+            test.query(
+                "ITTTIIIIIII",
+                f"""
+                SELECT statistics_snapshot_id, statistics_path, partition.region, partition.event_time_day,
+                       spec_id, data_record_count, data_file_count, total_data_file_size_in_bytes,
+                       position_delete_record_count, position_delete_file_count, dv_count
+                FROM iceberg_partition_statistics(my_datalake.{table}, snapshot_from_id => {snapshot_id})
+                ORDER BY partition.region NULLS FIRST, partition.event_time_day NULLS FIRST
+                """,
+                [(snapshot_id, path, *partition) for partition in partitions],
+            )
