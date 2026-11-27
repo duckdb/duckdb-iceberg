@@ -4,7 +4,7 @@
 #include "duckdb/execution/physical_plan_generator.hpp"
 #include "duckdb/execution/operator/persistent/physical_merge_into.hpp"
 #include "duckdb/planner/operator/logical_merge_into.hpp"
-#include "execution/operator/iceberg_copy_on_write_delete.hpp"
+#include "execution/operator/copy_on_write/iceberg_copy_on_write.hpp"
 #include "execution/operator/iceberg_delete.hpp"
 #include "execution/operator/iceberg_insert.hpp"
 

@@ -1,15 +1,13 @@
 //===----------------------------------------------------------------------===//
 //                         DuckDB
 //
-// execution/operator/iceberg_copy_on_write_delete.hpp
+// execution/operator/copy_on_write/iceberg_copy_on_write.hpp
 //
 //
 //===----------------------------------------------------------------------===//
 
 #pragma once
 
-#include "duckdb/common/unordered_map.hpp"
-#include "duckdb/common/unordered_set.hpp"
 #include "duckdb/execution/physical_operator.hpp"
 #include "duckdb/planner/logical_operator.hpp"
 #include "execution/operator/iceberg_pending_deletes.hpp"
@@ -61,33 +59,6 @@ struct IcebergCopyOnWriteDelete {
 	static PhysicalOperator &PlanMerge(ClientContext &context, PhysicalPlanGenerator &planner, LogicalMergeInto &op,
 	                                   PhysicalOperator &merge_plan, IcebergTableSchemaVersion &table,
 	                                   shared_ptr<IcebergCopyOnWriteMergeRows> merge_rows);
-};
-
-//! Passes its rows through unchanged and counts them; with a file column, also records the distinct files
-class IcebergCopyOnWriteRowCounter : public PhysicalOperator {
-public:
-	IcebergCopyOnWriteRowCounter(PhysicalPlan &physical_plan, PhysicalOperator &child,
-	                             optional_idx file_column = optional_idx());
-
-	//! The column with the filename, if the files are recorded
-	optional_idx file_column;
-
-	//! The number of rows that passed; valid once its pipeline has finished
-	idx_t GetCount() const;
-	//! The files of the rows that passed, if recorded; valid once its pipeline has finished
-	const unordered_set<string> &GetFiles() const;
-
-public:
-	unique_ptr<GlobalOperatorState> GetGlobalOperatorState(ClientContext &context) const override;
-	unique_ptr<OperatorState> GetOperatorState(ExecutionContext &context) const override;
-	OperatorResultType Execute(ExecutionContext &context, DataChunk &input, DataChunk &chunk,
-	                           GlobalOperatorState &gstate, OperatorState &state) const override;
-
-	bool ParallelOperator() const override {
-		return true;
-	}
-
-	string GetName() const override;
 };
 
 } // namespace duckdb

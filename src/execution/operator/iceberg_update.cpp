@@ -8,7 +8,7 @@
 #include "duckdb/execution/operator/scan/physical_table_scan.hpp"
 
 #include "execution/operator/iceberg_delete.hpp"
-#include "execution/operator/iceberg_copy_on_write_delete.hpp"
+#include "execution/operator/copy_on_write/iceberg_copy_on_write.hpp"
 #include "execution/operator/iceberg_insert.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"

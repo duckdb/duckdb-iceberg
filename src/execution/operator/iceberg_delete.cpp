@@ -1,6 +1,6 @@
 #include "duckdb/execution/operator/persistent/physical_merge_into.hpp"
 #include "execution/operator/iceberg_delete.hpp"
-#include "execution/operator/iceberg_copy_on_write_delete.hpp"
+#include "execution/operator/copy_on_write/iceberg_copy_on_write.hpp"
 #include "execution/operator/merge_into/iceberg_merge_delete_collector.hpp"
 
 #include "iceberg_logging.hpp"
