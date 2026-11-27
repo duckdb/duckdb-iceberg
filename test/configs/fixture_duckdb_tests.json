@@ -1696,10 +1696,9 @@
       ]
     },
     {
-      "reason": "Historical ASan heap-buffer-overflow in shredded VARIANT AnalyzeShred; requires sanitizer recheck before unskipping",
+      "reason": "PRIMARY KEY is not supported on Iceberg tables",
       "paths": [
-        "test/sql/storage/types/variant/index_fetch.test",
-        "test/sql/storage/types/variant/variant_shredded_slice.test"
+        "test/sql/storage/types/variant/index_fetch.test"
       ]
     },
     {
