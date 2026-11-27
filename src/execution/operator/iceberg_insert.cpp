@@ -276,7 +276,12 @@ void IcebergInsertGlobalState::AddFiles(DataChunk &chunk, const string &table_na
 				// Direct identity partitions use the written column name. Computed keys use the partition label.
 				auto &name =
 				    direct ? ic_schema.GetColumnByFieldId(field.source_id).name : field.GetPartitionSpecFieldName();
-				info.value = copy_values.at(name);
+				auto &text = copy_values.at(name);
+				auto &source_type = ic_schema.GetColumnTypeFromFieldId(field.source_id);
+				// Decode COPY's text in the write schema. After FLOAT -> DOUBLE, for example, parsing "0.1"
+				// as DOUBLE would give a different value than widening the FLOAT that was written.
+				auto bounds_type = field.transform.GetBoundsType(source_type);
+				info.value = text.DefaultTryCastAs(bounds_type, nullptr, true).value_or(text);
 			}
 			data_file.partition_info.push_back(std::move(info));
 		}
