@@ -174,6 +174,9 @@ public:
 
 	//! Contribute this action's files to the active MERGE's snapshot.
 	bool merge_action = false;
+	//! In a copy-on-write MERGE: hand the matched rows to the rewrite that runs after the MERGE, instead of writing
+	//! delete files
+	shared_ptr<IcebergCopyOnWriteMergeRows> copy_on_write_merge_rows;
 	//! Immutable participant information assigned by MERGE planning.
 	optional_idx merge_delete_action_index;
 	idx_t merge_delete_action_count = 0;
@@ -228,10 +231,10 @@ public:
 	//! Write a v2 delete file or serialize a v3 vector for subsequent size-based Puffin packing.
 	IcebergDeleteFileWrite MaterializeDeletes(ClientContext &context, const string &filename,
 	                                          const vector<idx_t> &deleted_rows) const;
-
-private:
 	//! Walk `plan` for the PhysicalTableScan that emits the row-id virtual columns the delete needs.
 	static optional_ptr<PhysicalTableScan> FindIcebergScan(PhysicalOperator &plan);
+
+private:
 	IcebergDeleteFileInfo WritePositionalDeleteFile(ClientContext &context, const string &filename,
 	                                                IcebergDeleteFileInfo delete_file,
 	                                                const set<idx_t> &sorted_deletes) const;

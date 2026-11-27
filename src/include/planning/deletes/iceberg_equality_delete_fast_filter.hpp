@@ -11,7 +11,6 @@
 #include "duckdb/common/allocator.hpp"
 #include "duckdb/common/error_data.hpp"
 #include "duckdb/common/mutex.hpp"
-#include "duckdb/common/set.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/common/types/hash.hpp"
 #include "duckdb/common/unordered_map.hpp"
@@ -112,7 +111,7 @@ public:
 	IcebergEqualityDeleteFastFilter::BuildResult
 	GetOrCreate(const vector<reference<const IcebergEqualityDeleteFile>> &delete_files,
 	            const unordered_map<int32_t, idx_t> &field_indexes, const vector<LogicalType> &target_types,
-	            const set<int32_t> &local_field_ids, ClientContext &context, Allocator &allocator);
+	            ClientContext &context, Allocator &allocator);
 
 private:
 	//! One builder publishes each layout key; waiters share its result while unrelated layouts build concurrently.

@@ -21,3 +21,25 @@ query I
 select user_id from ICEBERG_SCAN('{WORKING_DIRECTORY}/data/persistent/partition_timestamptz/default.db/partition_timestamptz/metadata/00001-ffeadb58-2a9e-46ba-8b4f-f363f05de68c.metadata.json') WHERE partition_col = '2023-05-15T16:30:45+02';
 ----
 12345
+
+# A task that supplies the local TIMESTAMP must resolve to the same instant as the table's TIMESTAMPTZ.
+statement ok
+SET VARIABLE ts_tasks = (
+	SELECT list(struct_update(t, partition_values := {'1000': t.partition_values."1000"::TIMESTAMP}))
+	FROM iceberg_scan_plan('{WORKING_DIRECTORY}/data/persistent/partition_timestamptz/default.db/partition_timestamptz/metadata/00001-ffeadb58-2a9e-46ba-8b4f-f363f05de68c.metadata.json') t
+);
+
+statement ok
+CALL enable_logging('Iceberg');
+
+query I
+SELECT user_id FROM iceberg_scan_tasks(getvariable('ts_tasks'))
+WHERE partition_col = '2023-05-15 14:30:45+00'::TIMESTAMPTZ;
+----
+12345
+
+query I
+SELECT count(*) FROM duckdb_logs()
+WHERE type = 'Iceberg' AND message = 'Iceberg scan tasks filter pushdown kept 1 of 2 data files';
+----
+1

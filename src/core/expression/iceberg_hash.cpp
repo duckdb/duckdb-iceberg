@@ -1,5 +1,6 @@
 #include "core/expression/iceberg_hash.hpp"
 
+#include "common/iceberg_decimal.hpp"
 #include "common/iceberg_math.hpp"
 
 #include "duckdb/common/exception.hpp"
@@ -105,7 +106,9 @@ int32_t IcebergHash::HashDecimal(const Value &value) {
 		hugeint_val = value.GetValueUnsafe<hugeint_t>();
 		break;
 	default:
-		return 0;
+		// not an integer-backed decimal: too wide for Iceberg, there is no hash to compute
+		IcebergDecimal::Verify(value.type());
+		throw InternalException("iceberg_bucket: unexpected physical type for %s", value.type().ToString());
 	}
 
 	// Serialize to minimum bytes, big-endian two's complement
@@ -335,6 +338,7 @@ Value IcebergHash::TruncateValue(const Value &v, idx_t width) {
 	case LogicalTypeId::DECIMAL: {
 		// Truncate the unscaled integer value, preserving type (scale/precision).
 		// Read the unscaled value according to the physical storage type (INT16/INT32/INT64/INT128).
+		IcebergDecimal::Verify(v.type());
 		auto decimal_width = DecimalType::GetWidth(v.type());
 		auto scale = DecimalType::GetScale(v.type());
 		int64_t val;

@@ -1,4 +1,5 @@
 #include "core/expression/iceberg_value.hpp"
+#include "common/iceberg_decimal.hpp"
 #include "common/iceberg_fixed_type.hpp"
 
 #include "duckdb/common/helper.hpp"
@@ -12,7 +13,17 @@
 #include "duckdb/common/types/vector.hpp"
 #include "utf8proc_wrapper.hpp"
 
+#include <limits>
+
 namespace duckdb {
+
+Value IcebergValue::NormalizePartitionNaN(Value value) {
+	if (!value.IsNull() && value.type().IsFloating() && Value::IsNan(value.GetValue<double>())) {
+		return value.type().id() == LogicalTypeId::FLOAT ? Value::FLOAT(std::numeric_limits<float>::quiet_NaN())
+		                                                 : Value::DOUBLE(std::numeric_limits<double>::quiet_NaN());
+	}
+	return value;
+}
 
 static Value TransformPartitionValueFromBlob(const string_t &blob, const LogicalType &type) {
 	auto result = IcebergValue::DeserializeValue(blob, type);
@@ -29,7 +40,7 @@ static Value TransformPartitionValueTemplated(const Value &value, const LogicalT
 	return TransformPartitionValueFromBlob(blob, type);
 }
 
-Value IcebergValue::TransformPartitionValue(const Value &value, const LogicalType &type) {
+Value IcebergValue::TransformPartitionValue(ClientContext &context, const Value &value, const LogicalType &type) {
 	D_ASSERT(!value.type().IsNested());
 	// COPY's partition map contains textual values. VARCHAR and BLOB share a physical
 	// type, but only BLOB contains bytes that should be decoded as Iceberg values.
@@ -38,16 +49,15 @@ Value IcebergValue::TransformPartitionValue(const Value &value, const LogicalTyp
 			auto blob = value.DefaultCastAs(LogicalType::BLOB);
 			return TransformPartitionValueFromBlob(blob.GetValueUnsafe<string_t>(), type);
 		}
-		return value.DefaultCastAs(type);
+		return value.CastAs(context, type);
 	}
-	// DECIMAL partition values are already decoded as proper DuckDB DECIMALs by the Avro reader.
-	// The blob round-trip below misinterprets the little-endian internal representation as
-	// big-endian Iceberg bytes, producing garbage. Return directly (or cast if params differ).
-	if (value.type().id() == LogicalTypeId::DECIMAL) {
+	// DECIMAL and UUID partition values are already decoded. Their internal values
+	// have a different byte order from the Iceberg encoding used by the blob path below.
+	if (value.type().id() == LogicalTypeId::DECIMAL || value.type().id() == LogicalTypeId::UUID) {
 		if (value.type() == type) {
 			return value;
 		}
-		return value.DefaultCastAs(type);
+		return value.CastAs(context, type);
 	}
 	switch (value.type().InternalType()) {
 	case PhysicalType::BOOL:
@@ -82,7 +92,7 @@ static DeserializeResult DeserializeError(const string_t &blob, const LogicalTyp
 }
 
 template <class VALUE_TYPE>
-static Value DeserializeDecimalTemplated(const string_t &blob, uint8_t width, uint8_t scale) {
+static Value DeserializeDecimalTemplated(const string_t &blob, const LogicalType &type) {
 	VALUE_TYPE ret = 0;
 	//! The blob has to be smaller or equal to the size of the type
 	D_ASSERT(blob.GetSize() <= sizeof(VALUE_TYPE));
@@ -105,10 +115,10 @@ static Value DeserializeDecimalTemplated(const string_t &blob, uint8_t width, ui
 		}
 	}
 
-	return Value::DECIMAL(ret, width, scale);
+	return Value::DECIMAL(ret, DecimalType::GetWidth(type), DecimalType::GetScale(type));
 }
 
-static Value DeserializeHugeintDecimal(const string_t &blob, uint8_t width, uint8_t scale) {
+static Value DeserializeHugeintDecimal(const string_t &blob, const LogicalType &type) {
 	//! The blob has to be smaller or equal to the size of the type
 	D_ASSERT(blob.GetSize() <= sizeof(hugeint_t));
 
@@ -125,15 +135,13 @@ static Value DeserializeHugeintDecimal(const string_t &blob, uint8_t width, uint
 	}
 
 	hugeint_t ret(static_cast<int64_t>(upper_val), lower_val);
-	return Value::DECIMAL(ret, width, scale);
+	return Value::DECIMAL(ret, DecimalType::GetWidth(type), DecimalType::GetScale(type));
 }
 
 static DeserializeResult DeserializeDecimal(const string_t &blob, const LogicalType &type) {
 	D_ASSERT(type.id() == LogicalTypeId::DECIMAL);
 
-	uint8_t width;
-	uint8_t scale;
-	if (!type.GetDecimalProperties(width, scale)) {
+	if (!IcebergDecimal::IsSupported(type)) {
 		return DeserializeError(blob, type);
 	}
 
@@ -143,16 +151,16 @@ static DeserializeResult DeserializeDecimal(const string_t &blob, const LogicalT
 	}
 	switch (physical_type) {
 	case PhysicalType::INT16: {
-		return DeserializeDecimalTemplated<int16_t>(blob, width, scale);
+		return DeserializeDecimalTemplated<int16_t>(blob, type);
 	}
 	case PhysicalType::INT32: {
-		return DeserializeDecimalTemplated<int32_t>(blob, width, scale);
+		return DeserializeDecimalTemplated<int32_t>(blob, type);
 	}
 	case PhysicalType::INT64: {
-		return DeserializeDecimalTemplated<int64_t>(blob, width, scale);
+		return DeserializeDecimalTemplated<int64_t>(blob, type);
 	}
 	case PhysicalType::INT128: {
-		return DeserializeHugeintDecimal(blob, width, scale);
+		return DeserializeHugeintDecimal(blob, type);
 	}
 	default:
 		throw InternalException("DeserializeDecimal not implemented for physical type '%s'",
@@ -417,6 +425,17 @@ std::vector<uint8_t> HexStringToBytes(const std::string &hex) {
 	return bytes;
 }
 
+SerializeResult IcebergValue::SerializeFileBound(Value value, const LogicalType &type, SerializeBound bound,
+                                                 const IcebergMetricsConfig &metrics) {
+	if (type.IsFloating()) {
+		value = value.DefaultCastAs(type);
+		if (value.GetValue<double>() == 0) {
+			value = Value::DOUBLE(bound == SerializeBound::LOWER_BOUND ? -0.0 : 0.0);
+		}
+	}
+	return SerializeValue(std::move(value), type, bound, metrics);
+}
+
 SerializeResult IcebergValue::SerializeValue(Value input_value, const LogicalType &column_type,
                                              SerializeBound bound_type, const IcebergMetricsConfig &metrics_config) {
 	switch (column_type.id()) {
@@ -532,6 +551,8 @@ SerializeResult IcebergValue::SerializeValue(Value input_value, const LogicalTyp
 		return SerializeResult(column_type, serialized_val);
 	}
 	case LogicalTypeId::DECIMAL: {
+		// the unscaled value is serialized through a HUGEINT below
+		IcebergDecimal::Verify(column_type);
 		auto decimal_as_string = input_value.GetValue<string>();
 		auto dec_pos = decimal_as_string.find(".");
 		// remove the decimal point if found (when scale is 0 there is no decimal point)

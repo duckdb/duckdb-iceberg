@@ -1,0 +1,131 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/test_hugeint_out_of_range.test
+# description: HUGEINT is stored as decimal(38, 0): values that need 39 digits are rejected, never stored
+# group: [insert]
+
+require-env CATALOG_TEST_CONFIG_SETUP
+
+include test/sql/init_requires
+
+require core_functions
+
+statement ok
+drop table if exists my_datalake.default.hugeint_out_of_range;
+
+statement ok
+create table my_datalake.default.hugeint_out_of_range (id INTEGER, h HUGEINT);
+
+# Iceberg has no 128-bit integer: the column is a decimal(38, 0)
+query II
+select column_name, column_type from (describe my_datalake.default.hugeint_out_of_range) order by all;
+----
+h	DECIMAL(38,0)
+id	INTEGER
+
+# the largest and smallest values a decimal(38, 0) can hold
+statement ok
+insert into my_datalake.default.hugeint_out_of_range values
+	(1, 99999999999999999999999999999999999999::HUGEINT),
+	(2, -99999999999999999999999999999999999999::HUGEINT);
+
+# 10^38 fits a HUGEINT but not a decimal(38, 0)
+statement error
+insert into my_datalake.default.hugeint_out_of_range values (3, 100000000000000000000000000000000000000::HUGEINT);
+----
+<REGEX>:.*Conversion Error.*DECIMAL\(38,0\).*
+
+statement error
+insert into my_datalake.default.hugeint_out_of_range values (4, -100000000000000000000000000000000000000::HUGEINT);
+----
+<REGEX>:.*Conversion Error.*DECIMAL\(38,0\).*
+
+statement error
+insert into my_datalake.default.hugeint_out_of_range values (5, 170141183460469231731687303715884105727::HUGEINT);
+----
+<REGEX>:.*Conversion Error.*DECIMAL\(38,0\).*
+
+statement error
+insert into my_datalake.default.hugeint_out_of_range select 6, h * 10 from my_datalake.default.hugeint_out_of_range;
+----
+<REGEX>:.*(Conversion|Out of Range) Error.*
+
+statement error
+update my_datalake.default.hugeint_out_of_range set h = h * 10 where id = 1;
+----
+<REGEX>:.*(Conversion|Out of Range) Error.*
+
+# nothing of the failed statements was stored
+query II
+select * from my_datalake.default.hugeint_out_of_range order by id;
+----
+1	99999999999999999999999999999999999999
+2	-99999999999999999999999999999999999999
+
+# the data file stores the column as a 38 digit decimal as well
+statement ok
+begin
+
+statement ok
+set variable hugeint_data_file = (select file_path from iceberg_metadata(my_datalake.default.hugeint_out_of_range) limit 1);
+
+query IIIII
+select name, type, converted_type, precision, scale from parquet_schema(getvariable('hugeint_data_file')) where name = 'h';
+----
+h	FIXED_LEN_BYTE_ARRAY	DECIMAL	38	0
+
+statement ok
+commit
+
+# the same holds for CREATE TABLE AS
+statement ok
+drop table if exists my_datalake.default.hugeint_out_of_range_ctas;
+
+statement error
+create table my_datalake.default.hugeint_out_of_range_ctas as
+select 100000000000000000000000000000000000000::HUGEINT as h;
+----
+<REGEX>:.*Conversion Error.*DECIMAL\(38,0\).*
+
+statement ok
+drop table if exists my_datalake.default.hugeint_out_of_range_ctas;
+
+statement ok
+create table my_datalake.default.hugeint_out_of_range_ctas as
+select 99999999999999999999999999999999999999::HUGEINT as h;
+
+query I
+select * from my_datalake.default.hugeint_out_of_range_ctas;
+----
+99999999999999999999999999999999999999
+
+# and for a HUGEINT partition column
+statement ok
+drop table if exists my_datalake.default.hugeint_out_of_range_partitioned;
+
+statement ok
+create table my_datalake.default.hugeint_out_of_range_partitioned (id INTEGER, h HUGEINT) partitioned by (h);
+
+statement error
+insert into my_datalake.default.hugeint_out_of_range_partitioned
+values (1, 100000000000000000000000000000000000000::HUGEINT);
+----
+<REGEX>:.*Conversion Error.*DECIMAL\(38,0\).*
+
+statement ok
+insert into my_datalake.default.hugeint_out_of_range_partitioned
+values (1, 99999999999999999999999999999999999999::HUGEINT);
+
+query II
+select * from my_datalake.default.hugeint_out_of_range_partitioned;
+----
+1	99999999999999999999999999999999999999
+
+# UHUGEINT has no Iceberg counterpart at all
+statement error
+create table my_datalake.default.uhugeint_not_supported (u UHUGEINT);
+----
+Column type UHUGEINT is not a valid Iceberg Type
+
+statement error
+create table my_datalake.default.uhugeint_not_supported as select 1::UHUGEINT as u;
+----
+Column type UHUGEINT is not a valid Iceberg Type
