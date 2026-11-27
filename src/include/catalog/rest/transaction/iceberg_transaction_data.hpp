@@ -63,6 +63,7 @@ public:
 	void TableSetProperties(const case_insensitive_map_t<string> &properties);
 	void TableRemoveProperties(const vector<string> &properties);
 	void TableRemoveSnapshots(const vector<int64_t> &snapshot_ids);
+	void TableRemoveSnapshotRefs(const vector<string> &ref_names);
 	void TableSetLocation();
 	//! Roll main back to an ancestor snapshot (Spark rollback_to_snapshot semantics).
 	void TableRollbackToSnapshot(int64_t snapshot_id);
@@ -71,6 +72,8 @@ public:
 
 private:
 	void CacheExistingManifestList(lock_guard<mutex> &guard, const IcebergTableMetadata &metadata);
+	//! Pin every ref the snapshot expiration planned from, once per transaction
+	void RequireSnapshotRefsUnchanged();
 	//! Retains one pending delete manifest per partition spec present in 'delete_files'.
 	void AddPendingDeleteManifests(IcebergAddSnapshot &add_snapshot, partitioned_manifest_entry_map_t &&delete_files);
 	//! Called with lock held, since MERGE action pipelines may finalize concurrently.
@@ -124,6 +127,9 @@ public:
 	bool has_assert_create = false;
 	//! Whether this transaction rolls main back (TableRollbackToSnapshot)
 	bool rolls_back = false;
+	//! Whether iceberg_expire_snapshots staged updates for this table. A table replacement also removes the main
+	//! ref, so the staged update types alone do not say whether snapshots are expired.
+	bool expires_snapshots = false;
 	//! Set explicitly by maintenance; its committed-table plan cannot be combined with later row changes.
 	bool has_maintenance_rewrite = false;
 	//! A MERGE chose its actions against the snapshot it read, so its commit can't be re-applied to a newer one.
