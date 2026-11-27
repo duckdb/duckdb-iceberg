@@ -59,10 +59,9 @@ OpenFileInfo IcebergMultiFileReader::FileInfo(const IcebergDataFileDescriptor &f
 
 IcebergEqualityDeleteFastFilter::BuildResult IcebergMultiFileReaderGlobalState::GetOrCreateEqualityDeleteFastFilter(
     const vector<reference<const IcebergEqualityDeleteFile>> &delete_files,
-    const IcebergEqualityDeleteReadState &read_state, const set<int32_t> &local_field_ids, ClientContext &context,
-    Allocator &allocator) {
+    const IcebergEqualityDeleteReadState &read_state, ClientContext &context, Allocator &allocator) {
 	return equality_delete_fast_filter_cache.GetOrCreate(delete_files, read_state.field_indexes, read_state.types,
-	                                                     local_field_ids, context, allocator);
+	                                                     context, allocator);
 }
 
 using MultiFileColumnPath = vector<idx_t>;
@@ -383,15 +382,13 @@ static void ApplyNestedPartitionDefaults(const unordered_map<int32_t, Value> &co
 }
 
 void IcebergMultiFileReader::ApplyPartitionDefaults(const unordered_map<int32_t, Value> &constants,
-                                                    const MultiFileReaderData &reader_data,
+                                                    const unordered_set<int32_t> &local_ids,
                                                     vector<MultiFileColumnDefinition> &scan_columns,
                                                     const vector<ColumnIndex> &scan_column_ids,
                                                     const IcebergTableMetadataSchemas &schemas) {
 	if (constants.empty()) {
 		return;
 	}
-	unordered_set<int32_t> local_ids;
-	CollectFieldIds(reader_data.reader->columns, local_ids);
 	unordered_set<idx_t> visited;
 	for (auto &id : scan_column_ids) {
 		if (id.IsVirtualColumn() || !visited.insert(id.GetPrimaryIndex()).second) {
@@ -445,7 +442,6 @@ ReaderInitializeType IcebergMultiFileReader::InitializeTaskReader(
 	auto scan_column_ids = global_column_ids;
 	auto read_columns = AddEqualityDeleteColumns(schemas, delete_plan.equality_deletes, scan_columns, scan_column_ids,
 	                                             reader_data, context);
-	auto equality_delete_state = make_uniq<IcebergEqualityDeleteReadState>(std::move(read_columns));
 
 	MultiFileReader::FinalizeBind(reader_data, bind_data.file_options, bind_data.reader_bind, scan_columns,
 	                              scan_column_ids, context, gstate.multi_file_reader_state.get());
@@ -461,19 +457,20 @@ ReaderInitializeType IcebergMultiFileReader::InitializeTaskReader(
 		}
 	}
 	//! After the field mapping, so files without field ids are matched too
-	ApplyPartitionDefaults(partition_constants, reader_data, scan_columns, scan_column_ids, schemas);
+	unordered_set<int32_t> local_ids;
+	if (!partition_constants.empty() || !read_columns.empty()) {
+		CollectFieldIds(local_columns, local_ids);
+	}
+	ApplyPartitionDefaults(partition_constants, local_ids, scan_columns, scan_column_ids, schemas);
 
+	auto equality_delete_state =
+	    make_uniq<IcebergEqualityDeleteReadState>(std::move(read_columns), local_ids, partition_constants);
 	vector<bool> accelerated_files;
 	Value fast_filter_setting;
 	if (context.TryGetCurrentSetting("iceberg_equality_delete_fast_filter", fast_filter_setting) &&
 	    fast_filter_setting.GetValue<bool>()) {
-		set<int32_t> local_field_ids;
-		for (auto &entry : CreateFieldIdMap(local_columns)) {
-			local_field_ids.insert(entry.first);
-		}
-		auto built =
-		    iceberg_state.GetOrCreateEqualityDeleteFastFilter(delete_plan.equality_deletes, *equality_delete_state,
-		                                                      local_field_ids, context, BufferAllocator::Get(context));
+		auto built = iceberg_state.GetOrCreateEqualityDeleteFastFilter(
+		    delete_plan.equality_deletes, *equality_delete_state, context, BufferAllocator::Get(context));
 		if (!delete_plan.equality_deletes.empty()) {
 			idx_t accelerated_count = 0;
 			for (auto accelerated : built.accelerated_files) {
@@ -485,8 +482,8 @@ ReaderInitializeType IcebergMultiFileReader::InitializeTaskReader(
 		equality_delete_state->fast_filter = std::move(built.filter);
 		accelerated_files = std::move(built.accelerated_files);
 	}
-	equality_delete_state->expression = CreateEqualityDeleteExpression(delete_plan.equality_deletes, local_columns,
-	                                                                   *equality_delete_state, accelerated_files);
+	equality_delete_state->expression =
+	    CreateEqualityDeleteExpression(delete_plan.equality_deletes, *equality_delete_state, accelerated_files);
 	iceberg_state.CacheEqualityDeleteReadState(file_id, std::move(equality_delete_state));
 
 	return CreateMapping(context, reader_data, scan_columns, scan_column_ids, table_filters, gstate.file_list,
@@ -503,14 +500,10 @@ void IcebergMultiFileReader::FinalizeBind(MultiFileReaderData &reader_data, cons
 
 unique_ptr<Expression> IcebergMultiFileReader::CreateEqualityDeleteExpression(
     const vector<reference<const IcebergEqualityDeleteFile>> &delete_files,
-    const vector<MultiFileColumnDefinition> &local_columns, const IcebergEqualityDeleteReadState &read_state,
-    const vector<bool> &accelerated_files) {
+    const IcebergEqualityDeleteReadState &read_state, const vector<bool> &accelerated_files) {
 	if (delete_files.empty()) {
 		return nullptr;
 	}
-
-	//! Map every field id, including nested fields, to its path in 'local_columns'.
-	auto id_to_local_column = CreateFieldIdMap(local_columns);
 
 	//! Create a big CONJUNCTION_AND of all the rows, illustrative example:
 	//! WHERE
@@ -541,17 +534,13 @@ unique_ptr<Expression> IcebergMultiFileReader::CreateEqualityDeleteExpression(
 				auto field_id = equality_ids[column_index];
 				auto constant = equality_values.GetValue(column_index, row_index);
 
-				if (!id_to_local_column.count(field_id)) {
-					//! A field absent from the data file is NULL for equality-delete matching,
-					//! regardless of its Iceberg initial default.
+				auto state_entry = read_state.field_indexes.find(field_id);
+				if (state_entry == read_state.field_indexes.end()) {
+					//! No data or identity partition value for this key. Match it as NULL.
 					equalities.push_back(make_uniq<BoundConstantExpression>(Value::BOOLEAN(!constant.IsNull())));
 					continue;
 				}
 
-				auto state_entry = read_state.field_indexes.find(field_id);
-				if (state_entry == read_state.field_indexes.end()) {
-					throw InternalException("Missing private scan column for equality-delete field id %d", field_id);
-				}
 				auto equality_column_index = state_entry->second;
 				auto &column = read_state.columns[equality_column_index];
 				auto bound_ref = make_uniq<BoundReferenceExpression>(column.type, equality_column_index);
