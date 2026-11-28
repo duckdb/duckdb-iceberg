@@ -56,8 +56,9 @@ ORDER BY ALL;
 1	0	0	2
 
 # Both tombstone-only manifests are dropped on the next commit.
+# Keep id=8 in this inserted file so deleting only id=6 still requires a position delete.
 statement ok
-INSERT INTO my_datalake.default.manifest_tombstones_v2_merge_on_read VALUES (6, 'f');
+INSERT INTO my_datalake.default.manifest_tombstones_v2_merge_on_read VALUES (6, 'f'), (8, 'h');
 
 query IIII
 SELECT content,
@@ -101,6 +102,7 @@ SELECT id, payload FROM my_datalake.default.manifest_tombstones_v2_merge_on_read
 3	c
 5	e
 7	g
+8	h
 
 statement ok
 DROP TABLE my_datalake.default.manifest_tombstones_v2_merge_on_read;

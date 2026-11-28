@@ -121,6 +121,19 @@ void IcebergScanPlanner::RequireRowIds() {
 	shared_state->RequireRowIds();
 }
 
+void IcebergScanPlanner::SetScanIsDeleteSource() {
+	scan_is_delete_source = true;
+}
+
+void IcebergScanPlanner::SetFiltersFullyPushed(bool fully_pushed) {
+	filters_fully_pushed = fully_pushed;
+}
+
+bool IcebergScanPlanner::CanDropCoveredFiles() const {
+	//! A residual filter above the scan can still reject rows, so only fully pushed filters can prove coverage.
+	return scan_is_delete_source && filters_fully_pushed && table_filters.HasFilters();
+}
+
 const IcebergTableFilters &IcebergScanPlanner::Filters() const {
 	return table_filters;
 }
@@ -207,6 +220,8 @@ IcebergScanPlanner::GetDataFile(idx_t file_id, annotated_lock_guard<annotated_mu
 	if (file_id < data_manifest_entries.size()) {
 		return data_manifest_entries[file_id];
 	}
+	//! Strict bounds checks are only needed for a standalone DELETE with no residual filters.
+	const bool evaluate_strict = CanDropCoveredFiles();
 	while (file_id >= data_manifest_entries.size()) {
 		if (!TryGetNextBatch(guard)) {
 			FinishScanTasks(guard);
@@ -241,13 +256,23 @@ IcebergScanPlanner::GetDataFile(idx_t file_id, annotated_lock_guard<annotated_mu
 			    transaction_data->IsFileInvalidated({data_file.file_path, data_file.content_offset})) {
 				continue;
 			}
-			if (table_filters.HasFilters() &&
-			    IcebergFilePruner(context, GetMetadata(), GetSchema(), table_filters)
-			            .FileMatchesFilter(manifest_file, manifest_entry) == IcebergMetricsMatch::ROWS_CANNOT_MATCH) {
-				continue;
-			}
 			if (StringUtil::CIEquals(data_file.file_format, "puffin")) {
 				continue;
+			}
+			if (table_filters.HasFilters()) {
+				auto match = IcebergFilePruner(context, GetMetadata(), GetSchema(), table_filters)
+				                 .FileMatchesFilter(manifest_file, manifest_entry, evaluate_strict);
+				if (match == IcebergMetricsMatch::ROWS_CANNOT_MATCH) {
+					continue;
+				}
+				if (evaluate_strict && match == IcebergMetricsMatch::ROWS_MUST_MATCH) {
+					DUCKDB_LOG(context, IcebergLogType,
+					           "Iceberg metadata-only DELETE, dropping 'data_file': '%s' with %lld records, every row "
+					           "matches the filters",
+					           data_file.file_path, data_file.record_count);
+					dropped_data_files.push_back(bound_entry);
+					continue;
+				}
 			}
 			data_manifest_entries.push_back(bound_entry);
 		}
@@ -412,6 +437,33 @@ IcebergPartition IcebergScanPlanner::GetPartitionForDataFile(const string &file_
 		return entry->second;
 	}
 	throw InvalidConfigurationException("Could not find data file '%s' in manifest entries", file_path);
+}
+
+vector<DroppedDataFile> IcebergScanPlanner::ResolveDroppedDataFiles() const {
+	vector<BoundIcebergManifestEntry> covered_files;
+	{
+		annotated_lock_guard<annotated_mutex> guard(shared_state->lock);
+		std::swap(covered_files, dropped_data_files);
+	}
+	vector<DroppedDataFile> result;
+	result.reserve(covered_files.size());
+	//! Delete files are resolved outside the planning lock, which ResolveApplicableDeleteFiles takes itself.
+	for (auto &entry : covered_files) {
+		auto &data_file = entry.entry.data_file;
+		DroppedDataFile dropped {{data_file.file_path, data_file.content_offset}, data_file.record_count, {}};
+		for (auto &delete_file : ResolveApplicableDeleteFiles(entry)) {
+			//! Table-wide equality deletes and position deletes spanning several data files must remain.
+			if (delete_file.content == IcebergManifestEntryContentType::EQUALITY_DELETES ||
+			    !delete_file.referenced_data_file || *delete_file.referenced_data_file != data_file.file_path) {
+				continue;
+			}
+			dropped.live_record_count -= delete_file.record_count;
+			dropped.superseded_delete_files.emplace_back(std::move(delete_file.file_path), delete_file.content_offset);
+		}
+		dropped.live_record_count = MaxValue<int64_t>(dropped.live_record_count, 0);
+		result.push_back(std::move(dropped));
+	}
+	return result;
 }
 
 vector<IcebergDeleteFile>
