@@ -322,7 +322,7 @@ DeleteApplyMatch PositionDeleteApplies(const IcebergTableMetadata &metadata, con
 		if (!delete_value || !data_value) {
 			return DeleteApplyMatch::AMBIGUOUS;
 		}
-		if (!Value::NotDistinctFrom(*delete_value, *data_value)) {
+		if (!IcebergFilePruner::PartitionValuesMatch(*delete_value, *data_value)) {
 			return DeleteApplyMatch::NO;
 		}
 	}

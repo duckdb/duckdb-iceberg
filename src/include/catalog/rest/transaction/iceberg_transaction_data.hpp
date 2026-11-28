@@ -118,6 +118,8 @@ public:
 
 	//! If we perform an update that relies on the current schema id staying unchanged
 	bool assert_schema_id = false;
+	//! A dropped field must still be unused by the default partition spec and sort order at commit.
+	bool drops_field = false;
 	//! Whether this transaction explicitly requires the table to be newly created.
 	bool has_assert_create = false;
 	//! Whether this transaction rolls main back (TableRollbackToSnapshot)

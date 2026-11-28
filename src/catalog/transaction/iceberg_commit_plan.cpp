@@ -97,6 +97,15 @@ static void CreateTableRequirements(DatabaseInstance &db, ClientContext &context
 		AssertCurrentSchemaIdRequirement requirement(transaction_data.initial_schema_id);
 		requirement.CreateRequirement(db, context, commit_state);
 	}
+	if (!has_assert_create && transaction_data.drops_field) {
+		AssertDefaultSpecIdRequirement spec(transaction_data.initial_default_spec_id);
+		spec.CreateRequirement(db, context, commit_state);
+		// V1 metadata can omit the default sort order, which means unsorted.
+		auto initial_order = transaction_data.initial_default_sort_order_id;
+		AssertDefaultSortOrderIdRequirement order(
+		    initial_order.IsValid() ? NumericCast<int32_t>(initial_order.GetIndex()) : UNSORTED_SORT_ORDER_ID);
+		order.CreateRequirement(db, context, commit_state);
+	}
 	if (!has_assert_create && commit_state.table_info.HasTransactionUpdates()) {
 		auto uuid_requirement = AssertTableUUIDRequirement(transaction_data.initial_table_uuid);
 		uuid_requirement.CreateRequirement(db, context, commit_state);
@@ -330,13 +339,9 @@ vector<IcebergNamespacePropertyUpdate> IcebergCommitPlan::NamespacePropertyUpdat
 	auto &backend = transaction.GetCatalog().GetBackend();
 	vector<IcebergNamespacePropertyUpdate> result;
 	for (auto &properties_update : transaction.schema_property_updates) {
-		auto schema_name_with_catalog = properties_update.first;
-		auto catalog_splitter = schema_name_with_catalog.find(".");
-		auto schema_name_no_catalog = schema_name_with_catalog.erase(0, catalog_splitter + 1);
-
 		auto &schema_property_updates = properties_update.second;
 		IcebergNamespacePropertyUpdate update;
-		update.ns = backend.ParseNamespace(schema_name_no_catalog);
+		update.ns = backend.ParseNamespace(properties_update.first);
 		update.removals.assign(schema_property_updates.removals.begin(), schema_property_updates.removals.end());
 		update.updates = schema_property_updates.updates;
 		result.push_back(std::move(update));

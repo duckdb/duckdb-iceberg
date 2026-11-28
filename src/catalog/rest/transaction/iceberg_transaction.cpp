@@ -139,6 +139,61 @@ bool IcebergTransaction::HasTableUpdate() const {
 	return !std::holds_alternative<std::monostate>(transaction_update);
 }
 
+idx_t IcebergTransaction::CatalogRequestCount() const {
+	// Compatible table changes share a request, as do property edits to the same namespace.
+	return HasTableUpdate() + created_schemas.Size() + deleted_schemas.size() + schema_property_updates.size() +
+	       created_views.size() + deleted_views.size();
+}
+
+void IcebergTransaction::VerifyCanAddRequest(RequestType request) const {
+	if (CatalogRequestCount() == 0) {
+		return;
+	}
+	auto &backend = catalog.GetBackend();
+	//! A transaction makes one kind of table change (the IcebergTransactionUpdate variant), whatever the backend
+	if (request == RequestType::TABLE && HasTableUpdate()) {
+		throw TransactionException("Iceberg %s cannot commit this transaction atomically because it mixes "
+		                           "table updates with rename/drop requests",
+		                           backend.Name());
+	}
+	if (backend.Capabilities().atomic_catalog_commit) {
+		return;
+	}
+	//! The backend publishes each catalog request on its own: a transaction may contain only one
+	if (request == RequestType::VIEW || !created_views.empty() || !deleted_views.empty()) {
+		throw TransactionException("Iceberg %s cannot commit view changes atomically with other catalog "
+		                           "changes. Run each view create or drop in a separate transaction",
+		                           backend.Name());
+	}
+	throw TransactionException("Iceberg %s cannot commit this transaction atomically because the namespace "
+	                           "operation requires a separate REST request",
+	                           backend.Name());
+}
+
+case_insensitive_map_t<string> &IcebergTransaction::GetSchemaProperties(ClientContext &context,
+                                                                        const IcebergSchemaEntry &schema) {
+	auto &info = schema_properties[schema.name.GetIdentifierName()];
+	if (!info.properties_loaded) {
+		auto properties =
+		    catalog.GetBackend().LoadNamespaceProperties(context, IcebergNamespace(schema.namespace_items));
+		if (properties.error) {
+			properties.error->Throw();
+		}
+		info.properties = std::move(properties.value);
+		info.properties_loaded = true;
+	}
+	return info.properties;
+}
+
+SchemaPropertyUpdates &IcebergTransaction::GetOrCreateSchemaPropertyUpdates(const string &schema_name) {
+	auto it = schema_property_updates.find(schema_name);
+	if (it != schema_property_updates.end()) {
+		return it->second;
+	}
+	VerifyCanAddRequest(RequestType::NAMESPACE);
+	return schema_property_updates[schema_name];
+}
+
 IcebergTransactionAlterUpdate *IcebergTransaction::GetAlterUpdate() {
 	return std::get_if<IcebergTransactionAlterUpdate>(&transaction_update);
 }
@@ -206,23 +261,16 @@ void IcebergTransaction::RefreshRetryTables(IcebergTransactionAlterUpdate &alter
 }
 
 void IcebergTransaction::Commit() {
-	if (!HasTableUpdate() && created_schemas.Empty() && deleted_schemas.empty() && schema_property_updates.empty() &&
-	    created_views.empty() && deleted_views.empty()) {
-		// Read-only transactions have no catalog commit work; temporary vended storage secrets
-		// are left to transaction/session cleanup.
+	auto requests = CatalogRequestCount();
+	if (requests == 0) {
 		return;
 	}
-	// Unless the backend publishes everything together, views are not part of the atomic table commit. Validate
-	// the entire write set before any schema, table, or view request can reach the catalog.
 	auto &backend = catalog.GetBackend();
-	auto view_operations = created_views.size() + deleted_views.size();
-	if (!backend.Capabilities().atomic_catalog_commit && view_operations &&
-	    (view_operations > 1 || HasTableUpdate() || !created_schemas.Empty() || !deleted_schemas.empty() ||
-	     !schema_property_updates.empty())) {
-		CleanupFiles();
-		DropCreatedTables();
-		throw TransactionException("Iceberg %s cannot commit view changes atomically with other catalog "
-		                           "changes; commit each view create or drop separately",
+	if (!backend.Capabilities().atomic_catalog_commit && requests > 1) {
+		// Staging checks enforce this invariant. Fail closed before publishing if a write path missed a check.
+		Rollback();
+		throw TransactionException("Iceberg %s cannot commit this transaction atomically because it has "
+		                           "multiple pending catalog write requests",
 		                           backend.Name());
 	}
 
@@ -451,30 +499,18 @@ IcebergTransactionTableState &IcebergTransaction::GetOrCreateTransactionTableSta
 	return SetTransactionTableState(table_key, std::move(copy), IcebergTableStatus::ALIVE);
 }
 
-void IcebergTransaction::ThrowMixedTableChanges() const {
-	//! A transaction makes one kind of table change (the IcebergTransactionUpdate variant), whatever the backend
-	throw TransactionException("Iceberg %s cannot commit this transaction atomically because it mixes "
-	                           "table updates with rename/drop requests",
-	                           catalog.GetBackend().Name());
-}
-
 IcebergTransactionAlterUpdate &IcebergTransaction::GetOrCreateAlter() {
-	if (!HasTableUpdate()) {
-		transaction_update.emplace<IcebergTransactionAlterUpdate>(*this);
+	if (auto alter_update = GetAlterUpdate()) {
+		return *alter_update;
 	}
-	auto alter_update = GetAlterUpdate();
-	if (!alter_update) {
-		ThrowMixedTableChanges();
-	}
-	return *alter_update;
+	VerifyCanAddRequest(RequestType::TABLE);
+	return transaction_update.emplace<IcebergTransactionAlterUpdate>(*this);
 }
 
 IcebergTable &IcebergTransaction::DeleteTable(IcebergTable &table) {
+	VerifyCanAddRequest(RequestType::TABLE);
 	auto table_key = table.GetTableKey();
 	auto state = GetLatestTableState(table_key);
-	if (HasTableUpdate()) {
-		ThrowMixedTableChanges();
-	}
 
 	if (!state) {
 		state = GetOrCreateTransactionTableState(table);
@@ -486,11 +522,9 @@ IcebergTable &IcebergTransaction::DeleteTable(IcebergTable &table) {
 }
 
 IcebergTable &IcebergTransaction::RenameTable(IcebergTable &table, const string &new_name) {
+	VerifyCanAddRequest(RequestType::TABLE);
 	auto table_key = table.GetTableKey();
 	auto state = GetLatestTableState(table_key);
-	if (HasTableUpdate()) {
-		ThrowMixedTableChanges();
-	}
 
 	if (!state) {
 		state = GetOrCreateTransactionTableState(table);

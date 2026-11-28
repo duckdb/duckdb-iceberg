@@ -8,6 +8,8 @@
 #include "planning/pruning/iceberg_predicate.hpp"
 #include "storage/statistics/iceberg_variant_statistics.hpp"
 
+#include <cmath>
+
 namespace duckdb {
 
 namespace {
@@ -90,6 +92,17 @@ bool IsNaN(const Value &value) {
 
 } // namespace
 
+bool IcebergFilePruner::PartitionValuesMatch(const Value &left, const Value &right) {
+	if (!Value::NotDistinctFrom(left, right)) {
+		return false;
+	}
+	if (left.IsNull() || !left.type().IsFloating() || !right.type().IsFloating()) {
+		return true;
+	}
+	auto left_number = left.GetValue<double>();
+	return left_number != 0.0 || std::signbit(left_number) == std::signbit(right.GetValue<double>());
+}
+
 bool IcebergFilePruner::PartitionValuesMatchFilter(int32_t spec_id, const vector<IcebergPartitionInfo> &partition_info,
                                                    const unordered_map<int32_t, int64_t> &nan_value_counts,
                                                    const string &file_path, bool evaluate_strict,
@@ -113,6 +126,10 @@ bool IcebergFilePruner::PartitionValuesMatchFilter(int32_t spec_id, const vector
 	}
 
 	for (auto &field : partition_spec.fields) {
+		//! A void field is always NULL, regardless of the source column's value.
+		if (field.transform.Type() == IcebergTransformType::VOID_TRANSFORM) {
+			continue;
+		}
 		auto source_it = source_to_column_id.find(field.source_id);
 		if (source_it == source_to_column_id.end()) {
 			// Historical partition sources can be absent from the selected schema.
@@ -124,33 +141,34 @@ bool IcebergFilePruner::PartitionValuesMatchFilter(int32_t spec_id, const vector
 			continue;
 		}
 
-		IcebergPredicateStats stats;
 		auto it = partition_info_map.find(field.partition_field_id);
 		if (it == partition_info_map.end()) {
 			continue;
 		}
-		auto &partition_val = partition_info[it->second];
-		stats.lower_bound = partition_val.value;
-		stats.upper_bound = partition_val.value;
-		if (partition_val.value.IsNull()) {
-			stats.has_null = true;
-		} else {
-			//! Every transform maps NULL to NULL, so a file under a non-NULL partition value has no NULL rows here.
-			stats.has_null = false;
-			stats.has_not_null = true;
+		auto &partition_value = partition_info[it->second].value;
+		auto &source_column = IcebergTableSchema::GetFromColumnIndex(schema.columns, column_id, 0);
+		if (partition_value.type().id() == LogicalTypeId::VARCHAR && !partition_value.IsNull() &&
+		    field.transform.GetBoundsType(source_column.type).id() != LogicalTypeId::VARCHAR) {
+			// COPY's text could not be decoded in the write schema. Other fields and file metrics can still prune.
+			continue;
 		}
+		IcebergPredicateStats stats;
+		stats.lower_bound = partition_value;
+		stats.upper_bound = partition_value;
+		//! Every transform maps NULL to NULL, so a file under a non-NULL partition value has no NULL rows here.
+		stats.has_null = partition_value.IsNull();
+		stats.has_not_null = !stats.has_null;
 
 		auto nan_counts_it = nan_value_counts.find(field.source_id);
-		if (field.transform.Type() == IcebergTransformType::IDENTITY && !partition_val.value.IsNull()) {
+		if (field.transform.Type() == IcebergTransformType::IDENTITY && !stats.has_null) {
 			//! An identity partition is exact, even when the file has no NaN counts.
-			stats.has_nan = IsNaN(partition_val.value);
+			stats.has_nan = IsNaN(partition_value);
 		} else if (nan_counts_it != nan_value_counts.end()) {
 			stats.has_nan = nan_counts_it->second != 0;
 		}
 
 		auto match = IcebergPredicate::MatchBounds(context, *table_filter, stats, field.transform, evaluate_strict);
 		if (match == IcebergMetricsMatch::ROWS_CANNOT_MATCH) {
-			auto &source_column = IcebergTableSchema::GetFromColumnIndex(schema.columns, column_id, 0);
 			auto partition_value_raw_str = stats.lower_bound ? stats.lower_bound->ToString() : "NULL";
 			auto partition_value_transformed_str =
 			    stats.lower_bound ? field.transform.PartitionValueToString(*stats.lower_bound) : "NULL";
@@ -569,7 +587,7 @@ bool IcebergFilePruner::DeleteFileMatchesDataFile(const IcebergManifest &delete_
 			if (!delete_value || !data_value) {
 				return false;
 			}
-			if (!Value::NotDistinctFrom(*delete_value, *data_value)) {
+			if (!PartitionValuesMatch(*delete_value, *data_value)) {
 				return false;
 			}
 		}

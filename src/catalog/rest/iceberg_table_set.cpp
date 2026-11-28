@@ -380,6 +380,8 @@ IcebergTable &IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCat
                                               IcebergSchemaEntry &schema, CreateTableInfo &info) {
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 	auto &backend = catalog.GetBackend();
+	// An eager create publishes the table immediately. Validate the write set before issuing the request.
+	auto &alter_update = iceberg_transaction.GetOrCreateAlter();
 
 	auto binder = Binder::CreateBinder(context);
 	TableFunctionBinder property_binder(*binder, context, "format-version");
@@ -450,8 +452,7 @@ IcebergTable &IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCat
 	new_table.properties = bootstrap_metadata.table_properties;
 	new_table.location = bootstrap_metadata.location;
 	new_table.namespace_properties = [&]() -> const case_insensitive_map_t<string> & {
-		schema.LoadProperties(context);
-		return schema.schema_info.properties;
+		return IcebergTransaction::Get(context, catalog).GetSchemaProperties(context, schema);
 	};
 
 	IcebergEntryId id(IcebergNamespace(schema.namespace_items), table_name);
@@ -461,7 +462,6 @@ IcebergTable &IcebergTableSet::CreateNewEntry(ClientContext &context, IcebergCat
 	if (created.exists_in_catalog) {
 		iceberg_transaction.TableCreatedInCatalog(key, id, created.initial);
 	}
-	auto &alter_update = iceberg_transaction.GetOrCreateAlter();
 	auto &table_info = alter_update.CreateTable(key, IcebergTable(catalog, schema, table_name, created.initial));
 	backend.OnTableCreated(key, created.initial);
 
@@ -692,9 +692,7 @@ bool IcebergTableSet::TryGetLocalViewEntry(ClientContext &context, const string 
 	auto &ic_catalog = catalog.Cast<IcebergCatalog>();
 	auto &iceberg_transaction = IcebergTransaction::Get(context, catalog);
 	auto view_key = IcebergTable::GetTableKey(ic_catalog, schema.namespace_items, view_name);
-	auto created_it = iceberg_transaction.created_views.find(view_key);
-	// A staged replacement is visible after DROP/CREATE in the same transaction.
-	if (created_it == iceberg_transaction.created_views.end() && iceberg_transaction.deleted_views.count(view_key)) {
+	if (iceberg_transaction.deleted_views.count(view_key)) {
 		return true;
 	}
 
@@ -704,6 +702,7 @@ bool IcebergTableSet::TryGetLocalViewEntry(ClientContext &context, const string 
 		return true;
 	}
 
+	auto created_it = iceberg_transaction.created_views.find(view_key);
 	if (created_it != iceberg_transaction.created_views.end()) {
 		auto view_entry = make_uniq<ViewCatalogEntry>(catalog, schema, *created_it->second);
 		auto result = view_entry.get();

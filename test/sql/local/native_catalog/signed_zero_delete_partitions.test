@@ -1,0 +1,137 @@
+# name: test/sql/local/native_catalog/signed_zero_delete_partitions.test
+# description: Scans and partial rewrites scope equality and shared position deletes to the sign of zero
+# group: [native_catalog]
+
+require-env CATALOG_TEST_CONFIG_SETUP mock
+
+include test/sql/init_requires
+
+require json
+
+foreach type,delete_zero,other_zero FLOAT,0.0,-0.0 DOUBLE,-0.0,0.0
+
+statement ok
+CREATE TABLE my_datalake.default.zero_parts (id INTEGER, p {type})
+PARTITIONED BY (p) WITH ('format-version' = 2);
+
+# Two files in the delete partition qualify for compaction. The opposite sign has one file with the same IDs.
+loop file 0 3
+
+statement ok
+INSERT INTO my_datalake.default.zero_parts
+SELECT id, IF({file} < 2, '{delete_zero}', '{other_zero}')::{type} FROM range(1, 4) t(id);
+
+endloop
+
+# External writers can produce partition-scoped equality deletes and multi-file position deletes.
+statement ok
+COPY (SELECT 1 AS id) TO '{TEST_DIR}/zero_eq_{type}.parquet' (FORMAT PARQUET, FIELD_IDS {id: 1});
+
+statement ok
+COPY (SELECT 3 AS id) TO '{TEST_DIR}/zero_other_{type}.parquet' (FORMAT PARQUET, FIELD_IDS {id: 1});
+
+statement ok
+COPY (SELECT filename AS file_path, file_row_number AS pos FROM my_datalake.default.zero_parts
+      WHERE signbit(p) = signbit('{delete_zero}'::{type}) AND id = 2 ORDER BY file_path, pos)
+TO '{TEST_DIR}/zero_pos_{type}.parquet' (FORMAT PARQUET, FIELD_IDS {file_path: 2147483546, pos: 2147483545});
+
+statement ok
+COPY (
+	SELECT 1 AS status, 4::BIGINT AS snapshot_id, 4::BIGINT AS sequence_number, 4::BIGINT AS file_sequence_number,
+	       {content: IF(is_equality, 2, 1), file_path: file_name, file_format: 'PARQUET',
+	        partition: {p: IF(is_other, '{other_zero}', '{delete_zero}')::{type}},
+	        record_count: num_rows::BIGINT, file_size_in_bytes: file_size_bytes::BIGINT,
+	        equality_ids: CASE WHEN is_equality THEN [1] END} AS data_file
+	FROM (SELECT *, parse_filename(file_name) <> 'zero_pos_{type}.parquet' AS is_equality,
+	                parse_filename(file_name) = 'zero_other_{type}.parquet' AS is_other
+	      FROM parquet_file_metadata('{TEST_DIR}/zero_*_{type}.parquet'))
+) TO '{TEST_DIR}/zero_deletes_{type}.avro' (
+	FORMAT AVRO, METADATA {'schema-id': '0', 'partition-spec-id': '0', 'format-version': '2', 'content': 'deletes'},
+	FIELD_IDS {status: 0, snapshot_id: 1, sequence_number: 3, file_sequence_number: 4,
+	           data_file: {__duckdb_field_id: 2, content: 134, file_path: 100, file_format: 101,
+	                       partition: {__duckdb_field_id: 102, p: 1000}, record_count: 103, file_size_in_bytes: 104,
+	                       equality_ids: {__duckdb_field_id: 135, list: 136}}}
+);
+
+statement ok
+BEGIN;
+
+statement ok
+SET VARIABLE zero_data_list = (SELECT manifest_list FROM iceberg_snapshots(my_datalake.default.zero_parts)
+                               WHERE sequence_number = 3);
+
+# Older DuckDB writers could publish [+0, +0] even when the manifest contained both signs.
+statement ok
+SET VARIABLE positive_zero_bytes = from_hex(repeat('00', IF('{type}' = 'FLOAT', 4, 8)));
+
+statement ok
+COPY (
+	SELECT * FROM read_avro(getvariable('zero_data_list'))
+	UNION ALL BY NAME
+	SELECT filename AS manifest_path, size::BIGINT AS manifest_length, 0 AS partition_spec_id, 1 AS content,
+	       4::BIGINT AS sequence_number, 4::BIGINT AS min_sequence_number, 4::BIGINT AS added_snapshot_id,
+	       3 AS added_files_count, 0 AS existing_files_count, 0 AS deleted_files_count,
+	       4::BIGINT AS added_rows_count, 0::BIGINT AS existing_rows_count, 0::BIGINT AS deleted_rows_count,
+	       [{contains_null: false, contains_nan: false, lower_bound: getvariable('positive_zero_bytes'),
+	         upper_bound: getvariable('positive_zero_bytes')}] AS partitions
+	FROM read_blob('{TEST_DIR}/zero_deletes_{type}.avro')
+) TO '{TEST_DIR}/zero_list_{type}.avro' (
+	FORMAT AVRO, FIELD_IDS {manifest_path: 500, manifest_length: 501, partition_spec_id: 502,
+		content: 517, sequence_number: 515, min_sequence_number: 516, added_snapshot_id: 503,
+		added_files_count: 504, existing_files_count: 505, deleted_files_count: 506,
+		added_rows_count: 512, existing_rows_count: 513, deleted_rows_count: 514,
+		partitions: {__duckdb_field_id: 507, list: {__duckdb_field_id: 508,
+		             contains_null: 509, contains_nan: 518, lower_bound: 510, upper_bound: 511}}}
+);
+
+statement ok
+COMMIT;
+
+query I
+SELECT status FROM iceberg_test_catalog_request('POST', '/v1/namespaces/default/tables/zero_parts',
+	json_object('requirements', [], 'updates', [
+		json_object('action', 'add-snapshot', 'snapshot', json_object(
+			'snapshot-id', 4, 'sequence-number', 4, 'schema-id', 0, 'timestamp-ms', epoch_ms(current_timestamp),
+			'manifest-list', '{TEST_DIR}/zero_list_{type}.avro', 'summary', json_object('operation', 'delete'))),
+		json_object('action', 'set-snapshot-ref', 'ref-name', 'main', 'type', 'branch', 'snapshot-id', 4)]));
+----
+200
+
+query IT
+SELECT signbit(p) = signbit('{delete_zero}'::{type}), list(id ORDER BY id)
+FROM my_datalake.default.zero_parts GROUP BY ALL ORDER BY 1;
+----
+false	[1, 2]
+true	[3, 3]
+
+# The untouched file in the opposite partition must not keep the shared position delete alive.
+query III
+SELECT rewritten_data_files_count, added_data_files_count, removed_delete_files_count
+FROM iceberg_rewrite_data_files('my_datalake.default.zero_parts', min_input_files => 2);
+----
+2	1	1
+
+query TI
+SELECT content, count(*) FROM iceberg_metadata(my_datalake.default.zero_parts)
+WHERE content <> 'DATA' AND status <> 'DELETED' GROUP BY content;
+----
+EQUALITY_DELETES	2
+
+# Rewriting both signed partitions in one operation must still produce a separate file for each.
+query II
+SELECT rewritten_data_files_count, added_data_files_count
+FROM iceberg_rewrite_data_files('my_datalake.default.zero_parts', rewrite_all => true);
+----
+2	2
+
+query IT
+SELECT signbit(p) = signbit('{delete_zero}'::{type}), list(id ORDER BY id)
+FROM my_datalake.default.zero_parts GROUP BY ALL ORDER BY 1;
+----
+false	[1, 2]
+true	[3, 3]
+
+statement ok
+DROP TABLE my_datalake.default.zero_parts;
+
+endloop

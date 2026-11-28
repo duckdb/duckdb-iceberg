@@ -45,6 +45,8 @@ public:
 	                               optional_ptr<IcebergEqualityDeleteBounds> delete_bounds) const;
 	//! Built once per data file: every delete file considered for it is matched against the same values.
 	static partition_value_map_t PartitionValueMap(const IcebergDataFile &data_file);
+	//! Iceberg partition equality normalizes NaNs and distinguishes positive and negative zero.
+	static bool PartitionValuesMatch(const Value &left, const Value &right);
 	//! Whether any row of a data file of partition spec `spec_id`, whose partition tuple is `partition_info`, can pass
 	//! the filters, judged by its partition values alone: the first test of FileMatchesFilter, for a file known only
 	//! by its tuple (a scan task's partition_values). No NaN counts: an identity value is exact, and no other
