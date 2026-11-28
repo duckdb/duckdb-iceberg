@@ -1,4 +1,5 @@
 #include "iceberg_extension.hpp"
+#include "catalog/rest/iceberg_rest_backend.hpp"
 #include "execution/operator/iceberg_written_files.hpp"
 
 #include "duckdb/main/secret/secret_manager.hpp"

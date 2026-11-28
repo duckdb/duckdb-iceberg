@@ -10,8 +10,7 @@ namespace duckdb {
 NoneAuthorization::NoneAuthorization(AttachedDatabase &db) : IcebergAuthorization(db, IcebergAuthorizationType::NONE) {
 }
 
-unique_ptr<IcebergAuthorization> NoneAuthorization::FromAttachOptions(AttachedDatabase &db,
-                                                                      IcebergAttachOptions &input) {
+unique_ptr<IcebergAuthorization> NoneAuthorization::FromAttachOptions(AttachedDatabase &db, IcebergRestOptions &input) {
 	auto result = make_uniq<NoneAuthorization>(db);
 
 	// Parse extra_http_headers if provided directly in attach options

@@ -10,132 +10,44 @@
 #include "duckdb/storage/storage_extension.hpp"
 #include "duckdb/common/http_util.hpp"
 
-#include "catalog/rest/api/url_utils.hpp"
+#include "catalog/iceberg_catalog_backend.hpp"
 #include "catalog/rest/iceberg_schema_set.hpp"
-#include "catalog/rest/iceberg_table_metadata_cache.hpp"
-#include "catalog/rest/storage/iceberg_authorization.hpp"
 #include "common/iceberg_utils.hpp"
+#include "iceberg_attach.hpp"
 
 namespace duckdb {
-
-namespace rest_api_objects {
-class CatalogConfig;
-}
 
 class IcebergSchemaEntry;
 struct IcebergTable;
 
-class MetadataCacheValue {
-public:
-	MetadataCacheValue(timestamp_ms_t expire_timestamp_ms, shared_ptr<const IcebergLoadTableResponse> load_table_result,
-	                   string etag)
-	    : expire_timestamp_ms(expire_timestamp_ms), load_table_result(std::move(load_table_result)),
-	      etag(std::move(etag)) {
-	}
-
-public:
-	//! The timestamp until when this entry is valid
-	timestamp_ms_t expire_timestamp_ms;
-	//! The payload of the cache entry
-	shared_ptr<const IcebergLoadTableResponse> load_table_result;
-	string etag;
-};
-
-class LoadTableResultCache;
-
-//! Caller-owned state controlling whether a fetched result can enter the cache.
-//! The cache must outlive this state, which is kept separate from worker requests.
-class LoadTableCachePublication {
-public:
-	~LoadTableCachePublication();
-	bool TryPublish(shared_ptr<const IcebergLoadTableResponse> result, string etag);
-
-	//! An expired response may still be revalidated with its ETag.
-	shared_ptr<const IcebergLoadTableResponse> cached_result;
-	string etag;
-
-private:
-	friend class LoadTableResultCache;
-	explicit LoadTableCachePublication(string table_key) : table_key(std::move(table_key)) {
-	}
-	LoadTableCachePublication(const LoadTableCachePublication &) = delete;
-	LoadTableCachePublication &operator=(const LoadTableCachePublication &) = delete;
-
-	optional_ptr<LoadTableResultCache> cache;
-	string table_key;
-};
-
-class LoadTableResultCache {
-public:
-	LoadTableResultCache(IcebergAttachOptions &attach_options) : attach_options(attach_options) {
-	}
-
-public:
-	bool Get(ClientContext &context, const string &table_key,
-	         const std::function<void(shared_ptr<const IcebergLoadTableResponse>)> &callback,
-	         bool validate_cache = true) {
-		shared_ptr<const IcebergLoadTableResponse> response;
-		{
-			annotated_lock_guard<annotated_mutex> guard(lock);
-			auto it = tables.find(table_key);
-			if (it == tables.end()) {
-				return false;
-			}
-			auto transaction_start_ms = IcebergUtils::GetTransactionStartTimeMS(context);
-			if (validate_cache && transaction_start_ms > it->second.expire_timestamp_ms) {
-				return false;
-			}
-			response = it->second.load_table_result;
-		}
-		// Metadata parsing (including authoritative file I/O) never holds the catalog-wide lock.
-		callback(std::move(response));
-		return true;
-	}
-	//! Create publication state before fetching. A later fetch supersedes earlier loads for the same key.
-	unique_ptr<LoadTableCachePublication> BeginLoad(const string &table_key);
-	//! Authoritative publication (e.g. staged creation) also invalidates outstanding fetches.
-	void SetOrOverwrite(const string &table_key, shared_ptr<const IcebergLoadTableResponse> load_table_result);
-
-	//! Evict only if the table was initialized from the result that is still cached for its key.
-	void EvictIfCurrent(const IcebergTable &table);
-
-private:
-	friend class LoadTableCachePublication;
-	struct PendingLoads {
-		optional_ptr<LoadTableCachePublication> latest;
-		idx_t count = 0;
-	};
-	bool TryPublish(LoadTableCachePublication &publication, shared_ptr<const IcebergLoadTableResponse> result,
-	                string etag);
-	void Release(LoadTableCachePublication &publication);
-	void InvalidateLoads(const string &table_key) DUCKDB_REQUIRES(lock);
-	void Store(const string &table_key, shared_ptr<const IcebergLoadTableResponse> result, string etag)
-	    DUCKDB_REQUIRES(lock);
-
-	IcebergAttachOptions &attach_options;
-	annotated_mutex lock;
-	unordered_map<string, MetadataCacheValue> tables DUCKDB_GUARDED_BY(lock);
-	unordered_map<string, PendingLoads> pending_loads DUCKDB_GUARDED_BY(lock);
-};
-
 class IcebergCatalog : public Catalog {
 public:
-	explicit IcebergCatalog(AttachedDatabase &db_p, AccessMode access_mode,
-	                        unique_ptr<IcebergAuthorization> auth_handler, IcebergAttachOptions &attach_options,
-	                        const optional<Identifier> &default_schema);
+	explicit IcebergCatalog(AttachedDatabase &db_p, AccessMode access_mode, IcebergAttachOptions &attach_options,
+	                        string attach_path, unique_ptr<IcebergCatalogBackend> backend);
 	~IcebergCatalog() override;
 
 public:
 	static unique_ptr<SecretEntry> GetStorageSecret(ClientContext &context, const string &secret_name);
 	static unique_ptr<SecretEntry> GetIcebergSecret(ClientContext &context, const string &secret_name);
 	static unique_ptr<SecretEntry> GetHTTPSecret(ClientContext &context, const string &secret_name);
-	void ParsePrefix();
-	void Configure(ClientContext &context, const rest_api_objects::CatalogConfig &config,
-	               IcebergEndpointType endpoint_type);
-	IRCEndpointBuilder GetBaseUrl() const;
-	string GetWarehouse() const {
-		return warehouse;
+	//! The backend that talks to the catalog service
+	IcebergCatalogBackend &GetBackend() const {
+		return *backend;
 	}
+	//! Table properties the catalog applies to all of its tables
+	const case_insensitive_map_t<string> &GetCatalogProperties() const {
+		return GetBackend().GetCatalogProperties();
+	}
+	//! The backend's credential vending, if it vends storage credentials
+	optional_ptr<IcebergCredentialVending> GetCredentialVending() const {
+		return GetBackend().GetCredentialVending();
+	}
+	//! The backend's server-side scan planning, if it plans scans
+	optional_ptr<IcebergServerScanPlanning> GetServerScanPlanning() const {
+		return GetBackend().GetServerScanPlanning();
+	}
+	//! The key that identifies a table or view of this catalog in caches and transactions
+	string GetEntryKey(const vector<string> &namespace_items, const string &name) const;
 	//! Whether or not this catalog should search a specific type with the standard priority
 	CatalogLookupBehavior CatalogTypeLookupRule(CatalogType type) const override {
 		switch (type) {
@@ -195,9 +107,6 @@ public:
 	unique_ptr<LogicalOperator> BindCreateIndex(Binder &binder, CreateStatement &stmt, TableCatalogEntry &table,
 	                                            unique_ptr<LogicalOperator> plan) override;
 	DatabaseSize GetDatabaseSize(ClientContext &context) override;
-	void AddDefaultSupportedEndpoints();
-	void AddS3TablesEndpoints();
-	void AddGlueEndpoints();
 	//! Whether or not this is an in-memory Iceberg database
 	bool InMemory() override;
 	string GetDBPath() override;
@@ -210,33 +119,20 @@ public:
 
 public:
 	AccessMode access_mode;
-	unique_ptr<IcebergAuthorization> auth_handler;
-	//! Base URI of the REST catalog
-	string base_uri;
-	//! version
-	const string version;
-	//! optional prefix path components
-	vector<string> prefix;
-	string namespace_separator = "\x1f";
 	//! attach options
 	IcebergAttachOptions attach_options;
 	//! Optionally (user-)provided default schema to use
 	optional<Identifier> default_schema;
-	case_insensitive_map_t<string> catalog_properties;
 
 private:
-	IcebergEndpointType endpoint_type = IcebergEndpointType::INVALID;
 	//! Original client selector, used for ATTACH OR REPLACE comparisons.
 	const string attach_path;
-	//! warehouse
-	string warehouse;
 	//! Normalized attach options (after core stripping) used to detect a conflicting ATTACH OR REPLACE
 	unordered_map<string, Value> normalized_attach_options;
+	unique_ptr<IcebergCatalogBackend> backend;
 
 public:
-	unordered_set<string> supported_urls;
 	IcebergSchemaSet schemas;
-	LoadTableResultCache table_request_cache;
 };
 
 } // namespace duckdb

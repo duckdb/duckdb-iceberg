@@ -1,5 +1,6 @@
 #pragma once
 
+#include "catalog/iceberg_catalog_types.hpp"
 #include "core/metadata/iceberg_table_metadata.hpp"
 #include "rest_catalog/objects/load_table_result.hpp"
 #include "duckdb/common/mutex.hpp"
@@ -12,12 +13,15 @@ struct IcebergTable;
 //! a 304 retains this owner. Never shared between catalog/table cache keys.
 //! Retains at most one parsed payload, with no version map. Replacement/eviction drops the cache's
 //! owner; in-flight requests and readers can keep the generation alive independently.
-class IcebergLoadTableResponse {
+class IcebergLoadTableResponse : public IcebergLoadedTable {
 public:
-	explicit IcebergLoadTableResponse(rest_api_objects::LoadTableResult result) : result(std::move(result)) {
-	}
+	explicit IcebergLoadTableResponse(rest_api_objects::LoadTableResult result);
 
-	shared_ptr<const IcebergTableMetadata> GetMetadata(ClientContext &context, const IcebergTable &table) const;
+	const rest_api_objects::TableMetadata &GetSpecMetadata() const override {
+		return result.metadata;
+	}
+	shared_ptr<const IcebergTableMetadata> GetMetadata(ClientContext &context,
+	                                                   const IcebergTable &table) const override;
 
 	const rest_api_objects::LoadTableResult result;
 

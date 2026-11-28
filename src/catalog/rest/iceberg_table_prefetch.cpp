@@ -23,7 +23,7 @@
 namespace duckdb {
 
 IcebergTablePrefetch::IcebergTablePrefetch(ClientContext &context, IcebergCatalog &catalog)
-    : executor(context, catalog) {
+    : executor(context, catalog.GetBackend()) {
 }
 
 IcebergTablePrefetch::~IcebergTablePrefetch() {
@@ -235,21 +235,21 @@ void IcebergTablePrefetch::ScheduleTables(ClientContext &context, IcebergCatalog
 		if (existing && existing->pending.count(table_key)) {
 			continue;
 		}
-		if (catalog.attach_options.max_table_staleness_micros.IsValid() &&
-		    catalog.table_request_cache.Get(context, table_key, [](shared_ptr<const IcebergLoadTableResponse>) {})) {
+		auto &backend = catalog.GetBackend();
+		if (backend.GetCachedTable(context, table_key)) {
 			continue;
 		}
 		auto &prefetch = transaction.GetTablePrefetch(context);
 		PendingLoad load;
-		load.publication = catalog.table_request_cache.BeginLoad(table_key);
-		load.result = prefetch.executor.Schedule(
-		    IcebergLoadTableRequest(schema.namespace_items, table_name, load.publication.get()));
+		load.load = backend.CreateTableLoad(
+		    context, IcebergEntryId(IcebergNamespace(schema.namespace_items), table_name), table_key);
+		load.result = prefetch.executor.Schedule(IcebergLoadTableOp {load.load});
 		prefetch.pending.emplace(std::move(table_key), std::move(load));
 	}
 }
 
-bool IcebergTablePrefetch::TryTakeResult(const string &table_key, IcebergLoadTableResult &result,
-                                         unique_ptr<LoadTableCachePublication> &publication) {
+bool IcebergTablePrefetch::TryTakeResult(const string &table_key, IcebergLoadTableOp::Result &result,
+                                         shared_ptr<IcebergTableLoad> &table_load) {
 	auto entry = pending.find(table_key);
 	if (entry == pending.end()) {
 		return false;
@@ -266,7 +266,7 @@ bool IcebergTablePrefetch::TryTakeResult(const string &table_key, IcebergLoadTab
 		//! The caller requests the table itself
 		return false;
 	}
-	publication = std::move(load.publication);
+	table_load = std::move(load.load);
 	return true;
 }
 

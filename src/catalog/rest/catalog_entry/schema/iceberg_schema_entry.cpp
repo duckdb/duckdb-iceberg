@@ -38,7 +38,9 @@ namespace duckdb {
 
 IcebergSchemaEntry::IcebergSchemaEntry(Catalog &catalog, CreateSchemaInfo &info)
     : SchemaCatalogEntry(catalog, info),
-      namespace_items(IRCAPI::ParseSchemaName(info.SchemaName().GetIdentifierName())), exists(true), tables(*this) {
+      namespace_items(
+          catalog.Cast<IcebergCatalog>().GetBackend().ParseNamespace(info.SchemaName().GetIdentifierName()).levels),
+      exists(true), tables(*this) {
 }
 
 IcebergSchemaEntry::~IcebergSchemaEntry() {
@@ -251,7 +253,7 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::CreateView(CatalogTransaction tra
 
 	// The view is only sent at commit, so reject catalogs without a create view endpoint here.
 	const auto &ic_catalog = catalog.Cast<IcebergCatalog>();
-	if (!ic_catalog.supported_urls.count("POST /v1/{prefix}/namespaces/{namespace}/views")) {
+	if (!ic_catalog.GetBackend().Capabilities().create_views) {
 		throw NotImplementedException("This Iceberg REST catalog server does not support creating views");
 	}
 
@@ -1317,7 +1319,7 @@ optional_ptr<CatalogEntry> IcebergSchemaEntry::LookupEntry(CatalogTransaction tr
 			return view_entry;
 		}
 		// verify the schema exists
-		if (!IRCAPI::VerifySchemaExistence(context, ic_catalog, name.GetIdentifierName())) {
+		if (!ic_catalog.GetBackend().NamespaceExists(context, IcebergNamespace(namespace_items))) {
 			// set exists to false here
 			// we would like to throw an error, but this code is also called when listing schemas,
 			// and throwing an error will abort the listing process.

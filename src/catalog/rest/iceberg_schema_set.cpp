@@ -4,7 +4,6 @@
 #include "duckdb/parser/parsed_data/drop_info.hpp"
 #include "duckdb/catalog/catalog.hpp"
 
-#include "catalog/rest/api/catalog_api.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/iceberg_request_executor.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
@@ -69,7 +68,8 @@ optional_ptr<CatalogEntry> IcebergSchemaSet::GetEntry(ClientContext &context, co
 		auto lookup_name = Identifier(name);
 		if (lookup_name == default_schema) {
 			// Verify the default schema does exist
-			if (!IRCAPI::VerifySchemaExistence(context, ic_catalog, name)) {
+			auto &backend = ic_catalog.GetBackend();
+			if (!backend.NamespaceExists(context, backend.ParseNamespace(name))) {
 				if (if_not_found == OnEntryNotFound::RETURN_NULL) {
 					return nullptr;
 				}
@@ -155,8 +155,8 @@ void IcebergSchemaSet::LoadEntriesInternal(ClientContext &context) {
 		return;
 	}
 	// The local executor drains on scope exit; the task retains its result storage until it finishes.
-	IcebergRequestExecutor executor(context, ic_catalog);
-	auto result = executor.Schedule(IcebergListSchemasRequest({}));
+	IcebergRequestExecutor executor(context, ic_catalog.GetBackend());
+	auto result = executor.Schedule(IcebergListNamespacesOp {IcebergNamespace()});
 	auto schemas = executor.WaitAndTakeResult(*result);
 	if (context.IsInterrupted()) {
 		throw InterruptException();
@@ -165,18 +165,18 @@ void IcebergSchemaSet::LoadEntriesInternal(ClientContext &context) {
 	iceberg_transaction.called_list_schemas = true;
 }
 
-void IcebergSchemaSet::ApplyListResult(IcebergListSchemasResult schemas) {
+void IcebergSchemaSet::ApplyListResult(vector<IcebergNamespace> schemas) {
 	for (auto &schema : schemas) {
-		if (schema.items.empty() ||
-		    std::any_of(schema.items.begin(), schema.items.end(), [](const string &item) { return item.empty(); })) {
+		if (schema.levels.empty() ||
+		    std::any_of(schema.levels.begin(), schema.levels.end(), [](const string &item) { return item.empty(); })) {
 			throw InvalidConfigurationException("Iceberg catalog returned an empty namespace name");
 		}
 		CreateSchemaInfo info;
-		info.SetQualifiedName(QualifiedName(info.GetQualifiedName().Catalog(), Identifier(GetSchemaName(schema.items)),
+		info.SetQualifiedName(QualifiedName(info.GetQualifiedName().Catalog(), Identifier(GetSchemaName(schema.levels)),
 		                                    info.GetQualifiedName().Name()));
 		info.internal = false;
 		auto schema_entry = make_shared_ptr<IcebergSchemaEntry>(catalog, info);
-		schema_entry->namespace_items = std::move(schema.items);
+		schema_entry->namespace_items = std::move(schema.levels);
 		CreateEntryInternal(std::move(schema_entry));
 	}
 }

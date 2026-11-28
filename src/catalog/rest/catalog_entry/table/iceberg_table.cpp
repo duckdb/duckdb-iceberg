@@ -75,8 +75,9 @@ vector<string> IcebergTable::GetS3EncryptionTypes() const {
 	if (it != config.end()) {
 		sse_types.push_back(it->second);
 	} else {
-		auto catalog_it = catalog.catalog_properties.find(SSE_TYPE);
-		if (catalog_it != catalog.catalog_properties.end()) {
+		auto &catalog_properties = catalog.GetCatalogProperties();
+		auto catalog_it = catalog_properties.find(SSE_TYPE);
+		if (catalog_it != catalog_properties.end()) {
 			sse_types.push_back(catalog_it->second);
 		}
 	}
@@ -256,35 +257,14 @@ IRCAPITableCredentials IcebergTable::GetVendedCredentials(ClientContext &context
 }
 
 IRCAPITableCredentials
-IcebergTable::GetVendedCredentials(ClientContext &context,
-                                   const vector<rest_api_objects::StorageCredential> &storage_credentials,
+IcebergTable::GetVendedCredentials(ClientContext &context, const vector<IcebergStorageCredential> &storage_credentials,
                                    optional_ptr<const case_insensitive_map_t<string>> config_override) const {
 	IRCAPITableCredentials result;
-	auto schema_component = IRCPathComponent::NamespaceComponent(schema.namespace_items, catalog.namespace_separator);
 	auto secret_base_name = UUID::ToString(UUID::GenerateRandomUUID());
 	case_insensitive_map_t<Value> user_defaults;
-	if (catalog.auth_handler->type == IcebergAuthorizationType::SIGV4) {
-		auto &sigv4_auth = catalog.auth_handler->Cast<SIGV4Authorization>();
-		auto catalog_credentials = IcebergCatalog::GetStorageSecret(context, sigv4_auth.secret);
-		// start with the credentials needed for the catalog and overwrite information contained
-		// in the vended credentials. We do it this way to maintain the region info from the catalog credentials
-		if (catalog_credentials) {
-			auto kv_secret = dynamic_cast<const KeyValueSecret &>(*catalog_credentials->secret);
-			for (auto &option : kv_secret.secret_map) {
-				// Ignore refresh info.
-				// if the credentials are the same as for the catalog, then refreshing the catalog secret is enough
-				// otherwise the vended credentials contain their own information for refreshing.
-				if (option.first != "refresh_info" && option.first != "refresh" && option.first != "expiration_epoch") {
-					user_defaults.emplace(option);
-				}
-			}
-		}
-		if (!sigv4_auth.sigv4_region.empty()) {
-			user_defaults.emplace("region", Value(sigv4_auth.sigv4_region));
-		}
-	}
-	if (!catalog.attach_options.default_region.empty()) {
-		user_defaults["region"] = catalog.attach_options.default_region;
+	auto vending = catalog.GetCredentialVending();
+	if (vending) {
+		user_defaults = vending->GetSecretDefaults(context);
 	}
 
 	// Detect storage type from metadata location
@@ -720,7 +700,8 @@ static void AddHTTPSecretsToOptions(SecretEntry &http_secret_entry, case_insensi
 
 void IcebergTable::LoadCredentials(ClientContext &context) const {
 	VerifyReadEncryptionSupported();
-	if (catalog.attach_options.access_mode != IRCAccessDelegationMode::VENDED_CREDENTIALS) {
+	auto vending = catalog.GetCredentialVending();
+	if (!vending || !vending->VendsCredentials()) {
 		// assume secret already exists
 		return;
 	}
@@ -748,7 +729,8 @@ static void StoreVendedSecret(ClientContext &context, CreateSecretInput &info) {
 
 void IcebergTable::LoadCredentials(ClientContext &context, IRCAPITableCredentials table_credentials) const {
 	auto &transaction = IcebergTransaction::Get(context, catalog);
-	if (catalog.attach_options.access_mode != IRCAccessDelegationMode::VENDED_CREDENTIALS) {
+	auto vending = catalog.GetCredentialVending();
+	if (!vending || !vending->VendsCredentials()) {
 		// assume secret already exists
 		return;
 	}
@@ -756,7 +738,7 @@ void IcebergTable::LoadCredentials(ClientContext &context, IRCAPITableCredential
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto metadata_path = GetMetadata().GetMetadataPath(fs);
 
-	auto http_secret_entry = IcebergTableSecretProvider::GetHTTPSecretForCatalog(context, catalog);
+	auto http_secret_entry = vending->GetHTTPSecret(context);
 
 	if (!table_credentials.config) {
 		for (auto &info : table_credentials.storage_credentials) {
@@ -805,34 +787,7 @@ void IcebergTable::LoadCredentials(ClientContext &context, IRCAPITableCredential
 	                 IcebergLogType::Redact(context, info.name.GetIdentifierName()),
 	                 IcebergLogType::Redact(context, info.scope), scope_source);
 
-	if (StringUtil::StartsWith(catalog.base_uri, "glue")) {
-		auto &sigv4 = catalog.auth_handler->Cast<SIGV4Authorization>();
-		auto secret_entry = IcebergCatalog::GetStorageSecret(context, sigv4.secret);
-		auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
-
-		//! Override the endpoint if 'glue' is the host of the catalog
-		auto region = kv_secret.TryGetValue("region").ToString();
-		auto endpoint = "s3." + region + ".amazonaws.com";
-		info.options["endpoint"] = endpoint;
-	} else if (StringUtil::StartsWith(catalog.base_uri, "s3tables")) {
-		auto &sigv4 = catalog.auth_handler->Cast<SIGV4Authorization>();
-		auto secret_entry = IcebergCatalog::GetStorageSecret(context, sigv4.secret);
-		auto kv_secret = dynamic_cast<const KeyValueSecret &>(*secret_entry->secret);
-
-		//! Override all the options if 's3tables' is the host of the catalog
-		auto substrings = StringUtil::Split(catalog.GetWarehouse(), ":");
-		D_ASSERT(substrings.size() == 6);
-		auto region = substrings[3];
-		auto endpoint = "s3." + region + ".amazonaws.com";
-
-		info.options = {{"key_id", kv_secret.TryGetValue("key_id").ToString()},
-		                {"secret", kv_secret.TryGetValue("secret").ToString()},
-		                {"session_token", kv_secret.TryGetValue("session_token").IsNull()
-		                                      ? ""
-		                                      : kv_secret.TryGetValue("session_token").ToString()},
-		                {"region", region},
-		                {"endpoint", endpoint}};
-	}
+	vending->AdjustConfigSecret(context, info);
 
 	if (http_secret_entry) {
 		IcebergTableSecretProvider::AddHTTPSecretsToOptions(*http_secret_entry, info.options);
@@ -859,11 +814,7 @@ optional_ptr<CatalogEntry> IcebergTable::GetLatestSchema() {
 
 string IcebergTable::GetTableKey(const IcebergCatalog &catalog, const vector<string> &namespace_items,
                                  const string &table_name) {
-	if (namespace_items.empty()) {
-		return table_name;
-	}
-	auto schema_component = IRCPathComponent::NamespaceComponent(namespace_items, catalog.namespace_separator);
-	return schema_component.encoded + "." + table_name;
+	return catalog.GetEntryKey(namespace_items, table_name);
 }
 
 string IcebergTable::GetTableKey() const {
@@ -888,23 +839,24 @@ bool IcebergTable::HasTransactionUpdates() const {
 }
 
 void IcebergTable::RefreshFromCatalog(ClientContext &context) {
-	auto publication = catalog.table_request_cache.BeginLoad(GetTableKey());
-	ApplyRefreshResult(context, IRCAPI::GetTable(context, catalog, schema, name, publication.get()), *publication);
+	auto load = catalog.GetBackend().CreateTableLoad(
+	    context, IcebergEntryId(IcebergNamespace(schema.namespace_items), name), GetTableKey());
+	auto result = load->Execute(context);
+	ApplyRefreshResult(context, std::move(result), *load);
 }
 
-void IcebergTable::ApplyRefreshResult(ClientContext &context, IcebergLoadTableResult get_table_result,
-                                      LoadTableCachePublication &publication) {
-	if (get_table_result.error_) {
-		throw HTTPException(
-		    StringUtil::Format("GetTableInformation endpoint returned response code %s with message \"%s\"",
-		                       EnumUtil::ToString(get_table_result.status_), get_table_result.error_->_error.message));
+void IcebergTable::ApplyRefreshResult(ClientContext &context,
+                                      IcebergCatalogResult<shared_ptr<const IcebergLoadedTable>> result,
+                                      IcebergTableLoad &load) {
+	if (result.error) {
+		result.error->Throw();
 	}
-	auto load_table_result = get_table_result.result_;
+	auto load_table_result = result.value;
 	schema_versions.clear();
 	dummy_entry.reset();
 	InitializeFromCatalogResponse(context, load_table_result);
 	initialization_source = nullptr;
-	if (publication.TryPublish(std::move(get_table_result.result_), std::move(get_table_result.etag))) {
+	if (load.Publish(std::move(result.value))) {
 		initialization_source = load_table_result;
 	}
 }
@@ -913,9 +865,7 @@ IcebergTable IcebergTable::Copy() const {
 	auto clone = IcebergTable(catalog, schema, name, GetMetadataOwner());
 	clone.config = config;
 	clone.initialization_source = initialization_source;
-	for (auto &credential : storage_credentials) {
-		clone.storage_credentials.push_back(credential.Copy());
-	}
+	clone.storage_credentials = storage_credentials;
 	return clone;
 }
 
@@ -1026,8 +976,9 @@ IcebergTable::IcebergTable(IcebergCatalog &catalog, IcebergSchemaEntry &schema, 
 }
 
 IcebergTable::IcebergTable(IcebergCatalog &catalog, IcebergSchemaEntry &schema, const string &name,
-                           shared_ptr<const IcebergLoadTableResponse> load_table_result)
-    : IcebergTable(catalog, schema, name, IcebergTableMetadata::FromTableMetadata(load_table_result->result.metadata)) {
+                           shared_ptr<const IcebergLoadedTable> load_table_result)
+    : IcebergTable(catalog, schema, name,
+                   IcebergTableMetadata::FromTableMetadata(load_table_result->GetSpecMetadata())) {
 	SetLoadTableResult(std::move(load_table_result));
 }
 
@@ -1045,59 +996,8 @@ IcebergTransactionData &IcebergTable::GetOrCreateTransactionData(IcebergTransact
 	return *transaction_data;
 }
 
-shared_ptr<const IcebergTableMetadata> IcebergLoadTableResponse::GetMetadata(ClientContext &context,
-                                                                             const IcebergTable &table) const {
-	// Resolve the callback on every initialization, even when the file's parsed contents are already cached.
-	// Registration and authorization remain connection/transaction-specific.
-	optional<OpenFileInfo> metadata_file;
-	const bool use_metadata_file = table.catalog.attach_options.use_metadata_location && result.metadata_location;
-	auto log_fallback = [&](const std::exception &ex) {
-		DUCKDB_LOG(context, IcebergLogType,
-		           "Could not load table metadata from metadata-location '%s': %s - falling back to the "
-		           "metadata embedded in the catalog response",
-		           *result.metadata_location, ex.what());
-	};
-	if (use_metadata_file) {
-		try {
-			metadata_file = IcebergFileCredentialsCallback::GetFileInfo(context, table, *result.metadata_location);
-		} catch (std::exception &ex) {
-			log_fallback(ex);
-		}
-	}
-	lock_guard<mutex> guard(lock);
-	if (metadata && (!use_metadata_file || metadata_file)) {
-		DUCKDB_LOG(context, IcebergLogType,
-		           "Iceberg metadata phase=table_metadata_cache scope=catalog_initialization parsed_metadata_hits=1 "
-		           "table_metadata_conversions=0 snapshots_converted=0");
-		return metadata;
-	}
-	unique_ptr<rest_api_objects::TableMetadata> file_metadata;
-	if (metadata_file) {
-		try {
-			auto &fs = FileSystem::GetFileSystem(context);
-			auto caching_fs = make_shared_ptr<CachingFileSystemWrapper>(fs, *context.db);
-			file_metadata = make_uniq<rest_api_objects::TableMetadata>(
-			    IcebergTableMetadata::Parse(*metadata_file, *caching_fs, "none"));
-		} catch (std::exception &ex) {
-			log_fallback(ex);
-		}
-	}
-	auto parsed = make_shared_ptr<const IcebergTableMetadata>(
-	    IcebergTableMetadata::FromTableMetadata(file_metadata ? *file_metadata : result.metadata));
-	DUCKDB_LOG(context, IcebergLogType,
-	           "Iceberg metadata phase=table_metadata_conversion scope=catalog_initialization "
-	           "table_metadata_conversions=1 snapshots_converted=%llu",
-	           parsed->snapshots.size());
-	// A transient file failure does not establish the effective authoritative version. Retry on the next
-	// read, and never substitute this fallback for a successfully parsed metadata-location payload.
-	if (!use_metadata_file || file_metadata) {
-		metadata = parsed;
-	}
-	return parsed;
-}
-
 void IcebergTable::InitializeFromCatalogResponse(ClientContext &context,
-                                                 shared_ptr<const IcebergLoadTableResponse> load_table_result) {
+                                                 shared_ptr<const IcebergLoadedTable> load_table_result) {
 	table_metadata = load_table_result->GetMetadata(context, *this);
 	mutable_metadata.reset();
 	SetLoadTableResult(std::move(load_table_result));
@@ -1105,19 +1005,11 @@ void IcebergTable::InitializeFromCatalogResponse(ClientContext &context,
 	InitSchemaVersions();
 }
 
-void IcebergTable::SetLoadTableResult(shared_ptr<const IcebergLoadTableResponse> response) {
+void IcebergTable::SetLoadTableResult(shared_ptr<const IcebergLoadedTable> response) {
 	initialization_source = std::move(response);
-	auto &load_table_result = initialization_source->result;
-	config.clear();
-	if (auto &val = load_table_result.config) {
-		config = *val;
-	}
-	storage_credentials.clear();
-	if (auto &credentials = load_table_result.storage_credentials) {
-		for (auto &credential : *credentials) {
-			storage_credentials.push_back(credential.Copy());
-		}
-	}
+	auto &access = initialization_source->GetAccess();
+	config = access.config;
+	storage_credentials = access.storage_credentials;
 }
 
 } // namespace duckdb

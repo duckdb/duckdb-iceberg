@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "catalog/rest/api/catalog_api.hpp"
+#include "catalog/iceberg_catalog_backend.hpp"
 #include "catalog/rest/iceberg_request_executor.hpp"
 #include "duckdb/common/unordered_map.hpp"
 #include "duckdb/parser/qualified_name.hpp"
@@ -18,7 +18,6 @@ namespace duckdb {
 class IcebergCatalog;
 class IcebergTransaction;
 class SQLStatement;
-class LoadTableCachePublication;
 
 //! Binding resolves the tables of a query one at a time, and each lookup of an Iceberg table waits for its own
 //! LoadTable request. Before binding, the planner extension's pre-bind function passes the statement, and this
@@ -36,8 +35,7 @@ public:
 	static void PrefetchTables(ClientContext &context, IcebergCatalog &catalog, const vector<QualifiedName> &tables);
 	//! Take the response of a prefetched LoadTable request for `table_key`, waiting for it if needed.
 	//! Returns false when no request was scheduled for the table, or when it failed to run
-	bool TryTakeResult(const string &table_key, IcebergLoadTableResult &result,
-	                   unique_ptr<LoadTableCachePublication> &publication);
+	bool TryTakeResult(const string &table_key, IcebergLoadTableOp::Result &result, shared_ptr<IcebergTableLoad> &load);
 
 private:
 	static void ScheduleTables(ClientContext &context, IcebergCatalog &catalog, IcebergTransaction &transaction,
@@ -45,8 +43,8 @@ private:
 
 private:
 	struct PendingLoad {
-		unique_ptr<LoadTableCachePublication> publication;
-		shared_ptr<IcebergRequestResult<IcebergLoadTableResult>> result;
+		shared_ptr<IcebergTableLoad> load;
+		shared_ptr<IcebergRequestResult<IcebergLoadTableOp::Result>> result;
 	};
 
 	IcebergRequestExecutor executor;

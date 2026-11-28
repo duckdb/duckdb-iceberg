@@ -11,10 +11,10 @@
 
 namespace duckdb {
 
-class IcebergCatalog;
+class IcebergCatalogBackend;
 
 //! One task publishes this result and one caller consumes it. Completion is independent of executor draining.
-//! The task retains the result holder. The execution context and catalog must outlive the executor's tasks.
+//! The task retains the result holder. The execution context and backend must outlive the executor's tasks.
 template <class RESULT>
 class IcebergRequestResult {
 public:
@@ -68,16 +68,16 @@ private:
 	ErrorData error;
 };
 
-//! Executes an owned request without retaining catalog entries or publishing its response.
+//! Executes an owned request on the catalog backend, without retaining catalog entries or publishing its response.
 //! Scheduling, draining, and handling request failures remain the caller's responsibility.
 template <class REQUEST>
 class IcebergRequestTask : public BaseExecutorTask {
 public:
 	using Result = typename REQUEST::Result;
 
-	IcebergRequestTask(TaskExecutor &executor, ClientContext &context, IcebergCatalog &catalog, REQUEST request,
+	IcebergRequestTask(TaskExecutor &executor, ClientContext &context, IcebergCatalogBackend &backend, REQUEST request,
 	                   shared_ptr<IcebergRequestResult<Result>> result)
-	    : BaseExecutorTask(executor), context(context), catalog(catalog), request(std::move(request)),
+	    : BaseExecutorTask(executor), context(context), backend(backend), request(std::move(request)),
 	      result(std::move(result)) {
 	}
 
@@ -87,7 +87,7 @@ public:
 			throw InterruptException();
 		}
 		try {
-			result->SetResult(request.Execute(context, catalog));
+			result->SetResult(request.Execute(context, backend));
 		} catch (std::exception &ex) {
 			// Let the caller decide whether a request failure aborts the operation or is only a warning.
 			result->SetError(ErrorData(ex));
@@ -107,7 +107,7 @@ public:
 
 private:
 	ClientContext &context;
-	IcebergCatalog &catalog;
+	IcebergCatalogBackend &backend;
 	REQUEST request;
 	shared_ptr<IcebergRequestResult<Result>> result;
 };

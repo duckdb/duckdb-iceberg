@@ -13,7 +13,6 @@
 #include "catalog/rest/iceberg_table_metadata_cache.hpp"
 
 namespace duckdb {
-class LoadTableCachePublication;
 class IcebergTableSchema;
 class ParsedExpression;
 struct CreateTableInfo;
@@ -30,7 +29,7 @@ public:
 	IcebergTable(IcebergCatalog &catalog, IcebergSchemaEntry &schema, const string &name,
 	             IcebergTableMetadata metadata);
 	IcebergTable(IcebergCatalog &catalog, IcebergSchemaEntry &schema, const string &name,
-	             shared_ptr<const IcebergLoadTableResponse> load_table_result);
+	             shared_ptr<const IcebergLoadedTable> load_table_result);
 	IcebergTable(IcebergCatalog &catalog, IcebergSchemaEntry &schema, const string &name,
 	             shared_ptr<const IcebergTableMetadata> metadata);
 	//! A listing placeholder has no schemas until FillEntry resolves it.
@@ -67,7 +66,7 @@ public:
 	                                       const IcebergTableSchema &schema, int32_t sort_order_id);
 	IRCAPITableCredentials GetVendedCredentials(ClientContext &context) const;
 	IRCAPITableCredentials
-	GetVendedCredentials(ClientContext &context, const vector<rest_api_objects::StorageCredential> &storage_credentials,
+	GetVendedCredentials(ClientContext &context, const vector<IcebergStorageCredential> &storage_credentials,
 	                     optional_ptr<const case_insensitive_map_t<string>> config_override = nullptr) const;
 	const string &BaseFilePath() const;
 	//! Verify if the catalog asks for unsupported read side encryption
@@ -91,10 +90,9 @@ public:
 	void InitSchemaVersions();
 
 	bool HasTransactionUpdates() const;
-	//! Initialize from a LoadTableResult, preferring the authoritative metadata file referenced by
-	//! 'metadata-location' over the metadata embedded in the catalog response.
-	void InitializeFromCatalogResponse(ClientContext &context,
-	                                   shared_ptr<const IcebergLoadTableResponse> load_table_result);
+	//! Initialize from a generation the catalog backend loaded (for REST, preferring the authoritative metadata file
+	//! referenced by 'metadata-location' over the metadata embedded in the catalog response).
+	void InitializeFromCatalogResponse(ClientContext &context, shared_ptr<const IcebergLoadedTable> load_table_result);
 	void RefreshFromCatalog(ClientContext &context);
 
 	const IcebergTableMetadata &GetMetadata() const;
@@ -108,18 +106,18 @@ public:
 	IcebergSchemaEntry &schema;
 	string name;
 	case_insensitive_map_t<string> config;
-	vector<rest_api_objects::StorageCredential> storage_credentials;
+	vector<IcebergStorageCredential> storage_credentials;
 	unordered_map<int32_t, unique_ptr<IcebergTableSchemaVersion>> schema_versions;
 	// dummy entry to hold existence of a table, but no schema versions
 	unique_ptr<IcebergTableSchemaVersion> dummy_entry;
 	unique_ptr<IcebergTransactionData> transaction_data;
 	//! Owns the validated generation used for identity-based eviction (not a historical metadata identity).
-	shared_ptr<const IcebergLoadTableResponse> initialization_source;
+	shared_ptr<const IcebergLoadedTable> initialization_source;
 
 private:
-	void ApplyRefreshResult(ClientContext &context, IcebergLoadTableResult result,
-	                        LoadTableCachePublication &publication);
-	void SetLoadTableResult(shared_ptr<const IcebergLoadTableResponse> load_table_result);
+	void ApplyRefreshResult(ClientContext &context, IcebergCatalogResult<shared_ptr<const IcebergLoadedTable>> result,
+	                        IcebergTableLoad &load);
+	void SetLoadTableResult(shared_ptr<const IcebergLoadedTable> load_table_result);
 	vector<string> GetS3EncryptionTypes() const;
 	shared_ptr<const IcebergTableMetadata> table_metadata;
 	shared_ptr<IcebergTableMetadata> mutable_metadata;

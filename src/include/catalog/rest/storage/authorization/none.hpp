@@ -12,7 +12,7 @@ public:
 	NoneAuthorization(AttachedDatabase &db);
 
 public:
-	static unique_ptr<IcebergAuthorization> FromAttachOptions(AttachedDatabase &db, IcebergAttachOptions &input);
+	static unique_ptr<IcebergAuthorization> FromAttachOptions(AttachedDatabase &db, IcebergRestOptions &input);
 	unique_ptr<HTTPResponse> Request(RequestType request_type, ClientContext &context,
 	                                 const IRCEndpointBuilder &endpoint_builder, HTTPHeaders &headers,
 	                                 const string &data = "") override;

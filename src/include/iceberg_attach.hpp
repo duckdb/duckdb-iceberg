@@ -1,7 +1,9 @@
 #pragma once
 
 #include "duckdb/common/string.hpp"
+#include "duckdb/common/identifier.hpp"
 #include "duckdb/common/optional.hpp"
+#include "duckdb/common/unordered_map.hpp"
 #include "duckdb/common/named_parameter_map.hpp"
 #include "duckdb/storage/storage_extension.hpp"
 #include "duckdb/main/attached_database.hpp"
@@ -31,40 +33,39 @@ enum class IcebergDefaultSchemaPolicy : uint8_t { THROW, CREATE, UNENFORCED };
 //! (S3 Tables) or only store (Glue) lowercase names; column names are never changed.
 enum class IcebergIdentifierCase : uint8_t { PRESERVE_CASE, LOWERCASE };
 
+//! The ATTACH options every Iceberg catalog type accepts. The options of a catalog type (e.g. IcebergRestOptions)
+//! belong to its backend.
 struct IcebergAttachOptions {
-	string catalog_uri;
-	string warehouse;
-	string prefix;
-	string namespace_separator = "\x1f";
-	string default_region;
-	string secret;
-	string name;
-	// some catalogs do not yet support stage create
-	bool stage_create_tables = true;
-	// some catalogs reject the multi-table transactions/commit endpoint; opt out of it here
-	bool disable_multi_table_commit = false;
-	// some catalogs fully initialize metadata during non-staged CREATE TABLE and reject follow-up metadata updates
-	bool skip_create_table_metadata_updates = false;
-	// if the catalog allows manual cleaning up of storage files.
-	bool remove_files_on_delete = true;
-	bool support_nested_namespaces = false;
-	bool encode_entire_prefix = false;
-	// in rest api spec, purge requested defaults to false.
-	bool purge_requested = false;
-	// some catalogs (e.g. AWS Glue) do not assign a table location server-side; derive one from the namespace's
-	// 'location' property
-	bool default_table_location_from_namespace = false;
-	// load the authoritative table metadata from the LoadTableResult's 'metadata-location' instead of
-	// the embedded response metadata, see duckdb-iceberg#1403
-	bool use_metadata_location = false;
 	IcebergTableResolution table_resolution = IcebergTableResolution::LAZY;
 	IcebergDefaultSchemaPolicy default_schema_policy = IcebergDefaultSchemaPolicy::THROW;
 	IcebergIdentifierCase identifier_case = IcebergIdentifierCase::PRESERVE_CASE;
-	IRCAccessDelegationMode access_mode = IRCAccessDelegationMode::VENDED_CREDENTIALS;
-	IcebergAuthorizationType authorization_type = IcebergAuthorizationType::INVALID;
-	unordered_map<string, Value> options;
-	// max staleness for cached table metadata in minutes (optional - if not set, always request fresh metadata)
-	optional_idx max_table_staleness_micros;
+};
+
+//! An ATTACH of an Iceberg catalog, as the catalog backends see it
+struct IcebergAttachInput {
+public:
+	IcebergAttachInput(ClientContext &context, AttachedDatabase &db, const string &name, AttachInfo &info,
+	                   AttachOptions &options);
+
+public:
+	//! Parses an option every catalog type accepts into 'attach_options' and 'default_schema'. Returns false for
+	//! any other option
+	bool ParseGenericOption(const string &option_name, const Value &value);
+	//! Checks that DEFAULT_SCHEMA_POLICY comes with a DEFAULT_SCHEMA it can apply to
+	void VerifyDefaultSchemaPolicy() const;
+
+public:
+	ClientContext &context;
+	AttachedDatabase &db;
+	//! The name the catalog is attached as
+	const string name;
+	AttachInfo &info;
+	AttachOptions &options;
+	//! The ATTACH options, normalized: lowercase names, aliases resolved
+	unordered_map<string, Value> client_options;
+	//! The generic options, which the backend fills in (it may take some from its catalog's configuration)
+	IcebergAttachOptions attach_options;
+	optional<Identifier> default_schema;
 };
 
 unordered_map<string, Value> NormalizeIcebergAttachOptions(const unordered_map<string, Value> &options);
@@ -76,6 +77,8 @@ void MergeIcebergOptions(unordered_map<string, Value> &target, const unordered_m
 bool IsIcebergAuthorizationOption(const string &name);
 void FilterIcebergAuthorizationOptions(unordered_map<string, Value> &options, IcebergAuthorizationType type);
 
+//! ATTACH ... (TYPE ICEBERG): creates the REST backend, and the
+//! IcebergCatalog that owns it
 struct IcebergAttach {
 	static unique_ptr<Catalog> Attach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,
 	                                  AttachedDatabase &db, const string &name, AttachInfo &info,

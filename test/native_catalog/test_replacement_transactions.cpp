@@ -5,6 +5,7 @@
 #include "duckdb/common/windows_undefs.hpp"
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/common/types/timestamp.hpp"
+#include "catalog/rest/iceberg_rest_backend.hpp"
 #include "catalog/rest/catalog_entry/table/iceberg_table.hpp"
 #include "catalog/rest/iceberg_catalog.hpp"
 #include "catalog/rest/transaction/iceberg_transaction.hpp"
@@ -194,7 +195,7 @@ TEST_CASE("Replacement asserts the original head even if it had no snapshot", "[
 				ReplacementTest test(2, populated);
 				Connection writer(test.database);
 				Query(test.connection, "BEGIN");
-				test.Catalog().attach_options.disable_multi_table_commit = single_table_commit;
+				IcebergRestBackend::Get(test.Catalog()).options.disable_multi_table_commit = single_table_commit;
 				test.Replace();
 				if (insert_after_replace) {
 					Query(test.connection, "INSERT INTO lake.default.t VALUES (7)");
