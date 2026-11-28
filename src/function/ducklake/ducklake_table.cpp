@@ -1,4 +1,5 @@
 #include "function/ducklake/ducklake_table.hpp"
+#include "duckdb/common/sql_identifier.hpp"
 #include "function/ducklake/ducklake_utils.hpp"
 
 namespace duckdb {
@@ -147,14 +148,16 @@ string DuckLakeTable::FinalizeEntry(int64_t schema_id, const map<timestamp_t, Du
 	auto snapshot_ids = DuckLakeUtils::GetSnapshots(start_snapshot, false, timestamp_t(0), snapshots);
 
 	const auto TABLE_SQL = R"(
-		INSERT INTO {METADATA_CATALOG}.ducklake_table VALUES(
+		INSERT INTO {METADATA_CATALOG}.ducklake_table (
+			table_id, table_uuid, begin_snapshot, end_snapshot, schema_id, table_name, path, path_is_relative
+		) VALUES (
 			%d, -- table_id
-			'%s', -- table_uuid
+			%s, -- table_uuid
 			%d, -- begin_snapshot
 			%s, -- end_snapshot
 			%d, -- schema_id
-			'%s', -- table_name
-			'%s', -- path
+			%s, -- table_name
+			'', -- path
 			%s -- path_is_relative
 		);
 	)";
@@ -163,7 +166,7 @@ string DuckLakeTable::FinalizeEntry(int64_t schema_id, const map<timestamp_t, Du
 	                          // table_id
 	                          table_id,
 	                          // table_uuid
-	                          table_uuid,
+	                          SQLString::ToString(table_uuid),
 	                          // begin_snapshot
 	                          snapshot_ids.first,
 	                          // end_snapshot
@@ -171,9 +174,7 @@ string DuckLakeTable::FinalizeEntry(int64_t schema_id, const map<timestamp_t, Du
 	                          // schema_id
 	                          schema_id,
 	                          // table_name
-	                          table_name,
-	                          // path
-	                          "",
+	                          SQLString::ToString(table_name),
 	                          // path_is_relative
 	                          "false");
 }

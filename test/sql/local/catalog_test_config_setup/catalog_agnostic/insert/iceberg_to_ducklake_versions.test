@@ -1,0 +1,116 @@
+# name: test/sql/local/catalog_test_config_setup/catalog_agnostic/insert/iceberg_to_ducklake_versions.test
+# description: Convert a partitioned Iceberg table with position deletes across DuckLake versions
+# group: [insert]
+
+# DuckLake reads the source files directly. The fixture has a storage secret
+# independent of the Iceberg transaction, and the mock uses local files.
+require-env CATALOG_TEST_CONFIG_SETUP fixture mock
+
+include test/sql/init_requires
+
+require ducklake
+
+statement ok
+CREATE SCHEMA IF NOT EXISTS my_datalake.iceberg_ducklake_conversion;
+
+statement ok
+DROP TABLE IF EXISTS my_datalake.iceberg_ducklake_conversion.conversion_archive;
+
+# Convert just this test's table, including in catalogs with preloaded fixtures.
+statement ok
+SET VARIABLE conversion_skip_tables = (
+	SELECT coalesce(list(table_name), []::VARCHAR[])
+	FROM duckdb_tables()
+	WHERE database_name = 'my_datalake'
+);
+
+statement ok
+CREATE TABLE my_datalake.iceberg_ducklake_conversion.conversion_archive (
+	id INTEGER, part INTEGER, "reader's edition" VARCHAR
+)
+PARTITIONED BY (part, "reader's edition") WITH (
+	'format-version' = 2,
+	'write.delete.mode' = 'merge-on-read'
+);
+
+statement ok
+INSERT INTO my_datalake.iceberg_ducklake_conversion.conversion_archive VALUES
+	(1, 10, 'reader''s copy'), (2, 10, 'reader''s copy'), (3, 20, 'author''s draft');
+
+statement ok
+DELETE FROM my_datalake.iceberg_ducklake_conversion.conversion_archive WHERE id = 1;
+
+foreach ducklake_version 0.4 1.0 1.1
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/conversion_{ducklake_version}.ducklake' AS lake (
+	DATA_PATH '{TEST_DIR}/conversion_{ducklake_version}',
+	DUCKLAKE_VERSION (CASE WHEN '{ducklake_version}' = '0.4' THEN '1.0' ELSE '{ducklake_version}' END)
+);
+
+# DuckLake 1.x cannot attach 0.4 directly. The 0.4-to-1.0 migration changes
+# only the version marker, so present the shared layout as 0.4 to the converter.
+onlyif ducklake_version=0.4
+statement ok
+UPDATE __ducklake_metadata_lake.ducklake_metadata SET value = '0.4' WHERE key = 'version';
+
+query I
+SELECT value = '{ducklake_version}' FROM __ducklake_metadata_lake.ducklake_metadata WHERE key = 'version';
+----
+true
+
+statement ok
+CALL iceberg_to_ducklake('my_datalake', 'lake', skip_tables := getvariable('conversion_skip_tables'));
+
+# Restore the version for checks through the attached DuckLake extension.
+onlyif ducklake_version=0.4
+statement ok
+UPDATE __ducklake_metadata_lake.ducklake_metadata SET value = '1.0' WHERE key = 'version';
+
+query IIT
+SELECT id, part, "reader's edition" FROM lake.iceberg_ducklake_conversion.conversion_archive ORDER BY id;
+----
+2	10	reader's copy
+3	20	author's draft
+
+query I
+SELECT id FROM lake.iceberg_ducklake_conversion.conversion_archive
+WHERE part = 10 AND "reader's edition" = 'reader''s copy';
+----
+2
+
+query IIT
+SELECT id, part, "reader's edition" FROM lake.iceberg_ducklake_conversion.conversion_archive
+AT (VERSION => 0) ORDER BY id;
+----
+1	10	reader's copy
+2	10	reader's copy
+3	20	author's draft
+
+query I
+SELECT bool_and(path <> '' AND NOT path_is_relative) FROM __ducklake_metadata_lake.ducklake_data_file;
+----
+true
+
+query II
+SELECT count(*), bool_and(path <> '' AND NOT path_is_relative)
+FROM __ducklake_metadata_lake.ducklake_delete_file;
+----
+1	true
+
+query I
+SELECT count(*) FROM ducklake_snapshots('lake')
+WHERE contains(changes['tables_created'][1], 'conversion_archive');
+----
+1
+
+statement ok
+DETACH lake;
+
+endloop
+
+statement ok
+DROP TABLE my_datalake.iceberg_ducklake_conversion.conversion_archive;
+
+statement ok
+DROP SCHEMA my_datalake.iceberg_ducklake_conversion;

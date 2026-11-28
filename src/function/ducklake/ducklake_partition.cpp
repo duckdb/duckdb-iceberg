@@ -20,7 +20,9 @@ string DuckLakePartition::FinalizeEntry(int64_t table_id, DuckLakeMetadataSerial
 	auto snapshot_ids = DuckLakeUtils::GetSnapshots(start_snapshot, has_end, end_snapshot, snapshots);
 
 	const auto PARTITION_SQL = R"(
-		INSERT INTO {METADATA_CATALOG}.ducklake_partition_info VALUES(
+		INSERT INTO {METADATA_CATALOG}.ducklake_partition_info (
+			partition_id, table_id, begin_snapshot, end_snapshot
+		) VALUES (
 			%d, -- partition_id
 			%d, -- table_id
 			%d, -- begin_snapshot

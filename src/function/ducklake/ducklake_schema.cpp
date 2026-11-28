@@ -1,4 +1,5 @@
 #include "function/ducklake/ducklake_schema.hpp"
+#include "duckdb/common/sql_identifier.hpp"
 #include "duckdb/common/types/uuid.hpp"
 
 namespace duckdb {
@@ -18,13 +19,15 @@ string DuckLakeSchema::FinalizeEntry(const map<timestamp_t, DuckLakeSnapshot> &s
 	this->schema_id = schema_id;
 
 	const auto SCHEMA_SQL = R"(
-		INSERT INTO {METADATA_CATALOG}.ducklake_schema VALUES (
+		INSERT INTO {METADATA_CATALOG}.ducklake_schema (
+			schema_id, schema_uuid, begin_snapshot, end_snapshot, schema_name, path, path_is_relative
+		) VALUES (
 			%d, -- schema_id
-			'%s', -- schema_uuid
+			%s, -- schema_uuid
 			%d, -- begin_snapshot
 			%s, -- end_snapshot
-			'%s', -- schema_name
-			'%s', -- path
+			%s, -- schema_name
+			'', -- path
 			%s -- path_is_relative
 		);
 	)";
@@ -34,15 +37,13 @@ string DuckLakeSchema::FinalizeEntry(const map<timestamp_t, DuckLakeSnapshot> &s
 	                          // schema_id
 	                          schema_id,
 	                          // schema_uuid
-	                          schema_uuid,
+	                          SQLString::ToString(schema_uuid),
 	                          // begin_snapshot
 	                          begin_snapshot,
 	                          // end_snapshot
 	                          "NULL",
 	                          // schema_name
-	                          schema_name,
-	                          // path
-	                          "",
+	                          SQLString::ToString(schema_name),
 	                          // path_is_relative
 	                          "false");
 }
